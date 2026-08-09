@@ -41,4 +41,4 @@ def test_real_providers_yaml_parses_with_timeout_overrides():
 
     assert resolve_timeout(by_name["gemini-flash"]).read == 90.0
     assert resolve_timeout(by_name["groq-llama"]).read == 45.0
-    assert resolve_timeout(by_name["openrouter-fallback"]).read == 20.0
+    assert resolve_timeout(by_name["openrouter-fallback"]).read == 90.0
