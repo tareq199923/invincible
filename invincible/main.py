@@ -33,7 +33,11 @@ async def require_auth(request: Request):
     if not gateway_key:
         return
     auth = request.headers.get("Authorization")
-    if not auth or not auth.startswith("Bearer "):
+    if auth and auth.startswith("Bearer "):
+        token = auth.removeprefix("Bearer ")
+    else:
+        token = request.headers.get("x-api-key")
+    if not token:
         raise HTTPException(
             status_code=401,
             detail={
@@ -43,7 +47,6 @@ async def require_auth(request: Request):
                 }
             },
         )
-    token = auth.removeprefix("Bearer ")
     if token != gateway_key:
         raise HTTPException(
             status_code=401,

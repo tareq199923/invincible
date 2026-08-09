@@ -5,7 +5,10 @@ Everything here operates on the *internal* message model:
 
     [{"role": "system" | "user" | "assistant", "content": str}, …]
 
-It must never depend on FastAPI or the Router.
+Tool-bearing conversations additionally use OpenAI shapes: assistant
+messages may carry ``tool_calls`` and tool results are
+``{"role": "tool", "tool_call_id", "content"}`` messages. It must never
+depend on FastAPI or the Router.
 """
 from invincible.core.router import estimate_tokens
 

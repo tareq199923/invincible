@@ -152,6 +152,36 @@ class UpstreamClientError(Exception):
         self.body = body
         super().__init__(str(body))
 
+
+def _log_attempt(
+    name: str,
+    model_id: str,
+    payload_bytes: int,
+    estimated_tokens: int,
+    status,
+    failover: bool,
+    level: int = logging.INFO,
+    **extra,
+):
+    """Emit one concise structured line per provider attempt.
+
+    Only sizes and outcome are logged; payload content, keys, and headers
+    are never included.
+    """
+    suffix = "".join(f" {k}={v}" for k, v in extra.items())
+    logger.log(
+        level,
+        "provider=%s model=%s payload_bytes=%d estimated_tokens=%d "
+        "status=%s failover=%s%s",
+        name,
+        model_id,
+        payload_bytes,
+        estimated_tokens,
+        status,
+        "true" if failover else "false",
+        suffix,
+    )
+
 class AllProvidersFailedError(Exception):
     """Every provider failed, was disabled, or is in cooldown; nothing left to try."""
 
@@ -196,7 +226,9 @@ class Router:
         self.health_tracker = HealthTracker()
         self.client = httpx.AsyncClient(transport=transport)
 
-    async def route_request(self, messages: list) -> dict:
+    async def route_request(
+        self, messages: list, tools: list | None = None, tool_choice=None
+    ) -> dict:
         for provider in self.providers:
             name = provider["name"]
 
@@ -223,6 +255,16 @@ class Router:
                 "model": provider["model_id"],
                 "messages": trimmed_messages
             }
+            if tools:
+                payload["tools"] = tools
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
+
+            payload_bytes = len(json.dumps(payload, ensure_ascii=False))
+            estimated_tokens = sum(
+                estimate_tokens(m)
+                for m in trimmed_messages + (payload.get("tools") or [])
+            )
 
             try:
                 resp = await self.client.post(
@@ -232,10 +274,19 @@ class Router:
                     timeout=resolve_timeout(provider)
                 )
 
-                if resp.status_code == 429 or resp.status_code >= 500:
-                    logger.warning(
-                        f"Provider {name} returned {resp.status_code}. "
-                        "Triggering failover."
+                if (
+                    resp.status_code == 429
+                    or resp.status_code in (402, 404, 408, 413)
+                    or resp.status_code >= 500
+                ):
+                    _log_attempt(
+                        name,
+                        provider["model_id"],
+                        payload_bytes,
+                        estimated_tokens,
+                        resp.status_code,
+                        True,
+                        level=logging.WARNING,
                     )
                     self.health_tracker.record_failure(name)
                     await resp.aclose()
@@ -243,17 +294,41 @@ class Router:
 
                 resp.raise_for_status()
                 self.health_tracker.record_success(name)
+                _log_attempt(
+                    name,
+                    provider["model_id"],
+                    payload_bytes,
+                    estimated_tokens,
+                    resp.status_code,
+                    False,
+                )
                 return resp.json()
 
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
                 if status in (401, 403):
-                    logger.warning(
-                        f"Auth error from {name} ({status}). Disabling provider."
+                    _log_attempt(
+                        name,
+                        provider["model_id"],
+                        payload_bytes,
+                        estimated_tokens,
+                        status,
+                        True,
+                        level=logging.WARNING,
+                        disabled=True,
                     )
                     self.health_tracker.disable(name)
                     await e.response.aclose()
                     continue
+                _log_attempt(
+                    name,
+                    provider["model_id"],
+                    payload_bytes,
+                    estimated_tokens,
+                    status,
+                    False,
+                    level=logging.WARNING,
+                )
                 body = await e.response.aread()
                 try:
                     parsed = json.loads(body)
@@ -263,23 +338,32 @@ class Router:
 
             except httpx.RequestError as e:
                 logger.error(f"Network error with {name}: {e}. Triggering failover.")
+                _log_attempt(
+                    name,
+                    provider["model_id"],
+                    payload_bytes,
+                    estimated_tokens,
+                    "network_error",
+                    True,
+                    level=logging.ERROR,
+                )
                 self.health_tracker.record_failure(name)
                 continue
 
         raise AllProvidersFailedError("All providers failed or are in cooldown.")
 
     async def stream_open(
-        self, messages: list
+        self, messages: list, tools: list | None = None, tool_choice=None
     ) -> tuple[dict | None, AsyncIterator[dict]]:
         """Open a streaming chat-completions response through the providers.
 
         Mirrors ``route_request``'s failover decisions exactly (tier order,
-        cooldowns, missing keys, 429/5xx and 401/403 handling) so streaming
-        reuses the same routing behavior. Returns once a provider's stream is
-        live: ``(first_chunk, tail)``. ``first_chunk`` is ``None`` for a clean
-        but empty stream. Connection-stage failures fail over to the next
-        provider; a mid-stream error after the first chunk propagates to the
-        caller so it can terminate the response cleanly.
+        cooldowns, missing keys, 429/402/404/408/413/5xx and 401/403 handling)
+        so streaming reuses the same routing behavior. Returns once a
+        provider's stream is live: ``(first_chunk, tail)``. ``first_chunk`` is
+        ``None`` for a clean but empty stream. Connection-stage failures fail
+        over to the next provider; a mid-stream error after the first chunk
+        propagates to the caller so it can terminate the response cleanly.
         """
         for provider in self.providers:
             name = provider["name"]
@@ -308,6 +392,16 @@ class Router:
                 "messages": trimmed_messages,
                 "stream": True,
             }
+            if tools:
+                payload["tools"] = tools
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
+
+            payload_bytes = len(json.dumps(payload, ensure_ascii=False))
+            estimated_tokens = sum(
+                estimate_tokens(m)
+                for m in trimmed_messages + (payload.get("tools") or [])
+            )
 
             try:
                 request = self.client.build_request(
@@ -319,25 +413,49 @@ class Router:
                 )
                 resp = await self.client.send(request, stream=True)
 
-                if resp.status_code == 429 or resp.status_code >= 500:
-                    logger.warning(
-                        f"Provider {name} returned {resp.status_code}. "
-                        "Triggering failover."
+                if (
+                    resp.status_code == 429
+                    or resp.status_code in (402, 404, 408, 413)
+                    or resp.status_code >= 500
+                ):
+                    _log_attempt(
+                        name,
+                        provider["model_id"],
+                        payload_bytes,
+                        estimated_tokens,
+                        resp.status_code,
+                        True,
+                        level=logging.WARNING,
                     )
                     self.health_tracker.record_failure(name)
                     await resp.aclose()
                     continue
 
                 if resp.status_code in (401, 403):
-                    logger.warning(
-                        f"Auth error from {name} ({resp.status_code}). "
-                        "Disabling provider."
+                    _log_attempt(
+                        name,
+                        provider["model_id"],
+                        payload_bytes,
+                        estimated_tokens,
+                        resp.status_code,
+                        True,
+                        level=logging.WARNING,
+                        disabled=True,
                     )
                     self.health_tracker.disable(name)
                     await resp.aclose()
                     continue
 
                 if resp.status_code >= 400:
+                    _log_attempt(
+                        name,
+                        provider["model_id"],
+                        payload_bytes,
+                        estimated_tokens,
+                        resp.status_code,
+                        False,
+                        level=logging.WARNING,
+                    )
                     body = await resp.aread()
                     await resp.aclose()
                     try:
@@ -354,17 +472,43 @@ class Router:
                 except StopAsyncIteration:
                     first = None
                 self.health_tracker.record_success(name)
+                _log_attempt(
+                    name,
+                    provider["model_id"],
+                    payload_bytes,
+                    estimated_tokens,
+                    resp.status_code,
+                    False,
+                )
                 return first, tail
 
             except json.JSONDecodeError as e:
                 logger.warning(
                     f"Malformed SSE from {name}: {e}. Triggering failover."
                 )
+                _log_attempt(
+                    name,
+                    provider["model_id"],
+                    payload_bytes,
+                    estimated_tokens,
+                    "malformed_sse",
+                    True,
+                    level=logging.WARNING,
+                )
                 self.health_tracker.record_failure(name)
                 continue
 
             except httpx.RequestError as e:
                 logger.error(f"Network error with {name}: {e}. Triggering failover.")
+                _log_attempt(
+                    name,
+                    provider["model_id"],
+                    payload_bytes,
+                    estimated_tokens,
+                    "network_error",
+                    True,
+                    level=logging.ERROR,
+                )
                 self.health_tracker.record_failure(name)
                 continue
 

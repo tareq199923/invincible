@@ -14,11 +14,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from invincible.compat.anthropic import (
     anthropic_to_internal,
+    anthropic_tools_to_openai,
     build_error,
     build_stream_events,
     internal_to_anthropic,
+    translate_tool_choice,
 )
-from invincible.compat.common import build_message, estimate_token_sum
+from invincible.compat.common import estimate_token_sum
 from invincible.core.router import AllProvidersFailedError, UpstreamClientError
 from invincible.models.anthropic import AnthropicMessagesRequest
 
@@ -32,18 +34,36 @@ def _error_message(status_code: int, message: str) -> JSONResponse:
     return JSONResponse(content=body, status_code=status)
 
 
-async def _persist(store, session_id, full_messages, content: str):
+def _assistant_message_from_provider(provider_message: dict) -> dict:
+    """Normalize a provider assistant message for session persistence.
+
+    Keeps ``tool_calls`` (so a tool turn's history stays structurally valid
+    for the OpenAI providers) while dropping provider-only noise fields.
+    """
+    message = {"role": "assistant", "content": provider_message.get("content") or ""}
+    tool_calls = provider_message.get("tool_calls") or []
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    return message
+
+
+async def _persist(store, session_id, full_messages, assistant_message: dict):
     try:
-        await store.save(
-            session_id, full_messages + [build_message("assistant", content)]
-        )
+        saved = [
+            m for m in full_messages if m.get("role") != "system"
+        ] + [assistant_message]
+        await store.save(session_id, saved)
     except Exception:
         logger.exception("Failed to persist session history for %s", session_id)
 
 
 @router.post("/v1/messages")
 async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
-    session_id = request.headers.get("X-Session-Id", "default")
+    session_id = (
+        request.headers.get("x-claude-code-session-id")
+        or request.headers.get("X-Session-Id")
+        or "default"
+    )
     store = request.app.state.sessions
 
     try:
@@ -54,16 +74,20 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
     history = await store.load(session_id)
     full_messages = history + internal_messages
     input_tokens = estimate_token_sum(full_messages)
+    tools = anthropic_tools_to_openai(body.tools)
+    tool_choice = translate_tool_choice(body.tool_choice)
 
     if body.stream:
         try:
-            first, tail = await request.app.state.router.stream_open(full_messages)
+            first, tail = await request.app.state.router.stream_open(
+                full_messages, tools=tools, tool_choice=tool_choice
+            )
         except UpstreamClientError as e:
             return _error_message(e.status_code, "Upstream request failed")
         except AllProvidersFailedError:
             return _error_message(503, "All providers failed or are in cooldown.")
 
-        async def save_complete(accumulated: str):
+        async def save_complete(accumulated: dict):
             await _persist(store, session_id, full_messages, accumulated)
 
         return StreamingResponse(
@@ -78,7 +102,9 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
         )
 
     try:
-        result = await request.app.state.router.route_request(full_messages)
+        result = await request.app.state.router.route_request(
+            full_messages, tools=tools, tool_choice=tool_choice
+        )
     except UpstreamClientError as e:
         return _error_message(e.status_code, "Upstream request failed")
     except AllProvidersFailedError:
@@ -89,8 +115,12 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
 
     choices = result.get("choices") or []
     if choices and "message" in choices[0]:
-        content = choices[0]["message"].get("content") or ""
-        await _persist(store, session_id, full_messages, content)
+        await _persist(
+            store,
+            session_id,
+            full_messages,
+            _assistant_message_from_provider(choices[0]["message"]),
+        )
 
     anthropic_response = internal_to_anthropic(result, body.model, input_tokens)
     return JSONResponse(content=anthropic_response)

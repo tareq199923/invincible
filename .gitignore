@@ -17,3 +17,6 @@ build/
 .ruff_cache/
 .verify/
 
+
+sessions.db
+sessions.db.bak

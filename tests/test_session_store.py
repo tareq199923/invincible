@@ -106,6 +106,43 @@ async def test_different_session_ids_do_not_share_history(router_setter, client)
 
 
 @pytest.mark.asyncio
+async def test_openai_claude_code_session_id_isolates_history(router_setter, client):
+    """x-claude-code-session-id isolates OpenAI sessions the same way:
+    session A's history is never replayed into session B."""
+    received = []
+
+    def alpha_handler(request: httpx.Request):
+        received.append(request.read())
+        return httpx.Response(200, json=provider_body("alpha", content="ok"))
+
+    router_setter({"alpha.example.com": alpha_handler})
+
+    await client.post(
+        "/v1/chat/completions",
+        headers={
+            "Authorization": "Bearer test-gateway-key",
+            "x-claude-code-session-id": "openai-session-A",
+        },
+        json={"messages": [{"role": "user", "content": "secret-from-A"}]},
+    )
+
+    await client.post(
+        "/v1/chat/completions",
+        headers={
+            "Authorization": "Bearer test-gateway-key",
+            "x-claude-code-session-id": "openai-session-B",
+        },
+        json={"messages": [{"role": "user", "content": "what is the secret?"}]},
+    )
+
+    import json
+    payload = json.loads(received[1])
+    contents = [m["content"] for m in payload["messages"]]
+    assert "secret-from-A" not in contents
+    assert "what is the secret?" in contents
+
+
+@pytest.mark.asyncio
 async def test_streamed_reply_is_persisted_to_session(client, router_setter):
     """The streamed reply is reconstructed from the chunk deltas and saved to
     the session store once the stream completes, like the non-stream path."""

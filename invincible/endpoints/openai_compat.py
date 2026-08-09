@@ -84,7 +84,11 @@ async def list_models(request: Request):
 
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request, body: ChatRequest):
-    session_id = request.headers.get("X-Session-Id", "default")
+    session_id = (
+        request.headers.get("x-claude-code-session-id")
+        or request.headers.get("X-Session-Id")
+        or "default"
+    )
     store = request.app.state.sessions
 
     history = await store.load(session_id)

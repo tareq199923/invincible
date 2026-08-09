@@ -138,7 +138,10 @@ async def test_anthropic_system_and_blocks_are_flattened(client, router_setter):
     assert outgoing[1] == {"role": "user", "content": "Explore this"}
 
 
-async def test_anthropic_tool_blocks_are_degraded_not_dropped(client, router_setter):
+async def test_anthropic_tool_blocks_are_preserved_not_degraded(client, router_setter):
+    """tool_use/tool_result blocks keep their structure instead of degrading
+    to placeholder text, so the Router can send a valid tool conversation
+    to OpenAI-compatible providers."""
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -177,9 +180,21 @@ async def test_anthropic_tool_blocks_are_degraded_not_dropped(client, router_set
         },
     )
     assert response.status_code == 200
-    combined = "".join(m["content"] for m in captured[0]["messages"])
-    assert "[tool_use: search]" in combined
-    assert "result text" in combined
+    outgoing = captured[0]["messages"]
+    assert outgoing == [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": '{"query": "x"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": "result text"},
+    ]
 
 
 # ------------------------------------------------------------------- streaming
@@ -331,6 +346,133 @@ async def test_cross_protocol_session_sharing(client, router_setter):
     assert "Hello world" in contents
 
 
+async def test_claude_code_session_id_isolates_history(client, router_setter):
+    """x-claude-code-session-id is the session key: session A's history is
+    never replayed into session B."""
+    received = []
+
+    def recording_handler(request: httpx.Request):
+        received.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("alpha", content="ok"))
+
+    router_setter({"alpha.example.com": recording_handler})
+
+    await client.post(
+        "/v1/messages",
+        headers={**AUTH, "x-claude-code-session-id": "claude-session-A"},
+        json={"messages": [{"role": "user", "content": "secret-from-A"}]},
+    )
+    history_a = await app.state.sessions.load("claude-session-A")
+    assert [m["role"] for m in history_a] == ["user", "assistant"]
+
+    await client.post(
+        "/v1/messages",
+        headers={**AUTH, "x-claude-code-session-id": "claude-session-B"},
+        json={"messages": [{"role": "user", "content": "what is the secret?"}]},
+    )
+    contents = [m["content"] for m in received[1]["messages"]]
+    assert "secret-from-A" not in contents
+    assert "what is the secret?" in contents
+
+
+async def test_claude_code_session_continuity(client, router_setter):
+    """Reusing the same x-claude-code-session-id replays prior turns: a
+    session stays continuous instead of starting fresh each request."""
+    received = []
+
+    def recording_handler(request: httpx.Request):
+        received.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("alpha", content="Hello Alice"))
+
+    router_setter({"alpha.example.com": recording_handler})
+    headers = {**AUTH, "x-claude-code-session-id": "claude-session-cont"}
+
+    await client.post(
+        "/v1/messages",
+        headers=headers,
+        json={"messages": [{"role": "user", "content": "My name is Alice"}]},
+    )
+    await client.post(
+        "/v1/messages",
+        headers=headers,
+        json={"messages": [{"role": "user", "content": "What is my name?"}]},
+    )
+    contents = [m["content"] for m in received[1]["messages"]]
+    assert "My name is Alice" in contents
+    assert "Hello Alice" in contents
+    assert "What is my name?" in contents
+
+
+async def test_anthropic_x_session_id_used_when_claude_header_absent(
+    client, router_setter
+):
+    """Legacy X-Session-Id clients keep working and keep their history."""
+    received = []
+
+    def recording_handler(request: httpx.Request):
+        received.append(json.loads(request.read()))
+        return httpx.Response(
+            200, json=provider_body("alpha", content="Nice to meet you!")
+        )
+
+    router_setter({"alpha.example.com": recording_handler})
+    headers = {**AUTH, "X-Session-Id": "legacy-session"}
+
+    await client.post(
+        "/v1/messages",
+        headers=headers,
+        json={"messages": [{"role": "user", "content": "My name is Alice"}]},
+    )
+    await client.post(
+        "/v1/messages",
+        headers=headers,
+        json={"messages": [{"role": "user", "content": "What is my name?"}]},
+    )
+    contents = [m["content"] for m in received[1]["messages"]]
+    assert "My name is Alice" in contents
+    assert "Nice to meet you!" in contents
+
+
+async def test_claude_code_session_id_wins_over_x_session_id(client, router_setter):
+    """When both headers are present the Claude Code session id wins."""
+    def alpha_handler(request: httpx.Request):
+        return httpx.Response(200, json=provider_body("alpha", content="ok"))
+
+    router_setter({"alpha.example.com": alpha_handler})
+    headers = {
+        **AUTH,
+        "x-claude-code-session-id": "claude-session",
+        "X-Session-Id": "legacy-session",
+    }
+    await client.post(
+        "/v1/messages",
+        headers=headers,
+        json={"messages": [{"role": "user", "content": "priority-secret"}]},
+    )
+    assert [m["content"] for m in await app.state.sessions.load("claude-session")] == [
+        "priority-secret",
+        "ok",
+    ]
+    assert await app.state.sessions.load("legacy-session") == []
+
+
+async def test_anthropic_no_session_header_uses_default(client, router_setter):
+    """Clients sending neither header keep using the default session."""
+    def alpha_handler(request: httpx.Request):
+        return httpx.Response(200, json=provider_body("alpha", content="ok"))
+
+    router_setter({"alpha.example.com": alpha_handler})
+    await client.post(
+        "/v1/messages",
+        headers=AUTH,
+        json={"messages": [{"role": "user", "content": "default-convo"}]},
+    )
+    assert [m["content"] for m in await app.state.sessions.load("default")] == [
+        "default-convo",
+        "ok",
+    ]
+
+
 async def test_anthropic_midstream_error_terminates_cleanly(client, router_setter):
     stream_fail = _FailingStream(
         sse_body(
@@ -363,6 +505,482 @@ async def test_anthropic_midstream_error_terminates_cleanly(client, router_sette
     assert error_payload["type"] == "error"
     assert error_payload["error"]["type"] == "api_error"
     assert not response.text.rstrip().endswith("message_stop")
+
+
+# ------------------------------------------------------------------ tools
+
+
+def tool_call_body(provider, name, arguments, tool_call_id="call_1", content=None):
+    return {
+        "id": f"cmpl-{provider}",
+        "model": f"{provider}-model",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": [
+                        {
+                            "id": tool_call_id,
+                            "type": "function",
+                            "function": {"name": name, "arguments": arguments},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+
+
+EXECUTE_BASH_TOOL = {
+    "name": "execute_bash",
+    "description": "Run a shell command on the host machine.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"command": {"type": "string"}},
+        "required": ["command"],
+    },
+}
+
+
+async def test_anthropic_tools_forwarded_to_provider(client, router_setter):
+    captured = []
+
+    def alpha_handler(request: httpx.Request):
+        captured.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("alpha", content="ok"))
+
+    router_setter({"alpha.example.com": alpha_handler})
+    response = await client.post(
+        "/v1/messages",
+        headers=AUTH,
+        json={
+            "model": "claude-sonnet-4",
+            "max_tokens": 1024,
+            "tools": [
+                EXECUTE_BASH_TOOL,
+                {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+                {
+                    "name": "write_file",
+                    "description": "Write a file",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            ],
+            "tool_choice": {"type": "any"},
+            "messages": [{"role": "user", "content": "What is my cwd?"}],
+        },
+    )
+    assert response.status_code == 200
+    outgoing = captured[0]
+    assert [t["function"]["name"] for t in outgoing["tools"]] == [
+        "execute_bash",
+        "read_file",
+        "write_file",
+    ]
+    assert all(t["type"] == "function" for t in outgoing["tools"])
+    assert outgoing["tools"][0]["function"]["parameters"]["required"] == ["command"]
+    assert outgoing["tool_choice"] == "required"
+
+
+async def test_anthropic_tool_use_response(client, router_setter):
+    router_setter(
+        handlers={
+            "alpha.example.com": httpx.Response(
+                200,
+                json=tool_call_body(
+                    "alpha",
+                    name="execute_bash",
+                    arguments='{"command": "pwd"}',
+                    tool_call_id="toolu_pwd",
+                ),
+            )
+        }
+    )
+    response = await client.post("/v1/messages", headers=AUTH, json=ANTHROPIC_BODY)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["content"] == [
+        {
+            "type": "tool_use",
+            "id": "toolu_pwd",
+            "name": "execute_bash",
+            "input": {"command": "pwd"},
+        }
+    ]
+    assert body["stop_reason"] == "tool_use"
+
+
+async def test_anthropic_tool_turn_round_trips(client, router_setter):
+    captured = []
+
+    def alpha_handler(request: httpx.Request):
+        captured.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("alpha", content="/Users/sark"))
+
+    router_setter({"alpha.example.com": alpha_handler})
+    response = await client.post(
+        "/v1/messages",
+        headers=AUTH,
+        json={
+            "model": "claude-sonnet-4",
+            "tools": [EXECUTE_BASH_TOOL],
+            "messages": [
+                {"role": "user", "content": "What is my current working directory?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "execute_bash",
+                            "input": {"command": "pwd"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": "/Users/sark",
+                        },
+                        {"type": "text", "text": "what is it?"},
+                    ],
+                },
+            ],
+        },
+    )
+    assert response.status_code == 200
+    outgoing = captured[0]["messages"]
+    assert outgoing[1] == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "toolu_1",
+                "type": "function",
+                "function": {"name": "execute_bash", "arguments": '{"command": "pwd"}'},
+            }
+        ],
+    }
+    assert outgoing[2] == {
+        "role": "tool",
+        "tool_call_id": "toolu_1",
+        "content": "/Users/sark",
+    }
+    assert outgoing[3] == {"role": "user", "content": "what is it?"}
+    assert response.json()["content"] == [{"type": "text", "text": "/Users/sark"}]
+
+
+async def test_anthropic_streaming_tool_use_events(client, router_setter):
+    router_setter(
+        handlers={
+            "alpha.example.com": httpx.Response(
+                200,
+                content=sse_body(
+                    stream_chunk("alpha", {"role": "assistant"}),
+                    stream_chunk(
+                        "alpha",
+                        {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "toolu_pwd",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "execute_bash",
+                                        "arguments": '{"command": "',
+                                    },
+                                }
+                            ]
+                        },
+                    ),
+                    stream_chunk(
+                        "alpha",
+                        {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": "pwd"}}
+                            ]
+                        },
+                    ),
+                    stream_chunk(
+                        "alpha",
+                        {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": '"}'}}
+                            ]
+                        },
+                    ),
+                    stream_chunk("alpha", {}, finish_reason="tool_calls"),
+                ),
+            )
+        }
+    )
+    response = await client.post(
+        "/v1/messages",
+        headers=AUTH,
+        json={**ANTHROPIC_BODY, "stream": True},
+    )
+    assert response.status_code == 200
+    events = _anthropic_events(response)
+    assert [e for e, _ in events] == [
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_delta",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    ]
+    start = [p for e, p in events if e == "content_block_start"][0]
+    assert start["content_block"] == {
+        "type": "tool_use",
+        "id": "toolu_pwd",
+        "name": "execute_bash",
+        "input": {},
+    }
+    partials = [
+        p["delta"]["partial_json"] for e, p in events if e == "content_block_delta"
+    ]
+    assert "".join(partials) == '{"command": "pwd"}'
+    message_delta = [p for e, p in events if e == "message_delta"][0]
+    assert message_delta["delta"]["stop_reason"] == "tool_use"
+
+
+async def test_anthropic_streaming_mixed_text_and_tool(client, router_setter):
+    router_setter(
+        handlers={
+            "alpha.example.com": httpx.Response(
+                200,
+                content=sse_body(
+                    stream_chunk("alpha", {"role": "assistant"}),
+                    stream_chunk("alpha", {"content": "Calling "}),
+                    stream_chunk(
+                        "alpha",
+                        {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "toolu_1",
+                                    "function": {"name": "Bash", "arguments": "{}"},
+                                }
+                            ]
+                        },
+                    ),
+                    stream_chunk("alpha", {}, finish_reason="tool_calls"),
+                ),
+            )
+        }
+    )
+    response = await client.post(
+        "/v1/messages",
+        headers=AUTH,
+        json={**ANTHROPIC_BODY, "stream": True},
+    )
+    events = _anthropic_events(response)
+    starts = [
+        (p["index"], p["content_block"]["type"])
+        for e, p in events
+        if e == "content_block_start"
+    ]
+    assert starts == [(0, "text"), (1, "tool_use")]
+    stops = [p["index"] for e, p in events if e == "content_block_stop"]
+    assert stops == [0, 1]
+    deltas = [
+        (p["index"], p["delta"]["type"])
+        for e, p in events
+        if e == "content_block_delta"
+    ]
+    assert deltas == [(0, "text_delta"), (1, "input_json_delta")]
+
+
+async def test_anthropic_streaming_multiple_tool_calls(client, router_setter):
+    router_setter(
+        handlers={
+            "alpha.example.com": httpx.Response(
+                200,
+                content=sse_body(
+                    stream_chunk("alpha", {"role": "assistant"}),
+                    stream_chunk(
+                        "alpha",
+                        {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "toolu_a",
+                                    "function": {"name": "read_file", "arguments": "{"},
+                                },
+                                {
+                                    "index": 1,
+                                    "id": "toolu_b",
+                                    "function": {
+                                        "name": "execute_bash",
+                                        "arguments": "{",
+                                    },
+                                },
+                            ]
+                        },
+                    ),
+                    stream_chunk(
+                        "alpha",
+                        {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "function": {"arguments": '"path": "a.txt"}'},
+                                },
+                                {
+                                    "index": 1,
+                                    "function": {"arguments": '"command": "ls"}'},
+                                },
+                            ]
+                        },
+                    ),
+                    stream_chunk("alpha", {}, finish_reason="tool_calls"),
+                ),
+            )
+        }
+    )
+    response = await client.post(
+        "/v1/messages",
+        headers=AUTH,
+        json={**ANTHROPIC_BODY, "stream": True},
+    )
+    events = _anthropic_events(response)
+    starts = [
+        (p["index"], p["content_block"]["type"], p["content_block"]["name"])
+        for e, p in events
+        if e == "content_block_start"
+    ]
+    assert starts == [(0, "tool_use", "read_file"), (1, "tool_use", "execute_bash")]
+    partials_by_index = {}
+    for e, p in events:
+        if e == "content_block_delta":
+            partials_by_index.setdefault(p["index"], "")
+            partials_by_index[p["index"]] += p["delta"]["partial_json"]
+    assert partials_by_index == {
+        0: '{"path": "a.txt"}',
+        1: '{"command": "ls"}',
+    }
+
+
+async def test_anthropic_malformed_tool_arguments_tolerated(client, router_setter):
+    router_setter(
+        handlers={
+            "alpha.example.com": httpx.Response(
+                200,
+                json=tool_call_body(
+                    "alpha",
+                    name="execute_bash",
+                    arguments='{"command": "pwd"',
+                ),
+            )
+        }
+    )
+    response = await client.post("/v1/messages", headers=AUTH, json=ANTHROPIC_BODY)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["content"] == [
+        {"type": "tool_use", "id": "call_1", "name": "execute_bash", "input": {}}
+    ]
+    assert body["stop_reason"] == "tool_use"
+
+
+async def test_anthropic_streamed_tool_reply_persisted(client, router_setter):
+    captured = []
+
+    def alpha_handler(request: httpx.Request):
+        captured.append(json.loads(request.read()))
+        return httpx.Response(
+            200,
+            content=sse_body(
+                stream_chunk("alpha", {"role": "assistant"}),
+                stream_chunk(
+                    "alpha",
+                    {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "toolu_pwd",
+                                "function": {
+                                    "name": "execute_bash",
+                                    "arguments": '{"command": "pwd"}',
+                                },
+                            }
+                        ]
+                    },
+                ),
+                stream_chunk("alpha", {}, finish_reason="tool_calls"),
+            ),
+        )
+
+    router_setter({"alpha.example.com": alpha_handler})
+    headers = {**AUTH, "X-Session-Id": "tool-session"}
+    response = await client.post(
+        "/v1/messages",
+        headers=headers,
+        json={**ANTHROPIC_BODY, "stream": True},
+    )
+    assert response.status_code == 200
+
+    history = await app.state.sessions.load("tool-session")
+    assistant_messages = [m for m in history if m["role"] == "assistant"]
+    assert len(assistant_messages) == 1
+    assert assistant_messages[0]["content"] is None
+    assert assistant_messages[0]["tool_calls"] == [
+        {
+            "id": "toolu_pwd",
+            "type": "function",
+            "function": {"name": "execute_bash", "arguments": '{"command": "pwd"}'},
+        }
+    ]
+
+    await client.post(
+        "/v1/messages",
+        headers=headers,
+        json={
+            "model": "claude-sonnet-4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_pwd",
+                            "content": "/Users/sark",
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    second_outgoing = captured[1]["messages"]
+    roles = [m["role"] for m in second_outgoing]
+    assert roles == ["user", "assistant", "tool"]
+    assert second_outgoing[1]["tool_calls"][0]["id"] == "toolu_pwd"
+    assert second_outgoing[2] == {
+        "role": "tool",
+        "tool_call_id": "toolu_pwd",
+        "content": "/Users/sark",
+    }
 
 
 # ------------------------------------------------------------------- failover
@@ -469,6 +1087,31 @@ async def test_anthropic_auth_invalid_returns_401(client):
     response = await client.post(
         "/v1/messages",
         headers={"Authorization": "Bearer wrong-key"},
+        json=ANTHROPIC_BODY,
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"]["error"]["type"] == "auth_error"
+
+
+async def test_anthropic_auth_x_api_key_succeeds(client, router_setter):
+    router_setter(
+        handlers={"alpha.example.com": httpx.Response(200, json=provider_body("alpha"))}
+    )
+    response = await client.post(
+        "/v1/messages",
+        headers={
+            "x-api-key": "test-gateway-key",
+            "anthropic-version": "2023-06-01",
+        },
+        json=ANTHROPIC_BODY,
+    )
+    assert response.status_code == 200
+
+
+async def test_anthropic_auth_x_api_key_invalid_returns_401(client):
+    response = await client.post(
+        "/v1/messages",
+        headers={"x-api-key": "wrong-key"},
         json=ANTHROPIC_BODY,
     )
     assert response.status_code == 401
@@ -589,14 +1232,145 @@ async def test_top_level_and_messages_system_combined(client, router_setter):
     assert systems == ["Top system.", "Inner system."]
 
 
-async def test_ignored_optional_anthropic_fields(client, router_setter):
-    """tools / tool_choice / metadata / temperature / top_p / top_k /
-    stop_sequences / unknown fields / beta query must never produce a 422."""
-    router_setter(
-        handlers={
-            "alpha.example.com": httpx.Response(200, json=provider_body("alpha"))
-        }
+async def test_system_messages_not_persisted_to_session(client, router_setter):
+    """Repeated requests with a system prompt must not accumulate system
+    messages in the persisted session history - user/assistant turns stay."""
+    received = []
+
+    def recording_handler(request: httpx.Request):
+        received.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("alpha", content="ok"))
+
+    router_setter({"alpha.example.com": recording_handler})
+    headers = {**AUTH, "X-Session-Id": "no-sys-accum"}
+
+    for _ in range(3):
+        response = await client.post(
+            "/v1/messages",
+            headers=headers,
+            json={
+                "system": "Be concise.",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        assert response.status_code == 200
+
+    history = await app.state.sessions.load("no-sys-accum")
+    assert [m["role"] for m in history] == [
+        "user", "assistant", "user", "assistant", "user", "assistant",
+    ]
+    assert all(m.get("role") != "system" for m in history)
+
+
+async def test_system_prompt_still_sent_upstream_each_request(
+    client, router_setter
+):
+    """Every request still sends its own current system prompt upstream, and
+    prior requests' system prompts never leak in as stale copies."""
+    received = []
+
+    def recording_handler(request: httpx.Request):
+        received.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("alpha", content="ok"))
+
+    router_setter({"alpha.example.com": recording_handler})
+    headers = {**AUTH, "X-Session-Id": "sys-per-request"}
+
+    await client.post(
+        "/v1/messages",
+        headers=headers,
+        json={"system": "System-One", "messages": [{"role": "user", "content": "a"}]},
     )
+    await client.post(
+        "/v1/messages",
+        headers=headers,
+        json={"system": "System-Two", "messages": [{"role": "user", "content": "b"}]},
+    )
+
+    first_systems = [
+        m["content"] for m in received[0]["messages"] if m["role"] == "system"
+    ]
+    second_systems = [
+        m["content"] for m in received[1]["messages"] if m["role"] == "system"
+    ]
+    assert first_systems == ["System-One"]
+    assert second_systems == ["System-Two"]
+
+
+async def test_tool_history_intact_with_system(client, router_setter):
+    """Tool-call/tool-result history stays intact in the persisted session
+    while system messages are excluded."""
+    received = []
+
+    def recording_handler(request: httpx.Request):
+        received.append(json.loads(request.read()))
+        if len(received) == 1:
+            return httpx.Response(
+                200,
+                json=tool_call_body(
+                    "alpha",
+                    name="execute_bash",
+                    arguments='{"command": "pwd"}',
+                    tool_call_id="toolu_persist",
+                ),
+            )
+        return httpx.Response(200, json=provider_body("alpha", content="done"))
+
+    router_setter({"alpha.example.com": recording_handler})
+    headers = {**AUTH, "X-Session-Id": "tool-sys-session"}
+
+    await client.post(
+        "/v1/messages",
+        headers=headers,
+        json={
+            "system": "Use tools.",
+            "tools": [EXECUTE_BASH_TOOL],
+            "messages": [{"role": "user", "content": "what dir?"}],
+        },
+    )
+    await client.post(
+        "/v1/messages",
+        headers=headers,
+        json={
+            "system": "Use tools.",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_persist",
+                            "content": "/c/Users/SARK/Desktop/ai-gateway",
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    history = await app.state.sessions.load("tool-sys-session")
+    assert all(m.get("role") != "system" for m in history)
+    assistant_with_tool = [
+        m for m in history if m.get("tool_calls")
+    ]
+    assert len(assistant_with_tool) == 1
+    assert assistant_with_tool[0]["tool_calls"][0]["id"] == "toolu_persist"
+    tool_msgs = [m for m in history if m.get("role") == "tool"]
+    assert tool_msgs[0]["tool_call_id"] == "toolu_persist"
+    assert "ai-gateway" in tool_msgs[0]["content"]
+
+
+async def test_optional_fields_ignored_but_tools_forwarded(client, router_setter):
+    """metadata / temperature / top_p / top_k / stop_sequences / unknown
+    fields / beta query must never produce a 422, while tools and
+    tool_choice are translated and forwarded to the provider."""
+    captured = []
+
+    def alpha_handler(request: httpx.Request):
+        captured.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("alpha"))
+
+    router_setter({"alpha.example.com": alpha_handler})
     response = await client.post(
         "/v1/messages?beta=true",
         headers={
@@ -620,6 +1394,18 @@ async def test_ignored_optional_anthropic_fields(client, router_setter):
     )
     assert response.status_code == 200
     assert response.json()["type"] == "message"
+    outgoing = captured[0]
+    assert outgoing["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "search",
+                "description": "Search",
+                "parameters": {},
+            },
+        }
+    ]
+    assert outgoing["tool_choice"] == "auto"
 
 
 # ------------------------------------------------------------- pure helpers

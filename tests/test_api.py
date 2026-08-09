@@ -215,6 +215,37 @@ async def test_invalid_auth_returns_401(client):
     assert response.json()["detail"]["error"]["type"] == "auth_error"
 
 
+async def test_x_api_key_auth_succeeds(client, router_setter):
+    alpha_body = provider_body("alpha")
+    router_setter(
+        handlers={"alpha.example.com": httpx.Response(200, json=alpha_body)}
+    )
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "test-gateway-key"},
+        json={"messages": MESSAGES},
+    )
+    assert response.status_code == 200
+    assert response.json() == alpha_body
+
+
+async def test_bearer_priority_over_x_api_key(client, router_setter):
+    alpha_body = provider_body("alpha")
+    router_setter(
+        handlers={"alpha.example.com": httpx.Response(200, json=alpha_body)}
+    )
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={
+            "Authorization": "Bearer test-gateway-key",
+            "x-api-key": "wrong-key",
+        },
+        json={"messages": MESSAGES},
+    )
+    assert response.status_code == 200
+    assert response.json() == alpha_body
+
+
 async def test_valid_auth_succeeds(client, router_setter):
     alpha_body = provider_body("alpha")
     router_setter(
