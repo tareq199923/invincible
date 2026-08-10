@@ -3,6 +3,7 @@ import importlib.resources
 import json
 import logging
 import os
+import time
 from collections.abc import AsyncIterator
 
 import httpx
@@ -185,6 +186,30 @@ def _log_attempt(
 class AllProvidersFailedError(Exception):
     """Every provider failed, was disabled, or is in cooldown; nothing left to try."""
 
+_TIMEOUT_KIND_BY_CLASS = {
+    "ConnectTimeout": "connect_timeout",
+    "ReadTimeout": "read_timeout",
+    "WriteTimeout": "write_timeout",
+    "PoolTimeout": "pool_timeout",
+    "TimeoutException": "timeout",
+}
+
+
+def _network_error_details(e: Exception) -> dict:
+    """Structured, safe detail fields for a network-error log line.
+
+    Never includes payload content, headers, or keys - only the exception
+    class, a coarse kind, and a truncated message. httpx streaming timeouts
+    surface with an empty message, hence the explicit fallback.
+    """
+    cls = type(e).__name__
+    kind = _TIMEOUT_KIND_BY_CLASS.get(
+        cls,
+        "timeout" if isinstance(e, httpx.TimeoutException) else "network_error",
+    )
+    message = str(e) or getattr(e, "message", "") or "no_message"
+    return {"error_type": cls, "error_kind": kind, "error_msg": message.strip()[:200]}
+
 async def _iter_stream(resp: httpx.Response) -> AsyncIterator[dict]:
     """Yield parsed OpenAI SSE events from a streaming httpx response.
 
@@ -266,6 +291,7 @@ class Router:
                 for m in trimmed_messages + (payload.get("tools") or [])
             )
 
+            attempt_started = time.monotonic()
             try:
                 resp = await self.client.post(
                     f"{provider['base_url']}/chat/completions",
@@ -337,7 +363,13 @@ class Router:
                 raise UpstreamClientError(status_code=status, body=parsed) from e
 
             except httpx.RequestError as e:
-                logger.error(f"Network error with {name}: {e}. Triggering failover.")
+                details = _network_error_details(e)
+                logger.error(
+                    "Network error with %s (%s): %s. Triggering failover.",
+                    name,
+                    details["error_type"],
+                    details["error_msg"],
+                )
                 _log_attempt(
                     name,
                     provider["model_id"],
@@ -346,6 +378,9 @@ class Router:
                     "network_error",
                     True,
                     level=logging.ERROR,
+                    elapsed_s=round(time.monotonic() - attempt_started, 2),
+                    read_timeout_s=resolve_timeout(provider).read,
+                    **details,
                 )
                 self.health_tracker.record_failure(name)
                 continue
@@ -403,6 +438,7 @@ class Router:
                 for m in trimmed_messages + (payload.get("tools") or [])
             )
 
+            attempt_started = time.monotonic()
             try:
                 request = self.client.build_request(
                     "POST",
@@ -499,7 +535,13 @@ class Router:
                 continue
 
             except httpx.RequestError as e:
-                logger.error(f"Network error with {name}: {e}. Triggering failover.")
+                details = _network_error_details(e)
+                logger.error(
+                    "Network error with %s (%s): %s. Triggering failover.",
+                    name,
+                    details["error_type"],
+                    details["error_msg"],
+                )
                 _log_attempt(
                     name,
                     provider["model_id"],
@@ -508,6 +550,9 @@ class Router:
                     "network_error",
                     True,
                     level=logging.ERROR,
+                    elapsed_s=round(time.monotonic() - attempt_started, 2),
+                    read_timeout_s=resolve_timeout(provider).read,
+                    **details,
                 )
                 self.health_tracker.record_failure(name)
                 continue

@@ -20,9 +20,10 @@ from invincible.core.session_store import SessionStore
 SUPPORTED_ENV_KEYS = (
     "GATEWAY_API_KEY",
     "MCP_SHARED_SECRET",
-    "GEMINI_API_KEY",
+    "NVIDIA_API_KEY",
     "GROQ_API_KEY",
     "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
 )
 SECRET_ENV_KEYS = ("GATEWAY_API_KEY", "MCP_SHARED_SECRET")
 

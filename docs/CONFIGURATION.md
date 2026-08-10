@@ -15,9 +15,10 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 |---|---|---|
 | `GATEWAY_API_KEY` | `/v1/*` | Bearer token for the chat endpoint. **If unset, the endpoint is open (no auth).** |
 | `MCP_SHARED_SECRET` | `/mcp` | Value of the `X-MCP-Secret` header for tool calls. **If unset, `/mcp` returns 503.** |
-| `GEMINI_API_KEY` | provider tier 1 | Gemini Flash. |
+| `NVIDIA_API_KEY` | provider tier 1 | NVIDIA NIM hosted: GLM-5.2 (Z.ai); strongest coding/agentic tier. |
 | `GROQ_API_KEY` | provider tier 2 | Groq Llama 70B. |
 | `OPENROUTER_API_KEY` | provider tier 3 | OpenRouter free fallback. |
+| `GEMINI_API_KEY` | provider tier 4 | Gemini Flash — last resort. |
 | `INVINCIBLE_CONFIG_PATH` | startup | Path to a custom `providers.yaml` (set by CLI `--config`). |
 | `INVINCIBLE_DB_PATH` | startup | Path to the session database (set by CLI `--db-path`). |
 
@@ -54,11 +55,11 @@ Top-level mapping with a single `providers:` list. Each provider entry:
 
 ```yaml
 providers:
-  - name: gemini-flash            # unique, used in logs & health tracking
+  - name: nim-glm                # unique, used in logs & health tracking
     tier: 1                        # ascending order = failover order
-    base_url: https://generativelanguage.googleapis.com/v1beta/openai
-    api_key_env: GEMINI_API_KEY    # env var *name* — never the key itself
-    model_id: gemini-2.5-flash
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY    # env var *name* — never the key itself
+    model_id: z-ai/glm-5.2
     max_context: 1000000           # tokens; used for context trimming
     timeout:                       # optional; per-field override (see below)
       read: 90.0
@@ -90,9 +91,10 @@ Shipped values and rationale:
 
 | Provider | Read timeout | Why |
 |---|---|---|
-| `gemini-flash` | 90.0s | 1M-token context; generation can legitimately take a while. |
+| `nim-glm` | 90.0s | 1M-token context; generation can legitimately take a while. |
 | `groq-llama` | 45.0s | Large model, still generous. |
-| `openrouter-fallback` | 20.0s | Fail fast on the free-tier fallback rather than hang. |
+| `openrouter-fallback` | 90.0s | 550B free tier can be slow to first token. |
+| `gemini-flash` | 90.0s | 1M-token context; generation can legitimately take a while. |
 
 ### Provider validation (at `Router` construction)
 

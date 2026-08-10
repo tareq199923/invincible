@@ -12,9 +12,9 @@ A local, Python (FastAPI) server that runs on your development machine and
 serves two roles in one process:
 
 1. **Local Failover Proxy** — an OpenAI-compatible `/v1/chat/completions`
-   endpoint that fans requests across tiered upstream providers (Groq,
-   Gemini, OpenRouter) and transparently fails over on rate limits (429) and
-   server errors, so a free-tier 429 no longer kills an agent's workflow.
+   endpoint that fans requests across tiered upstream providers (NVIDIA NIM,
+   Groq, OpenRouter, Gemini) and transparently fails over on rate limits (429)
+   and server errors, so a free-tier 429 no longer kills an agent's workflow.
    It also speaks the **Anthropic Messages API** (`POST /v1/messages`), so
    Claude Code and other Anthropic-native clients plug in with a one-line
    config change.
@@ -26,7 +26,8 @@ serves two roles in one process:
 ### Why it exists
 
 - **The 429 problem.** AI coding agents using free/open-source providers
-  (Groq, Gemini, OpenRouter) get killed when they hit a rate limit. Invincible
+  (NVIDIA NIM, Groq, OpenRouter, Gemini) get killed when they hit a rate
+  limit. Invincible
   sits between the agent and the providers; on a 429 (or 5xx) it records the
   failure, puts the provider in a short cooldown, and retries the next
   provider in the tier order. The agent sees a single, stable endpoint.
@@ -46,7 +47,7 @@ serves two roles in one process:
 | **Exponential cooldown** | 30s → 60s → 120s → 240s → capped at 300s; a success resets the counter (in-memory, process-scoped). |
 | **Conversation memory** | SQLite-backed, keyed by the `X-Session-Id` header (default `default`). History is merged into every request and the assistant reply is persisted back. |
 | **Context trimming** | Per-provider `max_context`; system messages always kept; everything else dropped as atomic *turns* (an assistant `tool_calls` is never separated from its tool results); the most recent turn is always sent. |
-| **Per-provider timeouts** | Split connect/read/write/pool with sane defaults and per-provider overrides (Gemini gets 90s read, the free OpenRouter fallback 20s). |
+| **Per-provider timeouts** | Split connect/read/write/pool with sane defaults and per-provider overrides (NIM, Gemini, and the OpenRouter fallback get 90s reads; Groq 45s). |
 | **MCP tool server** | `read_file` (no confirmation), `execute_bash` and `write_file` (interactive y/N at the server terminal), guarded by denylists and a separate `MCP_SHARED_SECRET` auth. |
 | **Protocol-agnostic** | Native **OpenAI** and **Anthropic** protocols, both translated into one internal message model. Claude Code works with `ANTHROPIC_BASE_URL` pointing at the gateway. |
 
@@ -100,9 +101,10 @@ Everything is environment variables plus one YAML file — no other config.
 |---|---|---|
 | `GATEWAY_API_KEY` | `/v1/*` | Bearer token for the chat endpoint. **If unset, the endpoint is open (no auth).** |
 | `MCP_SHARED_SECRET` | `/mcp` | Value of the `X-MCP-Secret` header for tool calls. **If unset, `/mcp` returns 503.** |
-| `GEMINI_API_KEY` | provider tier 1 | Gemini Flash. |
+| `NVIDIA_API_KEY` | provider tier 1 | NVIDIA NIM hosted: GLM-5.2 (Z.ai); strongest coding/agentic tier. |
 | `GROQ_API_KEY` | provider tier 2 | Groq Llama 70B. |
 | `OPENROUTER_API_KEY` | provider tier 3 | OpenRouter free fallback. |
+| `GEMINI_API_KEY` | provider tier 4 | Gemini Flash — last resort. |
 | `INVINCIBLE_CONFIG_PATH` | startup | Path to a custom `providers.yaml` (set by CLI `--config`). |
 | `INVINCIBLE_DB_PATH` | startup | Path to the session database (set by CLI `--db-path`). |
 
@@ -278,9 +280,10 @@ Shipped tier order:
 
 | Tier | Provider | Model | Max context |
 |---|---|---|---|
-| 1 | `gemini-flash` | `gemini-2.5-flash` | 1 000 000 |
-| 2 | `groq-llama` | `llama-3.3-70b-versatile` | 128 000 |
-| 3 | `openrouter-fallback` | `meta-llama/llama-3.1-8b-instruct:free` | 32 000 |
+| 1 | `nim-glm` | `z-ai/glm-5.2` | 1 000 000 |
+| 2 | `groq-llama` | `openai/gpt-oss-120b` | 128 000 |
+| 3 | `openrouter-fallback` | `nvidia/nemotron-3-ultra-550b-a55b:free` | 1 000 000 |
+| 4 | `gemini-flash` | `gemini-2.5-flash` | 1 000 000 |
 
 Deep dive (failover state machine, context trimming): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -302,9 +305,10 @@ curl http://127.0.0.1:8000/v1/models
 # {
 #   "object": "list",
 #   "data": [
-#     {"id": "gemini-2.5-flash", "object": "model", "owned_by": "invincible"},
-#     {"id": "llama-3.3-70b-versatile", "object": "model", "owned_by": "invincible"},
-#     {"id": "meta-llama/llama-3.1-8b-instruct:free", "object": "model", "owned_by": "invincible"}
+#     {"id": "z-ai/glm-5.2", "object": "model", "owned_by": "invincible"},
+#     {"id": "openai/gpt-oss-120b", "object": "model", "owned_by": "invincible"},
+#     {"id": "nvidia/nemotron-3-ultra-550b-a55b:free", "object": "model", "owned_by": "invincible"},
+#     {"id": "gemini-2.5-flash", "object": "model", "owned_by": "invincible"}
 #   ]
 # }
 ```

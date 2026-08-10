@@ -4,14 +4,14 @@
 # used solely as a fallback if the packaged resource is unavailable.
 # It can be removed in a future release.
 providers:
-  - name: gemini-flash
+  - name: nim-glm
     tier: 1
-    base_url: https://generativelanguage.googleapis.com/v1beta/openai
-    api_key_env: GEMINI_API_KEY
-    model_id: gemini-2.5-flash
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY
+    model_id: z-ai/glm-5.2
     max_context: 1000000
     timeout:
-      read: 90.0   # large-context requests can legitimately take longer to generate
+      read: 90.0   # 1M-token context; generation can legitimately take a while
 
   - name: groq-llama
     tier: 2
@@ -30,3 +30,12 @@ providers:
     max_context: 1000000
     timeout:
       read: 90.0   # 550B free tier can be slow to first token
+
+  - name: gemini-flash
+    tier: 4
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    api_key_env: GEMINI_API_KEY
+    model_id: gemini-2.5-flash
+    max_context: 1000000
+    timeout:
+      read: 90.0   # large-context requests can legitimately take longer to generate

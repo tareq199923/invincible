@@ -39,6 +39,7 @@ def test_real_providers_yaml_parses_with_timeout_overrides():
     router = Router()
     by_name = {p["name"]: p for p in router.providers}
 
-    assert resolve_timeout(by_name["gemini-flash"]).read == 90.0
+    assert resolve_timeout(by_name["nim-glm"]).read == 90.0
     assert resolve_timeout(by_name["groq-llama"]).read == 45.0
     assert resolve_timeout(by_name["openrouter-fallback"]).read == 90.0
+    assert resolve_timeout(by_name["gemini-flash"]).read == 90.0

@@ -288,6 +288,128 @@ def _attempt_records(caplog, provider="alpha"):
     ]
 
 
+def tiered_providers():
+    """The shipped tier order as mock providers: NIM -> Groq -> OpenRouter
+    -> Gemini (last)."""
+    return [
+        {
+            "name": "nim",
+            "tier": 1,
+            "base_url": "https://nim.example.com/v1",
+            "api_key_env": "NIM_API_KEY",
+            "model_id": "z-ai/glm-5.2",
+        },
+        {
+            "name": "groq",
+            "tier": 2,
+            "base_url": "https://groq.example.com/v1",
+            "api_key_env": "GROQ_API_KEY",
+            "model_id": "gpt-oss-120b",
+        },
+        {
+            "name": "openrouter",
+            "tier": 3,
+            "base_url": "https://openrouter.example.com/v1",
+            "api_key_env": "OPENROUTER_API_KEY",
+            "model_id": "nemotron-free",
+        },
+        {
+            "name": "gemini",
+            "tier": 4,
+            "base_url": "https://gemini.example.com/v1",
+            "api_key_env": "GEMINI_API_KEY",
+            "model_id": "gemini-2.5-flash",
+        },
+    ]
+
+
+async def test_provider_priority_is_nim_groq_openrouter_gemini(make_router):
+    """With every provider healthy, the lowest tier (nim) wins and the rest
+    are never contacted."""
+    calls = []
+
+    def handler(name):
+        def _handler(request):
+            calls.append(name)
+            return httpx.Response(200, json=provider_body(name))
+
+        return _handler
+
+    router = make_router(
+        providers=tiered_providers(),
+        handlers={
+            "nim.example.com": handler("nim"),
+            "groq.example.com": handler("groq"),
+            "openrouter.example.com": handler("openrouter"),
+            "gemini.example.com": handler("gemini"),
+        },
+    )
+    assert [p["name"] for p in router.providers] == [
+        "nim", "groq", "openrouter", "gemini",
+    ]
+    result = await router.route_request(MESSAGES)
+    assert result == provider_body("nim")
+    assert calls == ["nim"]
+
+
+async def test_gemini_reached_only_after_earlier_providers_fail(make_router):
+    """Gemini is the last resort: it is tried only after nim, groq, and
+    openrouter all fail, and a second request skips the failed ones due to
+    their cooldowns."""
+    calls = []
+
+    def fail_with(status):
+        def _handler(request):
+            calls.append("called")
+            return httpx.Response(status)
+
+        return _handler
+
+    router = make_router(
+        providers=tiered_providers(),
+        handlers={
+            "nim.example.com": fail_with(429),
+            "groq.example.com": fail_with(503),
+            "openrouter.example.com": fail_with(429),
+            "gemini.example.com": httpx.Response(
+                200, json=provider_body("gemini")
+            ),
+        },
+    )
+    result = await router.route_request(MESSAGES)
+    assert result == provider_body("gemini")
+    assert calls.count("called") == 3
+    assert not router.health_tracker.is_available("nim")
+    assert not router.health_tracker.is_available("groq")
+    assert not router.health_tracker.is_available("openrouter")
+    assert router.health_tracker.is_available("gemini")
+
+    calls.clear()
+    result = await router.route_request(MESSAGES)
+    assert result == provider_body("gemini")
+    assert "called" not in calls
+    assert router.health_tracker.get("gemini").consecutive_failures == 0
+
+
+async def test_gemini_failure_still_failovers_but_raises_when_all_fail(
+    make_router,
+):
+    """Failover chain reaches gemini; when even gemini is down, the request
+    fails like today."""
+    router = make_router(
+        providers=tiered_providers(),
+        handlers={
+            "nim.example.com": httpx.Response(429),
+            "groq.example.com": httpx.Response(429),
+            "openrouter.example.com": httpx.Response(429),
+            "gemini.example.com": httpx.Response(429),
+        },
+    )
+    with pytest.raises(Exception, match="All providers failed"):
+        await router.route_request(MESSAGES)
+    assert not router.health_tracker.is_available("gemini")
+
+
 async def test_attempt_logged_on_success(make_router, caplog):
     router = make_router(
         handlers={"alpha.example.com": httpx.Response(200, json=provider_body("alpha"))}
@@ -333,6 +455,86 @@ async def test_attempt_logged_on_network_error(make_router, caplog):
         await router.route_request(MESSAGES)
     lines = _attempt_records(caplog)
     assert any("status=network_error" in m and "failover=true" in m for m in lines)
+
+
+async def test_network_error_logs_exception_details(make_router, caplog):
+    def alpha_handler(request):
+        raise httpx.ReadTimeout("read timed out")
+
+    router = make_router(
+        handlers={
+            "alpha.example.com": alpha_handler,
+            "beta.example.com": httpx.Response(200, json=provider_body("beta")),
+        }
+    )
+    with caplog.at_level(logging.INFO, logger="invincible.router"):
+        result = await router.route_request(MESSAGES)
+    assert result == provider_body("beta")
+    line = next(
+        m for m in _attempt_records(caplog)
+        if "status=network_error" in m and "failover=true" in m
+    )
+    assert "error_type=ReadTimeout" in line
+    assert "error_kind=read_timeout" in line
+    assert "error_msg=read timed out" in line
+    assert "elapsed_s=" in line
+    assert "read_timeout_s=60.0" in line
+    assert "payload_bytes=" in line
+    assert "estimated_tokens=" in line
+
+
+async def test_network_error_logs_empty_message_gracefully(make_router, caplog):
+    """httpx streaming timeouts surface with an empty message; the log must
+    say so instead of logging a blank field."""
+
+    def alpha_handler(request):
+        raise httpx.ReadTimeout("")
+
+    router = make_router(
+        handlers={
+            "alpha.example.com": alpha_handler,
+            "beta.example.com": httpx.Response(200, json=provider_body("beta")),
+        }
+    )
+    with caplog.at_level(logging.INFO, logger="invincible.router"):
+        result = await router.route_request(MESSAGES)
+    assert result == provider_body("beta")
+    line = next(
+        m for m in _attempt_records(caplog)
+        if "status=network_error" in m and "failover=true" in m
+    )
+    assert "error_type=ReadTimeout" in line
+    assert "error_msg=no_message" in line
+
+
+async def test_stream_open_network_error_logs_exception_details(
+    make_router, caplog
+):
+    def alpha_handler(request):
+        raise httpx.ReadTimeout("")
+
+    router = make_router(
+        handlers={
+            "alpha.example.com": alpha_handler,
+            "beta.example.com": httpx.Response(
+                200,
+                content=sse_body(stream_chunk("beta", {"role": "assistant"})),
+            ),
+        }
+    )
+    with caplog.at_level(logging.INFO, logger="invincible.router"):
+        first, tail = await router.stream_open(MESSAGES)
+    assert first["model"] == "beta-model"
+    line = next(
+        m for m in _attempt_records(caplog)
+        if "status=network_error" in m and "failover=true" in m
+    )
+    assert "error_type=ReadTimeout" in line
+    assert "error_kind=read_timeout" in line
+    assert "error_msg=no_message" in line
+    assert "elapsed_s=" in line
+    assert "read_timeout_s=60.0" in line
+    await router.close()
 
 
 async def test_stream_attempt_logged_on_failover(make_router, caplog):
