@@ -25,7 +25,7 @@ invincible/
     ├── router.py               Provider loading, failover, trimming, timeouts
     ├── provider_health.py      Per-provider failure counts + cooldowns
     ├── session_store.py        SQLite conversation memory
-    └── tool_executor.py        MCP tool execution + denylists + confirmation
+    └── tool_executor.py        MCP tool execution + denylists + approval
 ```
 
 Packaging (`pyproject.toml`):
@@ -114,10 +114,11 @@ main.py::require_auth                     same GATEWAY_API_KEY as OpenAI
   ▼
 anthropic_compat::anthropic_messages
   │  1. anthropic_to_internal(messages, system) → internal model
-  │       system            → leading {role: system}
-  │       text/image blocks → text concatenated
-  │       tool_use          → "[tool_use: <name>]" tag
-  │       tool_result      → its text
+  │       system            → flattened to text, leading {role: system}
+  │       text blocks       → text concatenated
+  │       tool_use          → OpenAI tool_calls entry (id preserved)
+  │       tool_result       → {role: "tool"} message (tool_use_id preserved)
+  │       image / unknown   → skipped
   │  2. session_id = X-Session-Id or "default"
   │  3. full = session_store.load(session_id) + internal_messages
   │  4. input_tokens = estimate_token_sum(full)
@@ -236,12 +237,17 @@ mcp_endpoint
   │  params not a dict        → -32602 Invalid params (or 204 if notification)
   │  no "id"                  → notification: side effect runs, reply 204 no body
   ▼
-_dispatch(method, rpc_id, params)
+_dispatch(method, rpc_id, params, request)
   │  initialize   → protocolVersion 2025-06-18, capabilities.tools
-  │  tools/list   → the three tool descriptors
-  │  tools/call   → read_file | execute_bash | write_file
+  │  tools/list   → the four tool descriptors
+  │  tools/call   → read_file | execute_bash | write_file | confirm_action
+  │                 execute_bash/write_file: denylist, then stage a pending
+  │                   action on app.state.pending_actions → token
+  │                 confirm_action: approve → real action result
+  │                                 deny     → {isError: true, text "Declined."}
+  │                                 unknown/expired token → {isError: true,
+  │                                   text "Unknown or expired confirmation token."}
   │                 ToolBlocked   → result {isError: true, text "Blocked: …"}
-  │                 ToolDeclined  → result {isError: true, text "Declined …"}
   │                 unknown tool  → -32601
   │  unknown method → -32601
 ```
@@ -259,12 +265,16 @@ The security architecture is explicit in the module docstring:
 1. **Denylist, not allowlist**, for `execute_bash` — keeps arbitrary dev
    work usable while catching high-blast-radius commands without a prompt.
 2. **Path denylist** for `write_file` (and a narrower one for `read_file`).
-3. **Interactive confirmation** is the *real* safety boundary — denylists
-   are a fast-path to refuse the obvious, not the actual gate. Confirmation
-   runs `input()` on a worker thread (`asyncio.to_thread`) so the event
-   loop stays free while waiting.
+3. **Token-based remote approval** is the *real* safety boundary — denylists
+   are a fast-path to refuse the obvious, not the actual gate. A surviving
+   action is staged in a `PendingActionStore` (`app.state.pending_actions`)
+   under an unpredictable `secrets.token_urlsafe(16)` token and runs only
+   after `confirm_action(token, approve=true)` — a second `/mcp` call.
+   Tokens expire after 10 minutes and are single-use.
 4. **Auth lives one layer up** (`MCP_SHARED_SECRET`); this module assumes an
-   authenticated caller.
+   authenticated caller. Deliberate trust-boundary change: approval is now
+   whoever holds the MCP secret, not whoever happens to be at the machine's
+   terminal.
 
 Execution details:
 
@@ -274,7 +284,7 @@ Execution details:
   `errors="replace"`.
 - `write_file`: creates parent directories (`os.makedirs exist_ok=True`),
   writes text, returns byte count.
-- `read_file`: no prompt; returns content or a structured `{"status":
+- `read_file`: no approval; returns content or a structured `{"status":
   "error", ...}` for missing files/directories.
 
 Full pattern inventory and threat model:

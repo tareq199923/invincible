@@ -6,6 +6,7 @@ import yaml
 
 from invincible.core.router import Router
 from invincible.core.session_store import SessionStore
+from invincible.core.tool_executor import PendingActionStore
 from invincible.main import app
 
 
@@ -90,6 +91,7 @@ async def client(router_setter, monkeypatch):
     store = SessionStore(db_path=":memory:")
     await store.init()
     app.state.sessions = store
+    app.state.pending_actions = PendingActionStore()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as async_client:

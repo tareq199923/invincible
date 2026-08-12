@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from invincible import __version__
 from invincible.core.router import Router
 from invincible.core.session_store import SessionStore
+from invincible.core.tool_executor import PendingActionStore
 from invincible.endpoints.anthropic_compat import router as anthropic_router
 from invincible.endpoints.mcp import require_mcp_auth
 from invincible.endpoints.mcp import router as mcp_router
@@ -21,6 +22,7 @@ logging.basicConfig(level=logging.INFO)
 async def lifespan(app: FastAPI):
     app.state.router = Router(config_path=os.getenv("INVINCIBLE_CONFIG_PATH"))
     app.state.sessions = SessionStore(db_path=os.getenv("INVINCIBLE_DB_PATH"))
+    app.state.pending_actions = PendingActionStore()
     await app.state.sessions.init()
     yield
     await app.state.router.close()

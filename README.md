@@ -48,7 +48,7 @@ serves two roles in one process:
 | **Conversation memory** | SQLite-backed, keyed by the `X-Session-Id` header (default `default`). History is merged into every request and the assistant reply is persisted back. |
 | **Context trimming** | Per-provider `max_context`; system messages always kept; everything else dropped as atomic *turns* (an assistant `tool_calls` is never separated from its tool results); the most recent turn is always sent. |
 | **Per-provider timeouts** | Split connect/read/write/pool with sane defaults and per-provider overrides (NIM, Gemini, and the OpenRouter fallback get 90s reads; Groq 45s). |
-| **MCP tool server** | `read_file` (no confirmation), `execute_bash` and `write_file` (interactive y/N at the server terminal), guarded by denylists and a separate `MCP_SHARED_SECRET` auth. |
+| **MCP tool server** | `read_file` (no approval), `execute_bash` and `write_file` (staged, then approved via a token round-trip through the `confirm_action` tool), guarded by denylists and a separate `MCP_SHARED_SECRET` auth. |
 | **Protocol-agnostic** | Native **OpenAI** and **Anthropic** protocols, both translated into one internal message model. Claude Code works with `ANTHROPIC_BASE_URL` pointing at the gateway. |
 
 ---
@@ -200,12 +200,14 @@ exactly as it does for OpenAI clients, and the upstream model comes from
 - **Streaming**: `stream: true` returns Anthropic SSE events in the
   canonical order — `message_start` → `content_block_start` →
   `content_block_delta` (one per text delta) → `content_block_stop` →
-  `message_delta` → `message_stop`. Content blocks (`tool_use`,
-  `tool_result`, `image`, …) are flattened to text: `tool_use` becomes a
-  `[tool_use: <name>]` tag and `tool_result` keeps its text, so tool-shaped
-  conversations round-trip without crashing. A mid-stream upstream failure
-  emits a well-formed Anthropic `error` event and closes — never malformed
-  SSE.
+  `message_delta` → `message_stop`. `tool_use` content blocks are preserved
+  and streamed as structured events (`content_block_start` +
+  `input_json_delta` frames) with `stop_reason: "tool_use"` at the end;
+  `tool_result` blocks in the request are carried as `role: "tool"`
+  messages, so tool-shaped conversations round-trip losslessly (ids
+  preserved). `image` content blocks are still skipped. A mid-stream
+  upstream failure emits a well-formed Anthropic `error` event and closes —
+  never malformed SSE.
 - **Sessions**: the same `X-Session-Id` header and SQLite store are used,
   and history is serialized in the shared internal format — an OpenAI
   client and a Claude Code session on the same id see the same
@@ -214,8 +216,7 @@ exactly as it does for OpenAI clients, and the upstream model comes from
   `authentication_error`, `permission_error`, `not_found_error`,
   `rate_limit_error`, `api_error`, `overloaded_error`) with sanitized
   messages; upstream provider bodies are never forwarded.
-- **Unsupported today**: real tool execution (tool calls are degraded to
-  text) and image content (skipped during flattening).
+- **Unsupported today**: image content (skipped during conversion).
 
 ### Status codes
 
@@ -251,8 +252,9 @@ Full contract — sessions, trimming, timeout semantics:
 | Tool | Arguments | Confirmation | Gate |
 |---|---|---|---|
 | `read_file` | `path` | **No** | Blocks only real secrets/state: `.env*`, `sessions.db`, `.git/`. **Allows** `invincible/`, `tests/`, `providers.yaml`. |
-| `execute_bash` | `command` | **Yes** — y/N at the server terminal | Blocks high-blast-radius commands (`rm -rf /`, fork bombs, `dd of=/dev/`, `mkfs`, `sudo`, `curl \| sh`, `rd /s C:\`, …). 30s execution timeout. |
-| `write_file` | `path`, `content` | **Yes** — y/N at the server terminal | Blocks writes to `.env*`, `providers.yaml`, `sessions.db`, `invincible/`, `tests/`, `.git/`. Creates parent directories. |
+| `execute_bash` | `command` + a `confirm_action` token round-trip | **Yes** — staged with a token; runs only after `confirm_action(token, approve=true)` (30s execution timeout) | Blocks high-blast-radius commands (`rm -rf /`, fork bombs, `dd of=/dev/`, `mkfs`, `sudo`, `curl \| sh`, `rd /s C:\`, …). |
+| `write_file` | `path`, `content` + a `confirm_action` token round-trip | **Yes** — staged with a token; writes only after `confirm_action(token, approve=true)` | Blocks writes to `.env*`, `providers.yaml`, `sessions.db`, `invincible/`, `tests/`, `.git/`. Creates parent directories. |
+| `confirm_action` | `token`, `approve` | — | Approves/denies a pending `execute_bash`/`write_file`; token is single-use and expires after 10 minutes. |
 
 Security model, full denylist inventory, and known limits:
 [docs/SECURITY.md](docs/SECURITY.md).
@@ -391,7 +393,21 @@ curl -X POST http://127.0.0.1:8000/mcp \
        "params":{"name":"execute_bash","arguments":{"command":"git status"}}}'
 ```
 
-Expect a `[y/N]` prompt at the server terminal before it runs.
+The call returns a `pending_confirmation` result carrying a token. To
+approve it, call `confirm_action` with that token (or deny with
+`approve: false`):
+
+```bash
+curl -X POST http://127.0.0.1:8000/mcp \
+  -H "X-MCP-Secret: $MCP_SHARED_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call",
+       "params":{"name":"confirm_action",
+                 "arguments":{"token":"<token from step 2>","approve":true}}}'
+```
+
+The command runs (or the file is written) only after approval; the token is
+single-use and expires after 10 minutes.
 
 ### 8. Expose to a cloud AI over a tunnel
 
@@ -421,7 +437,7 @@ More MCP protocol details: [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md).
                                 │              │
                   ┌─────────────▼──┐   ┌───────▼────────────┐
                   │ core/router.py │   │ core/tool_executor │
-                  │ tiered failover│   │ (denylist + confirm)│
+                  │ tiered failover│   │ (denylist + approval)│
                   │ + ctx trimming │   └─────────────────────┘
                   └───────┬────────┘
                           │
@@ -450,7 +466,7 @@ store, and trimming logic consume.
 | `invincible/core/router.py` | Provider loading, tiered failover, response trimming, timeouts. |
 | `invincible/core/provider_health.py` | Per-provider failure counts + exponential cooldowns. |
 | `invincible/core/session_store.py` | SQLite-backed conversation memory, partitioned by session id. |
-| `invincible/core/tool_executor.py` | Denylists, interactive confirmation, tool execution. |
+| `invincible/core/tool_executor.py` | Denylists, pending-action approval (`confirm_action`), tool execution. |
 | `invincible/cli.py` | Click CLI: `setup` (env file wizard) and `start` (uvicorn wrapper). |
 | `invincible/providers.yaml` | Canonical provider configuration (packaged, authoritative). |
 
@@ -464,21 +480,25 @@ store, and trimming logic consume.
 | [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | The `/v1/chat/completions` contract: request, response, status codes, failover semantics. |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | `.env` variables, `providers.yaml` schema, timeouts, session database, CLI reference. |
 | [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md) | Client-facing `/mcp` spec: JSON-RPC shape, tools, notifications, tunnel setup. |
-| [docs/SECURITY.md](docs/SECURITY.md) | Threat model, auth realms, denylist inventory, confirmation UX, known limits. |
+| [docs/SECURITY.md](docs/SECURITY.md) | Threat model, auth realms, denylist inventory, approval flow, known limits. |
 | [docs/TESTING.md](docs/TESTING.md) | How tests work, fixtures, per-file coverage map. |
 
 ---
 
 ## Known limits (tl;dr)
 
-- Anthropic **tool execution is not surfaced** — `tool_use`/`tool_result`
-  blocks are flattened to text (a `[tool_use: <name>]` tag) so tool-shaped
-  conversations round-trip without crashing; the model answers in text.
+- Invincible translates Anthropic tool calls correctly (`tool_use` →
+  `tool_calls`, `tool_result` → `role: "tool"` messages, ids preserved, and
+  responses close with `stop_reason: "tool_use"`), but it does not execute
+  the tools itself — execution is the client's job (Claude Code runs the
+  tool and sends back `tool_result`).
 - Image content blocks are **skipped** during flattening.
 - Denylists are **text-pattern matches, not shell parsers** — wrappers like
-  `powershell -Command` can smuggle commands past them; the interactive
-  confirmation prompt is the real safety boundary.
-- **Single-user, local-only** — confirmation is a terminal prompt; no web UI.
+  `powershell -Command` can smuggle commands past them; the token approval
+  step is the real safety boundary.
+- **Remote approval** — approval goes through `/mcp` itself: whoever holds
+  `MCP_SHARED_SECRET` can approve pending actions; there is no terminal
+  prompt and no separate human-authentication surface.
 - Sessions are stored **plaintext** in SQLite; cooldowns and provider
   disables are **in-memory only**.
 

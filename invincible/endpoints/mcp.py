@@ -11,6 +11,12 @@ leaked tunnel URL alone isn't enough to reach these tools - and so rotating
 one secret never silently affects the other. The comparison uses
 secrets.compare_digest rather than `==` so a timing side-channel can't be
 used to guess the secret one byte at a time.
+
+Approval for execute_bash/write_file is remote and token-based: a call
+stages a pending action and returns a token; only a confirm_action call
+with that token (approve=true) executes it. This replaces the old
+synchronous terminal prompt - whoever holds MCP_SHARED_SECRET is now the
+approver, not whoever happens to be sitting at the machine.
 """
 import json
 import os
@@ -44,8 +50,9 @@ TOOLS = [
             "Run a shell command on the host machine. Commands matching the "
             "denylist (destructive filesystem ops, privilege escalation, "
             "power commands, etc.) are rejected outright. Everything else "
-            "blocks and requires the operator to approve it interactively "
-            "at the terminal running this server before it runs."
+            "is staged for approval: the call returns a token, and the "
+            "command only runs after confirm_action is called with that "
+            "token and approve=true."
         ),
         "inputSchema": {
             "type": "object",
@@ -59,9 +66,9 @@ TOOLS = [
             "Write content to a file on the host machine. Writes to files "
             "this server depends on for its own security or state (.env, "
             "providers.yaml, sessions.db, its own source/tests, .git/) are "
-            "rejected outright. Everything else blocks and requires the "
-            "operator to approve it interactively at the terminal running "
-            "this server before it runs."
+            "rejected outright. Everything else is staged for approval: "
+            "the call returns a token, and the file is only written after "
+            "confirm_action is called with that token and approve=true."
         ),
         "inputSchema": {
             "type": "object",
@@ -70,6 +77,25 @@ TOOLS = [
                 "content": {"type": "string"},
             },
             "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "confirm_action",
+        "description": (
+            "Approve or deny a pending execute_bash/write_file request. "
+            "Must be called with the exact token returned by that request. "
+            "approve=true performs the action immediately (runs the "
+            "command / writes the file); approve=false discards it without "
+            "executing anything. This is how operator approval is obtained: "
+            "an action is never executed until this tool confirms it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "token": {"type": "string"},
+                "approve": {"type": "boolean"},
+            },
+            "required": ["token", "approve"],
         },
     },
 ]
@@ -115,7 +141,7 @@ def _tool_content(text: str, is_error: bool = False) -> dict:
     return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
 
-async def _dispatch(method, rpc_id, params):
+async def _dispatch(method, rpc_id, params, request):
     if method == "initialize":
         return _result(rpc_id, {
             "protocolVersion": "2025-06-18",
@@ -129,6 +155,7 @@ async def _dispatch(method, rpc_id, params):
     if method == "tools/call":
         name = params.get("name")
         args = params.get("arguments") or {}
+        pending_actions = request.app.state.pending_actions
 
         try:
             if name == "read_file":
@@ -136,23 +163,37 @@ async def _dispatch(method, rpc_id, params):
                 return _result(rpc_id, _tool_content(str(result)))
 
             if name == "execute_bash":
-                result = await tool_executor.execute_bash(args.get("command", ""))
+                result = tool_executor.execute_bash(
+                    args.get("command", ""), pending_actions
+                )
                 return _result(rpc_id, _tool_content(str(result)))
 
             if name == "write_file":
-                result = await tool_executor.write_file(
-                    args.get("path", ""), args.get("content", "")
+                result = tool_executor.write_file(
+                    args.get("path", ""), args.get("content", ""), pending_actions
                 )
+                return _result(rpc_id, _tool_content(str(result)))
+
+            if name == "confirm_action":
+                # Only a real JSON boolean can approve - anything else
+                # (absent, string, number) is treated as deny.
+                approve = args.get("approve") is True
+                result = await tool_executor.confirm_action(
+                    pending_actions, args.get("token", ""), approve
+                )
+                status = result.get("status")
+                if status == "not_found":
+                    return _result(rpc_id, _tool_content(
+                        "Unknown or expired confirmation token.", is_error=True
+                    ))
+                if status == "declined":
+                    return _result(rpc_id, _tool_content("Declined.", is_error=True))
                 return _result(rpc_id, _tool_content(str(result)))
 
             return _error(rpc_id, -32601, f"Unknown tool: {name}")
 
         except tool_executor.ToolBlocked as e:
             return _result(rpc_id, _tool_content(f"Blocked: {e.reason}", is_error=True))
-        except tool_executor.ToolDeclined:
-            return _result(rpc_id, _tool_content(
-                "Declined by operator at the terminal.", is_error=True
-            ))
 
     return _error(rpc_id, -32601, f"Unknown method: {method}")
 
@@ -187,7 +228,7 @@ async def mcp_endpoint(request: Request):
             return Response(status_code=204)
         return JSONResponse(_error(rpc_id, -32602, "Invalid params"))
 
-    response = await _dispatch(method, rpc_id, params)
+    response = await _dispatch(method, rpc_id, params, request)
 
     if is_notification:
         # JSON-RPC 2.0: a request with no "id" is a notification - the

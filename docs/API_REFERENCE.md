@@ -172,7 +172,8 @@ a `422` for optional features Invincible doesn't implement.
 
 ### Content-block flattening
 
-`content` blocks are flattened to text instead of dropped:
+Flattening to plain text only applies to `system` content (it has no
+structured equivalent downstream):
 
 | Block type | Result |
 |---|---|
@@ -180,6 +181,14 @@ a `422` for optional features Invincible doesn't implement.
 | `tool_use` | `[tool_use: <name>]` placeholder tag |
 | `tool_result` | its text (string or nested text blocks) |
 | `image` / unknown | skipped |
+
+For `user`/`assistant` messages the blocks are preserved structurally
+instead: `tool_use` blocks become OpenAI-shaped `tool_calls` entries (the
+id is kept verbatim) and `tool_result` blocks become `role: "tool"`
+messages keyed by `tool_use_id` — nothing is flattened. The response
+re-emits them as real `tool_use` content blocks (non-streaming and SSE
+alike) with `stop_reason: "tool_use"`. `image` blocks are skipped in all
+cases.
 
 ### Non-streaming response
 

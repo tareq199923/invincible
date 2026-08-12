@@ -58,64 +58,173 @@ def test_denylist_allows_safe_commands(command):
     tool_executor.check_denylist(command)  # should not raise
 
 
-async def test_execute_bash_blocked_command_never_prompts(monkeypatch):
-    called = False
+# --- pending-action approval flow ---
 
-    async def fake_confirm(prompt):
-        nonlocal called
-        called = True
-        return True
 
-    monkeypatch.setattr(tool_executor, "confirm", fake_confirm)
+def make_store():
+    return tool_executor.PendingActionStore()
+
+
+async def test_execute_bash_blocked_command_never_issues_token(monkeypatch):
+    store = make_store()
+
+    async def probe(command, timeout):
+        raise AssertionError("blocked command must never reach execution")
+
+    monkeypatch.setattr(tool_executor, "_run_command", probe)
 
     with pytest.raises(tool_executor.ToolBlocked):
-        await tool_executor.execute_bash("sudo rm -rf /")
+        tool_executor.execute_bash("sudo rm -rf /", store)
 
-    assert called is False  # denylist short-circuits before confirmation
-
-
-async def test_execute_bash_declined_raises(monkeypatch):
-    monkeypatch.setattr(tool_executor, "confirm", lambda prompt: _false())
-
-    with pytest.raises(tool_executor.ToolDeclined):
-        await tool_executor.execute_bash("echo hello")
+    assert len(store) == 0  # denylist short-circuits before staging
 
 
-async def test_execute_bash_approved_runs_command(monkeypatch):
-    monkeypatch.setattr(tool_executor, "confirm", lambda prompt: _true())
+async def test_execute_bash_returns_pending_confirmation(monkeypatch):
+    store = make_store()
+    called = []
 
-    result = await tool_executor.execute_bash("echo hello")
+    async def probe(command, timeout):
+        called.append(command)
+        return {"stdout": "", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(tool_executor, "_run_command", probe)
+
+    result = tool_executor.execute_bash("echo hello", store)
+
+    assert result["status"] == "pending_confirmation"
+    assert result["action"] == "execute_bash"
+    assert result["command"] == "echo hello"
+    assert result["token"]
+    assert len(store) == 1
+    assert called == []  # nothing ran at stage time
+
+
+async def test_execute_bash_confirm_approve_runs_command(monkeypatch):
+    store = make_store()
+
+    async def probe(command, timeout=30.0):
+        return {"stdout": "hello\n", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(tool_executor, "_run_command", probe)
+
+    staged = tool_executor.execute_bash("echo hello", store)
+    result = await tool_executor.confirm_action(store, staged["token"], True)
 
     assert result["returncode"] == 0
     assert "hello" in result["stdout"]
 
 
-async def test_write_file_declined_does_not_write(monkeypatch, tmp_path):
-    monkeypatch.setattr(tool_executor, "confirm", lambda prompt: _false())
+async def test_execute_bash_confirm_approve_runs_real_command():
+    store = make_store()
+
+    staged = tool_executor.execute_bash("echo hello", store)
+    result = await tool_executor.confirm_action(store, staged["token"], True)
+
+    assert result["returncode"] == 0
+    assert "hello" in result["stdout"]
+
+
+async def test_execute_bash_confirm_decline_does_not_run(monkeypatch):
+    store = make_store()
+
+    async def probe(command, timeout):
+        raise AssertionError("declined command must never reach execution")
+
+    monkeypatch.setattr(tool_executor, "_run_command", probe)
+
+    staged = tool_executor.execute_bash("echo hello", store)
+    result = await tool_executor.confirm_action(store, staged["token"], False)
+
+    assert result["status"] == "declined"
+    assert len(store) == 0
+
+
+async def test_confirm_action_unknown_token():
+    store = make_store()
+
+    result = await tool_executor.confirm_action(store, "not-a-real-token", True)
+
+    assert result["status"] == "not_found"
+
+
+async def test_confirm_action_expired_token(monkeypatch):
+    store = make_store()
+    monkeypatch.setattr(tool_executor.PendingActionStore, "TTL_SECONDS", -1)
+
+    staged = tool_executor.execute_bash("echo hello", store)
+    result = await tool_executor.confirm_action(store, staged["token"], True)
+
+    assert result["status"] == "not_found"  # expired behaves like unknown
+    assert len(store) == 0
+
+
+async def test_confirm_action_token_is_single_use(monkeypatch):
+    store = make_store()
+    runs = []
+
+    async def probe(command, timeout):
+        runs.append(command)
+        return {"stdout": "ok", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(tool_executor, "_run_command", probe)
+
+    staged = tool_executor.execute_bash("echo hello", store)
+    first = await tool_executor.confirm_action(store, staged["token"], True)
+    second = await tool_executor.confirm_action(store, staged["token"], True)
+
+    assert first["returncode"] == 0
+    assert second["status"] == "not_found"  # no double execution on replay
+    assert len(runs) == 1
+
+
+async def test_write_file_pending_does_not_write(monkeypatch, tmp_path):
+    store = make_store()
     target = tmp_path / "out.txt"
 
-    with pytest.raises(tool_executor.ToolDeclined):
-        await tool_executor.write_file(str(target), "content")
+    async def probe(path, content):
+        raise AssertionError("pending write must not touch disk")
 
+    monkeypatch.setattr(tool_executor, "_write_file", probe)
+
+    result = tool_executor.write_file(str(target), "content", store)
+
+    assert result["status"] == "pending_confirmation"
+    assert result["action"] == "write_file"
+    assert result["content_length"] == 7
     assert not target.exists()
+    assert len(store) == 1
 
 
-async def test_write_file_approved_writes_content(monkeypatch, tmp_path):
-    monkeypatch.setattr(tool_executor, "confirm", lambda prompt: _true())
+async def test_write_file_confirm_approve_writes_content(tmp_path):
+    store = make_store()
     target = tmp_path / "nested" / "out.txt"
 
-    result = await tool_executor.write_file(str(target), "hello world")
+    staged = tool_executor.write_file(str(target), "hello world", store)
+    result = await tool_executor.confirm_action(store, staged["token"], True)
 
     assert result["status"] == "written"
     assert target.read_text() == "hello world"
 
 
-async def test_write_file_handles_unicode_content(monkeypatch, tmp_path):
-    monkeypatch.setattr(tool_executor, "confirm", lambda prompt: _true())
+async def test_write_file_confirm_decline_does_not_write(tmp_path):
+    store = make_store()
+    target = tmp_path / "out.txt"
+
+    staged = tool_executor.write_file(str(target), "content", store)
+    result = await tool_executor.confirm_action(store, staged["token"], False)
+
+    assert result["status"] == "declined"
+    assert not target.exists()
+    assert len(store) == 0
+
+
+async def test_write_file_confirm_approve_handles_unicode_content(tmp_path):
+    store = make_store()
     target = tmp_path / "unicode.txt"
     content = "héllo wörld 中文 🚀"
 
-    result = await tool_executor.write_file(str(target), content)
+    staged = tool_executor.write_file(str(target), content, store)
+    result = await tool_executor.confirm_action(store, staged["token"], True)
 
     assert result["status"] == "written"
     assert target.read_text(encoding="utf-8") == content
@@ -204,26 +313,11 @@ def test_write_denylist_allows_paths_outside_repo(tmp_path):
     )  # should not raise
 
 
-async def test_write_file_to_protected_path_never_prompts(monkeypatch):
-    called = False
-
-    async def fake_confirm(prompt):
-        nonlocal called
-        called = True
-        return True
-
-    monkeypatch.setattr(tool_executor, "confirm", fake_confirm)
+async def test_write_file_to_protected_path_never_issues_token():
+    store = make_store()
     target = os.path.join(tool_executor._REPO_ROOT, ".env")
 
     with pytest.raises(tool_executor.ToolBlocked):
-        await tool_executor.write_file(target, "GATEWAY_API_KEY=stolen")
+        tool_executor.write_file(target, "GATEWAY_API_KEY=stolen", store)
 
-    assert called is False
-
-
-async def _true():
-    return True
-
-
-async def _false():
-    return False
+    assert len(store) == 0  # never staged, never approved, never written

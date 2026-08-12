@@ -1,3 +1,4 @@
+import ast
 import os
 
 from invincible.core import tool_executor
@@ -43,7 +44,7 @@ async def test_mcp_tools_list(client, monkeypatch):
     )
     assert response.status_code == 200
     names = {t["name"] for t in response.json()["result"]["tools"]}
-    assert names == {"read_file", "execute_bash", "write_file"}
+    assert names == {"read_file", "execute_bash", "write_file", "confirm_action"}
 
 
 async def test_mcp_call_blocked_command(client, monkeypatch):
@@ -66,42 +67,165 @@ async def test_mcp_call_blocked_command(client, monkeypatch):
     assert "Blocked" in body["result"]["content"][0]["text"]
 
 
-async def test_mcp_call_declined_command(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
-    monkeypatch.setattr(tool_executor, "confirm", lambda prompt: _false())
+def _pending_token(body):
+    """Extract the token from a pending_confirmation result."""
+    result = ast.literal_eval(body["result"]["content"][0]["text"])
+    assert result["status"] == "pending_confirmation"
+    return result["token"]
 
-    response = await client.post(
+
+async def _call_tool(client, name, arguments):
+    return await client.post(
         "/mcp",
         headers=MCP_AUTH,
         json={
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "execute_bash", "arguments": {"command": "echo hi"}},
+            "params": {"name": name, "arguments": arguments},
         },
     )
-    body = response.json()
-    assert body["result"]["isError"] is True
-    assert "Declined" in body["result"]["content"][0]["text"]
 
 
-async def test_mcp_call_approved_command(client, monkeypatch):
+async def test_mcp_execute_bash_stages_pending_without_running(client, monkeypatch):
     monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
-    monkeypatch.setattr(tool_executor, "confirm", lambda prompt: _true())
+    executed = []
 
-    response = await client.post(
-        "/mcp",
-        headers=MCP_AUTH,
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": "execute_bash", "arguments": {"command": "echo hi"}},
-        },
+    async def probe(command, timeout):
+        executed.append(command)
+        return {"stdout": "", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(tool_executor, "_run_command", probe)
+
+    response = await _call_tool(
+        client, "execute_bash", {"command": "echo hi"}
     )
     body = response.json()
     assert body["result"]["isError"] is False
+    assert "pending_confirmation" in body["result"]["content"][0]["text"]
+    _pending_token(body)  # a token was issued
+    assert executed == []  # nothing ran until confirmed
+
+
+async def test_mcp_execute_bash_approve_two_call_flow(client, monkeypatch):
+    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+
+    staged = await _call_tool(client, "execute_bash", {"command": "echo hi"})
+    token = _pending_token(staged.json())
+
+    response = await _call_tool(client, "confirm_action", {
+        "token": token, "approve": True,
+    })
+    body = response.json()
+    assert body["result"]["isError"] is False
     assert "hi" in body["result"]["content"][0]["text"]
+
+
+async def test_mcp_execute_bash_decline_two_call_flow(client, monkeypatch):
+    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+    executed = []
+
+    async def probe(command, timeout):
+        executed.append(command)
+        return {"stdout": "", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(tool_executor, "_run_command", probe)
+
+    staged = await _call_tool(client, "execute_bash", {"command": "echo hi"})
+    token = _pending_token(staged.json())
+
+    response = await _call_tool(client, "confirm_action", {
+        "token": token, "approve": False,
+    })
+    body = response.json()
+    assert body["result"]["isError"] is True
+    assert "Declined" in body["result"]["content"][0]["text"]
+    assert executed == []
+
+
+async def test_mcp_confirm_action_unknown_token(client, monkeypatch):
+    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+    executed = []
+
+    async def probe(command, timeout):
+        executed.append(command)
+        return {"stdout": "", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(tool_executor, "_run_command", probe)
+
+    response = await _call_tool(client, "confirm_action", {
+        "token": "not-a-real-token", "approve": True,
+    })
+    body = response.json()
+    assert body["result"]["isError"] is True
+    assert "Unknown or expired" in body["result"]["content"][0]["text"]
+    assert executed == []
+
+
+async def test_mcp_confirm_action_token_single_use(client, monkeypatch):
+    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+    executed = []
+
+    async def probe(command, timeout):
+        executed.append(command)
+        return {"stdout": "ok", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(tool_executor, "_run_command", probe)
+
+    staged = await _call_tool(client, "execute_bash", {"command": "echo hi"})
+    token = _pending_token(staged.json())
+
+    first = await _call_tool(client, "confirm_action", {
+        "token": token, "approve": True,
+    })
+    second = await _call_tool(client, "confirm_action", {
+        "token": token, "approve": True,
+    })
+    assert first.json()["result"]["isError"] is False
+    assert second.json()["result"]["isError"] is True
+    assert "Unknown or expired" in second.json()["result"]["content"][0]["text"]
+    assert len(executed) == 1  # replay never double-executes
+
+
+async def test_mcp_confirm_action_non_boolean_approve_is_denied(client, monkeypatch):
+    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+    executed = []
+
+    async def probe(command, timeout):
+        executed.append(command)
+        return {"stdout": "", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(tool_executor, "_run_command", probe)
+
+    staged = await _call_tool(client, "execute_bash", {"command": "echo hi"})
+    token = _pending_token(staged.json())
+
+    response = await _call_tool(client, "confirm_action", {
+        "token": token, "approve": "true",  # string, not a JSON boolean
+    })
+    body = response.json()
+    assert body["result"]["isError"] is True
+    assert "Declined" in body["result"]["content"][0]["text"]
+    assert executed == []
+
+
+async def test_mcp_write_file_two_call_flow(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+    target = tmp_path / "nested" / "out.txt"
+
+    staged = await _call_tool(client, "write_file", {
+        "path": str(target), "content": "hello from mcp",
+    })
+    assert "pending_confirmation" in staged.json()["result"]["content"][0]["text"]
+    assert not target.exists()  # nothing written until confirmed
+    token = _pending_token(staged.json())
+
+    response = await _call_tool(client, "confirm_action", {
+        "token": token, "approve": True,
+    })
+    body = response.json()
+    assert body["result"]["isError"] is False
+    assert target.read_text() == "hello from mcp"
 
 
 async def test_mcp_unknown_tool(client, monkeypatch):
@@ -180,16 +304,8 @@ async def test_mcp_call_read_own_source_allowed(client, monkeypatch):
     assert body["result"]["isError"] is False
 
 
-async def test_mcp_call_write_to_protected_path_blocked(client, monkeypatch):
+async def test_mcp_call_write_to_protected_path_blocked_without_token(client, monkeypatch):
     monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
-    called = False
-
-    async def fake_confirm(prompt):
-        nonlocal called
-        called = True
-        return True
-
-    monkeypatch.setattr(tool_executor, "confirm", fake_confirm)
 
     response = await client.post(
         "/mcp",
@@ -207,7 +323,13 @@ async def test_mcp_call_write_to_protected_path_blocked(client, monkeypatch):
     body = response.json()
     assert body["result"]["isError"] is True
     assert "Blocked" in body["result"]["content"][0]["text"]
-    assert called is False  # never reached the confirmation prompt
+    assert len(app_pending_actions()) == 0  # never staged for approval
+
+
+def app_pending_actions():
+    from invincible.main import app
+
+    return app.state.pending_actions
 
 
 # --- JSON-RPC protocol hardening ---
@@ -300,11 +422,3 @@ async def test_mcp_notification_invalid_params_still_no_body(client, monkeypatch
     )
     assert response.status_code == 204
     assert response.content == b""
-
-
-async def _true():
-    return True
-
-
-async def _false():
-    return False

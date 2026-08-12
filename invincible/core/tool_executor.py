@@ -11,16 +11,25 @@ Security model - decided explicitly up front, not bolted on after the fact:
      harmless-looking write is blocked outright if its target is a file
      this project depends on for its own security or state (`.env`,
      `providers.yaml`, `sessions.db`, Invincible's own source, its tests,
-     or `.git/`). Confirmation is a good backstop, but it shouldn't be the
+     or `.git/`). Approval is a good backstop, but it shouldn't be the
      only thing standing between a cloud AI and this server rewriting its
      own auth check.
-  3. Every execute_bash and write_file call that isn't blocked still stops
-     and waits for interactive confirmation, typed at the same terminal
-     running this server. This is a local single-user tool - the person
-     approving *is* the person sitting at the machine - so a synchronous
-     terminal prompt is the natural confirmation surface, not a second HTTP
-     round-trip or a web UI.
-  4. Authentication for who can reach this code at all lives one layer up,
+  3. Every execute_bash and write_file call that isn't blocked is staged as
+     a pending action with an unpredictable token, and nothing runs until
+     the caller confirms it through the ``confirm_action`` tool (a second
+     ``/mcp`` call with that token). This replaces the old synchronous y/N
+     terminal prompt so a remote operator - e.g. someone on their phone
+     talking to a cloud AI through a tunnel - can approve without any
+     physical access to the machine.
+  4. TRUST BOUNDARY (changed deliberately, on purpose): before, only
+     someone with physical access to the server's terminal could approve an
+     action. After, approval is whatever the calling AI/client reports back
+     through a second ``/mcp`` call - the boundary is now "whoever holds
+     MCP_SHARED_SECRET", the same boundary as every other request on
+     ``/mcp``. Holding the secret is sufficient to approve (or deny)
+     pending actions remotely. This is a real security property change, not
+     an implementation detail.
+  5. Authentication for who can reach this code at all lives one layer up,
      in the MCP endpoint's dependency (MCP_SHARED_SECRET, independent of
      GATEWAY_API_KEY). This module assumes the caller is already
      authenticated - it only decides whether a specific action is safe and
@@ -30,14 +39,17 @@ KNOWN LIMIT: the denylist is a text-pattern match, not a real shell parser.
 `powershell -Command "..."`, `cmd /c "..."`, or any other wrapper/encoding
 can smuggle an arbitrary command past every pattern below. The denylist
 exists to catch the obvious, high-blast-radius cases without a prompt; it
-is not the real safety boundary. The confirmation step is - read what you
-approve.
+is not the real safety boundary. The approval step is - whoever holds the
+MCP secret decides what runs, and anything staged for approval is visible
+in plain sight at the server's own stdout before it is approved.
 """
 import asyncio
 import logging
 import os
 import re
+import secrets
 import subprocess
+import time
 
 logger = logging.getLogger("invincible.tool_executor")
 
@@ -79,7 +91,7 @@ DENYLIST_PATTERNS = [
     # target, so both lookaheads scan the whole command rather than
     # anchoring to a fixed position. A subdirectory target (rd /s C:\build)
     # does NOT match - that's the Windows equivalent of `rm -rf ./build`
-    # and is left to the confirmation step, same as its Unix counterpart.
+    # and is left to the approval step, same as its Unix counterpart.
     (re.compile(
         r"\b(rd|rmdir|del|erase)\b"
         r"(?=.*(?<!\S)/s(?!\S))"
@@ -91,7 +103,7 @@ DENYLIST_PATTERNS = [
 ]
 
 # Paths (relative to the repo root) that write_file refuses to touch
-# outright, regardless of confirmation. Repo root is resolved the same way
+# outright, regardless of approval. Repo root is resolved the same way
 # Router resolves providers.yaml (three dirname() calls up from this file:
 # invincible/core/tool_executor.py -> invincible/core -> invincible -> repo root).
 #
@@ -125,15 +137,60 @@ READ_DENYLIST_PATTERNS = [
 
 
 class ToolBlocked(Exception):
-    """Command or write target matched a denylist; never reached confirmation."""
+    """Command or write target matched a denylist; never staged for approval."""
     def __init__(self, reason: str):
         self.reason = reason
         super().__init__(reason)
 
 
-class ToolDeclined(Exception):
-    """Operator typed 'n' (or just hit enter) at the confirmation prompt."""
-    pass
+class PendingActionStore:
+    """In-process store of staged, not-yet-approved actions.
+
+    Tokens are ``secrets.token_urlsafe(16)`` - unpredictable and generated
+    per action. Entries expire ``TTL_SECONDS`` after creation; an expired
+    token behaves exactly like an unknown one and is purged on the next
+    sweep (lazily done on insert and on lookup - no background task).
+
+    ``take()`` pops the entry, making each token single-use: confirming the
+    same token twice can never execute the action twice (replay guard).
+    """
+
+    TTL_SECONDS = 600  # 10 minutes; tests shrink this via monkeypatch
+
+    def __init__(self):
+        self._pending: dict = {}  # token -> {"type", "args", "created_at"}
+
+    def _sweep(self, now: float | None = None) -> None:
+        cutoff = (now if now is not None else time.monotonic()) - self.TTL_SECONDS
+        for token in [
+            t for t, record in self._pending.items()
+            if record["created_at"] < cutoff
+        ]:
+            del self._pending[token]
+
+    def put(self, action_type: str, args: dict) -> str:
+        """Stage an action and return its confirmation token."""
+        self._sweep()
+        token = secrets.token_urlsafe(16)
+        self._pending[token] = {
+            "type": action_type,
+            "args": args,
+            "created_at": time.monotonic(),
+        }
+        return token
+
+    def take(self, token: str) -> dict | None:
+        """Pop and return the pending record, or None if unknown/expired."""
+        self._sweep()
+        record = self._pending.pop(token, None)
+        if record is None:
+            return None
+        if time.monotonic() - record["created_at"] > self.TTL_SECONDS:
+            return None
+        return record
+
+    def __len__(self) -> int:
+        return len(self._pending)
 
 
 def check_denylist(command: str) -> None:
@@ -149,7 +206,7 @@ def _check_protected_path(path: str, patterns: list, verb: str) -> None:
     except ValueError:
         return  # different drive on Windows - can't be inside the repo root
     if rel.startswith(".."):
-        return  # outside the repo root - confirmation (for writes) is the gate here
+        return  # outside the repo root - approval (for writes) is the gate here
     rel = rel.replace(os.sep, "/")
     for pattern, reason in patterns:
         if pattern.match(rel):
@@ -164,33 +221,12 @@ def check_write_denylist(path: str) -> None:
     """Block writes to files this project depends on for its own security
     or state. Only applies to paths that resolve *inside* the repo root -
     a write outside the repo entirely is a different risk profile and is
-    left to the confirmation step, same as any other write."""
+    left to the approval step, same as any other write."""
     _check_protected_path(path, WRITE_DENYLIST_PATTERNS, "write")
 
 
-async def confirm(prompt: str) -> bool:
-    """Block and wait for y/n on the terminal running this server.
-
-    Runs input() in a worker thread via asyncio.to_thread so the event loop
-    stays free for other in-flight requests while we wait on the operator.
-    """
-    def _ask():
-        try:
-            answer = input(f"{prompt} [y/N]: ").strip().lower()
-        except EOFError:
-            return False
-        return answer in ("y", "yes")
-
-    return await asyncio.to_thread(_ask)
-
-
-async def execute_bash(command: str, timeout: float = 30.0) -> dict:
-    check_denylist(command)  # raises ToolBlocked; caller maps it to a response
-
-    print(f"\n[MCP] Cloud AI wants to run:\n  $ {command}")
-    if not await confirm("Allow this command?"):
-        raise ToolDeclined()
-
+async def _run_command(command: str, timeout: float) -> dict:
+    """Actually run a shell command. Only reached after approval."""
     try:
         proc = await asyncio.create_subprocess_shell(
             command,
@@ -218,13 +254,8 @@ async def execute_bash(command: str, timeout: float = 30.0) -> dict:
         return {"stdout": "", "stderr": str(e), "returncode": -1}
 
 
-async def write_file(path: str, content: str) -> dict:
-    check_write_denylist(path)  # raises ToolBlocked; caller maps it to a response
-
-    print(f"\n[MCP] Cloud AI wants to write {len(content)} bytes to:\n  {path}")
-    if not await confirm("Allow this write?"):
-        raise ToolDeclined()
-
+async def _write_file(path: str, content: str) -> dict:
+    """Actually write a file. Only reached after approval."""
     try:
         dirname = os.path.dirname(os.path.abspath(path))
         if dirname:
@@ -237,8 +268,89 @@ async def write_file(path: str, content: str) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+def execute_bash(
+    command: str,
+    store: PendingActionStore,
+    timeout: float = 30.0,
+) -> dict:
+    """Stage a shell command for approval; nothing runs until confirmed.
+
+    The denylist check happens first and raises ``ToolBlocked`` (no token
+    is ever issued for a blocked command). A passing command is stored in
+    ``store`` under a fresh token and the caller gets a
+    ``pending_confirmation`` response; the caller must then call
+    :func:`confirm_action` with that token to run (or discard) it.
+    """
+    check_denylist(command)  # raises ToolBlocked; caller maps it to a response
+
+    token = store.put("execute_bash", {"command": command, "timeout": timeout})
+    print(f'[MCP] Pending {token}: execute_bash "{command}"')
+    return {
+        "status": "pending_confirmation",
+        "token": token,
+        "action": "execute_bash",
+        "command": command,
+        "message": "Call confirm_action with this token (approve=true/false) to proceed.",
+    }
+
+
+def write_file(
+    path: str,
+    content: str,
+    store: PendingActionStore,
+) -> dict:
+    """Stage a file write for approval; nothing is written until confirmed.
+
+    Same shape as :func:`execute_bash`: denylist first (``ToolBlocked``,
+    no token), then a ``pending_confirmation`` response carrying a token
+    the caller must confirm via :func:`confirm_action`.
+    """
+    check_write_denylist(path)  # raises ToolBlocked; caller maps it to a response
+
+    token = store.put("write_file", {"path": path, "content": content})
+    print(f"[MCP] Pending {token}: write_file {path} ({len(content)} bytes)")
+    return {
+        "status": "pending_confirmation",
+        "token": token,
+        "action": "write_file",
+        "path": path,
+        "content_length": len(content),
+        "message": "Call confirm_action with this token (approve=true/false) to proceed.",
+    }
+
+
+async def confirm_action(
+    store: PendingActionStore,
+    token: str,
+    approve: bool,
+) -> dict:
+    """Resolve a staged action by token.
+
+    Returns a dict the endpoint maps to an MCP result:
+    ``{"status": "not_found"}`` for an unknown/expired/already-used token,
+    ``{"status": "declined"}`` when ``approve`` is false, or the real
+    action result (as :func:`execute_bash`/:func:`write_file` used to
+    return synchronously) when approved. The record is popped regardless,
+    so a token can never resolve twice.
+    """
+    record = store.take(token)
+    if record is None:
+        return {"status": "not_found"}
+    if not approve:
+        return {"status": "declined"}
+    if record["type"] == "execute_bash":
+        args = record["args"]
+        return await _run_command(
+            args.get("command", ""), args.get("timeout", 30.0)
+        )
+    if record["type"] == "write_file":
+        args = record["args"]
+        return await _write_file(args.get("path", ""), args.get("content", ""))
+    return {"status": "error", "error": f"Unknown pending action type: {record['type']}"}
+
+
 async def read_file(path: str) -> dict:
-    """No confirmation prompt - reading isn't destructive, so the friction
+    """No approval step - reading isn't destructive, so the friction
     wouldn't buy anything. The denylist is the only gate: it blocks reading
     out actual secrets/state (.env, sessions.db, .git/) but deliberately
     allows reading invincible/ and tests/ and providers.yaml, since letting the
