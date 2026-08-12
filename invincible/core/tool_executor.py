@@ -290,7 +290,10 @@ def execute_bash(
         "token": token,
         "action": "execute_bash",
         "command": command,
-        "message": "Call confirm_action with this token (approve=true/false) to proceed.",
+        "message": (
+            "Call confirm_action with this token "
+            "(approve=true/false) to proceed."
+        ),
     }
 
 
@@ -315,7 +318,10 @@ def write_file(
         "action": "write_file",
         "path": path,
         "content_length": len(content),
-        "message": "Call confirm_action with this token (approve=true/false) to proceed.",
+        "message": (
+            "Call confirm_action with this token "
+            "(approve=true/false) to proceed."
+        ),
     }
 
 
@@ -346,7 +352,10 @@ async def confirm_action(
     if record["type"] == "write_file":
         args = record["args"]
         return await _write_file(args.get("path", ""), args.get("content", ""))
-    return {"status": "error", "error": f"Unknown pending action type: {record['type']}"}
+    return {
+        "status": "error",
+        "error": f"Unknown pending action type: {record['type']}",
+    }
 
 
 async def read_file(path: str) -> dict:

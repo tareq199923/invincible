@@ -304,7 +304,9 @@ async def test_mcp_call_read_own_source_allowed(client, monkeypatch):
     assert body["result"]["isError"] is False
 
 
-async def test_mcp_call_write_to_protected_path_blocked_without_token(client, monkeypatch):
+async def test_mcp_call_write_to_protected_path_blocked_without_token(
+    client, monkeypatch
+):
     monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
 
     response = await client.post(
