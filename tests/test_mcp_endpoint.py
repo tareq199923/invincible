@@ -2,56 +2,60 @@ import ast
 import os
 
 from invincible.core import tool_executor
+from invincible.core.oauth_store import OAuthStore
+from invincible.main import app
+from tests.conftest import obtain_access_token
 
-MCP_AUTH = {"X-MCP-Secret": "test-mcp-secret"}
 TOOLS_LIST_REQUEST = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
 
-async def test_mcp_missing_secret_returns_401(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+# --- auth gate (Bearer tokens, WWW-Authenticate) ---
+
+
+async def test_mcp_without_bearer_returns_401_with_challenge(client):
+    response = await client.post("/mcp", json=TOOLS_LIST_REQUEST)
+    assert response.status_code == 401
+    challenge = response.headers.get("www-authenticate", "")
+    assert challenge.startswith("Bearer")
+    assert "/.well-known/oauth-protected-resource" in challenge
+
+
+async def test_mcp_with_invalid_bearer_returns_401(client):
     response = await client.post(
-        "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        "/mcp",
+        headers={"Authorization": "Bearer garbage"},
+        json=TOOLS_LIST_REQUEST,
+    )
+    assert response.status_code == 401
+    challenge = response.headers.get("www-authenticate", "")
+    assert "oauth-protected-resource" in challenge
+
+
+async def test_mcp_with_revoked_token_returns_401(client):
+    tokens = await obtain_access_token(client)
+    store: OAuthStore = app.state.oauth_store
+    await store.revoke(tokens["access_token"])
+    response = await client.post(
+        "/mcp",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        json=TOOLS_LIST_REQUEST,
     )
     assert response.status_code == 401
 
 
-async def test_mcp_wrong_secret_returns_401(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_tools_list(client, bearer_headers):
     response = await client.post(
-        "/mcp",
-        headers={"X-MCP-Secret": "wrong"},
-        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
-    )
-    assert response.status_code == 401
-
-
-async def test_mcp_disabled_when_secret_unset(client, monkeypatch):
-    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
-    response = await client.post(
-        "/mcp",
-        headers=MCP_AUTH,
-        json=TOOLS_LIST_REQUEST,
-    )
-    assert response.status_code == 503
-
-
-async def test_mcp_tools_list(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
-    response = await client.post(
-        "/mcp",
-        headers=MCP_AUTH,
-        json=TOOLS_LIST_REQUEST,
+        "/mcp", headers=bearer_headers, json=TOOLS_LIST_REQUEST
     )
     assert response.status_code == 200
     names = {t["name"] for t in response.json()["result"]["tools"]}
     assert names == {"read_file", "execute_bash", "write_file", "confirm_action"}
 
 
-async def test_mcp_call_blocked_command(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_call_blocked_command(client, bearer_headers):
     response = await client.post(
         "/mcp",
-        headers=MCP_AUTH,
+        headers=bearer_headers,
         json={
             "jsonrpc": "2.0",
             "id": 1,
@@ -74,10 +78,10 @@ def _pending_token(body):
     return result["token"]
 
 
-async def _call_tool(client, name, arguments):
+async def _call_tool(client, headers, name, arguments):
     return await client.post(
         "/mcp",
-        headers=MCP_AUTH,
+        headers=headers,
         json={
             "jsonrpc": "2.0",
             "id": 1,
@@ -87,8 +91,20 @@ async def _call_tool(client, name, arguments):
     )
 
 
-async def test_mcp_execute_bash_stages_pending_without_running(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def _call_bash(client, headers, command):
+    return await _call_tool(
+        client, headers, "execute_bash", {"command": command}
+    )
+
+
+async def _confirm(client, headers, token, approve):
+    return await _call_tool(
+        client, headers, "confirm_action",
+        {"token": token, "approve": approve},
+    )
+
+
+async def test_mcp_execute_bash_stages_pending(client, bearer_headers, monkeypatch):
     executed = []
 
     async def probe(command, timeout):
@@ -97,9 +113,7 @@ async def test_mcp_execute_bash_stages_pending_without_running(client, monkeypat
 
     monkeypatch.setattr(tool_executor, "_run_command", probe)
 
-    response = await _call_tool(
-        client, "execute_bash", {"command": "echo hi"}
-    )
+    response = await _call_bash(client, bearer_headers, "echo hi")
     body = response.json()
     assert body["result"]["isError"] is False
     assert "pending_confirmation" in body["result"]["content"][0]["text"]
@@ -107,22 +121,17 @@ async def test_mcp_execute_bash_stages_pending_without_running(client, monkeypat
     assert executed == []  # nothing ran until confirmed
 
 
-async def test_mcp_execute_bash_approve_two_call_flow(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
-
-    staged = await _call_tool(client, "execute_bash", {"command": "echo hi"})
+async def test_mcp_execute_bash_approve_flow(client, bearer_headers, monkeypatch):
+    staged = await _call_bash(client, bearer_headers, "echo hi")
     token = _pending_token(staged.json())
 
-    response = await _call_tool(client, "confirm_action", {
-        "token": token, "approve": True,
-    })
+    response = await _confirm(client, bearer_headers, token, True)
     body = response.json()
     assert body["result"]["isError"] is False
     assert "hi" in body["result"]["content"][0]["text"]
 
 
-async def test_mcp_execute_bash_decline_two_call_flow(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_execute_bash_decline_flow(client, bearer_headers, monkeypatch):
     executed = []
 
     async def probe(command, timeout):
@@ -131,20 +140,17 @@ async def test_mcp_execute_bash_decline_two_call_flow(client, monkeypatch):
 
     monkeypatch.setattr(tool_executor, "_run_command", probe)
 
-    staged = await _call_tool(client, "execute_bash", {"command": "echo hi"})
+    staged = await _call_bash(client, bearer_headers, "echo hi")
     token = _pending_token(staged.json())
 
-    response = await _call_tool(client, "confirm_action", {
-        "token": token, "approve": False,
-    })
+    response = await _confirm(client, bearer_headers, token, False)
     body = response.json()
     assert body["result"]["isError"] is True
     assert "Declined" in body["result"]["content"][0]["text"]
     assert executed == []
 
 
-async def test_mcp_confirm_action_unknown_token(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_confirm_action_unknown_token(client, bearer_headers, monkeypatch):
     executed = []
 
     async def probe(command, timeout):
@@ -153,17 +159,14 @@ async def test_mcp_confirm_action_unknown_token(client, monkeypatch):
 
     monkeypatch.setattr(tool_executor, "_run_command", probe)
 
-    response = await _call_tool(client, "confirm_action", {
-        "token": "not-a-real-token", "approve": True,
-    })
+    response = await _confirm(client, bearer_headers, "not-a-real-token", True)
     body = response.json()
     assert body["result"]["isError"] is True
     assert "Unknown or expired" in body["result"]["content"][0]["text"]
     assert executed == []
 
 
-async def test_mcp_confirm_action_token_single_use(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_confirm_action_token_single_use(client, bearer_headers, monkeypatch):
     executed = []
 
     async def probe(command, timeout):
@@ -172,23 +175,20 @@ async def test_mcp_confirm_action_token_single_use(client, monkeypatch):
 
     monkeypatch.setattr(tool_executor, "_run_command", probe)
 
-    staged = await _call_tool(client, "execute_bash", {"command": "echo hi"})
+    staged = await _call_bash(client, bearer_headers, "echo hi")
     token = _pending_token(staged.json())
 
-    first = await _call_tool(client, "confirm_action", {
-        "token": token, "approve": True,
-    })
-    second = await _call_tool(client, "confirm_action", {
-        "token": token, "approve": True,
-    })
+    first = await _confirm(client, bearer_headers, token, True)
+    second = await _confirm(client, bearer_headers, token, True)
     assert first.json()["result"]["isError"] is False
     assert second.json()["result"]["isError"] is True
     assert "Unknown or expired" in second.json()["result"]["content"][0]["text"]
     assert len(executed) == 1  # replay never double-executes
 
 
-async def test_mcp_confirm_action_non_boolean_approve_is_denied(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_confirm_non_boolean_approve_denied(
+    client, bearer_headers, monkeypatch
+):
     executed = []
 
     async def probe(command, timeout):
@@ -197,131 +197,74 @@ async def test_mcp_confirm_action_non_boolean_approve_is_denied(client, monkeypa
 
     monkeypatch.setattr(tool_executor, "_run_command", probe)
 
-    staged = await _call_tool(client, "execute_bash", {"command": "echo hi"})
+    staged = await _call_bash(client, bearer_headers, "echo hi")
     token = _pending_token(staged.json())
 
-    response = await _call_tool(client, "confirm_action", {
-        "token": token, "approve": "true",  # string, not a JSON boolean
-    })
+    response = await _confirm(client, bearer_headers, token, "true")  # not a JSON bool
     body = response.json()
     assert body["result"]["isError"] is True
     assert "Declined" in body["result"]["content"][0]["text"]
     assert executed == []
 
 
-async def test_mcp_write_file_two_call_flow(client, monkeypatch, tmp_path):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_write_file_two_call_flow(client, bearer_headers, tmp_path):
     target = tmp_path / "nested" / "out.txt"
 
-    staged = await _call_tool(client, "write_file", {
+    staged = await _call_tool(client, bearer_headers, "write_file", {
         "path": str(target), "content": "hello from mcp",
     })
     assert "pending_confirmation" in staged.json()["result"]["content"][0]["text"]
     assert not target.exists()  # nothing written until confirmed
     token = _pending_token(staged.json())
 
-    response = await _call_tool(client, "confirm_action", {
-        "token": token, "approve": True,
-    })
+    response = await _confirm(client, bearer_headers, token, True)
     body = response.json()
     assert body["result"]["isError"] is False
     assert target.read_text() == "hello from mcp"
 
 
-async def test_mcp_unknown_tool(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
-    response = await client.post(
-        "/mcp",
-        headers=MCP_AUTH,
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": "delete_everything", "arguments": {}},
-        },
-    )
+async def test_mcp_unknown_tool(client, bearer_headers):
+    response = await _call_tool(client, bearer_headers, "delete_everything", {})
     body = response.json()
     assert "error" in body
     assert body["error"]["code"] == -32601
 
 
-async def test_mcp_call_read_file_success(client, monkeypatch, tmp_path):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_call_read_file_success(client, bearer_headers, tmp_path):
     target = tmp_path / "readable.txt"
     target.write_text("hello from disk")
 
-    response = await client.post(
-        "/mcp",
-        headers=MCP_AUTH,
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": "read_file", "arguments": {"path": str(target)}},
-        },
+    response = await _call_tool(
+        client, bearer_headers, "read_file", {"path": str(target)}
     )
     body = response.json()
     assert body["result"]["isError"] is False
     assert "hello from disk" in body["result"]["content"][0]["text"]
 
 
-async def test_mcp_call_read_env_file_blocked(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_call_read_env_file_blocked(client, bearer_headers):
     target = os.path.join(tool_executor._REPO_ROOT, ".env")
 
-    response = await client.post(
-        "/mcp",
-        headers=MCP_AUTH,
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": "read_file", "arguments": {"path": target}},
-        },
-    )
+    response = await _call_tool(client, bearer_headers, "read_file", {"path": target})
     body = response.json()
     assert body["result"]["isError"] is True
     assert "Blocked" in body["result"]["content"][0]["text"]
 
 
-async def test_mcp_call_read_own_source_allowed(client, monkeypatch):
+async def test_mcp_call_read_own_source_allowed(client, bearer_headers):
     """Unlike write_file, read_file must allow invincible/ and tests/ - seeing
     the code is the entire point of giving a cloud AI this tool."""
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
     target = os.path.join(tool_executor._REPO_ROOT, "invincible", "main.py")
 
-    response = await client.post(
-        "/mcp",
-        headers=MCP_AUTH,
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": "read_file", "arguments": {"path": target}},
-        },
-    )
+    response = await _call_tool(client, bearer_headers, "read_file", {"path": target})
     body = response.json()
     assert body["result"]["isError"] is False
 
 
-async def test_mcp_call_write_to_protected_path_blocked_without_token(
-    client, monkeypatch
-):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
-
-    response = await client.post(
-        "/mcp",
-        headers=MCP_AUTH,
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "write_file",
-                "arguments": {"path": ".env", "content": "GATEWAY_API_KEY=stolen"},
-            },
-        },
-    )
+async def test_mcp_write_to_protected_path_blocked(client, bearer_headers):
+    response = await _call_tool(client, bearer_headers, "write_file", {
+        "path": ".env", "content": "GATEWAY_API_KEY=stolen",
+    })
     body = response.json()
     assert body["result"]["isError"] is True
     assert "Blocked" in body["result"]["content"][0]["text"]
@@ -336,11 +279,10 @@ def app_pending_actions():
 
 # --- JSON-RPC protocol hardening ---
 
-async def test_mcp_malformed_json_returns_parse_error(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_malformed_json_returns_parse_error(client, bearer_headers):
     response = await client.post(
         "/mcp",
-        headers={**MCP_AUTH, "Content-Type": "application/json"},
+        headers={**bearer_headers, "Content-Type": "application/json"},
         content=b"{not valid json",
     )
     assert response.status_code == 200
@@ -349,54 +291,43 @@ async def test_mcp_malformed_json_returns_parse_error(client, monkeypatch):
     assert body["error"]["code"] == -32700
 
 
-async def test_mcp_non_object_body_returns_invalid_request(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
-    response = await client.post("/mcp", headers=MCP_AUTH, json=[1, 2, 3])
+async def test_mcp_non_object_body_returns_invalid_request(client, bearer_headers):
+    response = await client.post("/mcp", headers=bearer_headers, json=[1, 2, 3])
     body = response.json()
     assert body["id"] is None
     assert body["error"]["code"] == -32600
 
 
-async def test_mcp_missing_method_returns_invalid_request(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_missing_method_returns_invalid_request(client, bearer_headers):
     response = await client.post(
-        "/mcp",
-        headers=MCP_AUTH,
-        json={"jsonrpc": "2.0", "id": 1},
+        "/mcp", headers=bearer_headers, json={"jsonrpc": "2.0", "id": 1}
     )
     body = response.json()
     assert body["id"] == 1
     assert body["error"]["code"] == -32600
 
 
-async def test_mcp_non_string_method_returns_invalid_request(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_non_string_method_returns_invalid_request(client, bearer_headers):
     response = await client.post(
-        "/mcp",
-        headers=MCP_AUTH,
-        json={"jsonrpc": "2.0", "id": 1, "method": 123},
+        "/mcp", headers=bearer_headers, json={"jsonrpc": "2.0", "id": 1, "method": 123}
     )
     body = response.json()
     assert body["id"] == 1
     assert body["error"]["code"] == -32600
 
 
-async def test_mcp_missing_method_notification_still_no_body(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_missing_method_notification_still_no_body(client, bearer_headers):
     response = await client.post(
-        "/mcp",
-        headers=MCP_AUTH,
-        json={"jsonrpc": "2.0"},  # no "id" and no method -> notification
-    )
+        "/mcp", headers=bearer_headers, json={"jsonrpc": "2.0"}
+    )  # no "id" and no method -> notification
     assert response.status_code == 204
     assert response.content == b""
 
 
-async def test_mcp_invalid_params_returns_invalid_params(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_invalid_params_returns_invalid_params(client, bearer_headers):
     response = await client.post(
         "/mcp",
-        headers=MCP_AUTH,
+        headers=bearer_headers,
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": [1, 2]},
     )
     body = response.json()
@@ -404,22 +335,18 @@ async def test_mcp_invalid_params_returns_invalid_params(client, monkeypatch):
     assert body["error"]["code"] == -32602
 
 
-async def test_mcp_notification_returns_no_body(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_notification_returns_no_body(client, bearer_headers):
     response = await client.post(
-        "/mcp",
-        headers=MCP_AUTH,
-        json={"jsonrpc": "2.0", "method": "tools/list"},  # no "id" -> notification
-    )
+        "/mcp", headers=bearer_headers, json={"jsonrpc": "2.0", "method": "tools/list"}
+    )  # no "id" -> notification
     assert response.status_code == 204
     assert response.content == b""
 
 
-async def test_mcp_notification_invalid_params_still_no_body(client, monkeypatch):
-    monkeypatch.setenv("MCP_SHARED_SECRET", "test-mcp-secret")
+async def test_mcp_notification_invalid_params_still_no_body(client, bearer_headers):
     response = await client.post(
         "/mcp",
-        headers=MCP_AUTH,
+        headers=bearer_headers,
         json={"jsonrpc": "2.0", "method": "tools/call", "params": [1, 2]},
     )
     assert response.status_code == 204

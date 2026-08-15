@@ -6,12 +6,14 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 
 from invincible import __version__
+from invincible.core.oauth_store import OAuthStore
 from invincible.core.router import Router
 from invincible.core.session_store import SessionStore
 from invincible.core.tool_executor import PendingActionStore
 from invincible.endpoints.anthropic_compat import router as anthropic_router
 from invincible.endpoints.mcp import require_mcp_auth
 from invincible.endpoints.mcp import router as mcp_router
+from invincible.endpoints.oauth import router as oauth_router
 from invincible.endpoints.openai_compat import router as openai_router
 
 load_dotenv()
@@ -20,13 +22,17 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    db_path = os.getenv("INVINCIBLE_DB_PATH")
     app.state.router = Router(config_path=os.getenv("INVINCIBLE_CONFIG_PATH"))
-    app.state.sessions = SessionStore(db_path=os.getenv("INVINCIBLE_DB_PATH"))
+    app.state.sessions = SessionStore(db_path=db_path)
     app.state.pending_actions = PendingActionStore()
+    app.state.oauth_store = OAuthStore(db_path=db_path)
     await app.state.sessions.init()
+    await app.state.oauth_store.init()
     yield
     await app.state.router.close()
     await app.state.sessions.close()
+    await app.state.oauth_store.close()
 
 app = FastAPI(title="Invincible", lifespan=lifespan)
 
@@ -62,6 +68,7 @@ async def require_auth(request: Request):
 
 app.include_router(openai_router, dependencies=[Depends(require_auth)])
 app.include_router(anthropic_router, dependencies=[Depends(require_auth)])
+app.include_router(oauth_router)
 app.include_router(mcp_router, dependencies=[Depends(require_mcp_auth)])
 
 @app.get("/")

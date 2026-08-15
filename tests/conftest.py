@@ -1,13 +1,19 @@
 import json
+import secrets
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 import yaml
 
+from invincible.core.oauth_store import OAuthStore, _s256_challenge
 from invincible.core.router import Router
 from invincible.core.session_store import SessionStore
 from invincible.core.tool_executor import PendingActionStore
 from invincible.main import app
+
+TEST_OWNER_SECRET = "test-owner-secret"
+TEST_REDIRECT_URI = "http://localhost:9999/callback"
 
 
 def default_providers():
@@ -87,11 +93,15 @@ def router_setter(make_router):
 @pytest.fixture
 async def client(router_setter, monkeypatch):
     monkeypatch.setenv("GATEWAY_API_KEY", "test-gateway-key")
+    monkeypatch.setenv("INVINCIBLE_OWNER_SECRET", TEST_OWNER_SECRET)
     router_setter({})
     store = SessionStore(db_path=":memory:")
     await store.init()
     app.state.sessions = store
     app.state.pending_actions = PendingActionStore()
+    oauth_store = OAuthStore(db_path=":memory:")
+    await oauth_store.init()
+    app.state.oauth_store = oauth_store
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as async_client:
@@ -99,6 +109,99 @@ async def client(router_setter, monkeypatch):
     for router in router_setter.routers:
         await router.close()
     await store.close()
+    await oauth_store.close()
+    app.state.oauth_store = None
+
+
+def pkce_pair():
+    """Generate a (code_verifier, code_challenge) pair."""
+    verifier = secrets.token_urlsafe(32)
+    return verifier, _s256_challenge(verifier)
+
+
+def authorize_params(client_id, challenge, redirect_uri=TEST_REDIRECT_URI):
+    return {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "state": "xyz-state",
+    }
+
+
+async def oauth_register(client, redirect_uri=TEST_REDIRECT_URI, name="test-client"):
+    """Register an OAuth client; returns (client_id, redirect_uri)."""
+    response = await client.post(
+        "/oauth/register",
+        json={"redirect_uris": [redirect_uri], "client_name": name},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["client_id"], redirect_uri
+
+
+async def oauth_login(client, params, owner_secret=TEST_OWNER_SECRET):
+    """Submit the owner-login form (sets the session cookie on success)."""
+    return await client.post(
+        "/oauth/authorize", data={**params, "owner_secret": owner_secret}
+    )
+
+
+async def oauth_approve(client, params, deny=False):
+    """Click Approve/Deny; returns the redirect Location with code/error."""
+    action = "deny" if deny else "approve"
+    response = await client.get(
+        f"/oauth/authorize?{'&'.join(f'{k}={v}' for k, v in params.items())}"
+        f"&action={action}",
+        follow_redirects=False,
+    )
+    assert response.status_code == 302, response.text[:300]
+    return response.headers["location"]
+
+
+async def oauth_exchange(
+    client, code, client_id, redirect_uri=TEST_REDIRECT_URI, verifier=None
+):
+    """Exchange an authorization code for tokens."""
+    data = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+    }
+    if verifier is not None:
+        data["code_verifier"] = verifier
+    return await client.post("/oauth/token", data=data)
+
+
+async def obtain_access_token(client):
+    """Run the complete register -> login -> approve -> exchange flow and
+    return the raw access token (and client_id, refresh_token, verifier)."""
+    verifier, challenge = pkce_pair()
+    client_id, redirect_uri = await oauth_register(client)
+    params = authorize_params(client_id, challenge, redirect_uri)
+    login = await oauth_login(client, params)
+    assert login.status_code == 302, login.text[:300]
+    location = await oauth_approve(client, params)
+    code = parse_qs(urlparse(location).query)["code"][0]
+    exchange = await oauth_exchange(client, code, client_id, redirect_uri, verifier)
+    assert exchange.status_code == 200, exchange.text
+    tokens = exchange.json()
+    return {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "verifier": verifier,
+        "code": code,
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
+    }
+
+
+@pytest.fixture
+async def bearer_headers(client):
+    """Authorization header for API tests that need a valid MCP token."""
+    tokens = await obtain_access_token(client)
+    return {"Authorization": f"Bearer {tokens['access_token']}"}
 
 
 def provider_body(provider_name, content="hello"):

@@ -6,26 +6,26 @@ tunnel can call execute_bash and write_file. Speaks the JSON-RPC 2.0 shape
 MCP clients expect for initialize / tools/list / tools/call - just enough
 surface for this server's own use, not a general-purpose transport.
 
-Auth is a separate MCP_SHARED_SECRET, independent of GATEWAY_API_KEY, so a
-leaked tunnel URL alone isn't enough to reach these tools - and so rotating
-one secret never silently affects the other. The comparison uses
-secrets.compare_digest rather than `==` so a timing side-channel can't be
-used to guess the secret one byte at a time.
+Auth is OAuth 2.1 + PKCE (RFC 9728 resource-server binding): /mcp accepts
+short-lived Bearer access tokens issued by the built-in authorization
+server (/oauth/*). A 401 carries a WWW-Authenticate header pointing at
+/.well-known/oauth-protected-resource so MCP-compatible clients can
+auto-discover the authorization server. The owner secret is no longer sent
+on every request - it only ever appears in the browser login form on
+/oauth/authorize.
 
 Approval for execute_bash/write_file is remote and token-based: a call
 stages a pending action and returns a token; only a confirm_action call
-with that token (approve=true) executes it. This replaces the old
-synchronous terminal prompt - whoever holds MCP_SHARED_SECRET is now the
-approver, not whoever happens to be sitting at the machine.
+with that token (approve=true) executes it. Whoever holds a valid Bearer
+token is the approver, not whoever happens to be sitting at the machine.
 """
 import json
-import os
-import secrets
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from invincible.core import tool_executor
+from invincible.core.oauth_store import OAuthStore
 
 router = APIRouter()
 
@@ -101,32 +101,48 @@ TOOLS = [
 ]
 
 
+def _auth_error(request: Request):
+    """401 with the RFC 9728 WWW-Authenticate challenge so MCP clients can
+    discover the authorization server instead of failing silently."""
+    base = str(request.base_url).rstrip("/")
+    return HTTPException(
+        status_code=401,
+        headers={
+            "WWW-Authenticate": (
+                'Bearer resource_metadata='
+                f'"{base}/.well-known/oauth-protected-resource"'
+            )
+        },
+        detail={
+            "error": {
+                "message": "Missing or invalid access token",
+                "type": "auth_error",
+            }
+        },
+    )
+
+
 async def require_mcp_auth(request: Request):
-    secret = os.getenv("MCP_SHARED_SECRET")
-    if not secret:
+    """Validate the Bearer access token from the built-in OAuth server."""
+    store: OAuthStore | None = getattr(request.app.state, "oauth_store", None)
+    if store is None:
         raise HTTPException(
             status_code=503,
             detail={
                 "error": {
-                    "message": (
-                        "MCP_SHARED_SECRET is not configured; "
-                        "MCP endpoint is disabled."
-                    ),
+                    "message": "OAuth store not initialized; MCP endpoint is disabled.",
                     "type": "config_error",
                 }
             },
         )
-    provided = request.headers.get("X-MCP-Secret")
-    if provided is None or not secrets.compare_digest(provided, secret):
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": {
-                    "message": "Missing or invalid MCP secret",
-                    "type": "auth_error",
-                }
-            },
-        )
+    auth = request.headers.get("Authorization")
+    if not auth or not auth.startswith("Bearer "):
+        raise _auth_error(request)
+    token = auth[len("Bearer "):].strip()
+    if not token:
+        raise _auth_error(request)
+    if await store.validate_access(token) is None:
+        raise _auth_error(request)
 
 
 def _result(id_, result):

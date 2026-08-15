@@ -8,24 +8,35 @@ import asyncio
 import importlib.resources
 import os
 import secrets
+import time
 
 import click
 import uvicorn
 from dotenv import load_dotenv
 
 from invincible import __version__
+from invincible.core.oauth_store import OAuthStore
 from invincible.core.router import load_providers_config
 from invincible.core.session_store import SessionStore
 
 SUPPORTED_ENV_KEYS = (
     "GATEWAY_API_KEY",
-    "MCP_SHARED_SECRET",
+    "INVINCIBLE_OWNER_SECRET",
     "NVIDIA_API_KEY",
     "GROQ_API_KEY",
     "OPENROUTER_API_KEY",
     "GEMINI_API_KEY",
 )
-SECRET_ENV_KEYS = ("GATEWAY_API_KEY", "MCP_SHARED_SECRET")
+SECRET_ENV_KEYS = ("GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET")
+LEGACY_OWNER_SECRET_KEY = "MCP_SHARED_SECRET"
+DB_PATH_HELP = (
+    "Session database file path (default: INVINCIBLE_DB_PATH or ./sessions.db)."
+)
+
+
+def _generate_secret() -> str:
+    """Generate a new cryptographically random secret (never echoed)."""
+    return secrets.token_urlsafe(32)
 
 
 def _parse_env_line(line):
@@ -91,19 +102,41 @@ def setup(env_file, force):
 
     new_values = {}
 
+    # Migration: the owner secret replaced MCP_SHARED_SECRET. When the new
+    # key is absent but the old one exists, carry the value over so existing
+    # deployments work unchanged (the legacy line is kept as a fallback).
+    if (
+        "INVINCIBLE_OWNER_SECRET" not in existing
+        and LEGACY_OWNER_SECRET_KEY in existing
+    ):
+        carried = existing[LEGACY_OWNER_SECRET_KEY]
+        new_values["INVINCIBLE_OWNER_SECRET"] = carried
+        existing["INVINCIBLE_OWNER_SECRET"] = carried
+        click.echo(
+            "Carried MCP_SHARED_SECRET over to INVINCIBLE_OWNER_SECRET "
+            "(it is now the owner-login secret for approving MCP connections)."
+        )
+
     for key in SUPPORTED_ENV_KEYS:
         current = existing.get(key, "")
+        if key == "INVINCIBLE_OWNER_SECRET":
+            label = (
+                "INVINCIBLE_OWNER_SECRET (one-time login to /oauth/authorize "
+                "for approving MCP connections; not sent on /mcp any more)"
+            )
+        else:
+            label = key
         if key in SECRET_ENV_KEYS:
             if current and not force:
                 continue
             if current:
                 new_values[key] = click.prompt(
-                    f"{key} (leave empty to keep the existing value)",
+                    f"{label} (leave empty to keep the existing value)",
                     default=current, hide_input=True, show_default=False,
                 )
             else:
                 # Never printed; write straight to the env file.
-                new_values[key] = secrets.token_urlsafe(32)
+                new_values[key] = _generate_secret()
         else:
             if current and not force:
                 continue
@@ -122,6 +155,21 @@ def setup(env_file, force):
                 if entered:
                     new_values[key] = entered
 
+    _apply_env_updates(env_path, lines, new_values)
+
+    click.echo(f"Configured {env_path}")
+
+
+def _apply_env_updates(env_path, lines, new_values, remove_keys=()):
+    """Rewrite an env file's lines in place: replace values for keys in
+    ``new_values`` (re-attaching any inline comment), drop lines whose key is
+    in ``remove_keys``, append keys in ``new_values`` that are not present,
+    and leave every other line (comments, blank lines, unrelated vars,
+    ordering) byte-for-byte untouched.
+
+    Shared by ``setup`` and ``secret rotate`` so file handling never
+    diverges between generation and rotation.
+    """
     output_lines = []
     seen = set()
     for line in lines:
@@ -129,6 +177,8 @@ def setup(env_file, force):
         if parsed:
             key = parsed[0]
             seen.add(key)
+            if key in remove_keys:
+                continue
             if key in new_values:
                 output_lines.append(f"{key}={new_values[key]}{parsed[2]}\n")
                 continue
@@ -150,8 +200,7 @@ def setup(env_file, force):
     except OSError as exc:
         msg = f"Could not write env file {env_path}: {exc}"
         raise click.ClickException(msg) from exc
-
-    click.echo(f"Configured {env_path}")
+    return text
 
 
 def _load_env_file(env_file: str) -> str | None:
@@ -278,8 +327,17 @@ def _run_doctor_checks():
     ok, note = asyncio.run(_check_session_db(None))
     checks.append(("session database accessible", ok, note))
 
-    for key in ("GATEWAY_API_KEY", "MCP_SHARED_SECRET"):
+    for key in ("GATEWAY_API_KEY",):
         checks.append((f"{key} exists", bool(os.getenv(key)), ""))
+
+    owner = os.getenv("INVINCIBLE_OWNER_SECRET")
+    legacy = os.getenv(LEGACY_OWNER_SECRET_KEY)
+    note = "falling back to MCP_SHARED_SECRET" if (legacy and not owner) else ""
+    checks.append((
+        "INVINCIBLE_OWNER_SECRET exists (owner login for /mcp)",
+        bool(owner or legacy),
+        note,
+    ))
 
     return checks
 
@@ -325,6 +383,288 @@ def doctor(env_file):
         raise click.exceptions.Exit(1)
 
 
+# --- secret rotation ---
+
+
+@click.group()
+def secret():
+    """Rotate gateway secrets stored in the .env file."""
+
+
+@secret.command("rotate")
+@click.option("--env-file", default=".env", show_default=True,
+              help="Path of the .env file to rotate the secret in.")
+@click.option("--show", is_flag=True,
+              help="Print the new secret to the terminal (off by default).")
+def secret_rotate(env_file, show):
+    """Generate a new INVINCIBLE_OWNER_SECRET and write it to .env.
+
+    Preserves every other line, comment, and ordering; a legacy
+    MCP_SHARED_SECRET line (if present) is migrated to the new key at the
+    same time. The new value is never echoed unless --show is passed.
+    Existing OAuth grants are NOT invalidated by rotation - use
+    `invincible oauth revoke <client_id>` for that.
+    """
+    env_path = os.path.abspath(env_file)
+
+    if not os.path.isfile(env_path):
+        raise click.ClickException(
+            f"No env file found at {env_path}. Run `invincible setup` "
+            "first to create one."
+        )
+    try:
+        with open(env_path, encoding="utf-8") as f:
+            content = f.read()
+    except OSError as exc:
+        msg = f"Could not read env file {env_path}: {exc}"
+        raise click.ClickException(msg) from exc
+    lines = content.splitlines(keepends=True)
+
+    parsed_keys = {
+        p[0] for p in (_parse_env_line(line) for line in lines) if p
+    }
+    if not (
+        "INVINCIBLE_OWNER_SECRET" in parsed_keys
+        or LEGACY_OWNER_SECRET_KEY in parsed_keys
+    ):
+        raise click.ClickException(
+            f"No owner secret found in {env_path}. Run `invincible setup` "
+            "first so it can create one for you."
+        )
+
+    new_secret = _generate_secret()
+    remove_keys = (
+        (LEGACY_OWNER_SECRET_KEY,)
+        if LEGACY_OWNER_SECRET_KEY in parsed_keys
+        else ()
+    )
+    _apply_env_updates(
+        env_path, lines, {"INVINCIBLE_OWNER_SECRET": new_secret},
+        remove_keys=remove_keys,
+    )
+
+    click.echo("New owner secret generated and saved to .env")
+    click.echo("Restart Invincible for the new secret to take effect")
+    click.echo(
+        "Anyone with an existing browser session (from the old consent-page "
+        "login) will need to log in again next time they approve a new "
+        "connection"
+    )
+    if show:
+        click.echo(f"INVINCIBLE_OWNER_SECRET={new_secret}")
+
+
+# --- oauth administration ---
+
+
+def _format_ts(timestamp: float) -> str:
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(timestamp))
+    except (OverflowError, OSError, ValueError):
+        return "?"
+
+
+@click.group()
+def oauth():
+    """Inspect and revoke OAuth (MCP bearer-token) grants."""
+
+
+@oauth.command("list")
+@click.option("--db-path", type=click.Path(dir_okay=False), default=None,
+              help=DB_PATH_HELP)
+def oauth_list(db_path):
+    """List registered OAuth clients and their active grants."""
+    store = OAuthStore(db_path=db_path)
+
+    async def _run():
+        await store.init()
+        clients = await store.list_clients()
+        for client in clients:
+            name = client["client_name"] or "(unnamed)"
+            uris = ", ".join(client["redirect_uris"])
+            click.echo(
+                f"{client['client_id']}  {name}\n"
+                f"  registered: {_format_ts(client['created_at'])}\n"
+                f"  redirect URIs: {uris}"
+            )
+            tokens = await store.list_active_tokens(client["client_id"])
+            active = [t for t in tokens if not t["revoked"]]
+            revoked = [t for t in tokens if t["revoked"]]
+            for token in active:
+                click.echo(
+                    f"  active {token['token_type']}: expires "
+                    f"{_format_ts(token['expires_at'])}"
+                )
+            if revoked:
+                click.echo(f"  revoked: {len(revoked)}")
+            if not tokens:
+                click.echo("  no grants")
+        if not clients:
+            click.echo("No registered OAuth clients.")
+        await store.close()
+
+    asyncio.run(_run())
+
+
+@oauth.command("revoke")
+@click.argument("client_id")
+@click.option("--db-path", type=click.Path(dir_okay=False), default=None,
+              help=DB_PATH_HELP)
+def oauth_revoke(client_id, db_path):
+    """Revoke every access/refresh token issued to a client.
+
+    New connections from that client will fail until it is re-registered
+    and approved again in the browser.
+    """
+    store = OAuthStore(db_path=db_path)
+
+    async def _run():
+        await store.init()
+        client = await store.get_client(client_id)
+        if client is None:
+            raise click.ClickException(f"Unknown client id: {client_id}")
+        count = await store.revoke_client_tokens(client_id)
+        click.echo(f"Revoked {count} token(s) for client {client_id}.")
+        await store.close()
+
+    try:
+        asyncio.run(_run())
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        raise click.ClickException(f"Could not revoke tokens: {exc}") from exc
+
+
+@oauth.command("test-client")
+@click.option("--redirect-uri", default="http://127.0.0.1:9999/callback",
+              show_default=True,
+              help="Loopback redirect URI to register for the test client.")
+@click.option("--db-path", type=click.Path(dir_okay=False), default=None,
+              help=DB_PATH_HELP)
+def oauth_test_client(redirect_uri, db_path):
+    """Headless helper: register a client, approve it, and print a Bearer
+    token - so /mcp can be exercised with curl without a browser."""
+    import base64
+    import hashlib
+    from urllib.parse import urlparse
+
+    import httpx
+
+    from invincible.main import app
+
+    owner = os.getenv("INVINCIBLE_OWNER_SECRET") or os.getenv(LEGACY_OWNER_SECRET_KEY)
+    if not owner:
+        raise click.ClickException(
+            "INVINCIBLE_OWNER_SECRET is not set; cannot authenticate as owner."
+        )
+    parsed = urlparse(redirect_uri)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise click.ClickException(f"Invalid redirect URI: {redirect_uri}")
+
+    verifier = secrets.token_urlsafe(32)
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()
+    ).rstrip(b"=").decode("ascii")
+
+    async def _run():
+        store = OAuthStore(db_path=db_path)
+        await store.init()
+        app.state.oauth_store = store
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://test",
+                cookies={},
+            ) as client:
+                client_id, code = await _headless_approve(
+                    client, owner, redirect_uri, challenge
+                )
+                response = await client.post(
+                    "/oauth/token",
+                    data={
+                        "grant_type": "authorization_code",
+                        "code": code,
+                        "client_id": client_id,
+                        "redirect_uri": redirect_uri,
+                        "code_verifier": verifier,
+                    },
+                )
+            if response.status_code != 200:
+                raise click.ClickException(
+                    f"Token exchange failed ({response.status_code}): {response.text}"
+                )
+            tokens = response.json()
+        finally:
+            await store.close()
+
+        click.echo(f"client_id:   {client_id}")
+        click.echo("registered:  http://127.0.0.1:8000/oauth/authorize (approve)")
+        click.echo(f"access token expires in {tokens['expires_in']}s")
+        click.echo("")
+        click.echo("List MCP tools with:")
+        click.echo(
+            f'curl -X POST http://127.0.0.1:8000/mcp '
+            f'-H "Authorization: Bearer {tokens["access_token"]}" '
+            f'-H "Content-Type: application/json" '
+            f'-d \'{{"jsonrpc":"2.0","id":1,"method":"tools/list"}}\''
+        )
+        click.echo("")
+        click.echo(
+            f"Full OAuth response saved below (refresh token included):\n{tokens}"
+        )
+
+    try:
+        asyncio.run(_run())
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        raise click.ClickException(f"Test client failed: {exc}") from exc
+
+
+async def _headless_approve(client, owner_secret_value, redirect_uri, challenge):
+    """Drive register -> login -> consent through the real endpoints.
+    Returns (client_id, authorization code)."""
+    from urllib.parse import parse_qs, urlencode, urlparse
+
+    registration = await client.post(
+        "/oauth/register",
+        json={
+            "redirect_uris": [redirect_uri],
+            "client_name": "invincible oauth test-client",
+        },
+    )
+    if registration.status_code != 201:
+        raise click.ClickException(
+            f"Registration failed ({registration.status_code}): {registration.text}"
+        )
+    client_id = registration.json()["client_id"]
+    params = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    query = urlencode(params)
+    login = await client.post(
+        "/oauth/authorize", data={**params, "owner_secret": owner_secret_value}
+    )
+    if login.status_code != 302:
+        raise click.ClickException(
+            f"Owner login failed ({login.status_code}): {login.text[:200]}"
+        )
+    approved = await client.get(
+        f"/oauth/authorize?{query}&action=approve", follow_redirects=False
+    )
+    location = approved.headers.get("location", "")
+    code = parse_qs(urlparse(location).query).get("code", [None])[0]
+    if approved.status_code != 302 or not code:
+        raise click.ClickException(
+            f"Consent approval failed ({approved.status_code}): {approved.text[:200]}"
+        )
+    return client_id, code
+
+
 @click.group()
 @click.version_option(__version__, "--version", "-V", prog_name="invincible")
 def cli():
@@ -334,6 +674,8 @@ def cli():
 cli.add_command(setup)
 cli.add_command(start)
 cli.add_command(doctor)
+cli.add_command(secret)
+cli.add_command(oauth)
 
 if __name__ == "__main__":
     cli()

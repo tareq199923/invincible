@@ -31,6 +31,8 @@ def test_cli_help():
     assert "Usage" in result.output
     assert "setup" in result.output
     assert "start" in result.output
+    assert "secret" in result.output
+    assert "oauth" in result.output
 
 
 def test_cli_version():
@@ -40,7 +42,7 @@ def test_cli_version():
 
 
 def test_subcommand_help():
-    for sub in ("setup", "start"):
+    for sub in ("setup", "start", "secret", "oauth"):
         result = CliRunner().invoke(cli, [sub, "--help"])
         assert result.exit_code == 0
         assert "Usage" in result.output
@@ -67,7 +69,7 @@ def test_setup_creates_env_file(tmp_path):
     assert str(target) in result.output
     values = _env_dict(target.read_text(encoding="utf-8"))
     assert set(values) == {
-        "GATEWAY_API_KEY", "MCP_SHARED_SECRET", "NVIDIA_API_KEY",
+        "GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET", "NVIDIA_API_KEY",
         "GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY",
     }
     assert values["NVIDIA_API_KEY"] == "nim-key"
@@ -76,7 +78,7 @@ def test_setup_creates_env_file(tmp_path):
     assert values["GEMINI_API_KEY"] == "gem-key"
 
 
-def test_setup_generates_gateway_and_mcp_secrets_without_printing(tmp_path):
+def test_setup_generates_gateway_and_owner_secrets_without_printing(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
         cli, ["setup", "--env-file", str(target)], input="\n\n\n\n"
@@ -84,20 +86,20 @@ def test_setup_generates_gateway_and_mcp_secrets_without_printing(tmp_path):
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
     assert values["GATEWAY_API_KEY"]
-    assert values["MCP_SHARED_SECRET"]
-    assert values["GATEWAY_API_KEY"] != values["MCP_SHARED_SECRET"]
+    assert values["INVINCIBLE_OWNER_SECRET"]
+    assert values["GATEWAY_API_KEY"] != values["INVINCIBLE_OWNER_SECRET"]
     # Empty input skips the provider keys...
     assert "NVIDIA_API_KEY" not in values
     assert "GEMINI_API_KEY" not in values
     # ...and the generated secrets never reach the terminal.
     assert values["GATEWAY_API_KEY"] not in result.output
-    assert values["MCP_SHARED_SECRET"] not in result.output
+    assert values["INVINCIBLE_OWNER_SECRET"] not in result.output
 
 
 def test_setup_preserves_existing_values(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
-        "GATEWAY_API_KEY=gw-1\nMCP_SHARED_SECRET=mcp-1\nNVIDIA_API_KEY=nim-1\n"
+        "GATEWAY_API_KEY=gw-1\nINVINCIBLE_OWNER_SECRET=owner-1\nNVIDIA_API_KEY=nim-1\n"
         "GROQ_API_KEY=groq-1\nOPENROUTER_API_KEY=or-1\nGEMINI_API_KEY=gem-1\n",
         encoding="utf-8",
     )
@@ -105,6 +107,21 @@ def test_setup_preserves_existing_values(tmp_path):
     result = CliRunner().invoke(cli, ["setup", "--env-file", str(target)], input="")
     assert result.exit_code == 0
     assert target.read_text(encoding="utf-8") == before
+
+
+def test_setup_carries_legacy_mcp_shared_secret_into_new_key(tmp_path):
+    target = tmp_path / ".env"
+    target.write_text(
+        "GATEWAY_API_KEY=gw-1\nMCP_SHARED_SECRET=old-mcp\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(
+        cli, ["setup", "--env-file", str(target)], input="\n\n\n\n"
+    )
+    assert result.exit_code == 0
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert values["INVINCIBLE_OWNER_SECRET"] == "old-mcp"
+    assert "Carried MCP_SHARED_SECRET over" in result.output
 
 
 def test_setup_preserves_unrelated_vars_comments_and_blank_lines(tmp_path):
@@ -127,7 +144,7 @@ def test_setup_preserves_unrelated_vars_comments_and_blank_lines(tmp_path):
     assert values["CUSTOM_SETTING"] == "value"
     assert values["ANOTHER_VARIABLE"] == "test"
     assert values["QUOTED"] == '"keep me"'
-    assert values["GATEWAY_API_KEY"] and values["MCP_SHARED_SECRET"]
+    assert values["GATEWAY_API_KEY"] and values["INVINCIBLE_OWNER_SECRET"]
 
 
 def test_setup_preserves_unicode_comments_and_values(tmp_path):
@@ -154,7 +171,7 @@ def test_setup_repeated_runs_do_not_duplicate_keys(tmp_path):
     second = CliRunner().invoke(cli, ["setup", "--env-file", str(target)], input="")
     assert second.exit_code == 0
     text = target.read_text(encoding="utf-8")
-    for key in ("GATEWAY_API_KEY", "MCP_SHARED_SECRET", "NVIDIA_API_KEY",
+    for key in ("GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET", "NVIDIA_API_KEY",
                 "GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY"):
         assert text.count(f"{key}=") == 1
 
@@ -162,19 +179,19 @@ def test_setup_repeated_runs_do_not_duplicate_keys(tmp_path):
 def test_setup_force_updates_values(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
-        "GATEWAY_API_KEY=old-gw\nMCP_SHARED_SECRET=old-mcp\nNVIDIA_API_KEY=old-nim\n"
+        "GATEWAY_API_KEY=old-gw\nINVINCIBLE_OWNER_SECRET=old-owner\nNVIDIA_API_KEY=old-nim\n"
         "GROQ_API_KEY=old-groq\nOPENROUTER_API_KEY=old-or\nGEMINI_API_KEY=old-gem\n",
         encoding="utf-8",
     )
     result = CliRunner().invoke(
         cli, ["setup", "--env-file", str(target), "--force"],
-        input="new-gw\nnew-mcp\nnew-nim\nnew-groq\nnew-or\nnew-gem\n",
+        input="new-gw\nnew-owner\nnew-nim\nnew-groq\nnew-or\nnew-gem\n",
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
     assert values == {
         "GATEWAY_API_KEY": "new-gw",
-        "MCP_SHARED_SECRET": "new-mcp",
+        "INVINCIBLE_OWNER_SECRET": "new-owner",
         "NVIDIA_API_KEY": "new-nim",
         "GROQ_API_KEY": "new-groq",
         "OPENROUTER_API_KEY": "new-or",
@@ -191,7 +208,7 @@ def test_setup_force_empty_input_preserves_existing(tmp_path):
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
     assert values["GEMINI_API_KEY"] == "keep-me"
-    assert values["GATEWAY_API_KEY"] and values["MCP_SHARED_SECRET"]
+    assert values["GATEWAY_API_KEY"] and values["INVINCIBLE_OWNER_SECRET"]
 
 
 def test_setup_write_failure_returns_nonzero(tmp_path):
@@ -201,6 +218,99 @@ def test_setup_write_failure_returns_nonzero(tmp_path):
     )
     assert result.exit_code == 1
     assert "Could not write env file" in result.output
+
+
+# --- secret rotate behavior ---
+
+def test_secret_rotate_replaces_owner_secret_with_new_value(tmp_path):
+    target = tmp_path / ".env"
+    target.write_text("INVINCIBLE_OWNER_SECRET=old-owner\n", encoding="utf-8")
+    result = CliRunner().invoke(cli, ["secret", "rotate", "--env-file", str(target)])
+    assert result.exit_code == 0
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert values["INVINCIBLE_OWNER_SECRET"]
+    assert values["INVINCIBLE_OWNER_SECRET"] != "old-owner"
+    assert "New owner secret generated and saved" in result.output
+
+
+def test_secret_rotate_preserves_other_lines_comments_and_order(tmp_path):
+    target = tmp_path / ".env"
+    before = (
+        "# Top comment\n"
+        "GATEWAY_API_KEY=gw-1\n"
+        "CUSTOM_SETTING=value\n"
+        "INVINCIBLE_OWNER_SECRET=old-owner\n"
+        "# trailing note\n"
+        'QUOTED="keep me"\n'
+        "\n"
+    )
+    target.write_text(before, encoding="utf-8")
+    result = CliRunner().invoke(cli, ["secret", "rotate", "--env-file", str(target)])
+    assert result.exit_code == 0
+    lines = target.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "# Top comment"
+    assert lines[1] == "GATEWAY_API_KEY=gw-1"
+    assert lines[2] == "CUSTOM_SETTING=value"
+    assert lines[3].startswith("INVINCIBLE_OWNER_SECRET=")
+    assert lines[3] != "INVINCIBLE_OWNER_SECRET=old-owner"
+    assert lines[4] == "# trailing note"
+    assert lines[5] == 'QUOTED="keep me"'
+    assert lines[6] == ""
+    assert target.read_text(encoding="utf-8") != before
+
+
+def test_secret_rotate_migrates_legacy_mcp_shared_secret(tmp_path):
+    target = tmp_path / ".env"
+    target.write_text(
+        "GATEWAY_API_KEY=gw-1\nMCP_SHARED_SECRET=old-mcp\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(cli, ["secret", "rotate", "--env-file", str(target)])
+    assert result.exit_code == 0
+    text = target.read_text(encoding="utf-8")
+    assert "INVINCIBLE_OWNER_SECRET=" in text
+    assert "MCP_SHARED_SECRET" not in text
+    values = _env_dict(text)
+    assert values["INVINCIBLE_OWNER_SECRET"] != "old-mcp"
+    assert values["GATEWAY_API_KEY"] == "gw-1"
+
+
+def test_secret_rotate_missing_env_file_guides_to_setup(tmp_path):
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(cli, ["secret", "rotate", "--env-file", str(target)])
+    assert result.exit_code == 1
+    assert "invincible setup" in result.output
+    assert not target.exists()
+
+
+def test_secret_rotate_env_file_without_owner_secret_guides_to_setup(tmp_path):
+    target = tmp_path / ".env"
+    target.write_text("GATEWAY_API_KEY=gw-1\n", encoding="utf-8")
+    result = CliRunner().invoke(cli, ["secret", "rotate", "--env-file", str(target)])
+    assert result.exit_code == 1
+    assert "invincible setup" in result.output
+    assert target.read_text(encoding="utf-8") == "GATEWAY_API_KEY=gw-1\n"
+
+
+def test_secret_rotate_hides_value_unless_show_flag(tmp_path):
+    target = tmp_path / ".env"
+    target.write_text("INVINCIBLE_OWNER_SECRET=old-owner\n", encoding="utf-8")
+
+    hidden = CliRunner().invoke(cli, ["secret", "rotate", "--env-file", str(target)])
+    assert hidden.exit_code == 0
+    assert "old-owner" not in hidden.output
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    first_value = values["INVINCIBLE_OWNER_SECRET"]
+    assert first_value not in hidden.output
+
+    shown = CliRunner().invoke(
+        cli, ["secret", "rotate", "--env-file", str(target), "--show"]
+    )
+    assert shown.exit_code == 0
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    second_value = values["INVINCIBLE_OWNER_SECRET"]
+    assert second_value != first_value
+    assert f"INVINCIBLE_OWNER_SECRET={second_value}" in shown.output
 
 
 # --- start behavior ---
@@ -399,3 +509,102 @@ def test_default_db_path_is_cwd_and_not_inside_package(tmp_path, monkeypatch):
     monkeypatch.setenv("INVINCIBLE_DB_PATH", str(custom))
     assert SessionStore().db_path == str(custom)
     assert SessionStore(db_path=":memory:").db_path == ":memory:"
+
+
+# --- oauth administration ---
+
+
+def test_oauth_list_shows_clients_and_grants(tmp_path):
+    import asyncio
+
+    from invincible.core.oauth_store import OAuthStore
+
+    db = tmp_path / "oauth.db"
+
+    async def seed():
+        store = OAuthStore(db_path=str(db))
+        await store.init()
+        registration = await store.register_client(
+            ["http://localhost:9999/callback"], "seed-client"
+        )
+        await store.issue_token_pair(registration["client_id"])
+        await store.close()
+        return registration["client_id"]
+
+    client_id = asyncio.run(seed())
+
+    result = CliRunner().invoke(cli, ["oauth", "list", "--db-path", str(db)])
+    assert result.exit_code == 0
+    assert client_id in result.output
+    assert "seed-client" in result.output
+    assert "http://localhost:9999/callback" in result.output
+    assert "active access: expires" in result.output
+    assert "active refresh: expires" in result.output
+
+
+def test_oauth_list_empty_is_quiet(tmp_path):
+    db = tmp_path / "empty.db"
+    result = CliRunner().invoke(cli, ["oauth", "list", "--db-path", str(db)])
+    assert result.exit_code == 0
+    assert "No registered OAuth clients." in result.output
+
+
+def test_oauth_revoke_unknown_client_fails(tmp_path):
+    db = tmp_path / "oauth.db"
+    result = CliRunner().invoke(cli, ["oauth", "revoke", "nope", "--db-path", str(db)])
+    assert result.exit_code == 1
+    assert "Unknown client id" in result.output
+
+
+def test_oauth_revoke_revokes_all_tokens(tmp_path):
+    import asyncio
+
+    from invincible.core.oauth_store import OAuthStore
+
+    db = tmp_path / "oauth.db"
+
+    async def seed():
+        store = OAuthStore(db_path=str(db))
+        await store.init()
+        registration = await store.register_client(
+            ["http://localhost:9999/callback"], "seed-client"
+        )
+        await store.issue_token_pair(registration["client_id"])
+        await store.close()
+        return registration["client_id"]
+
+    client_id = asyncio.run(seed())
+
+    result = CliRunner().invoke(
+        cli, ["oauth", "revoke", client_id, "--db-path", str(db)]
+    )
+    assert result.exit_code == 0
+    assert f"Revoked 2 token(s) for client {client_id}." in result.output
+
+    listed = CliRunner().invoke(cli, ["oauth", "list", "--db-path", str(db)])
+    assert "revoked: 2" in listed.output
+
+
+def test_oauth_test_client_prints_bearer_curl(monkeypatch, tmp_path):
+    monkeypatch.setenv("INVINCIBLE_OWNER_SECRET", "owner-secret")
+    db = tmp_path / "oauth.db"
+    result = CliRunner().invoke(
+        cli, ["oauth", "test-client", "--db-path", str(db)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "client_id:" in result.output
+    assert "access token expires in 3600s" in result.output
+    assert 'curl -X POST http://127.0.0.1:8000/mcp' in result.output
+    assert "Authorization: Bearer" in result.output
+    assert "Full OAuth response" in result.output
+
+
+def test_oauth_test_client_requires_owner_secret(monkeypatch, tmp_path):
+    monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
+    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
+    db = tmp_path / "oauth.db"
+    result = CliRunner().invoke(
+        cli, ["oauth", "test-client", "--db-path", str(db)]
+    )
+    assert result.exit_code == 1
+    assert "INVINCIBLE_OWNER_SECRET is not set" in result.output

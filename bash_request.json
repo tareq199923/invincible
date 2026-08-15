@@ -1,1 +1,0 @@
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute_bash","arguments":{"command":"echo hello from invincible"}}}

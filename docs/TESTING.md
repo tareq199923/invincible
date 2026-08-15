@@ -43,8 +43,9 @@ pytest
   real `invincible.main.app`), tracking every router so the fixture can
   close its httpx client afterwards.
 - **`client`** — an `httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
-  base_url="http://test")`; sets `GATEWAY_API_KEY=test-gateway-key`,
-  `MCP_SHARED_SECRET` is set per-test with `monkeypatch`. Uses a
+  base_url="http://test")`; sets `GATEWAY_API_KEY=test-gateway-key` and
+  `INVINCIBLE_OWNER_SECRET=test-owner-secret` (MCP auth flows through the
+  OAuth endpoints, which need the owner secret for the login step). Uses a
   `SessionStore(db_path=":memory:")` so tests are isolated.
 - **`provider_body(name, content)`** — a canned OpenAI-shaped success body.
 

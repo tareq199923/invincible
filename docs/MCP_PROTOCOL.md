@@ -6,25 +6,187 @@ a manual `curl`. The server speaks a **minimal JSON-RPC 2.0 subset** over a
 single `POST /mcp` — it is not a general-purpose MCP transport (no
 streaming/SSE, no subscriptions, no batch).
 
+Auth is **OAuth 2.1 + PKCE**: the `/mcp` endpoint is an OAuth resource
+server, guarded by short-lived Bearer access tokens issued by Invincible's
+own built-in authorization server. This matches what MCP-compatible clients
+(the Claude app's "Add custom connector" flow, etc.) expect.
+
 ---
 
-## 1. Transport & auth
+## 1. Discovery
+
+### Protected-resource metadata (RFC 9728) — the MCP server
+
+`GET /.well-known/oauth-protected-resource`:
+
+```json
+{
+  "resource": "http://127.0.0.1:8000/mcp",
+  "canonical_uri": "http://127.0.0.1:8000/mcp",
+  "authorization_servers": ["http://127.0.0.1:8000"]
+}
+```
+
+This is where a client starts after hitting a `401` with this header:
+
+```http
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer resource_metadata="http://127.0.0.1:8000/.well-known/oauth-protected-resource"
+```
+
+### Authorization-server metadata (RFC 8414) — the OAuth server
+
+`GET /.well-known/oauth-authorization-server`:
+
+```json
+{
+  "issuer": "http://127.0.0.1:8000",
+  "authorization_endpoint": "http://127.0.0.1:8000/oauth/authorize",
+  "token_endpoint": "http://127.0.0.1:8000/oauth/token",
+  "registration_endpoint": "http://127.0.0.1:8000/oauth/register",
+  "revocation_endpoint": "http://127.0.0.1:8000/oauth/revoke",
+  "response_types_supported": ["code"],
+  "grant_types_supported": ["authorization_code", "refresh_token"],
+  "code_challenge_methods_supported": ["S256"],
+  "token_endpoint_auth_methods_supported": ["none"],
+  "revocation_endpoint_auth_methods_supported": ["none"]
+}
+```
+
+---
+
+## 2. Transport & auth
 
 ```
 POST /mcp
 Content-Type: application/json
-X-MCP-Secret: <MCP_SHARED_SECRET>
+Authorization: Bearer <access_token>
 ```
 
-- **Auth**: the `X-MCP-Secret` header must equal `MCP_SHARED_SECRET`
-  (timing-safe comparison). Wrong/missing → `401`. If the secret is unset on
-  the server → `503` (disabled, never open).
+- **Auth**: the `Authorization: Bearer` token must be a live access token
+  issued by the `/oauth` server. Missing, expired, or revoked → `401` with
+  the `WWW-Authenticate` challenge above. There is no `X-MCP-Secret` header
+  any more.
 - **One request per HTTP POST.** The body is a single JSON-RPC 2.0 object.
 - Protocol version advertised: `2025-06-18`.
 
+> The `resource` parameter (RFC 8707) that MCP clients send on authorize /
+> token requests is accepted and ignored — this deployment is a single
+> authorization server for a single resource.
+
 ---
 
-## 2. Methods
+## 3. Connecting a client (OAuth flow)
+
+A compliant MCP client performs: discovery → dynamic registration →
+authorization-code flow with PKCE (S256) → Bearer calls on `/mcp`.
+
+### 3.1 Register a client (RFC 7591)
+
+```http
+POST /oauth/register
+Content-Type: application/json
+
+{"redirect_uris": ["http://localhost:8765/callback"], "client_name": "my-agent"}
+```
+
+Response (`201`):
+
+```json
+{
+  "client_id": "9zLm...WxQ",
+  "client_name": "my-agent",
+  "redirect_uris": ["http://localhost:8765/callback"]
+}
+```
+
+Public client — **no `client_secret`** is issued (PKCE-only). Registration
+is open (that is normal for dynamic registration); the real gate is the
+consent page, so only a registered `redirect_uri` is ever redirected to.
+Redirect URIs must be `https://` or loopback (`http://localhost` /
+`http://127.0.0.1`).
+
+### 3.2 Authorize (consent page)
+
+```
+GET /oauth/authorize?response_type=code&client_id=<id>&redirect_uri=<uri>
+    &code_challenge=<S256>&code_challenge_method=S256&state=<opaque>
+```
+
+- No valid owner session cookie → a **login form** asking for
+  `INVINCIBLE_OWNER_SECRET` (entered once per browser, ~30-day remembered
+  session). A wrong secret sets no cookie.
+- Logged in → a **consent page**: "`<client_name>` wants access to your
+  Invincible instance. [Approve] [Deny]".
+
+On **Approve**, the owner's browser is redirected to:
+
+```
+http://localhost:8765/callback?code=<single-use-code>&state=<opaque>
+```
+
+On **Deny**:
+
+```
+http://localhost:8765/callback?error=access_denied&state=<opaque>
+```
+
+The code is single-use, bound to the exact client / redirect URI / PKCE
+challenge, and expires after ~5 minutes. Invalid `client_id` or a
+`redirect_uri` that was never registered is answered with an error page —
+the server **never** redirects to an unregistered URI.
+
+### 3.3 Exchange code for tokens
+
+```http
+POST /oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code&code=<code>&client_id=<id>
+&redirect_uri=<uri>&code_verifier=<verifier>
+```
+
+The `code_verifier` must hash (S256) to the `code_challenge` sent in 3.2.
+Response (`200`):
+
+```json
+{
+  "access_token": "74mC...",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "refresh_token": "aR2b..."
+}
+```
+
+Access tokens expire after **1 hour**; refresh tokens after **30 days**.
+Refresh tokens are **rotated**: every refresh invalidates the previous one.
+
+### 3.4 Refresh
+
+```http
+POST /oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token&refresh_token=<refresh_token>
+```
+
+Returns a fresh `access_token` and a **new** `refresh_token` (the old one
+is revoked).
+
+### 3.5 Revoke
+
+```http
+POST /oauth/revoke
+Content-Type: application/x-www-form-urlencoded
+
+token=<access-or-refresh-token>
+```
+
+Always `200` (an unknown token counts as already revoked).
+
+---
+
+## 4. Methods
 
 ### `initialize`
 
@@ -269,7 +431,7 @@ token can never execute the action twice.
 
 ---
 
-## 3. Notifications (no `id`)
+## 5. Notifications (no `id`)
 
 A request **without** an `id` field is a JSON-RPC 2.0 *notification*: the
 server still performs the side effect (e.g. `tools/call` executes), but
@@ -287,7 +449,7 @@ actions, and all side effects are untouched by the missing `id`.
 
 ---
 
-## 4. Error codes
+## 6. Error codes
 
 | Code | Meaning | When |
 |---|---|---|
@@ -307,7 +469,7 @@ errors — they are successful calls whose `result.isError` is `true`.
 
 ---
 
-## 5. End-to-end example (tunnel)
+## 7. End-to-end example (tunnel)
 
 Expose the local server with a tunnel, e.g. Cloudflare:
 
@@ -316,21 +478,42 @@ cloudflared tunnel --url http://127.0.0.1:8000
 # → https://random-name.trycloudflare.com
 ```
 
-Then a remote AI calls:
+Without a valid token, `/mcp` answers `401` with the RFC 9728 challenge:
 
 ```bash
-curl -X POST https://random-name.trycloudflare.com/mcp \
-  -H "X-MCP-Secret: $MCP_SHARED_SECRET" \
+curl -i -X POST https://random-name.trycloudflare.com/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
+
+# HTTP/1.1 401 Unauthorized
+# WWW-Authenticate: Bearer resource_metadata="https://random-name.trycloudflare.com/.well-known/oauth-protected-resource"
 ```
+
+A compliant MCP client then auto-discovers the authorization server and
+runs the OAuth flow (§3) in the browser. For **manual testing without a
+browser**, use the built-in helper:
+
+```bash
+invincible oauth test-client
+# client_id:   9zLm...WxQ
+# access token expires in 3600s
+# curl -X POST http://127.0.0.1:8000/mcp \
+#   -H "Authorization: Bearer <token>" \
+#   -H "Content-Type: application/json" \
+#   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+Or drive the flow by hand with a browser: open `/.well-known/oauth-protected-resource`,
+register a client, approve the consent page, and use the returned token.
 
 Security notes for this setup:
 
-- The tunnel URL alone is useless without the MCP secret (independent from
-  `GATEWAY_API_KEY`).
+- The tunnel URL alone is useless — no valid token, no access.
+- Access tokens expire in an hour and can be revoked immediately with
+  `invincible oauth revoke <client_id>`.
 - `read_file` needs no confirmation. `execute_bash`/`write_file` return a
   token; the command/file only materializes after a second
   `confirm_action` call with that token and `approve: true`. Whoever holds
-  the MCP secret is the approver — there is no terminal prompt to gate it.
+  a valid bearer token is the approver — there is no terminal prompt to
+  gate it.
 - See [docs/SECURITY.md](SECURITY.md) for the full threat model.

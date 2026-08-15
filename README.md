@@ -48,7 +48,7 @@ serves two roles in one process:
 | **Conversation memory** | SQLite-backed, keyed by the `X-Session-Id` header (default `default`). History is merged into every request and the assistant reply is persisted back. |
 | **Context trimming** | Per-provider `max_context`; system messages always kept; everything else dropped as atomic *turns* (an assistant `tool_calls` is never separated from its tool results); the most recent turn is always sent. |
 | **Per-provider timeouts** | Split connect/read/write/pool with sane defaults and per-provider overrides (NIM, Gemini, and the OpenRouter fallback get 90s reads; Groq 45s). |
-| **MCP tool server** | `read_file` (no approval), `execute_bash` and `write_file` (staged, then approved via a token round-trip through the `confirm_action` tool), guarded by denylists and a separate `MCP_SHARED_SECRET` auth. |
+| **MCP tool server** | `read_file` (no approval), `execute_bash` and `write_file` (staged, then approved via a token round-trip through the `confirm_action` tool), guarded by denylists and an **OAuth 2.1 + PKCE bearer-token** auth layer (browser owner-login + per-client consent, tokens don't survive on requests like a shared header does). |
 | **Protocol-agnostic** | Native **OpenAI** and **Anthropic** protocols, both translated into one internal message model. Claude Code works with `ANTHROPIC_BASE_URL` pointing at the gateway. |
 
 ---
@@ -83,8 +83,10 @@ invincible start                    # http://127.0.0.1:8000
 ```
 
 `invincible setup` writes missing secret values (`GATEWAY_API_KEY`,
-`MCP_SHARED_SECRET`) as random `secrets.token_urlsafe(32)` tokens and prompts
-for the provider keys, preserving your existing `.env` comments and values.
+`INVINCIBLE_OWNER_SECRET`) as random `secrets.token_urlsafe(32)` tokens and
+prompts for the provider keys, preserving your existing `.env` comments and
+values. `INVINCIBLE_OWNER_SECRET` is the one-time browser login for
+approving MCP connections — not something `/mcp` requests send anymore.
 
 See [Examples](#examples) for ready-to-run `curl` calls, or continue reading
 for the full configuration, API, and tooling reference.
@@ -100,7 +102,7 @@ Everything is environment variables plus one YAML file — no other config.
 | Variable | Required by | Purpose |
 |---|---|---|
 | `GATEWAY_API_KEY` | `/v1/*` | Bearer token for the chat endpoint. **If unset, the endpoint is open (no auth).** |
-| `MCP_SHARED_SECRET` | `/mcp` | Value of the `X-MCP-Secret` header for tool calls. **If unset, `/mcp` returns 503.** |
+| `INVINCIBLE_OWNER_SECRET` | `/oauth/authorize` | One-time **browser login** to approve MCP connections (kept in a 30-day signed session cookie). **Not** sent on `/mcp` — requests use short-lived OAuth Bearer tokens. **If unset, no new MCP grants can be approved.** The legacy `MCP_SHARED_SECRET` key is still read as a fallback. |
 | `NVIDIA_API_KEY` | provider tier 1 | NVIDIA NIM hosted: GLM-5.2 (Z.ai); strongest coding/agentic tier. |
 | `GROQ_API_KEY` | provider tier 2 | Groq Llama 70B. |
 | `OPENROUTER_API_KEY` | provider tier 3 | OpenRouter free fallback. |
@@ -110,6 +112,8 @@ Everything is environment variables plus one YAML file — no other config.
 
 The two secrets are **independent**: a leaked tunnel URL alone is not enough
 to reach tool execution, and rotating one secret never affects the other.
+Rotating `INVINCIBLE_OWNER_SECRET` does **not** kill existing MCP grants —
+use `invincible oauth revoke <client_id>` for that.
 
 ### `providers.yaml`
 
@@ -130,11 +134,18 @@ Two commands, both exposed as `invincible` and `inv`:
 
 | Command | Purpose |
 |---|---|
-| `invincible setup` | Create/update `.env`: generates missing secrets (`token_urlsafe(32)`, never echoed), prompts for provider keys, preserves existing comments/values. `--force` re-prompts existing values. |
+| `invincible setup` | Create/update `.env`: generates missing secrets (`token_urlsafe(32)`, never echoed), prompts for provider keys, preserves existing comments/values; carries a legacy `MCP_SHARED_SECRET` over to `INVINCIBLE_OWNER_SECRET` automatically. `--force` re-prompts existing values. |
+| `invincible secret rotate` | Generate a brand-new `INVINCIBLE_OWNER_SECRET` and rewrite it in place — no manual `.env` editing, never echoes the value (unless `--show`). Preserves every other line; migrates a legacy `MCP_SHARED_SECRET` key away. Does **not** revoke already-issued OAuth grants (that's `invincible oauth revoke`). |
 | `invincible start` | Start the server. Options: `--host` (default `127.0.0.1`), `--port` (default `8000`), `--reload`, `--log-level`, `--env-file`, `--config` (custom providers.yaml), `--db-path` (session database). |
+| `invincible doctor` | Environment/config diagnostics, including the owner-secret presence. |
+| `invincible oauth list` | Show registered OAuth clients, their redirect URIs, and active/revoked grants. |
+| `invincible oauth revoke <client_id>` | Revoke every access/refresh token for a client immediately. |
+| `invincible oauth test-client` | Headless helper: registers a client, approves it, and prints a ready-to-use Bearer token + curl for `/mcp` (no browser needed). |
 
 ```bash
 invincible setup --force
+invincible secret rotate            # new owner secret, in place
+invincible secret rotate --show     # ...and print it (rarely needed)
 invincible start --port 9000 --config ./my-providers.yaml
 ```
 
@@ -242,8 +253,14 @@ Full contract — sessions, trimming, timeout semantics:
 `POST /mcp` implements a minimal JSON-RPC 2.0 subset: `initialize`,
 `tools/list`, and `tools/call`. Protocol version: `2025-06-18`.
 
-- **Auth**: header `X-MCP-Secret: <MCP_SHARED_SECRET>` (timing-safe
-  comparison). Wrong/missing → `401`; secret unset on the server → `503`.
+- **Auth**: OAuth 2.1 + PKCE via the built-in authorization server. Clients
+  discover it at `/.well-known/oauth-protected-resource` (RFC 9728), register
+  at `/oauth/register`, get owner approval on the `/oauth/authorize` consent
+  page, then send `Authorization: Bearer <access_token>` on every `/mcp`
+  request. Wrong/missing/expired/revoked token → `401` with a
+  `WWW-Authenticate: Bearer resource_metadata="…"` challenge. (No
+  `X-MCP-Secret` header anymore; the legacy `MCP_SHARED_SECRET` env var is
+  only read as a fallback for the owner login.)
 - **Notifications**: a request without an `id` still runs its side effect
   but the server replies `204 No Content` with no body.
 
@@ -376,9 +393,17 @@ And stream it (`stream: true`) to receive Anthropic SSE events ending in
 
 ### 6. List MCP tools
 
+First get an MCP access token (one-time browser consent, or the headless
+helper):
+
+```bash
+invincible oauth test-client   # outputs a Bearer token + curl command
+export ACCESS_TOKEN=...
+```
+
 ```bash
 curl -X POST http://127.0.0.1:8000/mcp \
-  -H "X-MCP-Secret: $MCP_SHARED_SECRET" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
@@ -387,7 +412,7 @@ curl -X POST http://127.0.0.1:8000/mcp \
 
 ```bash
 curl -X POST http://127.0.0.1:8000/mcp \
-  -H "X-MCP-Secret: $MCP_SHARED_SECRET" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call",
        "params":{"name":"execute_bash","arguments":{"command":"git status"}}}'
@@ -399,7 +424,7 @@ approve it, call `confirm_action` with that token (or deny with
 
 ```bash
 curl -X POST http://127.0.0.1:8000/mcp \
-  -H "X-MCP-Secret: $MCP_SHARED_SECRET" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call",
        "params":{"name":"confirm_action",
@@ -416,7 +441,8 @@ cloudflared tunnel --url http://127.0.0.1:8000
 # → https://random-name.trycloudflare.com  — call /mcp on this URL
 ```
 
-The tunnel URL alone is useless without `MCP_SHARED_SECRET`.
+The tunnel URL alone is useless without an access token — and any valid
+token can be revoked immediately with `invincible oauth revoke <client_id>`.
 
 More MCP protocol details: [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md).
 
@@ -497,8 +523,9 @@ store, and trimming logic consume.
   `powershell -Command` can smuggle commands past them; the token approval
   step is the real safety boundary.
 - **Remote approval** — approval goes through `/mcp` itself: whoever holds
-  `MCP_SHARED_SECRET` can approve pending actions; there is no terminal
-  prompt and no separate human-authentication surface.
+  a valid OAuth Bearer token can approve pending actions; there is no
+  terminal prompt and no separate human-authentication surface. Revoke the
+  client with `invincible oauth revoke <client_id>` to cut that off.
 - Sessions are stored **plaintext** in SQLite; cooldowns and provider
   disables are **in-memory only**.
 

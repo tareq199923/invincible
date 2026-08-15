@@ -14,7 +14,7 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 | Variable | Required by | Purpose |
 |---|---|---|
 | `GATEWAY_API_KEY` | `/v1/*` | Bearer token for the chat endpoint. **If unset, the endpoint is open (no auth).** |
-| `MCP_SHARED_SECRET` | `/mcp` | Value of the `X-MCP-Secret` header for tool calls. **If unset, `/mcp` returns 503.** |
+| `INVINCIBLE_OWNER_SECRET` | `/oauth/authorize` | One-time **browser login** to approve MCP connections (30-day signed session cookie). **Not** sent on `/mcp` — requests use short-lived OAuth Bearer tokens. **If unset, no new MCP grants can be approved.** Legacy alias `MCP_SHARED_SECRET` is read as a fallback (~30 days, one-time deprecation notice). |
 | `NVIDIA_API_KEY` | provider tier 1 | NVIDIA NIM hosted: GLM-5.2 (Z.ai); strongest coding/agentic tier. |
 | `GROQ_API_KEY` | provider tier 2 | Groq Llama 70B. |
 | `OPENROUTER_API_KEY` | provider tier 3 | OpenRouter free fallback. |
@@ -29,9 +29,11 @@ to reach tool execution, and rotating one secret never affects the other.
 
 `invincible setup` (Click CLI) creates/updates `.env`:
 
-- Missing secrets (`GATEWAY_API_KEY`, `MCP_SHARED_SECRET`) are generated as
-  random `secrets.token_urlsafe(32)` values and written straight to the file
-  (never echoed to the terminal).
+- Missing secrets (`GATEWAY_API_KEY`, `INVINCIBLE_OWNER_SECRET`) are
+  generated as random `secrets.token_urlsafe(32)` values and written
+  straight to the file (never echoed to the terminal).
+- A legacy `MCP_SHARED_SECRET` in the existing `.env` is carried over to
+  `INVINCIBLE_OWNER_SECRET` automatically (the same value keeps working).
 - Existing values are kept unless `--force` is passed; prompts are
   `hide_input` so keys never appear in the shell.
 - Inline comments and unrelated lines in an existing `.env` are preserved
@@ -127,11 +129,27 @@ Shipped values and rationale:
 
 ```
 invincible setup [--env-file PATH] [--force]
+invincible secret rotate [--env-file PATH] [--show]
 invincible start [--host 127.0.0.1] [--port 8000] [--reload]
                 [--log-level info] [--env-file .env]
                 [--config PATH] [--db-path PATH]
+invincible oauth list | revoke <client_id> | test-client [--db-path PATH]
 invincible --version | --help
 ```
+
+Notes on `secret rotate`:
+
+- Regenerates `INVINCIBLE_OWNER_SECRET` inside the `.env` file in place
+  using the same generation/rewrite machinery as `setup` — every other
+  line, comment, and ordering is preserved, and the value is never echoed
+  (use `--show` to print it deliberately).
+- If the file still has the legacy `MCP_SHARED_SECRET` key, the new value
+  is written under `INVINCIBLE_OWNER_SECRET` and the legacy line is
+  removed, completing the migration.
+- Requires an existing owner secret (new or legacy key) — running it before
+  `invincible setup` prints guidance instead of creating a partial file.
+- Does **not** revoke already-issued OAuth grants; use
+  `invincible oauth revoke <client_id>` for that.
 
 Notes on `start`:
 

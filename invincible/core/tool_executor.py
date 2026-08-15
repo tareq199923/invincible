@@ -24,24 +24,26 @@ Security model - decided explicitly up front, not bolted on after the fact:
   4. TRUST BOUNDARY (changed deliberately, on purpose): before, only
      someone with physical access to the server's terminal could approve an
      action. After, approval is whatever the calling AI/client reports back
-     through a second ``/mcp`` call - the boundary is now "whoever holds
-     MCP_SHARED_SECRET", the same boundary as every other request on
-     ``/mcp``. Holding the secret is sufficient to approve (or deny)
-     pending actions remotely. This is a real security property change, not
-     an implementation detail.
+     through a second ``/mcp`` call - the boundary is now "whoever holds a
+     valid OAuth bearer access token", the same boundary as every other
+     request on ``/mcp``. A live token implies the operator approved the
+     client on the /oauth/authorize consent page, and can be revoked with
+     ``invincible oauth revoke``. Holding a token is sufficient to approve
+     (or deny) pending actions remotely. This is a real security property
+     change, not an implementation detail.
   5. Authentication for who can reach this code at all lives one layer up,
-     in the MCP endpoint's dependency (MCP_SHARED_SECRET, independent of
-     GATEWAY_API_KEY). This module assumes the caller is already
-     authenticated - it only decides whether a specific action is safe and
-     approved, not who's allowed to ask.
+     in the MCP endpoint's dependency (OAuth 2.1 + PKCE bearer tokens,
+     independent of GATEWAY_API_KEY). This module assumes the caller is
+     already authenticated - it only decides whether a specific action is
+     safe and approved, not who's allowed to ask.
 
 KNOWN LIMIT: the denylist is a text-pattern match, not a real shell parser.
 `powershell -Command "..."`, `cmd /c "..."`, or any other wrapper/encoding
 can smuggle an arbitrary command past every pattern below. The denylist
 exists to catch the obvious, high-blast-radius cases without a prompt; it
-is not the real safety boundary. The approval step is - whoever holds the
-MCP secret decides what runs, and anything staged for approval is visible
-in plain sight at the server's own stdout before it is approved.
+is not the real safety boundary. The approval step is - whoever holds a
+valid bearer token decides what runs, and anything staged for approval is
+visible in plain sight at the server's own stdout before it is approved.
 """
 import asyncio
 import logging

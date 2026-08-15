@@ -10,22 +10,25 @@ non-obvious algorithms (context trimming, cooldowns, config resolution).
 ```
 invincible/
 ├── main.py                     FastAPI app, lifespan, auth wiring, /health, HEAD /
-├── cli.py                      Click CLI (setup / start / doctor)
+├── cli.py                      Click CLI (setup / start / doctor / oauth)
 ├── providers.yaml              Canonical provider config (packaged)
 ├── endpoints/
 │   ├── openai_compat.py        POST /v1/chat/completions, GET /v1/models
 │   ├── anthropic_compat.py     POST /v1/messages (Anthropic protocol)
-│   └── mcp.py                  POST /mcp (JSON-RPC 2.0 dispatch)
+│   ├── mcp.py                  POST /mcp (JSON-RPC 2.0 dispatch, Bearer resource server)
+│   └── oauth.py                Built-in OAuth 2.1 + PKCE authorization server
+│                              (/.well-known/oauth-*, /oauth/register|authorize|token|revoke)
 ├── models/
 │   └── anthropic.py            Pydantic request model (ignores unknown fields)
 ├── compat/
 │   ├── common.py               Protocol-neutral internal-message helpers
 │   └── anthropic.py            Pure Anthropic translators + SSE streaming
-└── core/
-    ├── router.py               Provider loading, failover, trimming, timeouts
-    ├── provider_health.py      Per-provider failure counts + cooldowns
-    ├── session_store.py        SQLite conversation memory
-    └── tool_executor.py        MCP tool execution + denylists + approval
+├── core/
+│   ├── router.py               Provider loading, failover, trimming, timeouts
+│   ├── provider_health.py      Per-provider failure counts + cooldowns
+│   ├── session_store.py        SQLite conversation memory
+│   ├── oauth_store.py          SQLite OAuth store (clients, codes, hashed tokens, revocations)
+│   └── tool_executor.py        MCP tool execution + denylists + approval
 ```
 
 Packaging (`pyproject.toml`):
@@ -49,12 +52,16 @@ import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
         Router(config_path=os.getenv("INVINCIBLE_CONFIG_PATH"))
         SessionStore(db_path=os.getenv("INVINCIBLE_DB_PATH"))
         await sessions.init()  (CREATE TABLE IF NOT EXISTS sessions)
+        OAuthStore(same db_path)          (CREATE oauth tables)
+        await oauth_store.init()
                      │
         serving               app.include_router(openai_router, deps=[require_auth])
                               app.include_router(mcp_router, deps=[require_mcp_auth])
+                              app.include_router(oauth_router)      (no dep — own auth)
                      │
         shutdown (lifespan)   await router.close()  (httpx client)
                               await sessions.close() (sqlite)
+                              await oauth_store.close() (sqlite)
 ```
 
 One `httpx.AsyncClient` lives inside the `Router` and is shared by all chat
@@ -228,8 +235,10 @@ shared state between processes and no persistence.
 ## 6. MCP request flow (`endpoints/mcp.py`)
 
 ```
-POST /mcp  (X-MCP-Secret: …)
-  │  require_mcp_auth: secret unset → 503 ; compare_digest fail → 401
+POST /mcp  (Authorization: Bearer <access_token>)
+  │  require_mcp_auth: token validation via /oauth server
+  │    (issuer, expiry, not-rotated, not-revoked, SHA-256 lookup)
+  │    fail → 401 + WWW-Authenticate: Bearer resource_metadata="…"
   ▼
 mcp_endpoint
   │  JSON decode fail         → -32700 Parse error, id: null
@@ -271,10 +280,11 @@ The security architecture is explicit in the module docstring:
    under an unpredictable `secrets.token_urlsafe(16)` token and runs only
    after `confirm_action(token, approve=true)` — a second `/mcp` call.
    Tokens expire after 10 minutes and are single-use.
-4. **Auth lives one layer up** (`MCP_SHARED_SECRET`); this module assumes an
-   authenticated caller. Deliberate trust-boundary change: approval is now
-   whoever holds the MCP secret, not whoever happens to be at the machine's
-   terminal.
+4. **Auth lives one layer up** (OAuth 2.1 + PKCE bearer tokens, independent
+   of `GATEWAY_API_KEY`); this module assumes an authenticated caller.
+   Deliberate trust-boundary change: approval is now whoever holds a valid
+   bearer token, not whoever happens to be at the machine's terminal.
+   Revoking the client (`invincible oauth revoke <client_id>`) cuts it off.
 
 Execution details:
 
