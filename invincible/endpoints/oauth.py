@@ -146,6 +146,11 @@ def _base_url(request: Request) -> str:
 
 
 def _has_valid_cookie(request: Request) -> bool:
+    # No owner secret configured means no one can log in, so no cookie may
+    # ever count as valid - the HMAC key would be sha256(b""), which anyone
+    # can compute, making forged cookies trivial.
+    if not owner_secret():
+        return False
     cookie = request.cookies.get(SESSION_COOKIE)
     return bool(cookie and _verify_cookie(cookie))
 
@@ -291,6 +296,15 @@ async def oauth_authorize(request: Request):
     context = await _authorize_context(request, request.query_params)
     if context is None:
         return _reject("Invalid or unregistered authorization request.")
+    if not owner_secret():
+        return HTMLResponse(
+            ERROR_HTML.format(
+                message="No owner secret is configured; set "
+                "INVINCIBLE_OWNER_SECRET and restart. Authorization is "
+                "disabled until then."
+            ),
+            status_code=503,
+        )
     if not _has_valid_cookie(request):
         return _login_page(context)
 

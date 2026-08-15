@@ -33,9 +33,11 @@ TOOLS = [
     {
         "name": "read_file",
         "description": (
-            "Read a file's contents from the host machine. Reads of files "
-            "that contain secrets or sensitive state (.env, sessions.db, "
-            ".git/) are rejected outright. No confirmation is required for "
+            "Read a file's contents from the host machine. Reads are "
+            "sandboxed to the server's working directory and repo root "
+            "(extend with INVINCIBLE_READ_ROOTS); files holding secrets or "
+            "sensitive state (.env, sessions.db, .git/) are rejected "
+            "outright wherever they sit. No confirmation is required for "
             "other files since reading is non-destructive."
         ),
         "inputSchema": {

@@ -36,6 +36,11 @@ Security model - decided explicitly up front, not bolted on after the fact:
      independent of GATEWAY_API_KEY). This module assumes the caller is
      already authenticated - it only decides whether a specific action is
      safe and approved, not who's allowed to ask.
+  6. read_file has no approval step, so it is sandboxed instead: reads are
+     only allowed under the repo root, the server's working directory, and
+     any directories listed in INVINCIBLE_READ_ROOTS (os.pathsep-separated).
+     Paths outside those roots are blocked outright, and .env / sessions.db
+     / .git are blocked by name anywhere inside them.
 
 KNOWN LIMIT: the denylist is a text-pattern match, not a real shell parser.
 `powershell -Command "..."`, `cmd /c "..."`, or any other wrapper/encoding
@@ -215,7 +220,45 @@ def _check_protected_path(path: str, patterns: list, verb: str) -> None:
             raise ToolBlocked(f"{verb} of {reason} ({rel})")
 
 
+# read_file is sandboxed to a small set of roots: the repo root, the
+# process working directory (where `invincible start` was run), and any
+# extra directories listed in INVINCIBLE_READ_ROOTS (os.pathsep-separated).
+# Anything outside those roots is blocked outright - no approval step -
+# because read_file has no approval step to act as the gate. Inside the
+# roots, the basename rules below block the files most likely to hold
+# actual credentials, wherever in the tree they sit.
+_BASENAME_READ_DENYLIST = [
+    (re.compile(r"^\.env(\..+)?$", re.I), "an .env file"),
+    (re.compile(r"^sessions\.db$", re.I), "the session database"),
+    (re.compile(r"^\.git$", re.I), "git internals"),
+]
+
+
+def _allowed_read_roots() -> list:
+    roots = [_REPO_ROOT, os.getcwd()]
+    extra = os.getenv("INVINCIBLE_READ_ROOTS", "")
+    for entry in extra.split(os.pathsep):
+        entry = entry.strip()
+        if entry:
+            roots.append(entry)
+    return [
+        os.path.normcase(os.path.abspath(root)) for root in roots
+    ]
+
+
 def check_read_denylist(path: str) -> None:
+    abs_path = os.path.abspath(path)
+    norm = os.path.normcase(abs_path)
+    roots = _allowed_read_roots()
+    if not any(norm == root or norm.startswith(root + os.sep) for root in roots):
+        raise ToolBlocked(
+            f"read of path outside the allowed roots ({abs_path}). "
+            "Set INVINCIBLE_READ_ROOTS to grant access to other directories."
+        )
+    for part in abs_path.split(os.sep):
+        for pattern, reason in _BASENAME_READ_DENYLIST:
+            if pattern.match(part):
+                raise ToolBlocked(f"read of {reason} ({abs_path})")
     _check_protected_path(path, READ_DENYLIST_PATTERNS, "read")
 
 
@@ -362,10 +405,12 @@ async def confirm_action(
 
 async def read_file(path: str) -> dict:
     """No approval step - reading isn't destructive, so the friction
-    wouldn't buy anything. The denylist is the only gate: it blocks reading
-    out actual secrets/state (.env, sessions.db, .git/) but deliberately
-    allows reading invincible/ and tests/ and providers.yaml, since letting the
-    cloud AI see the code is the entire point of this tool."""
+    wouldn't buy anything. The sandbox is the gate instead: reads are only
+    allowed under the repo root, the server's working directory, and any
+    INVINCIBLE_READ_ROOTS directories, with .env / sessions.db / .git
+    blocked by name anywhere inside them. Reading invincible/ and tests/
+    and providers.yaml stays allowed, since letting the cloud AI see the
+    code is the entire point of this tool."""
     check_read_denylist(path)  # raises ToolBlocked; caller maps it to a response
 
     try:

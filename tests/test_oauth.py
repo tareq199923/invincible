@@ -378,3 +378,49 @@ async def test_mcp_with_garbage_bearer_returns_401(client):
     )
     assert response.status_code == 401
     assert "oauth-protected-resource" in response.headers.get("www-authenticate", "")
+
+
+# --- owner-secret-unset hardening ---
+
+
+async def test_authorize_get_rejected_when_owner_secret_unset(client, monkeypatch):
+    monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
+    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
+    verifier, challenge = pkce_pair()
+    client_id, redirect_uri = await oauth_register(client)
+    params = authorize_params(client_id, challenge, redirect_uri)
+    response = await client.get(
+        f"/oauth/authorize?{'&'.join(f'{k}={v}' for k, v in params.items())}"
+    )
+    assert response.status_code == 503
+    assert "No owner secret is configured" in response.text
+
+
+async def test_forged_cookie_rejected_when_owner_secret_unset(client, monkeypatch):
+    """With no owner secret configured the cookie HMAC key would be
+    sha256(b"") - publicly computable. A cookie forged with exactly that key
+    must not authorize anything."""
+    import hashlib
+    import hmac
+    import time
+
+    monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
+    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
+    verifier, challenge = pkce_pair()
+    client_id, redirect_uri = await oauth_register(client)
+    params = authorize_params(client_id, challenge, redirect_uri)
+
+    payload = str(int(time.time()))
+    forged_key = hashlib.sha256(b"").digest()
+    signature = hmac.new(
+        forged_key, payload.encode("ascii"), hashlib.sha256
+    ).hexdigest()
+    client.cookies.set("invincible_owner", f"{payload}.{signature}")
+
+    response = await client.get(
+        f"/oauth/authorize?{'&'.join(f'{k}={v}' for k, v in params.items())}"
+        "&action=approve",
+        follow_redirects=False,
+    )
+    assert response.status_code == 503
+    assert "location" not in response.headers  # no code is ever issued

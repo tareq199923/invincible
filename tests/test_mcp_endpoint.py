@@ -230,7 +230,10 @@ async def test_mcp_unknown_tool(client, bearer_headers):
     assert body["error"]["code"] == -32601
 
 
-async def test_mcp_call_read_file_success(client, bearer_headers, tmp_path):
+async def test_mcp_call_read_file_success(
+    client, bearer_headers, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
     target = tmp_path / "readable.txt"
     target.write_text("hello from disk")
 

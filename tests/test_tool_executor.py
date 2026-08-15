@@ -281,7 +281,8 @@ def test_read_denylist_allows_source_and_config(relative_path):
     tool_executor.check_read_denylist(target)  # should not raise
 
 
-async def test_read_file_returns_content(tmp_path):
+async def test_read_file_returns_content(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
     target = tmp_path / "hello.txt"
     target.write_text("hello world")
 
@@ -291,7 +292,8 @@ async def test_read_file_returns_content(tmp_path):
     assert result["content"] == "hello world"
 
 
-async def test_read_file_missing_returns_error(tmp_path):
+async def test_read_file_missing_returns_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
     target = tmp_path / "does_not_exist.txt"
 
     result = await tool_executor.read_file(str(target))
@@ -321,3 +323,55 @@ async def test_write_file_to_protected_path_never_issues_token():
         tool_executor.write_file(target, "GATEWAY_API_KEY=stolen", store)
 
     assert len(store) == 0  # never staged, never approved, never written
+
+
+# --- read_file root sandbox ---
+
+
+def test_read_outside_allowed_roots_blocked(tmp_path, monkeypatch):
+    monkeypatch.delenv("INVINCIBLE_READ_ROOTS", raising=False)
+    # tmp_path is neither the repo root nor the process CWD, so it is
+    # outside every allowed root and must be rejected before any disk read.
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.check_read_denylist(str(tmp_path / "notes.txt"))
+
+
+def test_read_inside_process_cwd_allowed(monkeypatch):
+    monkeypatch.delenv("INVINCIBLE_READ_ROOTS", raising=False)
+    target = os.path.join(os.getcwd(), "scratch-read-test.txt")
+    tool_executor.check_read_denylist(target)  # should not raise
+
+
+def test_read_extra_root_allowed_via_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    tool_executor.check_read_denylist(str(tmp_path / "notes.txt"))  # no raise
+
+
+def test_read_env_file_blocked_anywhere(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    target = tmp_path / ".env"
+    target.write_text("SECRET=hunter2")
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.check_read_denylist(str(target))
+
+
+def test_read_git_dir_blocked_anywhere(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    target = tmp_path / ".git" / "config"
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.check_read_denylist(str(target))
+
+
+def test_read_sessions_db_blocked_anywhere(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.check_read_denylist(str(tmp_path / "sessions.db"))
+
+
+async def test_read_file_outside_roots_never_touches_disk(tmp_path, monkeypatch):
+    monkeypatch.delenv("INVINCIBLE_READ_ROOTS", raising=False)
+    target = tmp_path / "secret.txt"
+    target.write_text("do not read")
+
+    with pytest.raises(tool_executor.ToolBlocked):
+        await tool_executor.read_file(str(target))
