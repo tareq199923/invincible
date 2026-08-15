@@ -43,6 +43,7 @@ target-version = "py310"
 exclude = [
     "venv",
     ".venv",
+    ".venv-review",
     ".venv-package-test",
     ".verify",
     "build",
