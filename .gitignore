@@ -4,6 +4,7 @@
 venv/
 .venv/
 .venv-review/
+.venv-fresh/
 __pycache__/
 *.pyc
 *.pyo
