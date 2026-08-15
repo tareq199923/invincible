@@ -16,10 +16,17 @@ OWNER_LABEL = "INVINCIBLE_OWNER_SECRET exists (owner login for /mcp)"
 
 @pytest.fixture(autouse=True)
 def _clean_invincible_env(monkeypatch):
-    """doctor reads INVINCIBLE_* env vars; earlier tests may leak them into
-    the process environment, so make every test start from a clean slate."""
-    monkeypatch.delenv("INVINCIBLE_CONFIG_PATH", raising=False)
-    monkeypatch.delenv("INVINCIBLE_DB_PATH", raising=False)
+    """doctor reads env vars from the process environment (including a
+    project .env loaded at import time) and earlier tests may leak them
+    into it, so make every test start from a clean slate."""
+    for key in (
+        "GATEWAY_API_KEY",
+        "INVINCIBLE_OWNER_SECRET",
+        "MCP_SHARED_SECRET",
+        "INVINCIBLE_CONFIG_PATH",
+        "INVINCIBLE_DB_PATH",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
 
 def _set_secrets(monkeypatch):
@@ -84,6 +91,7 @@ def test_doctor_missing_secrets_fail(monkeypatch, tmp_path):
 
 def test_doctor_legacy_alias_counts_as_owner_secret(monkeypatch, tmp_path):
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
+    monkeypatch.setenv("GATEWAY_API_KEY", "gw-key")
     monkeypatch.setenv("MCP_SHARED_SECRET", "legacy-owner")
     config = tmp_path / "providers.yaml"
     config.write_text(VALID_YAML, encoding="utf-8")
