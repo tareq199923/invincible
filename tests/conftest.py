@@ -148,11 +148,12 @@ async def oauth_login(client, params, owner_secret=TEST_OWNER_SECRET):
 
 
 async def oauth_approve(client, params, deny=False):
-    """Click Approve/Deny; returns the redirect Location with code/error."""
+    """Submit the Approve/Deny consent form; returns the redirect Location
+    with code/error. Consent is POST-only (GET links were CSRF-able)."""
     action = "deny" if deny else "approve"
-    response = await client.get(
-        f"/oauth/authorize?{'&'.join(f'{k}={v}' for k, v in params.items())}"
-        f"&action={action}",
+    response = await client.post(
+        "/oauth/authorize",
+        data={**params, "action": action},
         follow_redirects=False,
     )
     assert response.status_code == 302, response.text[:300]

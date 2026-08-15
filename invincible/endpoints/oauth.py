@@ -69,10 +69,17 @@ CONSENT_HTML = """<!doctype html>
 <p>Approving issues a short-lived access token for MCP tool calls. You can
 revoke every token for this client at any time with
 <code>invincible oauth revoke &lt;client_id&gt;</code>.</p>
-<p>
-<a href="{approve_query}">Approve</a> &nbsp;|&nbsp;
-<a href="{deny_query}">Deny</a>
-</p>
+<form method="post" action="/oauth/authorize" style="display:inline">
+{hidden_fields}
+<input type="hidden" name="action" value="approve">
+<button type="submit">Approve</button>
+</form>
+&nbsp;
+<form method="post" action="/oauth/authorize" style="display:inline">
+{hidden_fields}
+<input type="hidden" name="action" value="deny">
+<button type="submit">Deny</button>
+</form>
 </body>
 </html>
 """
@@ -280,22 +287,35 @@ def _login_page(
     )
 
 
-def _consent_url(params: dict, action: str) -> str:
-    query = urlencode(
-        {key: value for key, value in params.items()
-         if key in AUTHORIZE_PARAMS and value}
-        | {"action": action}
+def _hidden_fields(params: dict) -> str:
+    """Render the authorize params as hidden form inputs for the consent
+    forms. html.escape covers the quoting; values were already validated
+    by _authorize_context."""
+    return "".join(
+        f'<input type="hidden" name="{key}" value="{html.escape(value)}">'
+        for key, value in params.items()
+        if key in AUTHORIZE_PARAMS and value
     )
-    return f"/oauth/authorize?{query}"
 
 
 @router.get("/oauth/authorize")
 async def oauth_authorize(request: Request):
-    """Owner-login gate followed by the consent page. Approve/Deny links
-    carry the original parameters plus an `action` flag."""
+    """Owner-login gate followed by the consent page. Approving or denying
+    is only possible via the POST forms - a GET carrying an `action` is
+    rejected, so a cross-site navigation can never grant consent (the
+    SameSite=Lax session cookie is sent on top-level GET navigations, which
+    made the old GET links CSRF-able)."""
     context = await _authorize_context(request, request.query_params)
     if context is None:
         return _reject("Invalid or unregistered authorization request.")
+    if "action" in request.query_params:
+        return HTMLResponse(
+            ERROR_HTML.format(
+                message="Consent actions must be submitted with the "
+                "Approve/Deny buttons (POST), not links."
+            ),
+            status_code=405,
+        )
     if not owner_secret():
         return HTMLResponse(
             ERROR_HTML.format(
@@ -310,28 +330,12 @@ async def oauth_authorize(request: Request):
 
     client = context["_client"]
     client_name = client["client_name"] or client["client_id"]
-    action = request.query_params.get("action", "")
-
-    if action == "approve":
-        store: OAuthStore = request.app.state.oauth_store
-        code = await store.create_code(
-            client["client_id"], context["redirect_uri"], context["code_challenge"],
-        )
-        return _redirect_with_params(
-            context["redirect_uri"], {"code": code, "state": context["state"]},
-        )
-    if action == "deny":
-        return _redirect_with_params(
-            context["redirect_uri"],
-            {"error": "access_denied", "state": context["state"]},
-        )
 
     return HTMLResponse(
         CONSENT_HTML.format(
             client_name=html.escape(client_name),
             redirect_uri=html.escape(context["redirect_uri"]),
-            approve_query=_consent_url(context, "approve"),
-            deny_query=_consent_url(context, "deny"),
+            hidden_fields=_hidden_fields(context),
         )
     )
 
@@ -346,12 +350,55 @@ def _redirect_with_params(redirect_uri: str, params: dict) -> RedirectResponse:
 
 @router.post("/oauth/authorize")
 async def oauth_authorize_login(request: Request):
-    """Owner-login form submission. On the correct secret, sets the signed
-    session cookie and bounces back to the GET consent flow."""
+    """POST /oauth/authorize handles two submissions from the same page flow:
+
+    - The consent forms (``action=approve|deny`` + authorize params):
+      requires a valid owner session cookie; issues the code (or the
+      access_denied redirect). POST is what makes this safe from CSRF -
+      the SameSite=Lax session cookie is not sent on cross-site POSTs.
+    - The owner-login form (``owner_secret`` + authorize params): on the
+      correct secret, sets the signed session cookie and bounces back to
+      the GET consent flow.
+    """
     form = await _parse_form(request)
     context = await _authorize_context(request, form)
     if context is None:
         return _reject("Invalid or unregistered authorization request.")
+
+    action = form.get("action", "")
+    if action in ("approve", "deny"):
+        if not owner_secret():
+            return HTMLResponse(
+                ERROR_HTML.format(
+                    message="No owner secret is configured; set "
+                    "INVINCIBLE_OWNER_SECRET and restart. Authorization is "
+                    "disabled until then."
+                ),
+                status_code=503,
+            )
+        if not _has_valid_cookie(request):
+            return HTMLResponse(
+                ERROR_HTML.format(
+                    message="Not authenticated as the owner. Log in first."
+                ),
+                status_code=401,
+            )
+        client = context["_client"]
+        if action == "approve":
+            store: OAuthStore = request.app.state.oauth_store
+            code = await store.create_code(
+                client["client_id"],
+                context["redirect_uri"],
+                context["code_challenge"],
+            )
+            return _redirect_with_params(
+                context["redirect_uri"], {"code": code, "state": context["state"]},
+            )
+        return _redirect_with_params(
+            context["redirect_uri"],
+            {"error": "access_denied", "state": context["state"]},
+        )
+
     attempted = str(form.get("owner_secret", ""))
     expected = owner_secret() or ""
     if not expected:

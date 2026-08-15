@@ -628,7 +628,7 @@ def oauth_test_client(redirect_uri, db_path):
 async def _headless_approve(client, owner_secret_value, redirect_uri, challenge):
     """Drive register -> login -> consent through the real endpoints.
     Returns (client_id, authorization code)."""
-    from urllib.parse import parse_qs, urlencode, urlparse
+    from urllib.parse import parse_qs, urlparse
 
     registration = await client.post(
         "/oauth/register",
@@ -649,7 +649,6 @@ async def _headless_approve(client, owner_secret_value, redirect_uri, challenge)
         "code_challenge": challenge,
         "code_challenge_method": "S256",
     }
-    query = urlencode(params)
     login = await client.post(
         "/oauth/authorize", data={**params, "owner_secret": owner_secret_value}
     )
@@ -657,8 +656,10 @@ async def _headless_approve(client, owner_secret_value, redirect_uri, challenge)
         raise click.ClickException(
             f"Owner login failed ({login.status_code}): {login.text[:200]}"
         )
-    approved = await client.get(
-        f"/oauth/authorize?{query}&action=approve", follow_redirects=False
+    approved = await client.post(
+        "/oauth/authorize",
+        data={**params, "action": "approve"},
+        follow_redirects=False,
     )
     location = approved.headers.get("location", "")
     code = parse_qs(urlparse(location).query).get("code", [None])[0]

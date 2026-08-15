@@ -5,6 +5,7 @@ registration, the owner-login cookie gate on /oauth/authorize, the full
 authorize -> approve -> token exchange with real PKCE verification, single-use
 codes, refresh-token rotation, revocation, and the /mcp bearer-token gate.
 """
+import html
 import re
 from urllib.parse import parse_qs, urlparse
 
@@ -237,40 +238,70 @@ async def test_deny_redirects_with_access_denied(client):
     assert query["state"] == ["xyz-state"]
 
 
-# --- consent page link construction (regression: doubled /oauth/authorize) ---
+# --- consent page forms (POST-only; the old GET links were CSRF-able) ---
 
 
-async def _consent_page_hrefs(client, params):
-    """GET the rendered consent page and return its (approve, deny) hrefs."""
+async def _consent_page_form_data(client, params, action):
+    """GET the rendered consent page, find the form for <action>, and return
+    its hidden fields exactly as a browser would submit them."""
     query = "&".join(f"{k}={v}" for k, v in params.items())
     response = await client.get(f"/oauth/authorize?{query}")
     assert response.status_code == 200, response.text[:300]
-    links = re.findall(r'<a href="([^"]+)"', response.text)
-    assert len(links) == 2, links
-    approve = next(link for link in links if "action=approve" in link)
-    deny = next(link for link in links if "action=deny" in link)
-    return approve, deny
+    forms = re.findall(
+        r'<form method="post" action="/oauth/authorize".*?</form>',
+        response.text,
+        re.S,
+    )
+    assert len(forms) == 2, forms
+    target = next(f for f in forms if f'value="{action}"' in f)
+    data = {
+        name: html.unescape(value)
+        for name, value in re.findall(
+            r'<input type="hidden" name="([^"]+)" value="([^"]*)">', target
+        )
+    }
+    assert data["action"] == action
+    return data
 
 
-async def test_consent_page_hrefs_contain_single_authorize_path(client):
+async def test_consent_page_renders_post_forms(client):
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
     await oauth_login(client, params)
-    approve_href, deny_href = await _consent_page_hrefs(client, params)
-    assert approve_href.count("/oauth/authorize?") == 1, approve_href
-    assert deny_href.count("/oauth/authorize?") == 1, deny_href
+    approve_data = await _consent_page_form_data(client, params, "approve")
+    deny_data = await _consent_page_form_data(client, params, "deny")
+    for data in (approve_data, deny_data):
+        assert data["client_id"] == client_id
+        assert data["redirect_uri"] == redirect_uri
+        assert data["code_challenge"] == params["code_challenge"]
 
 
-async def test_live_approve_follows_rendered_href(client):
-    """Follow the literal Approve link from the rendered HTML - the exact
-    click the browser (e.g. the Claude app connector) would make."""
+async def test_get_with_action_is_rejected(client):
+    """GET ?action=approve must never issue a code - that was the CSRF hole."""
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
     await oauth_login(client, params)
-    approve_href, _ = await _consent_page_hrefs(client, params)
-    response = await client.get(approve_href, follow_redirects=False)
+    query = "&".join(f"{k}={v}" for k, v in params.items())
+    response = await client.get(
+        f"/oauth/authorize?{query}&action=approve", follow_redirects=False
+    )
+    assert response.status_code == 405
+    assert "location" not in response.headers
+
+
+async def test_live_approve_submits_rendered_form(client):
+    """Submit the Approve form exactly as rendered - the exact click the
+    browser (e.g. the Claude app connector) would make."""
+    verifier, challenge = pkce_pair()
+    client_id, redirect_uri = await oauth_register(client)
+    params = authorize_params(client_id, challenge, redirect_uri)
+    await oauth_login(client, params)
+    data = await _consent_page_form_data(client, params, "approve")
+    response = await client.post(
+        "/oauth/authorize", data=data, follow_redirects=False
+    )
     assert response.status_code == 302, response.text[:300]
     location = response.headers["location"]
     assert not location.startswith("/oauth/authorize"), location
@@ -284,20 +315,21 @@ async def test_live_approve_follows_rendered_href(client):
     assert exchange.status_code == 200, exchange.text
 
 
-async def test_live_deny_follows_rendered_href(client):
+async def test_live_deny_submits_rendered_form(client):
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
     await oauth_login(client, params)
-    _, deny_href = await _consent_page_hrefs(client, params)
-    response = await client.get(deny_href, follow_redirects=False)
+    data = await _consent_page_form_data(client, params, "deny")
+    response = await client.post(
+        "/oauth/authorize", data=data, follow_redirects=False
+    )
     assert response.status_code == 302, response.text[:300]
     location = response.headers["location"]
-    assert not location.startswith("/oauth/authorize"), location
-    assert location.startswith(redirect_uri), location
     query = parse_qs(urlparse(location).query)
     assert query["error"] == ["access_denied"]
     assert query["state"] == ["xyz-state"]
+
 
 
 # --- refresh tokens ---
@@ -417,9 +449,9 @@ async def test_forged_cookie_rejected_when_owner_secret_unset(client, monkeypatc
     ).hexdigest()
     client.cookies.set("invincible_owner", f"{payload}.{signature}")
 
-    response = await client.get(
-        f"/oauth/authorize?{'&'.join(f'{k}={v}' for k, v in params.items())}"
-        "&action=approve",
+    response = await client.post(
+        "/oauth/authorize",
+        data={**params, "action": "approve"},
         follow_redirects=False,
     )
     assert response.status_code == 503
