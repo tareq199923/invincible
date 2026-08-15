@@ -456,3 +456,59 @@ async def test_forged_cookie_rejected_when_owner_secret_unset(client, monkeypatc
     )
     assert response.status_code == 503
     assert "location" not in response.headers  # no code is ever issued
+
+
+# --- owner-login rate limiting ---
+
+
+def _clear_login_failures():
+    from invincible.endpoints import oauth as oauth_module
+
+    oauth_module._login_failures.clear()
+
+
+async def test_five_wrong_secrets_lock_out_the_ip(client):
+    _clear_login_failures()
+    verifier, challenge = pkce_pair()
+    client_id, redirect_uri = await oauth_register(client)
+    params = authorize_params(client_id, challenge, redirect_uri)
+
+    for _ in range(5):
+        response = await oauth_login(client, params, owner_secret="wrong")
+        assert response.status_code == 401
+
+    sixth = await oauth_login(client, params, owner_secret="wrong")
+    assert sixth.status_code == 429
+    assert "Too many failed attempts" in sixth.text
+
+
+async def test_lockout_rejects_even_the_correct_secret(client):
+    _clear_login_failures()
+    verifier, challenge = pkce_pair()
+    client_id, redirect_uri = await oauth_register(client)
+    params = authorize_params(client_id, challenge, redirect_uri)
+
+    for _ in range(5):
+        await oauth_login(client, params, owner_secret="wrong")
+
+    response = await oauth_login(client, params)  # correct secret
+    assert response.status_code == 429
+    assert "set-cookie" not in response.headers
+
+
+async def test_successful_login_resets_the_counter(client):
+    _clear_login_failures()
+    verifier, challenge = pkce_pair()
+    client_id, redirect_uri = await oauth_register(client)
+    params = authorize_params(client_id, challenge, redirect_uri)
+
+    for _ in range(4):  # one short of the limit
+        await oauth_login(client, params, owner_secret="wrong")
+
+    response = await oauth_login(client, params)  # correct: resets
+    assert response.status_code == 302
+
+    # four more failures are allowed again before any lockout
+    for _ in range(4):
+        attempt = await oauth_login(client, params, owner_secret="wrong")
+        assert attempt.status_code == 401

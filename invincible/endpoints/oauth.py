@@ -41,6 +41,40 @@ REFRESH_TOKEN_TTL = 30 * 24 * 3600
 
 _legacy_warned = False
 
+# --- owner-login rate limiting ---
+# The owner secret is the single password guarding the whole OAuth flow, so
+# the login form gets a small in-memory limiter: LOGIN_MAX_ATTEMPTS wrong
+# guesses inside LOGIN_WINDOW_SECONDS from one client IP locks that IP out
+# for the rest of the window. In-memory on purpose (process restart resets
+# it) - this is brute-force friction, not an audit log.
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_WINDOW_SECONDS = 15 * 60
+
+_login_failures: dict[str, list[float]] = {}  # client IP -> failure timestamps
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _login_locked_out(ip: str) -> int | None:
+    """Seconds until the lockout lifts, or None when the IP may try again."""
+    now = time.monotonic()
+    failures = [t for t in _login_failures.get(ip, [])
+                if now - t < LOGIN_WINDOW_SECONDS]
+    _login_failures[ip] = failures
+    if len(failures) < LOGIN_MAX_ATTEMPTS:
+        return None
+    return int(LOGIN_WINDOW_SECONDS - (now - failures[0])) + 1
+
+
+def _record_login_failure(ip: str) -> None:
+    _login_failures.setdefault(ip, []).append(time.monotonic())
+
+
+def _reset_login_failures(ip: str) -> None:
+    _login_failures.pop(ip, None)
+
 LOGIN_FORM_HTML = """<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Invincible - Owner login</title></head>
@@ -408,14 +442,25 @@ async def oauth_authorize_login(request: Request):
             "set INVINCIBLE_OWNER_SECRET and restart.</p>",
             status_code=503,
         )
+    ip = _client_ip(request)
+    locked_for = _login_locked_out(ip)
+    if locked_for is not None:
+        return _login_page(
+            context,
+            f"<p style='color:#900'>Too many failed attempts. "
+            f"Try again in {locked_for} seconds.</p>",
+            status_code=429,
+        )
     if not hmac.compare_digest(
         hashlib.sha256(attempted.encode("utf-8")).digest(),
         hashlib.sha256(expected.encode("utf-8")).digest(),
     ):
+        _record_login_failure(ip)
         return _login_page(
             context, "<p style='color:#900'>Incorrect owner secret.</p>",
             status_code=401,
         )
+    _reset_login_failures(ip)
     query = urlencode(
         {key: value for key, value in context.items()
          if key in AUTHORIZE_PARAMS and value}
