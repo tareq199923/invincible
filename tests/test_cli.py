@@ -576,10 +576,53 @@ def test_oauth_revoke_revokes_all_tokens(tmp_path):
     client_id = asyncio.run(seed())
 
     result = CliRunner().invoke(
-        cli, ["oauth", "revoke", client_id, "--db-path", str(db)]
+        cli, ["oauth", "revoke", "--db-path", str(db), "--", client_id]
     )
     assert result.exit_code == 0
     assert f"Revoked 2 token(s) for client {client_id}." in result.output
+
+    listed = CliRunner().invoke(cli, ["oauth", "list", "--db-path", str(db)])
+    assert "revoked: 2" in listed.output
+
+
+def test_oauth_revoke_accepts_dash_prefixed_client_id(tmp_path):
+    """Client ids are random URL-safe strings, so a generated id can start
+    with '-' - which Click would otherwise parse as an option ("No such
+    option", exit code 2). The id must follow a '--' separator.
+    Deterministic regression for the CI flake that hit a random dashed id."""
+    import asyncio
+
+    from invincible.core.oauth_store import OAuthStore, _now
+
+    db = tmp_path / "oauth.db"
+    dashed_id = "-dash-prefixed-id"
+
+    async def seed():
+        store = OAuthStore(db_path=str(db))
+        await store.init()
+        await store._db.execute(
+            "INSERT INTO oauth_clients"
+            " (client_id, client_name, redirect_uris, created_at)"
+            " VALUES (?, ?, ?, ?)",
+            (
+                dashed_id,
+                "dashed-client",
+                '["http://localhost:9999/callback"]',
+                _now(),
+            ),
+        )
+        await store._insert_token("access", dashed_id, 3600)
+        await store._insert_token("refresh", dashed_id, 30 * 24 * 3600)
+        await store._db.commit()
+        await store.close()
+
+    asyncio.run(seed())
+
+    result = CliRunner().invoke(
+        cli, ["oauth", "revoke", "--db-path", str(db), "--", dashed_id]
+    )
+    assert result.exit_code == 0, result.output
+    assert f"Revoked 2 token(s) for client {dashed_id}." in result.output
 
     listed = CliRunner().invoke(cli, ["oauth", "list", "--db-path", str(db)])
     assert "revoked: 2" in listed.output

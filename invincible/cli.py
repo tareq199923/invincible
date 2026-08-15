@@ -515,6 +515,10 @@ def oauth_revoke(client_id, db_path):
 
     New connections from that client will fail until it is re-registered
     and approved again in the browser.
+
+    Client ids are random URL-safe strings that may start with '-'. Because
+    Click parses such an id as an option, pass it after a '--' separator:
+    invincible oauth revoke -- <client_id>
     """
     store = OAuthStore(db_path=db_path)
 

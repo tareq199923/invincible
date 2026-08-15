@@ -161,3 +161,10 @@ Notes on `start`:
 - Binding to `0.0.0.0` prints a reminder of the local access URL.
 - Both console scripts (`invincible` and `inv`) declared in `pyproject.toml`
   point at the same `cli` group.
+
+Notes on `oauth revoke`:
+
+- Client ids are random URL-safe strings and may start with `-`. Because
+  Click parses such an id as an option, pass it after a `--` separator:
+  `invincible oauth revoke -- <client_id>`. Same surface for `oauth list`
+  and `oauth test-client` (both accept `--db-path`).
