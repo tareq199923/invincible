@@ -26,7 +26,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.responses import RedirectResponse
 
-from invincible.core.oauth_store import OAuthError, OAuthStore
+from invincible.core.oauth_store import ACCESS_TOKEN_TTL, OAuthError, OAuthStore
 
 logger = logging.getLogger("invincible.oauth")
 
@@ -36,8 +36,9 @@ OWNER_SECRET_ENV = "INVINCIBLE_OWNER_SECRET"
 LEGACY_OWNER_SECRET_ENV = "MCP_SHARED_SECRET"
 SESSION_COOKIE = "invincible_owner"
 SESSION_TTL = 30 * 24 * 3600  # "remember this browser" session cookie TTL
-ACCESS_TOKEN_TTL = 3600
-REFRESH_TOKEN_TTL = 30 * 24 * 3600
+# ACCESS_TOKEN_TTL / REFRESH_TOKEN_TTL come from core.oauth_store (single
+# source of truth for token lifetimes; the store enforces them, the
+# endpoint only reports them in the token response).
 
 _legacy_warned = False
 

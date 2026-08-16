@@ -1,4 +1,5 @@
 # invincible/core/session_store.py
+import asyncio
 import json
 import os
 import time
@@ -24,11 +25,16 @@ class SessionStore:
 
     Not a security boundary: session_id is a partition key, not a credential.
     Auth is handled entirely by GATEWAY_API_KEY upstream of this class.
+
+    A single asyncio.Lock serializes the read-modify-write in :meth:`append`
+    so two concurrent requests to the same session can never lose each
+    other's turns (a plain load-then-save would last-write-wins).
     """
 
     def __init__(self, db_path: str = None):
         self.db_path = db_path or default_db_path()
         self._db: aiosqlite.Connection | None = None
+        self._append_lock = asyncio.Lock()
 
     async def init(self):
         self._db = await aiosqlite.connect(self.db_path)
@@ -74,3 +80,16 @@ class SessionStore:
             (session_id, json.dumps(messages), time.time()),
         )
         await self._db.commit()
+
+    async def append(self, session_id: str, new_messages: list):
+        """Atomically load, extend and save a session's history.
+
+        The lock makes this safe under concurrency: two requests to the
+        same session each append their own turns instead of one clobbering
+        the other's write. Callers should pass only the *new* turns for
+        this request (e.g. the user messages plus the assistant reply) -
+        never the history they loaded themselves.
+        """
+        async with self._append_lock:
+            current = await self.load(session_id)
+            await self.save(session_id, current + new_messages)

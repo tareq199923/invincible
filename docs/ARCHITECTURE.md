@@ -262,8 +262,8 @@ _dispatch(method, rpc_id, params, request)
 ```
 
 Tool results are wrapped with `{"content": [{"type": "text", "text":
-str(result)}], "isError": bool}` — MCP shape. Everything is text; there are
-no structured binary/JSON results.
+json.dumps(result)}], "isError": bool}` — MCP shape. The text field is
+valid JSON; everything else is text.
 
 ---
 

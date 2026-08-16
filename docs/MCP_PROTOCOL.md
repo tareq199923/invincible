@@ -289,7 +289,7 @@ No confirmation. Result (success):
   "jsonrpc": "2.0",
   "id": 3,
   "result": {
-    "content": [{"type": "text", "text": "{'status': 'read', 'path': 'C:\\\\Users\\\\me\\\\project\\\\notes.txt', 'content': '...'}"}],
+    "content": [{"type": "text", "text": "{\"status\": \"read\", \"path\": \"C:\\\\Users\\\\me\\\\project\\\\notes.txt\", \"content\": \"...\"}"}],
     "isError": false
   }
 }
@@ -302,7 +302,7 @@ Result (error, e.g. missing file):
   "jsonrpc": "2.0",
   "id": 3,
   "result": {
-    "content": [{"type": "text", "text": "{'status': 'error', 'error': 'File not found: ...'}"}],
+    "content": [{"type": "text", "text": "{\"status\": \"error\", \"error\": \"File not found: ...\"}"}],
     "isError": true
   }
 }
@@ -335,7 +335,7 @@ returns immediately with a `pending_confirmation` result carrying a token:
   "jsonrpc": "2.0",
   "id": 3,
   "result": {
-    "content": [{"type": "text", "text": "{'status': 'pending_confirmation', 'token': 'bXfQ...9aZt', 'action': 'execute_bash', 'command': 'git status', 'message': 'Call confirm_action with this token (approve=true/false) to proceed.'}"}],
+    "content": [{"type": "text", "text": "{\"status\": \"pending_confirmation\", \"token\": \"bXfQ...9aZt\", \"action\": \"execute_bash\", \"command\": \"git status\", \"message\": \"Call confirm_action with this token (approve=true/false) to proceed.\"}"}],
     "isError": false
   }
 }
@@ -352,7 +352,7 @@ Nothing has executed yet. The command only runs after a follow-up
   "jsonrpc": "2.0",
   "id": 4,
   "result": {
-    "content": [{"type": "text", "text": "{'stdout': '...', 'stderr': '', 'returncode': 0}"}],
+    "content": [{"type": "text", "text": "{\"stdout\": \"...\", \"stderr\": \"\", \"returncode\": 0}"}],
     "isError": false
   }
 }
@@ -362,9 +362,10 @@ Nothing has executed yet. The command only runs after a follow-up
 - Denylist hit → the *first* call already returns `isError: true`, text
   starting `Blocked: <reason>` — no token is ever issued.
 
-> Note: the result is the Python `dict.__str__()` output, so expect single
-> quotes and Python escapes inside the JSON text field. `str(result)` is used
-> for all three tools.
+> Note: tool results are JSON-encoded with `json.dumps` — the text field is
+> valid JSON (double quotes, no Python `None`/`True` literals). Parse it
+> with a JSON decoder, not `ast.literal_eval`. This applies to all tools
+> (`read_file`, `execute_bash`, `write_file`, `confirm_action`).
 
 #### `write_file`
 
@@ -384,7 +385,7 @@ token:
   "jsonrpc": "2.0",
   "id": 3,
   "result": {
-    "content": [{"type": "text", "text": "{'status': 'pending_confirmation', 'token': 'qWx2...Kp7', 'action': 'write_file', 'path': 'C:\\\\Users\\\\me\\\\project\\\\scratch\\\\out.txt', 'content_length': 5, 'message': 'Call confirm_action with this token (approve=true/false) to proceed.'}"}],
+    "content": [{"type": "text", "text": "{\"status\": \"pending_confirmation\", \"token\": \"qWx2...Kp7\", \"action\": \"write_file\", \"path\": \"C:\\\\Users\\\\me\\\\project\\\\scratch\\\\out.txt\", \"content_length\": 5, \"message\": \"Call confirm_action with this token (approve=true/false) to proceed.\"}"}],
     "isError": false
   }
 }
@@ -398,14 +399,14 @@ On approval parent directories are created automatically
   "jsonrpc": "2.0",
   "id": 4,
   "result": {
-    "content": [{"type": "text", "text": "{'status': 'written', 'path': '...', 'bytes': 5}"}],
+    "content": [{"type": "text", "text": "{\"status\": \"written\", \"path\": \"...\", \"bytes\": 5}"}],
     "isError": false
   }
 }
 ```
 
 Failure (e.g. permission denied, or the token was unknown/expired) →
-`isError: true`: text `{'status': 'error', 'error': '<exception>'}` for an
+`isError: true`: text `{"status": "error", "error": "<exception>"}` for an
 execution failure, or `Unknown or expired confirmation token.` /
 `Declined.` for the approval outcome.
 

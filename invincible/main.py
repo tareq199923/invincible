@@ -20,12 +20,32 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 
+logger = logging.getLogger("invincible")
+
+
+def _warn_if_gateway_open() -> None:
+    """The /v1/* chat endpoints fail open when GATEWAY_API_KEY is unset
+    (documented behavior, convenient for local use). Make sure anyone
+    exposing the server to something untrusted sees that loud and clear."""
+    if not os.getenv("GATEWAY_API_KEY"):
+        logger.warning(
+            "GATEWAY_API_KEY is not set - the /v1/* chat endpoints are "
+            "UNAUTHENTICATED. Anyone who can reach this server can use your "
+            "providers. Set GATEWAY_API_KEY in your .env before exposing it "
+            "through a tunnel or to anything untrusted."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db_path = os.getenv("INVINCIBLE_DB_PATH")
+    _warn_if_gateway_open()
     app.state.router = Router(config_path=os.getenv("INVINCIBLE_CONFIG_PATH"))
     app.state.sessions = SessionStore(db_path=db_path)
-    app.state.pending_actions = PendingActionStore()
+    if os.getenv("INVINCIBLE_PERSIST_PENDING_ACTIONS"):
+        app.state.pending_actions = PendingActionStore(db_path=db_path)
+    else:
+        app.state.pending_actions = PendingActionStore()
     app.state.oauth_store = OAuthStore(db_path=db_path)
     await app.state.sessions.init()
     await app.state.oauth_store.init()

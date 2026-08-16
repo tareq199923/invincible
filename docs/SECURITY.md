@@ -128,9 +128,16 @@ Implications, stated plainly:
   <client_id>` kills every outstanding token for a client instantly.
 - A `confirm_action` sent as a **notification** (no `id`) also executes —
   JSON-RPC notifications still run their side effects.
-- Pending entries live **in memory only**: a server restart forgets every
-  staged action (tokens become invalid — confirmations fail with *Unknown or
-  expired*), and there is no audit log of who approved what.
+- Pending entries are **persisted across restarts only when explicitly
+  opted in**: `PendingActionStore` writes through to the same SQLite file
+  as sessions (`INVINCIBLE_DB_PATH`, `sessions.db` in the working
+  directory) only when the `INVINCIBLE_PERSIST_PENDING_ACTIONS`
+  environment variable is set. By default it is **memory-only** — a
+  restart orphans every staged action and confirmations fail with
+  *Unknown or expired*, the original clean-slate design. Persistence
+  means staged shell commands sit in plaintext on disk pre-approval, so
+  it is deliberately off unless requested. There is no audit log of who
+  approved what.
 - The server still prints an informational visibility line for each pending
   action to its own stdout (`[MCP] Pending <token>: …`) — **informational
   only**, it is not a gate.
@@ -246,8 +253,12 @@ exact token:
 Details:
 
 - Tokens are `secrets.token_urlsafe(16)` — unpredictable, issued one per
-  action, valid for **10 minutes**, stored **in memory only**
-  (`PendingActionStore` on `app.state`, same lifetime as the process).
+  action, valid for **10 minutes** (wall-clock expiry, correct across
+  restarts). When persistence is opted in via
+  `INVINCIBLE_PERSIST_PENDING_ACTIONS`, tokens are written to the session
+  SQLite file (`INVINCIBLE_DB_PATH`) so they survive restarts
+  (`PendingActionStore` on `app.state`); otherwise the store is
+  memory-only and restarts orphan staged actions.
 - A token is **single-use**: the first `confirm_action` that resolves it
   pops the entry, so replaying a token can never execute the action twice.
 - Only a real JSON boolean `true` approves — a string `"true"` or a number
@@ -329,22 +340,28 @@ sandbox:
    runs.**
 2. **Approval is remote, and "the operator" is whoever holds a live access
    token.** There is no separate human-approval surface, no per-approver
-   identity, and no audit log — the pending store is in-memory (a restart
-   invalidates every outstanding token), and there is no record of who
-   approved what. Revocation is the control: `invincible oauth revoke`.
+   identity, and no audit log. Pending actions are persisted to the session
+   SQLite file (`INVINCIBLE_DB_PATH`) **only when
+   `INVINCIBLE_PERSIST_PENDING_ACTIONS` is set** — the default is
+   memory-only, so a restart orphans them — and there is no record of who
+   approved what. Revocation is the control:
+   `invincible oauth revoke`.
 3. **The bearer token is the secret in flight.** Leaking an access token
    gives `/mcp` access until it expires (~1h) or is revoked via
    `invincible oauth revoke <client_id>`. A leaked **refresh** token is
    useful only until the next rotation or revocation. Treat the output of
    client tooling that echoes tokens as sensitive. (Contrast with the old
    model: the shared secret never expired at all.)
-4. **No rate-limiting on the owner-login attempt (yet).** The
-   `/oauth/authorize` login form compares the owner secret with a
-   timing-safe digest, but there is **no** attempt limiting or lockout.
-   Someone with network reach to the consent page can brute-force a weak
-   owner secret. Use a high-entropy value (`invincible setup` generates one)
-   and keep the service on localhost/tunnel HTTPS. This is an acknowledged
-   gap, not a silently shipped control.
+4. **Owner-login rate limiting is per-IP, in-memory, and restarts reset
+   it.** The `/oauth/authorize` login form compares the owner secret with a
+   timing-safe digest and, after `LOGIN_MAX_ATTEMPTS` (5) wrong guesses
+   inside `LOGIN_WINDOW_SECONDS` (15 minutes), rejects further attempts
+   from that IP until the oldest of those failures ages out of the window.
+   That is brute-force friction, not an audit log: it is process-local (a
+   restart clears it), it can be bypassed by rotating IPs, and it does not
+   protect the consent page from other abuse. Use a high-entropy secret
+   (`invincible setup` generates one) and keep the service on
+   localhost/tunnel HTTPS.
 5. **Owner-secret exposure.** If `INVINCIBLE_OWNER_SECRET` is ever
    accidentally pasted somewhere or otherwise exposed, rotate it immediately
    with `invincible secret rotate` — it regenerates the value inside `.env`

@@ -178,19 +178,19 @@ async def _dispatch(method, rpc_id, params, request):
         try:
             if name == "read_file":
                 result = await tool_executor.read_file(args.get("path", ""))
-                return _result(rpc_id, _tool_content(str(result)))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "execute_bash":
                 result = tool_executor.execute_bash(
                     args.get("command", ""), pending_actions
                 )
-                return _result(rpc_id, _tool_content(str(result)))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "write_file":
                 result = tool_executor.write_file(
                     args.get("path", ""), args.get("content", ""), pending_actions
                 )
-                return _result(rpc_id, _tool_content(str(result)))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "confirm_action":
                 # Only a real JSON boolean can approve - anything else
@@ -206,7 +206,7 @@ async def _dispatch(method, rpc_id, params, request):
                     ))
                 if status == "declined":
                     return _result(rpc_id, _tool_content("Declined.", is_error=True))
-                return _result(rpc_id, _tool_content(str(result)))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
 
             return _error(rpc_id, -32601, f"Unknown tool: {name}")
 

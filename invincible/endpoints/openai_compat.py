@@ -31,7 +31,7 @@ def _append_content(content: str, chunk: dict) -> str:
     return content
 
 
-async def _stream_body(first, tail, store, session_id, full_messages):
+async def _stream_body(first, tail, store, session_id, to_persist):
     content = ""
     try:
         if first is not None:
@@ -45,8 +45,8 @@ async def _stream_body(first, tail, store, session_id, full_messages):
         yield _sse_event({"error": {"message": str(e), "type": "stream_error"}})
         return
     try:
-        await store.save(
-            session_id, full_messages + [{"role": "assistant", "content": content}]
+        await store.append(
+            session_id, to_persist + [{"role": "assistant", "content": content}]
         )
     except Exception:
         logger.exception("Failed to persist session history for %s", session_id)
@@ -93,6 +93,10 @@ async def chat_completions(request: Request, body: ChatRequest):
 
     history = await store.load(session_id)
     full_messages = history + body.messages
+    # Clients resend the system prompt on every request; persisting it would
+    # accumulate duplicates that trimming never removes (system messages are
+    # always kept). Route with it, but only persist the new turns.
+    to_persist = [m for m in body.messages if m.get("role") != "system"]
 
     if body.stream:
         try:
@@ -105,7 +109,7 @@ async def chat_completions(request: Request, body: ChatRequest):
                 status_code=503,
             )
         return StreamingResponse(
-            _stream_body(first, tail, store, session_id, full_messages),
+            _stream_body(first, tail, store, session_id, to_persist),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -117,7 +121,7 @@ async def chat_completions(request: Request, body: ChatRequest):
         result = await request.app.state.router.route_request(full_messages)
         choices = result.get("choices") or []
         if choices and "message" in choices[0]:
-            await store.save(session_id, full_messages + [choices[0]["message"]])
+            await store.append(session_id, to_persist + [choices[0]["message"]])
         return JSONResponse(content=result)
     except UpstreamClientError as e:
         return JSONResponse(

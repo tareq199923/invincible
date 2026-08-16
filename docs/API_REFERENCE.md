@@ -47,8 +47,15 @@ never from the client.
 
 - History is loaded from SQLite keyed by `X-Session-Id` (default
   `default`), **prepended** to the request's `messages`, sent upstream.
-- On a successful reply, the assistant message (`choices[0].message`) is
-  appended and the full conversation persisted back (upsert).
+- On a successful reply, the request's new turns plus the assistant message
+  (`choices[0].message`) are **appended** to the stored history (atomic
+  under a per-store lock, so concurrent requests to one session never lose
+  each other's turns).
+- **System messages are not persisted.** Clients resend the system prompt
+  on every request; storing it would accumulate duplicates that trimming
+  never removes (system messages are always kept). System prompts still go
+  upstream every request — only the stored history excludes them (same
+  behavior as the Anthropic endpoint).
 - `session_id` is a **partition key, not a credential** — any authenticated
   caller may read/write any session id.
 - Trimming happens per-provider at send time; the stored history is

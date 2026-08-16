@@ -14,13 +14,21 @@ Security model - decided explicitly up front, not bolted on after the fact:
      or `.git/`). Approval is a good backstop, but it shouldn't be the
      only thing standing between a cloud AI and this server rewriting its
      own auth check.
-  3. Every execute_bash and write_file call that isn't blocked is staged as
-     a pending action with an unpredictable token, and nothing runs until
-     the caller confirms it through the ``confirm_action`` tool (a second
-     ``/mcp`` call with that token). This replaces the old synchronous y/N
-     terminal prompt so a remote operator - e.g. someone on their phone
-     talking to a cloud AI through a tunnel - can approve without any
-     physical access to the machine.
+3. Every execute_bash and write_file call that isn't blocked is staged as
+      a pending action with an unpredictable token, and nothing runs until
+      the caller confirms it through the ``confirm_action`` tool (a second
+      ``/mcp`` call with that token). This replaces the old synchronous y/N
+      terminal prompt so a remote operator - e.g. someone on their phone
+      talking to a cloud AI through a tunnel - can approve without any
+      physical access to the machine. By default the store is in-memory
+      only and a restart orphans staged actions (the original design: a
+      clean slate on restart). Persistence is opt-in: when the
+      ``INVINCIBLE_PERSIST_PENDING_ACTIONS`` environment variable is set
+      (main.py then passes it a ``db_path`` - INVINCIBLE_DB_PATH, the same
+      file as sessions), staged actions are written to SQLite and survive a
+      restart. Timestamps use wall-clock time (``time.time()``) because
+      ``created_at`` crosses process boundaries when persisted; a
+      monotonic clock is only meaningful inside one process.
   4. TRUST BOUNDARY (changed deliberately, on purpose): before, only
      someone with physical access to the server's terminal could approve an
      action. After, approval is whatever the calling AI/client reports back
@@ -51,10 +59,13 @@ valid bearer token decides what runs, and anything staged for approval is
 visible in plain sight at the server's own stdout before it is approved.
 """
 import asyncio
+import contextlib
+import json
 import logging
 import os
 import re
 import secrets
+import sqlite3
 import subprocess
 import time
 
@@ -160,20 +171,85 @@ class PendingActionStore:
 
     ``take()`` pops the entry, making each token single-use: confirming the
     same token twice can never execute the action twice (replay guard).
+
+    Persistence: when constructed with a ``db_path``, entries are written
+    through to a small SQLite table in that file and reloaded on startup,
+    so a server restart keeps staged approvals alive. This is opt-in by
+    design - main.py only passes a ``db_path`` when the
+    ``INVINCIBLE_PERSIST_PENDING_ACTIONS`` environment variable is set;
+    the default (no ``db_path``) is memory-only, so a restart orphans
+    staged actions, matching the original design. If the database is
+    unavailable the store degrades to in-memory only and logs a warning -
+    staging must never break the MCP flow over a disk problem.
     """
 
     TTL_SECONDS = 600  # 10 minutes; tests shrink this via monkeypatch
 
-    def __init__(self):
+    def __init__(self, db_path: str = None):
         self._pending: dict = {}  # token -> {"type", "args", "created_at"}
+        self._db = None
+        if db_path:
+            try:
+                self._db = sqlite3.connect(db_path)
+                self._db.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS pending_actions (
+                        token TEXT PRIMARY KEY,
+                        type TEXT NOT NULL,
+                        args TEXT NOT NULL,
+                        created_at REAL NOT NULL
+                    )
+                    """
+                )
+                self._db.commit()
+                for token, action_type, args_json, created_at in self._db.execute(
+                    "SELECT token, type, args, created_at FROM pending_actions"
+                ):
+                    self._pending[token] = {
+                        "type": action_type,
+                        "args": json.loads(args_json),
+                        "created_at": created_at,
+                    }
+            except Exception as e:
+                logger.warning(
+                    "PendingActionStore persistence unavailable (%s); "
+                    "staged actions will not survive a restart", e
+                )
+                self._db = None
+        self._sweep()
+
+    def _db_run(self, fn) -> None:
+        """Run a write through the persistence connection; on any failure
+        drop the connection and continue in memory only."""
+        if self._db is None:
+            return
+        try:
+            fn(self._db)
+            self._db.commit()
+        except Exception as e:
+            logger.warning(
+                "Pending action persistence failed (%s); continuing in "
+                "memory only", e
+            )
+            with contextlib.suppress(Exception):
+                self._db.close()
+            self._db = None
 
     def _sweep(self, now: float | None = None) -> None:
-        cutoff = (now if now is not None else time.monotonic()) - self.TTL_SECONDS
-        for token in [
+        cutoff = (now if now is not None else time.time()) - self.TTL_SECONDS
+        expired = [
             t for t, record in self._pending.items()
             if record["created_at"] < cutoff
-        ]:
+        ]
+        for token in expired:
             del self._pending[token]
+        if expired:
+            self._db_run(
+                lambda db: db.executemany(
+                    "DELETE FROM pending_actions WHERE token = ?",
+                    [(t,) for t in expired],
+                )
+            )
 
     def put(self, action_type: str, args: dict) -> str:
         """Stage an action and return its confirmation token."""
@@ -182,17 +258,34 @@ class PendingActionStore:
         self._pending[token] = {
             "type": action_type,
             "args": args,
-            "created_at": time.monotonic(),
+            "created_at": time.time(),
         }
+        self._db_run(
+            lambda db: db.execute(
+                "INSERT INTO pending_actions (token, type, args, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    token,
+                    action_type,
+                    json.dumps(args),
+                    self._pending[token]["created_at"],
+                ),
+            )
+        )
         return token
 
     def take(self, token: str) -> dict | None:
         """Pop and return the pending record, or None if unknown/expired."""
         self._sweep()
         record = self._pending.pop(token, None)
+        self._db_run(
+            lambda db: db.execute(
+                "DELETE FROM pending_actions WHERE token = ?", (token,)
+            )
+        )
         if record is None:
             return None
-        if time.monotonic() - record["created_at"] > self.TTL_SECONDS:
+        if time.time() - record["created_at"] > self.TTL_SECONDS:
             return None
         return record
 

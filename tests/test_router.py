@@ -144,6 +144,28 @@ async def test_failover_on_5xx(make_router):
     assert result == provider_body("beta")
 
 
+async def test_non_json_200_fails_over_to_next_provider(make_router):
+    """A 200 with a non-JSON body must not crash routing: it counts as an
+    upstream failure and fails over to the next provider like any other."""
+    responses = []
+
+    def alpha_handler(request):
+        resp = _TrackingResponse(200, content="<html>not json</html>")
+        responses.append(resp)
+        return resp
+
+    def beta_handler(request):
+        return httpx.Response(200, json=provider_body("beta"))
+
+    router = make_router(
+        handlers={"alpha.example.com": alpha_handler, "beta.example.com": beta_handler}
+    )
+    result = await router.route_request(MESSAGES)
+    assert result == provider_body("beta")
+    assert not router.health_tracker.is_available("alpha")
+    assert responses[0].aclosed
+
+
 @pytest.mark.parametrize("status", [402, 404, 408, 413])
 async def test_failover_on_limit_and_transient_statuses(make_router, status):
     calls = []

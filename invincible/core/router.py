@@ -319,6 +319,26 @@ class Router:
                     continue
 
                 resp.raise_for_status()
+                body = await resp.aread()
+                try:
+                    parsed = json.loads(body)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        f"Malformed JSON (non-JSON 200) from {name}: "
+                        f"{body[:200]!r}. Triggering failover."
+                    )
+                    _log_attempt(
+                        name,
+                        provider["model_id"],
+                        payload_bytes,
+                        estimated_tokens,
+                        "malformed_json",
+                        True,
+                        level=logging.WARNING,
+                    )
+                    self.health_tracker.record_failure(name)
+                    await resp.aclose()
+                    continue
                 self.health_tracker.record_success(name)
                 _log_attempt(
                     name,
@@ -328,7 +348,7 @@ class Router:
                     resp.status_code,
                     False,
                 )
-                return resp.json()
+                return parsed
 
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code

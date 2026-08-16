@@ -1,7 +1,9 @@
 import json
+import logging
 
 import httpx
 
+from invincible.main import _warn_if_gateway_open
 from tests.conftest import default_providers, provider_body, sse_body, stream_chunk
 
 MESSAGES = [{"role": "user", "content": "hi"}]
@@ -14,6 +16,24 @@ async def _events(response):
         for event in response.text.split("\n\n")
         if event.startswith("data: ") and not event.startswith("data: [DONE]")
     ]
+
+
+def test_gateway_open_warns_loudly_when_key_unset(caplog, monkeypatch):
+    monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
+    with caplog.at_level(logging.WARNING):
+        _warn_if_gateway_open()
+    assert any(
+        "UNAUTHENTICATED" in record.message for record in caplog.records
+    )
+
+
+def test_gateway_open_warns_nothing_when_key_set(caplog, monkeypatch):
+    monkeypatch.setenv("GATEWAY_API_KEY", "test-gateway-key")
+    with caplog.at_level(logging.WARNING):
+        _warn_if_gateway_open()
+    assert not any(
+        "UNAUTHENTICATED" in record.message for record in caplog.records
+    )
 
 
 async def test_health_check(client):

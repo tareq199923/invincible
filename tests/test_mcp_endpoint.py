@@ -1,4 +1,4 @@
-import ast
+import json
 import os
 
 from invincible.core import tool_executor
@@ -73,7 +73,7 @@ async def test_mcp_call_blocked_command(client, bearer_headers):
 
 def _pending_token(body):
     """Extract the token from a pending_confirmation result."""
-    result = ast.literal_eval(body["result"]["content"][0]["text"])
+    result = json.loads(body["result"]["content"][0]["text"])
     assert result["status"] == "pending_confirmation"
     return result["token"]
 

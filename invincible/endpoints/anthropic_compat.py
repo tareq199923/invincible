@@ -47,12 +47,16 @@ def _assistant_message_from_provider(provider_message: dict) -> dict:
     return message
 
 
-async def _persist(store, session_id, full_messages, assistant_message: dict):
+async def _persist(store, session_id, new_messages: list, assistant_message: dict):
+    """Append this request's new turns to the session under the store's lock.
+
+    ``new_messages`` is the request's own messages (system role already
+    excluded here so repeated system prompts never accumulate in history);
+    the assistant reply is appended after them.
+    """
     try:
-        saved = [
-            m for m in full_messages if m.get("role") != "system"
-        ] + [assistant_message]
-        await store.save(session_id, saved)
+        saved = [m for m in new_messages if m.get("role") != "system"]
+        await store.append(session_id, saved + [assistant_message])
     except Exception:
         logger.exception("Failed to persist session history for %s", session_id)
 
@@ -88,7 +92,7 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
             return _error_message(503, "All providers failed or are in cooldown.")
 
         async def save_complete(accumulated: dict):
-            await _persist(store, session_id, full_messages, accumulated)
+            await _persist(store, session_id, internal_messages, accumulated)
 
         return StreamingResponse(
             build_stream_events(
@@ -118,7 +122,7 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
         await _persist(
             store,
             session_id,
-            full_messages,
+            internal_messages,
             _assistant_message_from_provider(choices[0]["message"]),
         )
 
