@@ -66,6 +66,29 @@ async def test_register_creates_public_client(client):
     assert stored["redirect_uris"] == [TEST_REDIRECT_URI]
 
 
+async def test_register_response_is_full_rfc7591_echo(client):
+    """The 201 body must echo the granted client metadata (RFC 7591 3.2.1):
+    token_endpoint_auth_method, grant_types, response_types, and
+    client_id_issued_at - matching the advertised discovery metadata."""
+    response = await client.post(
+        "/oauth/register",
+        json={
+            "client_name": "claude-connector",
+            "redirect_uris": [TEST_REDIRECT_URI],
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["client_id"]
+    assert body["client_name"] == "claude-connector"
+    assert body["redirect_uris"] == [TEST_REDIRECT_URI]
+    assert isinstance(body["client_id_issued_at"], int)
+    assert body["client_id_issued_at"] > 0
+    assert body["token_endpoint_auth_method"] == "none"
+    assert body["grant_types"] == ["authorization_code", "refresh_token"]
+    assert body["response_types"] == ["code"]
+
+
 async def test_register_rejects_missing_redirect_uris(client):
     response = await client.post("/oauth/register", json={})
     assert response.status_code == 400

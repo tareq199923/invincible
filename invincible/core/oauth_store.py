@@ -148,6 +148,10 @@ class OAuthStore:
             "client_id": client_id,
             "client_name": client_name.strip(),
             "redirect_uris": redirect_uris,
+            "client_id_issued_at": int(_now()),
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
         }
 
     async def get_client(self, client_id: str) -> dict | None:
