@@ -5,9 +5,13 @@ Both console scripts (``invincible`` and ``inv``) declared in pyproject.toml
 point at the ``cli`` group defined here, so the two commands are identical.
 """
 import asyncio
+import contextlib
 import importlib.resources
 import os
 import secrets
+import shutil
+import subprocess
+import threading
 import time
 
 import click
@@ -213,6 +217,128 @@ def _load_env_file(env_file: str) -> str | None:
     return None
 
 
+TUNNEL_NAME_ENV_KEY = "INVINCIBLE_TUNNEL_NAME"
+DEFAULT_TUNNEL_NAME = "invincible"
+
+
+def _resolve_tunnel_name(tunnel_name: str | None = None) -> str:
+    """Tunnel name for `cloudflared tunnel run`: an explicit flag wins,
+    then INVINCIBLE_TUNNEL_NAME, then the default."""
+    if tunnel_name:
+        return tunnel_name
+    return os.getenv(TUNNEL_NAME_ENV_KEY) or DEFAULT_TUNNEL_NAME
+
+
+def _tunnel_output_reader(proc, stopping):
+    """Forward cloudflared output to the console and surface key events.
+
+    Runs on a daemon thread so a wedged pipe can never block process exit.
+    Never raises. ``stopping`` is a threading.Event set by _stop_tunnel to
+    suppress the "tunnel exited" warning during a deliberate shutdown.
+    """
+    connected = False
+    try:
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            click.echo(f"[tunnel] {line}")
+            if "Registered tunnel connection" in line:
+                if not connected:
+                    connected = True
+                    click.echo("[tunnel] Cloudflare tunnel connected.")
+            elif "https://" in line:
+                click.echo(f"[tunnel] Tunnel URL: {line.strip()}")
+    except (OSError, ValueError):
+        pass
+    returncode = proc.poll()
+    if returncode is not None and returncode != 0 and not stopping.is_set():
+        click.echo(
+            f"Warning: Cloudflare tunnel exited (code {returncode}) - "
+            "check the tunnel credentials with `cloudflared tunnel list`; "
+            "the server is still running locally", err=True,
+        )
+
+
+def _start_tunnel(tunnel_name: str):
+    """Spawn `cloudflared tunnel run <name>` as a child of this process.
+
+    The child shares our console process group (no creationflags, no
+    start_new_session), so a terminal Ctrl+C reaches cloudflared directly.
+    Returns ``(proc, reader, stopping)``, or ``(None, None, None)`` when
+    cloudflared is unavailable. The caller MUST route every shutdown path
+    through _stop_tunnel, which never raises.
+    """
+    cloudflared = shutil.which("cloudflared")
+    if cloudflared is None:
+        click.echo(
+            "Warning: cloudflared not found on PATH; starting without "
+            "tunnel (use --no-tunnel to silence this)", err=True,
+        )
+        return None, None, None
+    click.echo(f"Starting Cloudflare tunnel '{tunnel_name}'...")
+    try:
+        proc = subprocess.Popen(
+            [cloudflared, "tunnel", "run", tunnel_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    except OSError as exc:
+        # TOCTOU guard: the binary may vanish or stop being executable
+        # between which() and Popen; without this the tunnel spawn would
+        # crash `inv start` before the cleanup finally exists.
+        click.echo(
+            f"Warning: could not start cloudflared ({exc}); starting "
+            "without tunnel (use --no-tunnel to silence this)", err=True,
+        )
+        return None, None, None
+    stopping = threading.Event()
+    reader = threading.Thread(
+        target=_tunnel_output_reader,
+        args=(proc, stopping),
+        name="cloudflared-output",
+        daemon=True,
+    )
+    reader.start()
+    return proc, reader, stopping
+
+
+def _stop_tunnel(proc, reader, stopping) -> None:
+    """Tear down a spawned cloudflared process. NEVER RAISES.
+
+    Every step is individually guarded because this function is the single
+    cleanup funnel for the tunnel: the orphan-free guarantee rests on it.
+    A slow QUIC/HTTP2 teardown on Windows can push cloudflared past the
+    terminate grace period; the kill() fallback triggering then is
+    expected, not a bug.
+    """
+    if proc is None:
+        return
+    stopping.set()
+    was_running = proc.poll() is None
+    if was_running:
+        with contextlib.suppress(OSError):
+            proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            # Process may have exited between wait() and kill(); the
+            # Ctrl+C broadcast on Windows makes this race real.
+            with contextlib.suppress(OSError):
+                proc.kill()
+            with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+                proc.wait(timeout=2)
+        except OSError:
+            pass
+    if proc.stdout is not None:
+        with contextlib.suppress(OSError):
+            proc.stdout.close()
+    reader.join(timeout=2.0)
+    if was_running:
+        click.echo("Cloudflare tunnel stopped.")
+
+
 @click.command()
 @click.option("--host", default="127.0.0.1", show_default=True,
               help="Interface to bind the server to.")
@@ -228,7 +354,14 @@ def _load_env_file(env_file: str) -> str | None:
               default=None, help="Custom providers.yaml configuration.")
 @click.option("--db-path", type=click.Path(dir_okay=False), default=None,
               help="Session database file path.")
-def start(host, port, reload, log_level, env_file, config_path, db_path):
+@click.option("--tunnel/--no-tunnel", default=True,
+              help="Start a Cloudflare tunnel alongside the server.")
+@click.option("--tunnel-name", default=None,
+              help="Cloudflare tunnel name for `cloudflared tunnel run` "
+                   f"(default: {TUNNEL_NAME_ENV_KEY} env var or "
+                   f"'{DEFAULT_TUNNEL_NAME}').")
+def start(host, port, reload, log_level, env_file, config_path, db_path,
+          tunnel, tunnel_name):
     """Start the Invincible gateway server."""
     if not 1 <= port <= 65535:
         raise click.ClickException(f"--port must be between 1 and 65535 (got {port})")
@@ -260,6 +393,21 @@ def start(host, port, reload, log_level, env_file, config_path, db_path):
     else:
         click.echo(f"Invincible starting at http://{host}:{port}")
 
+    # Spawning the tunnel is deliberately the LAST statement before the
+    # `try` block: nothing may execute between the two, because any
+    # exception raised there would orphan the cloudflared process before
+    # the cleanup finally exists.
+    tunnel_proc = tunnel_reader = tunnel_stopping = None
+    if tunnel:
+        tunnel_proc, tunnel_reader, tunnel_stopping = _start_tunnel(
+            _resolve_tunnel_name(tunnel_name)
+        )
+
+    # With --reload the tunnel is tied to the uvicorn supervisor process,
+    # not the app child: file-change restarts keep the tunnel up (correct),
+    # and an app-child crash does not propagate as an exception (uvicorn
+    # keeps supervising). Cleanup below still runs when the supervisor
+    # itself stops. Do not "fix" this later.
     try:
         uvicorn.run(
             "invincible.main:app",
@@ -270,6 +418,8 @@ def start(host, port, reload, log_level, env_file, config_path, db_path):
         )
     except KeyboardInterrupt:
         click.echo("Shutting down.")
+    finally:
+        _stop_tunnel(tunnel_proc, tunnel_reader, tunnel_stopping)
 
 
 def _legacy_providers_path() -> str:

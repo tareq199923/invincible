@@ -1,4 +1,7 @@
+import io
 import os
+import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -323,6 +326,243 @@ def _fake_run(monkeypatch):
 
     monkeypatch.setattr("invincible.cli.uvicorn.run", fake_run)
     return calls
+
+
+class _FakeProc:
+    """Fake subprocess.Popen result: controllable poll/wait/terminate/kill."""
+
+    def __init__(self, stdout_text="", exit_code=0, running=True):
+        self.stdout = io.StringIO(stdout_text)
+        self.exit_code = exit_code
+        self.running = running
+        self.terminate_called = False
+        self.kill_called = False
+        self.waits = []
+
+    def poll(self):
+        return None if self.running else self.exit_code
+
+    def terminate(self):
+        self.terminate_called = True
+        self.running = False
+
+    def kill(self):
+        self.kill_called = True
+        self.running = False
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        return None if self.running else self.exit_code
+
+
+class _HungProc(_FakeProc):
+    """Fake proc whose wait() always times out and whose kill() raises:
+    exercises every exception guard in _stop_tunnel."""
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        raise subprocess.TimeoutExpired(cmd="cloudflared", timeout=timeout)
+
+    def kill(self):
+        self.kill_called = True
+        raise OSError("kill raced with process exit")
+
+
+def _fake_cloudflared(monkeypatch, proc_factory=_FakeProc):
+    """Point `inv start` at a fake cloudflared binary and record spawns.
+
+    Returns (created, procs) where `created` is the list of recording
+    threading.Thread instances (join to synchronize reader output) and
+    `procs` is a list of (args, kwargs, proc) tuples from Popen.
+    """
+    created = []
+    real_thread = threading.Thread
+
+    class RecordingThread(real_thread):
+        def __init__(self, *args, **kwargs):
+            created.append(self)
+            super().__init__(*args, **kwargs)
+
+    procs = []
+
+    def fake_popen(args, **kwargs):
+        proc = proc_factory()
+        procs.append((args, kwargs, proc))
+        return proc
+
+    monkeypatch.setattr("invincible.cli.shutil.which", lambda name: "cloudflared")
+    monkeypatch.setattr("invincible.cli.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("invincible.cli.threading.Thread", RecordingThread)
+    return created, procs
+
+
+def test_start_spawns_and_stops_tunnel(monkeypatch, tmp_path):
+    calls = _fake_run(monkeypatch)
+    _, procs = _fake_cloudflared(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["start"])
+    assert result.exit_code == 0
+    assert calls
+    assert len(procs) == 1
+    args, kwargs, proc = procs[0]
+    assert args == ["cloudflared", "tunnel", "run", "invincible"]
+    assert kwargs["stdout"] == subprocess.PIPE
+    assert kwargs["stderr"] == subprocess.STDOUT
+    assert kwargs["text"] is True
+    assert "Starting Cloudflare tunnel 'invincible'..." in result.output
+    assert "Cloudflare tunnel stopped." in result.output
+    assert proc.terminate_called
+    assert not proc.kill_called
+    assert proc.waits == [5]
+
+
+def test_start_stops_tunnel_on_keyboard_interrupt(monkeypatch, tmp_path):
+    def fake_run(*args, **kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr("invincible.cli.uvicorn.run", fake_run)
+    _, procs = _fake_cloudflared(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["start"])
+    assert result.exit_code == 0
+    assert "Shutting down" in result.output
+    assert procs[0][2].terminate_called
+
+
+def test_start_stops_tunnel_on_server_crash(monkeypatch, tmp_path):
+    def fake_run(*args, **kwargs):
+        raise SystemExit(1)
+
+    monkeypatch.setattr("invincible.cli.uvicorn.run", fake_run)
+    _, procs = _fake_cloudflared(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["start"])
+    assert result.exit_code == 1
+    assert procs[0][2].terminate_called
+    assert not procs[0][2].kill_called
+
+
+def test_start_stops_hung_tunnel_without_raising(monkeypatch, tmp_path):
+    """A tunnel that never exits cleanly must not crash or hang shutdown:
+    wait() times out, kill() races the exit - _stop_tunnel still survives
+    and the command exits 0."""
+    _fake_run(monkeypatch)
+    _, procs = _fake_cloudflared(monkeypatch, proc_factory=_HungProc)
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["start"])
+    assert result.exit_code == 0
+    _, _, proc = procs[0]
+    assert proc.terminate_called
+    assert proc.kill_called
+    assert "Cloudflare tunnel stopped." in result.output
+
+
+def test_start_warns_when_tunnel_exits_prematurely(monkeypatch, tmp_path):
+    """A tunnel that dies at startup (bad credentials, tunnel deleted)
+    must be reported immediately instead of surfacing as a 502 later."""
+    calls = _fake_run(monkeypatch)
+    error_text = "2026-08-18T10:00:00Z ERR unable to find tunnel 'invincible'\n"
+    created, procs = _fake_cloudflared(
+        monkeypatch,
+        proc_factory=lambda: _FakeProc(
+            stdout_text=error_text, exit_code=1, running=False
+        ),
+    )
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["start"])
+    for thread in created:
+        thread.join()
+    assert result.exit_code == 0
+    assert calls
+    assert procs[0][2].terminate_called is False
+    assert "[tunnel] 2026-08-18T10:00:00Z ERR unable to find tunnel" in result.output
+    assert "Cloudflare tunnel exited (code 1)" in result.output
+    assert "the server is still running locally" in result.output
+    assert "Cloudflare tunnel stopped." not in result.output
+
+
+def test_start_reports_tunnel_connected(monkeypatch, tmp_path):
+    """The reader thread echoes cloudflared's registration line so the
+    operator can see the tunnel is live (and its URL)."""
+    _fake_run(monkeypatch)
+    stdout_text = (
+        "2026-08-18T10:00:00Z INF Registered tunnel connection "
+        "connIndex=0 originUrl=https://invincible.example.com\n"
+        "You can visit your tunnel at: https://invincible.example.com\n"
+    )
+    created, procs = _fake_cloudflared(
+        monkeypatch, proc_factory=lambda: _FakeProc(stdout_text=stdout_text)
+    )
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["start"])
+    for thread in created:
+        thread.join()
+    assert result.exit_code == 0
+    assert procs[0][2].terminate_called
+    assert "[tunnel] Cloudflare tunnel connected." in result.output
+    assert "Tunnel URL: You can visit your tunnel at:" in result.output
+    assert "https://invincible.example.com" in result.output
+
+
+def test_start_no_tunnel_skips_spawn(monkeypatch, tmp_path):
+    calls = _fake_run(monkeypatch)
+    created, procs = _fake_cloudflared(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["start", "--no-tunnel"])
+    assert result.exit_code == 0
+    assert calls
+    assert procs == []
+    assert created == []
+    assert "cloudflared" not in result.output
+
+
+def test_start_tunnel_custom_name(monkeypatch, tmp_path):
+    _fake_run(monkeypatch)
+    _, procs = _fake_cloudflared(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["start", "--tunnel-name", "my-tunnel"])
+    assert result.exit_code == 0
+    assert procs[0][0] == ["cloudflared", "tunnel", "run", "my-tunnel"]
+
+
+def test_start_tunnel_name_env_fallback(monkeypatch, tmp_path):
+    monkeypatch.setenv("INVINCIBLE_TUNNEL_NAME", "env-tunnel")
+    _fake_run(monkeypatch)
+    _, procs = _fake_cloudflared(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["start"])
+    assert result.exit_code == 0
+    assert procs[0][0] == ["cloudflared", "tunnel", "run", "env-tunnel"]
+
+
+def test_start_warns_when_cloudflared_missing(monkeypatch, tmp_path):
+    calls = _fake_run(monkeypatch)
+    monkeypatch.setattr("invincible.cli.shutil.which", lambda name: None)
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["start"])
+    assert result.exit_code == 0
+    assert calls
+    assert "cloudflared not found on PATH" in result.output
+    assert "--no-tunnel" in result.output
+
+
+def test_start_warns_when_popen_fails(monkeypatch, tmp_path):
+    """Popen raising OSError (TOCTOU race after which()) must degrade to a
+    warning instead of crashing `inv start` before cleanup exists."""
+    calls = _fake_run(monkeypatch)
+    monkeypatch.setattr("invincible.cli.shutil.which", lambda name: "cloudflared")
+
+    def boom(*args, **kwargs):
+        raise OSError("binary vanished")
+
+    monkeypatch.setattr("invincible.cli.subprocess.Popen", boom)
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["start"])
+    assert result.exit_code == 0
+    assert calls
+    assert "could not start cloudflared" in result.output
+    assert "binary vanished" in result.output
+    assert "Cloudflare tunnel stopped." not in result.output
 
 
 def test_start_invokes_uvicorn_run_with_defaults(monkeypatch, tmp_path):

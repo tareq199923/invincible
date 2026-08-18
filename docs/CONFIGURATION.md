@@ -22,6 +22,7 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 | `INVINCIBLE_CONFIG_PATH` | startup | Path to a custom `providers.yaml` (set by CLI `--config`). |
 | `INVINCIBLE_DB_PATH` | startup | Path to the session database (set by CLI `--db-path`). |
 | `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the session database and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
+| `INVINCIBLE_TUNNEL_NAME` | `inv start` | Cloudflare tunnel name for `cloudflared tunnel run` (overridden by `--tunnel-name`; default `invincible`). |
 
 The two secrets are **independent**: a leaked tunnel URL alone is not enough
 to reach tool execution, and rotating one secret never affects the other.
@@ -134,6 +135,7 @@ invincible secret rotate [--env-file PATH] [--show]
 invincible start [--host 127.0.0.1] [--port 8000] [--reload]
                 [--log-level info] [--env-file .env]
                 [--config PATH] [--db-path PATH]
+                [--tunnel | --no-tunnel] [--tunnel-name NAME]
 invincible oauth list | revoke <client_id> | test-client [--db-path PATH]
 invincible --version | --help
 ```
@@ -160,6 +162,15 @@ Notes on `start`:
   `FileNotFoundError`/`ValueError`) and sets `INVINCIBLE_CONFIG_PATH`.
 - `--db-path` sets `INVINCIBLE_DB_PATH`.
 - Binding to `0.0.0.0` prints a reminder of the local access URL.
+- By default the tunnel is started alongside the server:
+  `cloudflared tunnel run <name>`, where the name is `--tunnel-name`,
+  else `INVINCIBLE_TUNNEL_NAME`, else `invincible`. Pass `--no-tunnel` to
+  skip it (or if `cloudflared` is not installed, it is skipped with a
+  warning). cloudflared's output is forwarded to the console prefixed
+  `[tunnel]`; a tunnel that dies is reported as soon as it exits. When the
+  server stops (Ctrl+C or a crash), the tunnel is terminated too — with
+  `--reload` it stays up across app-file restarts and is only torn down
+  when the supervisor stops.
 - Both console scripts (`invincible` and `inv`) declared in `pyproject.toml`
   point at the same `cli` group.
 

@@ -137,7 +137,7 @@ Two commands, both exposed as `invincible` and `inv`:
 |---|---|
 | `invincible setup` | Create/update `.env`: generates missing secrets (`token_urlsafe(32)`, never echoed), prompts for provider keys, preserves existing comments/values; carries a legacy `MCP_SHARED_SECRET` over to `INVINCIBLE_OWNER_SECRET` automatically. `--force` re-prompts existing values. |
 | `invincible secret rotate` | Generate a brand-new `INVINCIBLE_OWNER_SECRET` and rewrite it in place — no manual `.env` editing, never echoes the value (unless `--show`). Preserves every other line; migrates a legacy `MCP_SHARED_SECRET` key away. Does **not** revoke already-issued OAuth grants (that's `invincible oauth revoke`). |
-| `invincible start` | Start the server. Options: `--host` (default `127.0.0.1`), `--port` (default `8000`), `--reload`, `--log-level`, `--env-file`, `--config` (custom providers.yaml), `--db-path` (session database). |
+| `invincible start` | Start the server **and** a Cloudflare tunnel (named `invincible` by default) so the gateway is reachable remotely. Options: `--host` (default `127.0.0.1`), `--port` (default `8000`), `--reload`, `--log-level`, `--env-file`, `--config` (custom providers.yaml), `--db-path` (session database), `--tunnel/--no-tunnel`, `--tunnel-name` (or `INVINCIBLE_TUNNEL_NAME`). The tunnel is shut down with the server (Ctrl+C or a crash); a dead tunnel is reported as soon as it exits. |
 | `invincible doctor` | Environment/config diagnostics, including the owner-secret presence. |
 | `invincible oauth list` | Show registered OAuth clients, their redirect URIs, and active/revoked grants. |
 | `invincible oauth revoke <client_id>` | Revoke every access/refresh token for a client immediately. |
@@ -436,6 +436,16 @@ The command runs (or the file is written) only after approval; the token is
 single-use and expires after 10 minutes.
 
 ### 8. Expose to a cloud AI over a tunnel
+
+`invincible start` brings the tunnel up automatically: it runs
+`cloudflared tunnel run <name>` (name defaults to `invincible`, override
+with `--tunnel-name` or `INVINCIBLE_TUNNEL_NAME`) alongside the server and
+shuts it down again when the server stops. cloudflared's log lines (and the
+public URL when cloudflared prints one) appear prefixed `[tunnel]`; a
+tunnel that dies is reported as soon as it exits. To skip the tunnel, pass
+`--no-tunnel`.
+
+For a one-off quick tunnel instead (no named-tunnel config required):
 
 ```bash
 cloudflared tunnel --url http://127.0.0.1:8000

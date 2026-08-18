@@ -472,7 +472,14 @@ errors — they are successful calls whose `result.isError` is `true`.
 
 ## 7. End-to-end example (tunnel)
 
-Expose the local server with a tunnel, e.g. Cloudflare:
+`invincible start` launches a named Cloudflare tunnel alongside the server
+(`cloudflared tunnel run <name>`, default name `invincible`; override with
+`--tunnel-name` or `INVINCIBLE_TUNNEL_NAME`, skip with `--no-tunnel`). Its
+log lines — including the public URL when cloudflared prints one — appear
+prefixed `[tunnel]`, and the tunnel is shut down when the server stops. A
+tunnel that dies is reported as soon as it exits.
+
+For a one-off quick tunnel instead (no named-tunnel config required):
 
 ```bash
 cloudflared tunnel --url http://127.0.0.1:8000
