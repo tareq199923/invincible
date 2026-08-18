@@ -91,6 +91,13 @@ app.include_router(anthropic_router, dependencies=[Depends(require_auth)])
 app.include_router(oauth_router)
 app.include_router(mcp_router, dependencies=[Depends(require_mcp_auth)])
 
+@app.head("/mcp")
+async def mcp_head():
+    # MCP clients probe the resource with HEAD before OAuth; answer 200
+    # with an empty body (registered after the protected router so no
+    # bearer token is required for the probe).
+    return Response(status_code=200)
+
 @app.get("/")
 def health_check():
     return {"status": "healthy"}

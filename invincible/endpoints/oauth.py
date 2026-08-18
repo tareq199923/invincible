@@ -242,6 +242,15 @@ async def protected_resource_metadata(request: Request):
     }
 
 
+@router.get("/.well-known/oauth-protected-resource/{rest:path}")
+async def protected_resource_metadata_path_form(request: Request):
+    """RFC 9728 5.1 path-form discovery: a client may ask for resource
+    metadata by appending the resource's path component, e.g.
+    ``/.well-known/oauth-protected-resource/mcp``. The metadata is the same
+    regardless of the resource path, so every suffix serves the same body."""
+    return await protected_resource_metadata(request)
+
+
 @router.post("/oauth/register")
 async def oauth_register(request: Request):
     """RFC 7591 dynamic client registration. Open by design - the real
