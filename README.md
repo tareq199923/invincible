@@ -519,6 +519,7 @@ store, and trimming logic consume.
 | [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md) | Client-facing `/mcp` spec: JSON-RPC shape, tools, notifications, tunnel setup. |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, auth realms, denylist inventory, approval flow, known limits. |
 | [docs/TESTING.md](docs/TESTING.md) | How tests work, fixtures, per-file coverage map. |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Planned future work by phase: hardening, distribution, docs site, multi-user, dashboard, more providers/tools, deployment. |
 
 ---
 
