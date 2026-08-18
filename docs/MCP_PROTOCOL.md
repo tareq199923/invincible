@@ -106,6 +106,19 @@ consent page, so only a registered `redirect_uri` is ever redirected to.
 Redirect URIs must be `https://` or loopback (`http://localhost` /
 `http://127.0.0.1`).
 
+#### Grok custom connector
+
+The registration **response body is intentionally minimal** — only
+`client_id`, `client_name`, and `redirect_uris`. Do **not** echo
+unsolicited `token_endpoint_auth_method`, `grant_types`, `response_types`,
+or `client_id_issued_at` without re-validating against Grok. A fuller
+RFC 7591 §3.2.1 echo has been observed to make Grok abort after a
+successful registration (client id stored, consent page never opened,
+every subsequent `/mcp` call returns 401). Authorization-server metadata
+still advertises `token_endpoint_auth_methods_supported: ["none"]` for
+clients that follow discovery. Prefer a live Grok connector re-test before
+expanding the registration response.
+
 ### 3.2 Authorize (consent page)
 
 ```

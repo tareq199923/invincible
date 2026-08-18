@@ -417,6 +417,12 @@ def start(host, port, reload, log_level, env_file, config_path, db_path,
             log_level=log_level,
         )
     except KeyboardInterrupt:
+        # Set stopping before any console output so the tunnel reader
+        # does not race a Ctrl+C-driven cloudflared exit and print a
+        # spurious 'tunnel exited' warning (Windows shares the console
+        # process group; cloudflared receives CTRL_C_EVENT directly).
+        if tunnel_stopping is not None:
+            tunnel_stopping.set()
         click.echo("Shutting down.")
     finally:
         _stop_tunnel(tunnel_proc, tunnel_reader, tunnel_stopping)

@@ -94,8 +94,12 @@ app.include_router(mcp_router, dependencies=[Depends(require_mcp_auth)])
 @app.head("/mcp")
 async def mcp_head():
     # MCP clients probe the resource with HEAD before OAuth; answer 200
-    # with an empty body (registered after the protected router so no
-    # bearer token is required for the probe).
+    # with an empty body. This is a separate unauthenticated route: the
+    # POST /mcp handler on mcp_router requires a Bearer token. Starlette
+    # records a partial match for HEAD against the POST-only route and
+    # continues; only if no later route fully matches would that become
+    # 405. Registered after include_router(mcp_router) so the full HEAD
+    # match wins the probe without auth.
     return Response(status_code=200)
 
 @app.get("/")

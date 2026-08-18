@@ -50,6 +50,20 @@ async def test_protected_resource_metadata_shape(client):
     assert data["authorization_servers"] == ["http://test"]
 
 
+async def test_protected_resource_path_form_mcp_ok(client):
+    response = await client.get("/.well-known/oauth-protected-resource/mcp")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["resource"].endswith("/mcp")
+    assert data["canonical_uri"].endswith("/mcp")
+
+
+async def test_protected_resource_path_form_unknown_404(client):
+    response = await client.get("/.well-known/oauth-protected-resource/v1")
+    assert response.status_code == 404
+    assert response.json()["error"] == "not_found"
+
+
 # --- dynamic client registration ---
 
 
@@ -64,6 +78,25 @@ async def test_register_creates_public_client(client):
     assert stored is not None
     assert stored["client_name"] == "claude-connector"
     assert stored["redirect_uris"] == [TEST_REDIRECT_URI]
+
+async def test_register_response_is_minimal_public_client(client):
+    """Grok-compatible registration body: only client_id, client_name,
+    redirect_uris — no unsolicited token_endpoint_auth_method / grant_types
+    / response_types / client_id_issued_at (see docs/MCP_PROTOCOL.md)."""
+    response = await client.post(
+        "/oauth/register",
+        json={
+            "client_name": "claude-connector",
+            "redirect_uris": [TEST_REDIRECT_URI],
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert set(body.keys()) == {"client_id", "client_name", "redirect_uris"}
+    assert body["client_id"]
+    assert body["client_name"] == "claude-connector"
+    assert body["redirect_uris"] == [TEST_REDIRECT_URI]
+
 
 
 async def test_register_rejects_missing_redirect_uris(client):

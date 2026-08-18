@@ -243,14 +243,18 @@ async def protected_resource_metadata(request: Request):
 
 
 @router.get("/.well-known/oauth-protected-resource/{rest:path}")
-async def protected_resource_metadata_path_form(request: Request):
+async def protected_resource_metadata_path_form(request: Request, rest: str):
     """RFC 9728 5.1 path-form discovery: a client may ask for resource
     metadata by appending the resource's path component, e.g.
-    ``/.well-known/oauth-protected-resource/mcp``. The metadata is the same
-    regardless of the resource path, so every suffix serves the same body."""
+    ``/.well-known/oauth-protected-resource/mcp``.
+
+    Only the MCP resource is published today, so unknown suffixes return
+    404. An empty path component (trailing slash on the well-known URL)
+    is treated the same as the root form.
+    """
+    if rest.strip("/") not in ("", "mcp"):
+        return JSONResponse({"error": "not_found"}, status_code=404)
     return await protected_resource_metadata(request)
-
-
 @router.post("/oauth/register")
 async def oauth_register(request: Request):
     """RFC 7591 dynamic client registration. Open by design - the real

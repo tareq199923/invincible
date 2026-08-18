@@ -12,6 +12,13 @@ TOOLS_LIST_REQUEST = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 # --- auth gate (Bearer tokens, WWW-Authenticate) ---
 
 
+async def test_mcp_head_unauthenticated_ok(client):
+    """MCP clients probe with HEAD before OAuth; must succeed without a token."""
+    response = await client.request("HEAD", "/mcp")
+    assert response.status_code == 200
+    assert response.content in (b"", None) or len(response.content) == 0
+
+
 async def test_mcp_without_bearer_returns_401_with_challenge(client):
     response = await client.post("/mcp", json=TOOLS_LIST_REQUEST)
     assert response.status_code == 401
