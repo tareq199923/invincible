@@ -79,6 +79,7 @@ async def test_register_creates_public_client(client):
     assert stored["client_name"] == "claude-connector"
     assert stored["redirect_uris"] == [TEST_REDIRECT_URI]
 
+
 async def test_register_response_is_minimal_public_client(client):
     """Grok-compatible registration body: only client_id, client_name,
     redirect_uris — no unsolicited token_endpoint_auth_method / grant_types
@@ -96,7 +97,6 @@ async def test_register_response_is_minimal_public_client(client):
     assert body["client_id"]
     assert body["client_name"] == "claude-connector"
     assert body["redirect_uris"] == [TEST_REDIRECT_URI]
-
 
 
 async def test_register_rejects_missing_redirect_uris(client):

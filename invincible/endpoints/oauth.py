@@ -255,6 +255,8 @@ async def protected_resource_metadata_path_form(request: Request, rest: str):
     if rest.strip("/") not in ("", "mcp"):
         return JSONResponse({"error": "not_found"}, status_code=404)
     return await protected_resource_metadata(request)
+
+
 @router.post("/oauth/register")
 async def oauth_register(request: Request):
     """RFC 7591 dynamic client registration. Open by design - the real
