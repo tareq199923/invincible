@@ -463,9 +463,9 @@ needs supervision, auto-restart, and predictable networking.
 
 ---
 
-## Phase 9 — Context compression
+## Phase 9 — Context compression (Done)
 
-**Priority P1 · Size M · Status: Planned · Prerequisite: none (soft-ordered before Phase 10)**
+**Priority P1 · Size M · Status: Done · Prerequisite: none (soft-ordered before Phase 10)**
 
 ### Goal
 
@@ -524,9 +524,9 @@ smaller payloads, and strictly more turns surviving the same budget.
 
 ---
 
-## Phase 10 — Context memory (regex fact extraction)
+## Phase 10 — Context memory (Done)
 
-**Priority P2 · Size M · Status: Planned · Soft ordering: after Phase 9 (not a hard dependency)**
+**Priority P2 · Size M · Status: Done · Soft ordering: after Phase 9 (not a hard dependency)**
 
 ### Goal
 
