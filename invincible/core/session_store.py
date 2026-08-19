@@ -89,7 +89,38 @@ class SessionStore:
         the other's write. Callers should pass only the *new* turns for
         this request (e.g. the user messages plus the assistant reply) -
         never the history they loaded themselves.
+
+        Retention (Phase 10): history is bounded to the most recent
+        ``INVINCIBLE_HISTORY_MAX_TURNS`` turns (default 200; ``0``/``off``
+        disables). Facts extracted from rolled-off turns survive in the
+        facts table (core/memory.py); turns are dropped atomically via the
+        router's ``group_into_turns`` so a tool_call is never separated
+        from its tool result.
         """
         async with self._append_lock:
             current = await self.load(session_id)
             await self.save(session_id, current + new_messages)
+            await self._enforce_retention(session_id)
+
+    async def _enforce_retention(self, session_id: str):
+        limit = history_max_turns()
+        if limit is None:
+            return
+        messages = await self.load(session_id)
+        from invincible.core.router import group_into_turns
+
+        turns = group_into_turns(messages)
+        if len(turns) > limit:
+            kept = [m for turn in turns[-limit:] for m in turn]
+            await self.save(session_id, kept)
+
+
+def history_max_turns() -> int | None:
+    """Stored-history turn cap (default 200); ``0``/``off`` disables."""
+    raw = os.getenv("INVINCIBLE_HISTORY_MAX_TURNS", "").strip().lower()
+    if raw in ("0", "off"):
+        return None
+    try:
+        return max(1, int(raw)) if raw else 200
+    except ValueError:
+        return 200

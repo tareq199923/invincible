@@ -33,7 +33,11 @@ Phase 0 (current state)
    │
    ├──► Phase 6  More providers
    ├──► Phase 7  More MCP tools
-   └──► Phase 8  Deployment
+   ├──► Phase 8  Deployment
+   │
+   ├──► Phase 9   Context compression      (parallel to 1/4 — no storage/identity)
+   │          │
+   │          └─► Phase 10  Context memory (soft ordering after 9, not a hard dep)
 ```
 
 ---
@@ -459,6 +463,131 @@ needs supervision, auto-restart, and predictable networking.
 
 ---
 
+## Phase 9 — Context compression
+
+**Priority P1 · Size M · Status: Planned · Prerequisite: none (soft-ordered before Phase 10)**
+
+### Goal
+
+Shrink what is actually sent to a provider on each request — tool outputs
+and other verbose content — *before* `trim_messages` decides what fits, so
+fewer turns are dropped and fewer tokens are burned per call.
+
+### Problem it solves
+
+Every request resends the full trimmed history with no compression, and the
+trim budget is computed on uncompressed sizes. Today trimming mostly bites
+on failover to the 128k-context provider (`groq-llama` in
+`providers.yaml`; the other shipped providers are 1M), so a single failover
+silently discards most of a long session. Compression attacks both halves:
+smaller payloads, and strictly more turns surviving the same budget.
+
+### Scope
+
+1. **Send-time compression pass** (`core/router.py`)
+   - A transform applied to the in-memory message list *before*
+     `trim_messages`' budget check, in both `route_request` and
+     `stream_open` (identical behavior in streaming and non-streaming).
+   - **Never persisted** — stored history stays verbatim. Compressing
+     stored turns would progressively degrade them on every round trip.
+2. **Compression rules**
+   - e.g. tool-result truncation/deduplication, whitespace and verbosity
+     reduction; behind a config toggle (`providers.yaml` or env var) —
+     decide the default and document it.
+   - Must preserve message structure: roles, and the `tool_calls` /
+     tool-result pairing that `group_into_turns` treats as atomic.
+3. **Token accounting**
+   - `estimate_tokens` / the trim budget must be computed on
+     post-compression sizes, or trimming still over-drops.
+   - Anthropic `input_tokens` (`endpoints/anthropic_compat.py`
+     `estimate_token_sum`) is currently computed on the untrimmed,
+     uncompressed `full_messages` — adjust it to reflect what is actually
+     sent, or document the drift explicitly.
+4. **Tests** — compression keeps roles/structure intact, tool-turn
+   atomicity survives, savings are measurable on a tool-heavy fixture,
+   and stream/non-stream paths behave identically.
+
+### Dependencies
+
+- Phase 0. No storage, identity, or audit involvement — fully parallel to
+  Phases 1 and 4.
+
+### Acceptance criteria
+
+- Payload token estimates are measurably smaller on tool-heavy sessions
+  with message structure intact.
+- For the same input, `trim_messages` keeps strictly ≥ as many turns after
+  compression as before.
+- Stored session history is byte-identical with compression on vs. off
+  (send-time only).
+- Full test suite stays green; SSE behavior unchanged.
+
+---
+
+## Phase 10 — Context memory (regex fact extraction)
+
+**Priority P2 · Size M · Status: Planned · Soft ordering: after Phase 9 (not a hard dependency)**
+
+### Goal
+
+Facts from turns that trimming drops stop being lost forever: extract
+simple `(entity, relation, target)` facts via pattern matching, store them
+in SQLite, and inject a compact, size-bounded summary back into future
+requests.
+
+### Problem it solves
+
+`trim_messages` drops the oldest turns silently and permanently — the
+provider never sees them again, and the gateway keeps no record of what
+was dropped. Separately, the session DB grows unboundedly: trimming is
+send-time only and nothing ever shrinks the stored history.
+
+### Scope
+
+1. **Facts table** (new table in the session DB; `core/session_store.py`
+   or a new `core/memory.py`)
+   - Keyed `(user_id, session_id)` from day one, with `user_id`
+     defaulting to a sentinel (`"default"`) until Phase 4 populates it
+     from auth — Phase 4 then backfills instead of rebuilding.
+   - If Phase 1's optional sessions-at-rest encryption lands first, the
+     facts table inherits the same toggle.
+2. **Extraction at persist time** (`endpoints/openai_compat.py`,
+   `endpoints/anthropic_compat.py` `_persist`)
+   - Runs when new turns are appended: idempotent, once per turn,
+     protocol-agnostic.
+   - Deliberately **not** in the router: `trim_messages` runs per provider
+     attempt, so extracting "before a turn is dropped" there would extract
+     different facts per provider and re-extract on retries.
+3. **Injection at load time**
+   - A compact facts summary injected as a system message — with its own
+     explicit size bound, because system messages are never trimmed and an
+     unbounded summary would become the new growth problem.
+4. **Storage retention cap**
+   - Bound the session DB's growth (e.g. max stored turns per session,
+     with extracted facts preserving what rolls off); decide the policy
+     and document it.
+5. **Tests** — extraction idempotency, both protocols covered, injection
+   respects the size cap, sentinel-key design documented for Phase 4.
+
+### Dependencies
+
+- Phase 0. Soft-ordered after Phase 9 so extraction design is validated
+  against post-compression trim behavior, but not code-dependent on it.
+- Survives Phase 4 via the sentinel `user_id` key (backfill, not rebuild).
+
+### Acceptance criteria
+
+- Facts from dropped turns are retrievable and injected within the size
+  cap on subsequent requests.
+- Extraction is idempotent (re-persisting a turn adds no duplicate facts)
+  and works identically on both endpoints.
+- Phase 4 migration of the facts table is a documented backfill, not a
+  schema rebuild.
+- Session DB size is bounded by the documented retention policy.
+- Full test suite stays green.
+
+---
+
 ## Cross-cutting backlog
 
 Ideas that don't fit one phase cleanly. Pull from here when planning a
@@ -482,6 +611,15 @@ cycle.
   (precursor to Phase 5's provider panel).
 - **Prettier console output** — structured/summarized logging for
   `start` (requests, failovers) instead of raw uvicorn lines.
+- **Vector / semantic memory** — embeddings + similarity retrieval over
+  session history, the heavier successor to Phase 10's regex facts.
+  Deferred pending two explicit decisions: embeddings (API provider vs.
+  local model vs. SQLite FTS5 keyword search — FTS5 is available in
+  CPython's bundled SQLite) and store (embedded sqlite-vec/FTS5 vs. a
+  service like Qdrant — a second long-running service would deviate from
+  the one-process, SQLite-first, self-hosted posture and needs explicit
+  sign-off). Natural ordering: after Phase 4 (per-user index namespaces
+  become natural) and Phase 8 (a vector service is a deployment question).
 
 ---
 

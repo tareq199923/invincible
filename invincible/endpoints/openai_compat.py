@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from invincible.core.memory import memory_system_message, record_turns
 from invincible.core.router import AllProvidersFailedError, UpstreamClientError
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ def _append_content(content: str, chunk: dict) -> str:
     return content
 
 
-async def _stream_body(first, tail, store, session_id, to_persist):
+async def _stream_body(first, tail, store, session_id, to_persist, memory=None):
     content = ""
     try:
         if first is not None:
@@ -44,12 +45,15 @@ async def _stream_body(first, tail, store, session_id, to_persist):
         logger.warning("Stream terminated after an upstream error: %s", e)
         yield _sse_event({"error": {"message": str(e), "type": "stream_error"}})
         return
+    new_turns = to_persist + [{"role": "assistant", "content": content}]
     try:
-        await store.append(
-            session_id, to_persist + [{"role": "assistant", "content": content}]
-        )
+        await store.append(session_id, new_turns)
     except Exception:
         logger.exception("Failed to persist session history for %s", session_id)
+    try:
+        await record_turns(memory, session_id, new_turns)
+    except Exception:
+        logger.exception("Failed to record session facts for %s", session_id)
     yield "data: [DONE]\n\n"
 
 
@@ -90,9 +94,15 @@ async def chat_completions(request: Request, body: ChatRequest):
         or "default"
     )
     store = request.app.state.sessions
+    memory = getattr(request.app.state, "memory", None)
 
     history = await store.load(session_id)
-    full_messages = history + body.messages
+    # Injected after history as a system message: routed but never
+    # persisted (system role is excluded below), so it never accumulates.
+    memory_msg = await memory_system_message(memory, session_id)
+    full_messages = (
+        history + ([memory_msg] if memory_msg else []) + body.messages
+    )
     # Clients resend the system prompt on every request; persisting it would
     # accumulate duplicates that trimming never removes (system messages are
     # always kept). Route with it, but only persist the new turns.
@@ -109,7 +119,7 @@ async def chat_completions(request: Request, body: ChatRequest):
                 status_code=503,
             )
         return StreamingResponse(
-            _stream_body(first, tail, store, session_id, to_persist),
+            _stream_body(first, tail, store, session_id, to_persist, memory),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -121,7 +131,12 @@ async def chat_completions(request: Request, body: ChatRequest):
         result = await request.app.state.router.route_request(full_messages)
         choices = result.get("choices") or []
         if choices and "message" in choices[0]:
-            await store.append(session_id, to_persist + [choices[0]["message"]])
+            new_turns = to_persist + [choices[0]["message"]]
+            await store.append(session_id, new_turns)
+            try:
+                await record_turns(memory, session_id, new_turns)
+            except Exception:
+                logger.exception("Failed to record session facts for %s", session_id)
         return JSONResponse(content=result)
     except UpstreamClientError as e:
         return JSONResponse(

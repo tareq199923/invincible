@@ -21,6 +21,8 @@ from invincible.compat.anthropic import (
     translate_tool_choice,
 )
 from invincible.compat.common import estimate_token_sum
+from invincible.core.compression import compress_messages, compression_enabled
+from invincible.core.memory import memory_system_message, record_turns
 from invincible.core.router import AllProvidersFailedError, UpstreamClientError
 from invincible.models.anthropic import AnthropicMessagesRequest
 
@@ -47,18 +49,25 @@ def _assistant_message_from_provider(provider_message: dict) -> dict:
     return message
 
 
-async def _persist(store, session_id, new_messages: list, assistant_message: dict):
+async def _persist(store, session_id, new_messages: list, assistant_message: dict,
+                   memory=None):
     """Append this request's new turns to the session under the store's lock.
 
     ``new_messages`` is the request's own messages (system role already
     excluded here so repeated system prompts never accumulate in history);
-    the assistant reply is appended after them.
+    the assistant reply is appended after them. Facts are extracted from
+    the persisted turns (Phase 10) on a best-effort basis.
     """
+    saved = [m for m in new_messages if m.get("role") != "system"]
+    new_turns = saved + [assistant_message]
     try:
-        saved = [m for m in new_messages if m.get("role") != "system"]
-        await store.append(session_id, saved + [assistant_message])
+        await store.append(session_id, new_turns)
     except Exception:
         logger.exception("Failed to persist session history for %s", session_id)
+    try:
+        await record_turns(memory, session_id, new_turns)
+    except Exception:
+        logger.exception("Failed to record session facts for %s", session_id)
 
 
 @router.post("/v1/messages")
@@ -69,6 +78,7 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
         or "default"
     )
     store = request.app.state.sessions
+    memory = getattr(request.app.state, "memory", None)
 
     try:
         internal_messages = anthropic_to_internal(body.messages, body.system)
@@ -76,8 +86,19 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
         return _error_message(400, str(e))
 
     history = await store.load(session_id)
-    full_messages = history + internal_messages
-    input_tokens = estimate_token_sum(full_messages)
+    # Injected memory is routed but never persisted (system role).
+    memory_msg = await memory_system_message(memory, session_id)
+    full_messages = (
+        history + ([memory_msg] if memory_msg else []) + internal_messages
+    )
+    # Estimate on the compressed messages so reported usage tracks what is
+    # actually sent (Phase 9). Per-provider trimming still makes this an
+    # upper bound when a small-context provider wins the route — that drift
+    # predates compression and is documented in ROADMAP Phase 9.
+    if compression_enabled():
+        input_tokens = estimate_token_sum(compress_messages(full_messages))
+    else:
+        input_tokens = estimate_token_sum(full_messages)
     tools = anthropic_tools_to_openai(body.tools)
     tool_choice = translate_tool_choice(body.tool_choice)
 
@@ -92,7 +113,7 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
             return _error_message(503, "All providers failed or are in cooldown.")
 
         async def save_complete(accumulated: dict):
-            await _persist(store, session_id, internal_messages, accumulated)
+            await _persist(store, session_id, internal_messages, accumulated, memory)
 
         return StreamingResponse(
             build_stream_events(
@@ -124,6 +145,7 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
             session_id,
             internal_messages,
             _assistant_message_from_provider(choices[0]["message"]),
+            memory,
         )
 
     anthropic_response = internal_to_anthropic(result, body.model, input_tokens)

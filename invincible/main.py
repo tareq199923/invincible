@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 
 from invincible import __version__
+from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore
 from invincible.core.router import Router
 from invincible.core.session_store import SessionStore
@@ -49,8 +50,13 @@ async def lifespan(app: FastAPI):
     app.state.oauth_store = OAuthStore(db_path=db_path)
     await app.state.sessions.init()
     await app.state.oauth_store.init()
+    # Phase 10 fact memory: shares the session DB connection so a
+    # `:memory:` database stays one database (tests, ephemeral runs).
+    app.state.memory = MemoryStore(shared=app.state.sessions)
+    await app.state.memory.init()
     yield
     await app.state.router.close()
+    await app.state.memory.close()
     await app.state.sessions.close()
     await app.state.oauth_store.close()
 

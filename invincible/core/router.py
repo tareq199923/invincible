@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 import httpx
 import yaml
 
+from invincible.core.compression import compress_messages, compression_enabled
 from invincible.core.provider_health import HealthTracker
 
 logger = logging.getLogger("invincible.router")
@@ -273,8 +274,15 @@ class Router:
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json"
             }
+            # Compress before trimming so the budget check runs on
+            # post-compression sizes (otherwise trimming over-drops).
+            # Send-time only: the caller's `messages` stay verbatim for
+            # session persistence.
+            send_messages = (
+                compress_messages(messages) if compression_enabled() else messages
+            )
             trimmed_messages = trim_messages(
-                messages, provider.get("max_context", DEFAULT_MAX_CONTEXT)
+                send_messages, provider.get("max_context", DEFAULT_MAX_CONTEXT)
             )
             payload = {
                 "model": provider["model_id"],
@@ -439,8 +447,12 @@ class Router:
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             }
+            # Same compress-then-trim order as route_request (send-time only).
+            send_messages = (
+                compress_messages(messages) if compression_enabled() else messages
+            )
             trimmed_messages = trim_messages(
-                messages, provider.get("max_context", DEFAULT_MAX_CONTEXT)
+                send_messages, provider.get("max_context", DEFAULT_MAX_CONTEXT)
             )
             payload = {
                 "model": provider["model_id"],
