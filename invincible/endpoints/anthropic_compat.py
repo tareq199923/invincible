@@ -105,7 +105,10 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
     if body.stream:
         try:
             first, tail = await request.app.state.router.stream_open(
-                full_messages, tools=tools, tool_choice=tool_choice
+                full_messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                model=body.model,
             )
         except UpstreamClientError as e:
             return _error_message(e.status_code, "Upstream request failed")
@@ -128,7 +131,10 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
 
     try:
         result = await request.app.state.router.route_request(
-            full_messages, tools=tools, tool_choice=tool_choice
+            full_messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            model=body.model,
         )
     except UpstreamClientError as e:
         return _error_message(e.status_code, "Upstream request failed")

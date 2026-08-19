@@ -64,6 +64,7 @@ providers:
     base_url: https://integrate.api.nvidia.com/v1
     api_key_env: NVIDIA_API_KEY    # env var *name* — never the key itself
     model_id: z-ai/glm-5.2
+    aliases: [strong]              # optional; soft routing hints (Phase 6)
     max_context: 1000000           # tokens; used for context trimming
     timeout:                       # optional; per-field override (see below)
       read: 90.0
@@ -73,11 +74,15 @@ providers:
 |---|---|---|---|
 | `name` | yes | string | Display/log identifier. |
 | `tier` | yes | number | Failover priority; **ascending** (1 tried first). |
-| `base_url` | yes | string | Provider's OpenAI-compatible base; the router posts to `{base_url}/chat/completions`. |
+| `base_url` | yes | string | Provider's OpenAI-compatible base; the router posts to `{base_url}{chat_path}`. |
 | `api_key_env` | yes | string | Name of the env var holding the API key. A provider whose key is unset is **skipped with a warning** (and any provider missing a required field raises `ValueError` at startup). |
 | `model_id` | yes | string | Sent as `model` in the payload. |
+| `aliases` | no | list[string] | Friendly names clients can request (soft routing hint; see below). Globally unique. |
 | `max_context` | no | number | Token budget for trimming (default 32000). |
 | `timeout` | no | mapping | Per-field httpx timeout overrides (see below). |
+| `auth_type` | no | `bearer` \| `query` | Default `bearer` (`Authorization: Bearer`). `query` sends the key in a URL query parameter. |
+| `auth_param` | no | string | Query parameter name for `auth_type: query` (default `key`). |
+| `chat_path` | no | string | Endpoint suffix (default `/chat/completions`); must start with `/`. |
 
 ### Timeout resolution
 
@@ -102,13 +107,32 @@ Shipped values and rationale:
 
 ### Provider validation (at `Router` construction)
 
-- All required fields must be present, or `ValueError` with the missing
-  names.
+- The full schema is validated after YAML load (Phase 6): missing required
+  fields, wrong types (`tier` must be a bare integer ≥ 1), a `base_url`
+  that isn't `http(s)://`, non-positive timeouts, **unknown fields**,
+  **duplicate provider names**, and **duplicate aliases** each raise a
+  `ValueError` naming the provider and field.
 - Providers are sorted by `tier` ascending at construction.
 - Missing API keys only produce a `logger.warning` at startup and a skip at
   request time — not a startup failure.
 - A missing explicit `--config` path raises `FileNotFoundError`; malformed
   YAML raises `ValueError`.
+- The same validation runs for `inv start --config` pre-flight, `inv
+  doctor`, and the server — one code path, same errors.
+
+### Model aliasing (Phase 6)
+
+An optional `aliases:` list on a provider adds friendly names clients can
+request. Routing is **soft**: the aliased provider moves to the front of
+the attempt order; if it fails, is in cooldown, or is disabled, failover
+continues through the rest of the tier order exactly as before. An exact
+`model_id` match behaves the same way. Unknown model names (e.g. Claude
+Code's `claude-sonnet-4`) change nothing — normal tier order applies.
+
+Both protocols accept it: OpenAI `{"model": "fast", ...}` and Anthropic
+`{"model": "fast", ...}` (echoed back in the response as before). Aliases
+also appear in `GET /v1/models` after the real model ids. Full guide and
+supported provider shapes: [docs/PROVIDERS.md](PROVIDERS.md).
 
 ---
 

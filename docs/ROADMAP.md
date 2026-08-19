@@ -330,9 +330,9 @@ multi-user owners (Phase 4) — want live state without a terminal.
 
 ---
 
-## Phase 6 — More providers
+## Phase 6 — More providers (Done)
 
-**Priority P2 · Size S · Status: Planned · Prerequisite: none**
+**Priority P2 · Size S · Status: Done · Prerequisite: none**
 
 ### Goal
 
@@ -361,7 +361,10 @@ OpenAI-compatible base URLs). Providers outside that shape are awkward.
    - A `docs/PROVIDERS.md` how-to and a commented `providers.yaml.example`.
    - Reference tier table stays in sync with the README's shipped order.
 4. **Test fixture** — adding a fake provider in tests must be as easy as
-   the existing `make_router` handlers.
+   the existing `make_router` handlers. (Done — `default_providers()` +
+   `make_router`; covered by `tests/test_provider_schema.py` and the Phase 6
+   additions in `tests/test_router.py`, `tests/test_api.py`,
+   `tests/test_anthropic_api.py`.)
 
 ### Dependencies
 

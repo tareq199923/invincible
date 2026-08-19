@@ -730,3 +730,222 @@ async def test_stream_open_timeout_extension_is_a_dict(make_router):
     }
     assert first["model"] == "alpha-model"
     await router.close()
+
+# --- Phase 6: model aliasing --------------------------------------------------
+
+
+def alias_providers():
+    providers = tiered_providers()
+    providers[1]["aliases"] = ["fast"]
+    providers[3]["aliases"] = ["backup"]
+    return providers
+
+
+async def test_model_alias_prefers_aliased_provider(make_router):
+    calls = []
+
+    def handler(name):
+        def _h(request):
+            calls.append(name)
+            return httpx.Response(200, json=provider_body(name))
+
+        return _h
+
+    router = make_router(
+        providers=alias_providers(),
+        handlers={
+            "nim.example.com": handler("nim"),
+            "groq.example.com": handler("groq"),
+            "openrouter.example.com": handler("openrouter"),
+            "gemini.example.com": handler("gemini"),
+        },
+    )
+    result = await router.route_request(MESSAGES, model="fast")
+    assert result == provider_body("groq")
+    assert calls == ["groq"]
+    await router.close()
+
+
+async def test_model_alias_falls_back_when_preferred_provider_fails(make_router):
+    """Soft semantics: a failing aliased provider still fails over to the
+    rest of the tier order - an alias is a hint, never a hard constraint."""
+    calls = []
+
+    def handler(name, status=200):
+        def _h(request):
+            calls.append(name)
+            return httpx.Response(status, json=provider_body(name))
+
+        return _h
+
+    router = make_router(
+        providers=alias_providers(),
+        handlers={
+            "nim.example.com": handler("nim", 503),
+            "groq.example.com": handler("groq", 429),
+            "openrouter.example.com": handler("openrouter"),
+            "gemini.example.com": handler("gemini"),
+        },
+    )
+    result = await router.route_request(MESSAGES, model="fast")
+    assert result == provider_body("openrouter")
+    assert calls == ["groq", "nim", "openrouter"]
+    await router.close()
+
+
+async def test_model_id_exact_match_prefers_that_provider(make_router):
+    calls = []
+
+    def handler(name):
+        def _h(request):
+            calls.append(name)
+            return httpx.Response(200, json=provider_body(name))
+
+        return _h
+
+    router = make_router(
+        providers=alias_providers(),
+        handlers={
+            "nim.example.com": handler("nim"),
+            "groq.example.com": handler("groq"),
+            "openrouter.example.com": handler("openrouter"),
+            "gemini.example.com": handler("gemini"),
+        },
+    )
+    result = await router.route_request(MESSAGES, model="gpt-oss-120b")
+    assert result == provider_body("groq")
+    assert calls == ["groq"]
+    await router.close()
+
+
+async def test_unknown_model_keeps_tier_order(make_router):
+    calls = []
+
+    def handler(name):
+        def _h(request):
+            calls.append(name)
+            return httpx.Response(200, json=provider_body(name))
+
+        return _h
+
+    router = make_router(
+        providers=alias_providers(),
+        handlers={
+            "nim.example.com": handler("nim"),
+            "groq.example.com": handler("groq"),
+            "openrouter.example.com": handler("openrouter"),
+            "gemini.example.com": handler("gemini"),
+        },
+    )
+    result = await router.route_request(MESSAGES, model="claude-sonnet-4")
+    assert result == provider_body("nim")
+    assert calls == ["nim"]
+    await router.close()
+
+
+async def test_stream_open_respects_model_alias(make_router):
+    calls = []
+
+    def handler(name):
+        def _h(request):
+            calls.append(name)
+            return httpx.Response(
+                200, content=sse_body(stream_chunk(name, {"role": "assistant"}))
+            )
+
+        return _h
+
+    router = make_router(
+        providers=alias_providers(),
+        handlers={
+            "nim.example.com": handler("nim"),
+            "groq.example.com": handler("groq"),
+            "openrouter.example.com": handler("openrouter"),
+            "gemini.example.com": handler("gemini"),
+        },
+    )
+    first, _ = await router.stream_open(MESSAGES, model="backup")
+    assert calls == ["gemini"]
+    assert first["model"] == "gemini-model"
+    await router.close()
+
+
+# --- Phase 6: extension point (query auth, chat_path) --------------------------
+
+
+async def test_query_auth_sends_key_in_query_and_no_bearer(make_router):
+    captured = {}
+
+    def handler(request):
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers.get("Authorization")
+        return httpx.Response(200, json=provider_body("alpha"))
+
+    provider = {
+        "name": "alpha",
+        "tier": 1,
+        "base_url": "https://alpha.example.com/v1",
+        "api_key_env": "ALPHA_API_KEY",
+        "model_id": "alpha-model",
+        "auth_type": "query",
+    }
+    router = make_router(
+        providers=[provider], handlers={"alpha.example.com": handler}
+    )
+    await router.route_request(MESSAGES)
+    assert "key=test-key-alpha" in captured["url"]
+    assert captured["authorization"] is None
+    await router.close()
+
+
+async def test_query_auth_custom_param_and_chat_path(make_router):
+    captured = {}
+
+    def handler(request):
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers.get("Authorization")
+        return httpx.Response(200, json=provider_body("alpha"))
+
+    provider = {
+        "name": "alpha",
+        "tier": 1,
+        "base_url": "https://alpha.example.com",
+        "api_key_env": "ALPHA_API_KEY",
+        "model_id": "alpha-model",
+        "auth_type": "query",
+        "auth_param": "api_key",
+        "chat_path": "/v1/chat/completions",
+    }
+    router = make_router(
+        providers=[provider], handlers={"alpha.example.com": handler}
+    )
+    await router.route_request(MESSAGES)
+    assert "/v1/chat/completions" in captured["url"]
+    assert "api_key=test-key-alpha" in captured["url"]
+    assert captured["authorization"] is None
+    await router.close()
+
+
+async def test_chat_path_override_with_bearer_auth(make_router):
+    captured = {}
+
+    def handler(request):
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers.get("Authorization")
+        return httpx.Response(200, json=provider_body("alpha"))
+
+    provider = {
+        "name": "alpha",
+        "tier": 1,
+        "base_url": "https://alpha.example.com/v1",
+        "api_key_env": "ALPHA_API_KEY",
+        "model_id": "alpha-model",
+        "chat_path": "/responses",
+    }
+    router = make_router(
+        providers=[provider], handlers={"alpha.example.com": handler}
+    )
+    await router.route_request(MESSAGES)
+    assert "/v1/responses" in captured["url"]
+    assert captured["authorization"] == "Bearer test-key-alpha"
+    await router.close()

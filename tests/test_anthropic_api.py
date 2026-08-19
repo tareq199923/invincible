@@ -10,7 +10,7 @@ from invincible.compat.anthropic import (
     translate_finish_reason,
 )
 from invincible.main import app
-from tests.conftest import provider_body, sse_body, stream_chunk
+from tests.conftest import default_providers, provider_body, sse_body, stream_chunk
 
 AUTH = {"Authorization": "Bearer test-gateway-key"}
 ANTHROPIC_BODY = {
@@ -1476,3 +1476,40 @@ async def test_anthropic_to_internal_rejects_empty():
         anthropic_to_internal([])
     with pytest.raises(ValueError):
         anthropic_to_internal([{"role": "user", "content": ""}])
+
+
+# --- Phase 6: model aliasing --------------------------------------------------
+
+
+async def test_anthropic_model_alias_routes_to_preferred_provider(
+    client, router_setter
+):
+    """model: fast on /v1/messages routes to the aliased provider; the
+    upstream payload still carries that provider's real model_id."""
+    providers = default_providers()
+    providers[1]["aliases"] = ["fast"]
+    captured = []
+
+    def beta_handler(request: httpx.Request):
+        captured.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("beta", content="ok"))
+
+    router_setter(
+        providers=providers,
+        handlers={
+            "alpha.example.com": httpx.Response(503),
+            "beta.example.com": beta_handler,
+            "gamma.example.com": httpx.Response(503),
+        },
+    )
+    response = await client.post(
+        "/v1/messages",
+        headers=AUTH,
+        json={
+            "model": "fast",
+            "messages": [{"role": "user", "content": "x"}],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["model"] == "fast"
+    assert captured[0]["model"] == "beta-model"

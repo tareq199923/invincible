@@ -16,6 +16,138 @@ logger = logging.getLogger("invincible.router")
 
 DEFAULT_TIMEOUT_CONFIG = {"connect": 5.0, "read": 60.0, "write": 5.0, "pool": 2.0}
 
+_REQUIRED_PROVIDER_FIELDS = {"name", "tier", "base_url", "api_key_env", "model_id"}
+_TIMEOUT_FIELDS = {"connect", "read", "write", "pool"}
+_AUTH_TYPES = ("bearer", "query")
+# Extra keys a provider entry may carry (all optional).
+_OPTIONAL_PROVIDER_FIELDS = {
+    "max_context", "timeout", "aliases", "auth_type", "auth_param", "chat_path",
+}
+
+
+def validate_providers_config(config: dict) -> None:
+    """Validate the ``providers`` mapping shape (Phase 6).
+
+    Runs after YAML load, so ``start`` pre-flight, ``doctor``, and the
+    lifespan all get the same named, fixable ``ValueError`` messages.
+    Unknown keys are rejected so a typo (``base_urll``) fails loudly at
+    startup instead of silently producing an unreachable provider.
+
+    Raises ValueError naming the offending provider and field.
+    """
+    providers = config.get("providers")
+    if providers is None:
+        raise ValueError("Provider configuration is missing the 'providers' key")
+    if not isinstance(providers, list):
+        raise ValueError("Provider configuration: 'providers' must be a YAML list")
+
+    names = set()
+    aliases = {}
+    for index, provider in enumerate(providers):
+        if not isinstance(provider, dict):
+            raise ValueError(f"Provider #{index} must be a YAML mapping")
+        missing = _REQUIRED_PROVIDER_FIELDS - set(provider)
+        if missing:
+            raise ValueError(
+                f"Provider '{provider.get('name', f'#{index}')}' is missing required "
+                f"field(s): {', '.join(sorted(missing))}"
+            )
+        name = provider["name"]
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"Provider #{index}: 'name' must be a non-empty string")
+        if name in names:
+            raise ValueError(f"Duplicate provider name '{name}'")
+        names.add(name)
+
+        tier = provider["tier"]
+        if not isinstance(tier, int) or isinstance(tier, bool) or tier < 1:
+            raise ValueError(f"Provider '{name}': 'tier' must be an integer >= 1")
+        for field in ("base_url", "api_key_env", "model_id"):
+            value = provider[field]
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    f"Provider '{name}': '{field}' must be a non-empty string"
+                )
+        if not provider["base_url"].startswith(("http://", "https://")):
+            raise ValueError(
+                f"Provider '{name}': 'base_url' must start with http:// or https://"
+            )
+
+        max_context = provider.get("max_context")
+        if max_context is not None and (
+            not isinstance(max_context, int)
+            or isinstance(max_context, bool)
+            or max_context < 1
+        ):
+            raise ValueError(
+                f"Provider '{name}': 'max_context' must be an integer >= 1"
+            )
+
+        timeout = provider.get("timeout")
+        if timeout is not None:
+            if not isinstance(timeout, dict):
+                raise ValueError(f"Provider '{name}': 'timeout' must be a mapping")
+            unknown = set(timeout) - _TIMEOUT_FIELDS
+            if unknown:
+                raise ValueError(
+                    f"Provider '{name}': unknown timeout field(s): "
+                    f"{', '.join(sorted(unknown))}"
+                )
+            for field, value in timeout.items():
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or value <= 0
+                ):
+                    raise ValueError(
+                        f"Provider '{name}': 'timeout.{field}' "
+                        "must be a positive number"
+                    )
+
+        alias_list = provider.get("aliases")
+        if alias_list is not None:
+            if not isinstance(alias_list, list) or not all(
+                isinstance(a, str) and a.strip() for a in alias_list
+            ):
+                raise ValueError(
+                    f"Provider '{name}': 'aliases' must be a list of non-empty strings"
+                )
+            for alias in alias_list:
+                if alias in aliases:
+                    raise ValueError(
+                        f"Duplicate alias '{alias}' (providers "
+                        f"'{aliases[alias]}' and '{name}')"
+                    )
+                aliases[alias] = name
+
+        auth_type = provider.get("auth_type", "bearer")
+        if auth_type not in _AUTH_TYPES:
+            raise ValueError(
+                f"Provider '{name}': 'auth_type' must be one of: "
+                f"{', '.join(_AUTH_TYPES)}"
+            )
+        auth_param = provider.get("auth_param")
+        if auth_param is not None and (
+            not isinstance(auth_param, str) or not auth_param.strip()
+        ):
+            raise ValueError(
+                f"Provider '{name}': 'auth_param' must be a non-empty string"
+            )
+        chat_path = provider.get("chat_path")
+        if chat_path is not None and (
+            not isinstance(chat_path, str) or not chat_path.startswith("/")
+        ):
+            raise ValueError(f"Provider '{name}': 'chat_path' must start with '/'")
+
+        unknown_fields = set(provider) - (
+            _REQUIRED_PROVIDER_FIELDS | _OPTIONAL_PROVIDER_FIELDS
+        )
+        if unknown_fields:
+            raise ValueError(
+                f"Provider '{name}': unknown field(s): "
+                f"{', '.join(sorted(unknown_fields))}"
+            )
+
 
 def load_providers_config(config_path: str = None) -> dict:
     """Load and validate the provider configuration as a YAML mapping.
@@ -71,6 +203,7 @@ def load_providers_config(config_path: str = None) -> dict:
         ) from exc
     if not isinstance(config, dict):
         raise ValueError(f"Provider configuration in {source} must be a YAML mapping")
+    validate_providers_config(config)
     return config
 
 
@@ -234,14 +367,8 @@ class Router:
     def __init__(self, config_path=None, transport=None):
         config = load_providers_config(config_path)
         self.providers = config.get("providers", [])
-        required_fields = {"name", "tier", "base_url", "api_key_env", "model_id"}
-        for provider in self.providers:
-            missing = required_fields - set(provider.keys())
-            if missing:
-                raise ValueError(
-                    f"Provider '{provider.get('name', 'unnamed')}' is missing required "
-                    f"field(s): {', '.join(sorted(missing))}"
-                )
+        # Shape is validated in load_providers_config (Phase 6); sort by
+        # tier here so failover order never depends on YAML order.
         self.providers.sort(key=lambda p: p["tier"])
         for provider in self.providers:
             if not os.getenv(provider["api_key_env"]):
@@ -252,10 +379,59 @@ class Router:
         self.health_tracker = HealthTracker()
         self.client = httpx.AsyncClient(transport=transport)
 
+    def _ordered_providers(self, model: str | None = None) -> list:
+        """Tier-ordered providers, optionally with a soft alias preference.
+
+        When ``model`` matches a provider's ``aliases`` or its exact
+        ``model_id``, those providers move to the front of the attempt
+        order (still tier-sorted among themselves). Everything else keeps
+        its position, so an alias is a routing hint - never a hard
+        constraint - and the failover guarantees stay intact.
+        """
+        if not model:
+            return self.providers
+        preferred = [
+            p for p in self.providers
+            if model == p.get("model_id") or model in (p.get("aliases") or [])
+        ]
+        if not preferred:
+            return self.providers
+        rest = [p for p in self.providers if p not in preferred]
+        return preferred + rest
+
+    def _request_url(self, provider: dict) -> str:
+        """Chat-completions URL for a provider (``chat_path`` override)."""
+        return f"{provider['base_url']}{provider.get('chat_path', '/chat/completions')}"
+
+    def _request_headers(self, provider: dict, api_key: str) -> dict:
+        """Auth + content headers for a provider attempt.
+
+        Default is ``Authorization: Bearer``. ``auth_type: query`` puts the
+        key in a query parameter instead (``auth_param``, default ``key``) -
+        for providers that do not accept a header. Note: a key in the URL is
+        visible to any proxy on the request path; never logged by this
+        router (``_log_attempt`` emits sizes/status only).
+        """
+        if provider.get("auth_type") == "query":
+            return {"Content-Type": "application/json"}
+        return {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def _request_params(self, provider: dict, api_key: str) -> dict | None:
+        if provider.get("auth_type") == "query":
+            return {provider.get("auth_param", "key"): api_key}
+        return None
+
     async def route_request(
-        self, messages: list, tools: list | None = None, tool_choice=None
+        self,
+        messages: list,
+        tools: list | None = None,
+        tool_choice=None,
+        model: str | None = None,
     ) -> dict:
-        for provider in self.providers:
+        for provider in self._ordered_providers(model):
             name = provider["name"]
 
             if not self.health_tracker.is_available(name):
@@ -270,10 +446,7 @@ class Router:
                 )
                 continue
 
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
+            headers = self._request_headers(provider, api_key)
             # Compress before trimming so the budget check runs on
             # post-compression sizes (otherwise trimming over-drops).
             # Send-time only: the caller's `messages` stay verbatim for
@@ -302,8 +475,9 @@ class Router:
             attempt_started = time.monotonic()
             try:
                 resp = await self.client.post(
-                    f"{provider['base_url']}/chat/completions",
+                    self._request_url(provider),
                     headers=headers,
+                    params=self._request_params(provider, api_key),
                     json=payload,
                     timeout=resolve_timeout(provider)
                 )
@@ -416,19 +590,24 @@ class Router:
         raise AllProvidersFailedError("All providers failed or are in cooldown.")
 
     async def stream_open(
-        self, messages: list, tools: list | None = None, tool_choice=None
+        self,
+        messages: list,
+        tools: list | None = None,
+        tool_choice=None,
+        model: str | None = None,
     ) -> tuple[dict | None, AsyncIterator[dict]]:
         """Open a streaming chat-completions response through the providers.
 
         Mirrors ``route_request``'s failover decisions exactly (tier order,
         cooldowns, missing keys, 429/402/404/408/413/5xx and 401/403 handling)
-        so streaming reuses the same routing behavior. Returns once a
+        so streaming reuses the same routing behavior. ``model`` applies the
+        same soft alias preference as ``route_request``. Returns once a
         provider's stream is live: ``(first_chunk, tail)``. ``first_chunk`` is
         ``None`` for a clean but empty stream. Connection-stage failures fail
         over to the next provider; a mid-stream error after the first chunk
         propagates to the caller so it can terminate the response cleanly.
         """
-        for provider in self.providers:
+        for provider in self._ordered_providers(model):
             name = provider["name"]
 
             if not self.health_tracker.is_available(name):
@@ -443,10 +622,7 @@ class Router:
                 )
                 continue
 
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            }
+            headers = self._request_headers(provider, api_key)
             # Same compress-then-trim order as route_request (send-time only).
             send_messages = (
                 compress_messages(messages) if compression_enabled() else messages
@@ -474,8 +650,9 @@ class Router:
             try:
                 request = self.client.build_request(
                     "POST",
-                    f"{provider['base_url']}/chat/completions",
+                    self._request_url(provider),
                     headers=headers,
+                    params=self._request_params(provider, api_key),
                     json=payload,
                     timeout=resolve_timeout(provider),
                 )

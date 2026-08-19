@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 class ChatRequest(BaseModel):
     messages: list[dict[str, Any]]
     stream: bool | None = None
+    model: str | None = None
 
 router = APIRouter()
 
@@ -62,13 +63,18 @@ def models_from_providers(providers: list) -> list[dict]:
 
     The router validates providers at startup, so every entry normally has
     a ``model_id``; the isinstance/get guard is cheap defense in depth.
-    Runtime provider order is preserved.
+    Runtime provider order is preserved. Aliases are listed after the real
+    model ids so clients can discover and request them.
     """
-    return [
+    entries = [
         {"id": p["model_id"], "object": "model", "owned_by": "invincible"}
         for p in providers
         if isinstance(p, dict) and p.get("model_id")
     ]
+    for p in providers:
+        for alias in p.get("aliases") or []:
+            entries.append({"id": alias, "object": "model", "owned_by": "invincible"})
+    return entries
 
 
 @router.get("/v1/models")
@@ -110,7 +116,9 @@ async def chat_completions(request: Request, body: ChatRequest):
 
     if body.stream:
         try:
-            first, tail = await request.app.state.router.stream_open(full_messages)
+            first, tail = await request.app.state.router.stream_open(
+                full_messages, model=body.model
+            )
         except UpstreamClientError as e:
             return JSONResponse(content=e.body, status_code=e.status_code)
         except AllProvidersFailedError as e:
@@ -128,7 +136,9 @@ async def chat_completions(request: Request, body: ChatRequest):
         )
 
     try:
-        result = await request.app.state.router.route_request(full_messages)
+        result = await request.app.state.router.route_request(
+            full_messages, model=body.model
+        )
         choices = result.get("choices") or []
         if choices and "message" in choices[0]:
             new_turns = to_persist + [choices[0]["message"]]

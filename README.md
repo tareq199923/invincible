@@ -120,12 +120,15 @@ use `invincible oauth revoke <client_id>` for that.
 
 Defines the upstream providers: `tier` (failover order, ascending), `base_url`
 (OpenAI-compatible), `api_key_env` (env var *name*, never the key itself),
-`model_id`, `max_context`, and optional per-provider `timeout` overrides. The
-canonical copy is packaged at `invincible/providers.yaml` (a deprecated copy
-at the repo root is only a fallback).
+`model_id`, optional `aliases` (soft routing hints — request `model: fast` to
+prefer Groq), `max_context`, and optional per-provider `timeout` overrides.
+The canonical copy is packaged at `invincible/providers.yaml` (a deprecated
+copy at the repo root is only a fallback).
 
 Full reference — schema, validation rules, timeout resolution:
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+How to add a provider, aliases, and supported shapes:
+[docs/PROVIDERS.md](docs/PROVIDERS.md).
 
 ---
 
@@ -170,8 +173,9 @@ Full CLI reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md) → *CLI refe
 ### Chat request
 
 - **Body**: `{"messages": [...], "stream": false}` — OpenAI message format.
-  Only `messages` and `stream` are accepted. Other OpenAI fields are rejected
-  with **422**.
+  `messages`, `stream`, and `model` are accepted. `model` is a soft routing
+  hint (matches a configured alias or exact `model_id`; unknown names are
+  ignored). Other OpenAI fields are rejected with **422**.
 - **Streaming**: `stream: true` returns an OpenAI-compatible
   Server-Sent Events (`text/event-stream`) response. Each event is a
   `chat.completion.chunk` (`data: {…}\n\n`), and the stream ends with
@@ -204,10 +208,12 @@ are served. Supported request fields: `model`, `system`, `messages`,
 `stop_sequences`, unknown fields, `anthropic-beta` / `anthropic-version`
 headers, the `?beta=true` query) is **accepted and ignored** — never a 422.
 
-The `model` field is treated as a **client hint only**: it is echoed back
-in the response but never influences routing. The Router picks providers
-exactly as it does for OpenAI clients, and the upstream model comes from
-`providers.yaml`.
+The `model` field is treated as a **client hint**: it is echoed back in
+the response, and if it matches a configured alias (or an exact provider
+`model_id`) the matching provider is *preferred* — the Router still fails
+over through the rest of the tier order if that provider is down. An
+unknown model name (like Claude Code's own model ids) changes nothing.
+The upstream model always comes from `providers.yaml`.
 
 - **Streaming**: `stream: true` returns Anthropic SSE events in the
   canonical order — `message_start` → `content_block_start` →
@@ -296,14 +302,15 @@ All providers exhausted → **HTTP 503**. Cooldowns follow
 `30 * 2**(failures-1)`, capped at **300s**; all health state is in-memory and
 resets on restart.
 
-Shipped tier order:
+Shipped tier order (aliases are soft routing hints — `model: fast` prefers
+Groq, and failover still covers every other provider):
 
-| Tier | Provider | Model | Max context |
-|---|---|---|---|
-| 1 | `nim-glm` | `z-ai/glm-5.2` | 1 000 000 |
-| 2 | `groq-llama` | `openai/gpt-oss-120b` | 128 000 |
-| 3 | `openrouter-fallback` | `nvidia/nemotron-3-ultra-550b-a55b:free` | 1 000 000 |
-| 4 | `gemini-flash` | `gemini-2.5-flash` | 1 000 000 |
+| Tier | Provider | Model | Max context | Alias |
+|---|---|---|---|---|
+| 1 | `nim-glm` | `z-ai/glm-5.2` | 1 000 000 | `strong` |
+| 2 | `groq-llama` | `openai/gpt-oss-120b` | 128 000 | `fast` |
+| 3 | `openrouter-fallback` | `nvidia/nemotron-3-ultra-550b-a55b:free` | 1 000 000 | `free` |
+| 4 | `gemini-flash` | `gemini-2.5-flash` | 1 000 000 | `backup` |
 
 Deep dive (failover state machine, context trimming): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -328,13 +335,18 @@ curl http://127.0.0.1:8000/v1/models
 #     {"id": "z-ai/glm-5.2", "object": "model", "owned_by": "invincible"},
 #     {"id": "openai/gpt-oss-120b", "object": "model", "owned_by": "invincible"},
 #     {"id": "nvidia/nemotron-3-ultra-550b-a55b:free", "object": "model", "owned_by": "invincible"},
-#     {"id": "gemini-2.5-flash", "object": "model", "owned_by": "invincible"}
+#     {"id": "gemini-2.5-flash", "object": "model", "owned_by": "invincible"},
+#     {"id": "strong", "object": "model", "owned_by": "invincible"},
+#     {"id": "fast", "object": "model", "owned_by": "invincible"},
+#     {"id": "free", "object": "model", "owned_by": "invincible"},
+#     {"id": "backup", "object": "model", "owned_by": "invincible"}
 #   ]
 # }
 ```
 
 The list is built from the running gateway's provider configuration, so it
-reflects exactly what the gateway can route to.
+reflects exactly what the gateway can route to. Real model ids are listed
+first, then the configured aliases.
 
 ### 3. Chat with session memory
 
@@ -516,6 +528,7 @@ store, and trimming logic consume.
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module map, request flows, context-trimming deep dive, failover state machine. |
 | [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | The `/v1/chat/completions` contract: request, response, status codes, failover semantics. |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | `.env` variables, `providers.yaml` schema, timeouts, session database, CLI reference. |
+| [docs/PROVIDERS.md](docs/PROVIDERS.md) | Adding providers, the full schema, model aliases, auth types, supported shapes, troubleshooting. |
 | [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md) | Client-facing `/mcp` spec: JSON-RPC shape, tools, notifications, tunnel setup. |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, auth realms, denylist inventory, approval flow, known limits. |
 | [docs/TESTING.md](docs/TESTING.md) | How tests work, fixtures, per-file coverage map. |

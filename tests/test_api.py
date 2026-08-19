@@ -365,3 +365,52 @@ async def test_models_requires_auth(client):
     response = await client.get("/v1/models")
     assert response.status_code == 401
     assert response.json()["detail"]["error"]["type"] == "auth_error"
+
+
+# --- Phase 6: model aliasing --------------------------------------------------
+
+
+async def test_model_field_accepted_no_422(client, router_setter):
+    """The OpenAI request body now accepts model (previously 422)."""
+    router_setter(
+        handlers={"alpha.example.com": httpx.Response(200, json=provider_body("alpha"))}
+    )
+    response = await client.post(
+        "/v1/chat/completions",
+        headers=AUTH,
+        json={"messages": MESSAGES, "model": "claude-sonnet-4"},
+    )
+    assert response.status_code == 200
+
+
+async def test_model_alias_routes_to_preferred_provider(client, router_setter):
+    """model: fast routes to the aliased provider (beta) instead of tier-1
+    alpha - the endpoint surfaces the router's soft alias preference."""
+    providers = default_providers()
+    providers[1]["aliases"] = ["fast"]
+    router_setter(
+        providers=providers,
+        handlers={
+            "alpha.example.com": httpx.Response(503),
+            "beta.example.com": httpx.Response(200, json=provider_body("beta")),
+            "gamma.example.com": httpx.Response(503),
+        },
+    )
+    response = await client.post(
+        "/v1/chat/completions",
+        headers=AUTH,
+        json={"messages": MESSAGES, "model": "fast"},
+    )
+    assert response.status_code == 200
+    assert response.json() == provider_body("beta")
+
+
+async def test_models_lists_aliases_after_model_ids(client, router_setter):
+    providers = default_providers()
+    providers[1]["aliases"] = ["fast"]
+    router_setter(providers=providers, handlers={})
+    response = await client.get("/v1/models", headers=AUTH)
+    assert response.status_code == 200
+    assert [
+        model["id"] for model in response.json()["data"]
+    ] == ["alpha-model", "beta-model", "gamma-model", "fast"]

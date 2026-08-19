@@ -33,13 +33,14 @@ Content-Type: application/json
 ### Body (`ChatRequest`)
 
 | Field | Type | Required | Notes |
-|---|---|---|---|
+|---|---|---|---|---|
 | `messages` | array of objects | **yes** | Standard OpenAI messages (`role`, `content`, optional `tool_calls`/`tool_call_id`). |
 | `stream` | boolean | no | `true` → SSE stream of `chat.completion.chunk` events ending in `data: [DONE]`; `false`/absent → JSON. |
+| `model` | string | no | Soft routing hint (Phase 6): matches a configured alias or exact `model_id` to prefer that provider; failover still covers the rest. Unknown names are ignored. |
 
-Other OpenAI fields (`model`, `temperature`, `max_tokens`, …) are **not
-accepted** — `ChatRequest` only defines `messages` and `stream`, so sending
-extra fields yields `422 Unprocessable Entity` from Pydantic (strict by
+Other OpenAI fields (`temperature`, `max_tokens`, …) are **not accepted** —
+`ChatRequest` only defines `messages`, `stream`, and `model`, so sending
+other extra fields yields `422 Unprocessable Entity` from Pydantic (strict by
 default). The upstream `model` is set per-provider from `providers.yaml`,
 never from the client.
 

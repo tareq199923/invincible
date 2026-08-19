@@ -1,0 +1,52 @@
+# providers.yaml.example — commented template (Phase 6).
+# Copy to your own file and reference it with `inv start --config` or
+# `INVINCIBLE_CONFIG_PATH`. Every field is validated at load; unknown
+# fields, duplicate names/aliases, and wrong types fail startup with a
+# named error. See docs/PROVIDERS.md for the full guide.
+providers:
+  # --- Required fields ---
+  - name: nim-glm                  # unique; used in logs & health tracking
+    tier: 1                        # int >= 1; ascending = failover order
+    base_url: https://integrate.api.nvidia.com/v1   # must be http(s)://
+    api_key_env: NVIDIA_API_KEY    # env var NAME, never the key itself
+    model_id: z-ai/glm-5.2         # sent as `model` in the upstream payload
+
+    # --- Optional fields ---
+    aliases: [strong]              # friendly names clients can request;
+                                   # soft routing hint, globally unique
+    max_context: 1000000           # token budget for trimming (default 32000)
+    timeout:                       # per-field httpx overrides (all positive)
+      read: 90.0                   # connect / read / write / pool
+    # auth_type: bearer            # 'bearer' (default) or 'query'
+    # auth_param: key              # query param name when auth_type: query
+    # chat_path: /chat/completions # endpoint suffix (default shown)
+
+  - name: groq-llama
+    tier: 2
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: GROQ_API_KEY
+    model_id: openai/gpt-oss-120b
+    aliases: [fast]
+    max_context: 128000
+    timeout:
+      read: 45.0
+
+  - name: openrouter-fallback
+    tier: 3
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    model_id: nvidia/nemotron-3-ultra-550b-a55b:free
+    aliases: [free]
+    max_context: 1000000
+    timeout:
+      read: 90.0
+
+  - name: gemini-flash
+    tier: 4
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    api_key_env: GEMINI_API_KEY
+    model_id: gemini-2.5-flash
+    aliases: [backup]
+    max_context: 1000000
+    timeout:
+      read: 90.0

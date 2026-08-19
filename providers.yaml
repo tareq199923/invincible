@@ -9,6 +9,7 @@ providers:
     base_url: https://integrate.api.nvidia.com/v1
     api_key_env: NVIDIA_API_KEY
     model_id: z-ai/glm-5.2
+    aliases: [strong]
     max_context: 1000000
     timeout:
       read: 90.0   # 1M-token context; generation can legitimately take a while
@@ -18,6 +19,7 @@ providers:
     base_url: https://api.groq.com/openai/v1
     api_key_env: GROQ_API_KEY
     model_id: openai/gpt-oss-120b
+    aliases: [fast]
     max_context: 128000
     timeout:
       read: 45.0
@@ -27,6 +29,7 @@ providers:
     base_url: https://openrouter.ai/api/v1
     api_key_env: OPENROUTER_API_KEY
     model_id: nvidia/nemotron-3-ultra-550b-a55b:free
+    aliases: [free]
     max_context: 1000000
     timeout:
       read: 90.0   # 550B free tier can be slow to first token
@@ -36,6 +39,7 @@ providers:
     base_url: https://generativelanguage.googleapis.com/v1beta/openai
     api_key_env: GEMINI_API_KEY
     model_id: gemini-2.5-flash
+    aliases: [backup]
     max_context: 1000000
     timeout:
       read: 90.0   # large-context requests can legitimately take longer to generate

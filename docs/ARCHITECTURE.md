@@ -83,12 +83,12 @@ openai_compat::chat_completions
   │  3. history = session_store.load(session_id)
   │  4. full = history + body.messages
   ▼
-router.route_request(full)
+router.route_request(full, model=body.model)   # model = soft alias hint (Phase 6)
   │  for provider in providers (sorted by tier, ascending):
   │     skip if health_tracker.is_available(provider) is False   (cooldown/disabled)
   │     skip if os.getenv(api_key_env) is missing
   │     trimmed = trim_messages(full, provider.max_context)
-  │     POST {base_url}/chat/completions  (timeout=resolve_timeout(provider))
+  │     POST {base_url}{chat_path or /chat/completions}  (timeout=resolve_timeout(provider))
   │       429/5xx        → record_failure → continue
   │       401/403        → disable        → continue
   │       other 4xx      → raise UpstreamClientError(status, body)  [abort]
