@@ -12,8 +12,8 @@ A local, Python (FastAPI) server that runs on your development machine and
 serves two roles in one process:
 
 1. **Local Failover Proxy** — an OpenAI-compatible `/v1/chat/completions`
-   endpoint that fans requests across tiered upstream providers (NVIDIA NIM,
-   Groq, OpenRouter, Gemini) and transparently fails over on rate limits (429)
+   endpoint that fans requests across tiered upstream providers (TokenRouter,
+   NVIDIA NIM, Groq, OpenRouter, Gemini) and transparently fails over on rate limits (429)
    and server errors, so a free-tier 429 no longer kills an agent's workflow.
    It also speaks the **Anthropic Messages API** (`POST /v1/messages`), so
    Claude Code and other Anthropic-native clients plug in with a one-line
@@ -26,7 +26,7 @@ serves two roles in one process:
 ### Why it exists
 
 - **The 429 problem.** AI coding agents using free/open-source providers
-  (NVIDIA NIM, Groq, OpenRouter, Gemini) get killed when they hit a rate
+  (TokenRouter, NVIDIA NIM, Groq, OpenRouter, Gemini) get killed when they hit a rate
   limit. Invincible
   sits between the agent and the providers; on a 429 (or 5xx) it records the
   failure, puts the provider in a short cooldown, and retries the next
@@ -103,10 +103,11 @@ Everything is environment variables plus one YAML file — no other config.
 |---|---|---|
 | `GATEWAY_API_KEY` | `/v1/*` | Bearer token for the chat endpoint. **If unset, the endpoint is open (no auth).** |
 | `INVINCIBLE_OWNER_SECRET` | `/oauth/authorize` | One-time **browser login** to approve MCP connections (kept in a 30-day signed session cookie). **Not** sent on `/mcp` — requests use short-lived OAuth Bearer tokens. **If unset, no new MCP grants can be approved.** The legacy `MCP_SHARED_SECRET` key is still read as a fallback. |
-| `NVIDIA_API_KEY` | provider tier 1 | NVIDIA NIM hosted: GLM-5.2 (Z.ai); strongest coding/agentic tier. |
-| `GROQ_API_KEY` | provider tier 2 | Groq Llama 70B. |
-| `OPENROUTER_API_KEY` | provider tier 3 | OpenRouter free fallback. |
-| `GEMINI_API_KEY` | provider tier 4 | Gemini Flash — last resort. |
+| `NVIDIA_API_KEY` | provider tier 2 | NVIDIA NIM hosted: GLM-5.2 (Z.ai); strongest coding/agentic tier. |
+| `GROQ_API_KEY` | provider tier 3 | Groq Llama 70B. |
+| `OPENROUTER_API_KEY` | provider tier 4 | OpenRouter free fallback. |
+| `GEMINI_API_KEY` | provider tier 5 | Gemini Flash — last resort. |
+| `TOKENROUTER_API_KEY` | provider tier 1 | TokenRouter: deepseek/deepseek-v4-pro-0813-free. |
 | `INVINCIBLE_CONFIG_PATH` | startup | Path to a custom `providers.yaml` (set by CLI `--config`). |
 | `INVINCIBLE_DB_PATH` | startup | Path to the session database (set by CLI `--db-path`). |
 | `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the session database and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
@@ -307,10 +308,11 @@ Groq, and failover still covers every other provider):
 
 | Tier | Provider | Model | Max context | Alias |
 |---|---|---|---|---|
-| 1 | `nim-glm` | `z-ai/glm-5.2` | 1 000 000 | `strong` |
-| 2 | `groq-llama` | `openai/gpt-oss-120b` | 128 000 | `fast` |
-| 3 | `openrouter-fallback` | `nvidia/nemotron-3-ultra-550b-a55b:free` | 1 000 000 | `free` |
-| 4 | `gemini-flash` | `gemini-2.5-flash` | 1 000 000 | `backup` |
+| 1 | `tokenrouter-deepseek` | `deepseek/deepseek-v4-pro-0813-free` | 1 000 000 | — |
+| 2 | `nim-glm` | `z-ai/glm-5.2` | 1 000 000 | `strong` |
+| 3 | `groq-llama` | `openai/gpt-oss-120b` | 128 000 | `fast` |
+| 4 | `openrouter-fallback` | `nvidia/nemotron-3-ultra-550b-a55b:free` | 1 000 000 | `free` |
+| 5 | `gemini-flash` | `gemini-2.5-flash` | 1 000 000 | `backup` |
 
 Deep dive (failover state machine, context trimming): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

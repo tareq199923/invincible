@@ -66,7 +66,7 @@ def test_setup_creates_env_file(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
         cli, ["setup", "--env-file", str(target)],
-        input="nim-key\ngroq-key\nor-key\ngem-key\n",
+        input="nim-key\ngroq-key\nor-key\ngem-key\ntok-key\n",
     )
     assert result.exit_code == 0
     assert str(target) in result.output
@@ -74,17 +74,19 @@ def test_setup_creates_env_file(tmp_path):
     assert set(values) == {
         "GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET", "NVIDIA_API_KEY",
         "GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY",
+        "TOKENROUTER_API_KEY",
     }
     assert values["NVIDIA_API_KEY"] == "nim-key"
     assert values["GROQ_API_KEY"] == "groq-key"
     assert values["OPENROUTER_API_KEY"] == "or-key"
     assert values["GEMINI_API_KEY"] == "gem-key"
+    assert values["TOKENROUTER_API_KEY"] == "tok-key"
 
 
 def test_setup_generates_gateway_and_owner_secrets_without_printing(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n\n\n\n"
+        cli, ["setup", "--env-file", str(target)], input="\n\n\n\n\n"
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -103,7 +105,8 @@ def test_setup_preserves_existing_values(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
         "GATEWAY_API_KEY=gw-1\nINVINCIBLE_OWNER_SECRET=owner-1\nNVIDIA_API_KEY=nim-1\n"
-        "GROQ_API_KEY=groq-1\nOPENROUTER_API_KEY=or-1\nGEMINI_API_KEY=gem-1\n",
+        "GROQ_API_KEY=groq-1\nOPENROUTER_API_KEY=or-1\nGEMINI_API_KEY=gem-1\n"
+        "TOKENROUTER_API_KEY=tok-1\n",
         encoding="utf-8",
     )
     before = target.read_text(encoding="utf-8")
@@ -119,7 +122,7 @@ def test_setup_carries_legacy_mcp_shared_secret_into_new_key(tmp_path):
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n\n\n\n"
+        cli, ["setup", "--env-file", str(target)], input="\n\n\n\n\n"
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -135,7 +138,7 @@ def test_setup_preserves_unrelated_vars_comments_and_blank_lines(tmp_path):
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\n"
+        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\n"
     )
     assert result.exit_code == 0
     lines = target.read_text(encoding="utf-8").splitlines()
@@ -157,7 +160,7 @@ def test_setup_preserves_unicode_comments_and_values(tmp_path):
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\n"
+        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\n"
     )
     assert result.exit_code == 0
     text = target.read_text(encoding="utf-8")
@@ -168,14 +171,15 @@ def test_setup_preserves_unicode_comments_and_values(tmp_path):
 def test_setup_repeated_runs_do_not_duplicate_keys(tmp_path):
     target = tmp_path / ".env"
     first = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\n"
+        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\n"
     )
     assert first.exit_code == 0
     second = CliRunner().invoke(cli, ["setup", "--env-file", str(target)], input="")
     assert second.exit_code == 0
     text = target.read_text(encoding="utf-8")
     for key in ("GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET", "NVIDIA_API_KEY",
-                "GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY"):
+                "GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY",
+                "TOKENROUTER_API_KEY"):
         assert text.count(f"{key}=") == 1
 
 
@@ -183,12 +187,13 @@ def test_setup_force_updates_values(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
         "GATEWAY_API_KEY=old-gw\nINVINCIBLE_OWNER_SECRET=old-owner\nNVIDIA_API_KEY=old-nim\n"
-        "GROQ_API_KEY=old-groq\nOPENROUTER_API_KEY=old-or\nGEMINI_API_KEY=old-gem\n",
+        "GROQ_API_KEY=old-groq\nOPENROUTER_API_KEY=old-or\nGEMINI_API_KEY=old-gem\n"
+        "TOKENROUTER_API_KEY=old-tok\n",
         encoding="utf-8",
     )
     result = CliRunner().invoke(
         cli, ["setup", "--env-file", str(target), "--force"],
-        input="new-gw\nnew-owner\nnew-nim\nnew-groq\nnew-or\nnew-gem\n",
+        input="new-gw\nnew-owner\nnew-nim\nnew-groq\nnew-or\nnew-gem\nnew-tok\n",
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -199,6 +204,7 @@ def test_setup_force_updates_values(tmp_path):
         "GROQ_API_KEY": "new-groq",
         "OPENROUTER_API_KEY": "new-or",
         "GEMINI_API_KEY": "new-gem",
+        "TOKENROUTER_API_KEY": "new-tok",
     }
 
 
@@ -206,7 +212,7 @@ def test_setup_force_empty_input_preserves_existing(tmp_path):
     target = tmp_path / ".env"
     target.write_text("GEMINI_API_KEY=keep-me\n", encoding="utf-8")
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target), "--force"], input="\n" * 5
+        cli, ["setup", "--env-file", str(target), "--force"], input="\n" * 6
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -217,7 +223,7 @@ def test_setup_force_empty_input_preserves_existing(tmp_path):
 def test_setup_write_failure_returns_nonzero(tmp_path):
     target = tmp_path / "missing-dir" / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\n"
+        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\n"
     )
     assert result.exit_code == 1
     assert "Could not write env file" in result.output
@@ -701,17 +707,24 @@ def test_packaged_providers_config_loads_from_any_cwd(tmp_path, monkeypatch):
     config = load_providers_config()
     providers = config["providers"]
     assert {p["name"] for p in providers} == {
-        "nim-glm", "groq-llama", "openrouter-fallback", "gemini-flash",
+        "tokenrouter-deepseek", "nim-glm", "groq-llama",
+        "openrouter-fallback", "gemini-flash",
     }
     assert [p["name"] for p in sorted(providers, key=lambda p: p["tier"])] == [
-        "nim-glm", "groq-llama", "openrouter-fallback", "gemini-flash",
+        "tokenrouter-deepseek", "nim-glm", "groq-llama",
+        "openrouter-fallback", "gemini-flash",
     ]
+    tokenrouter = next(p for p in providers if p["name"] == "tokenrouter-deepseek")
+    assert tokenrouter["base_url"] == "https://api.tokenrouter.com/v1"
+    assert tokenrouter["api_key_env"] == "TOKENROUTER_API_KEY"
+    assert tokenrouter["model_id"] == "deepseek/deepseek-v4-pro-0813-free"
+    assert tokenrouter["tier"] == 1
     nim = next(p for p in providers if p["name"] == "nim-glm")
     assert nim["base_url"] == "https://integrate.api.nvidia.com/v1"
     assert nim["api_key_env"] == "NVIDIA_API_KEY"
     assert nim["model_id"] == "z-ai/glm-5.2"
-    assert nim["tier"] == 1
-    assert next(p for p in providers if p["name"] == "gemini-flash")["tier"] == 4
+    assert nim["tier"] == 2
+    assert next(p for p in providers if p["name"] == "gemini-flash")["tier"] == 5
 
 
 def test_custom_provider_config_path_still_works(tmp_path):

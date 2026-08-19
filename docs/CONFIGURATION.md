@@ -15,10 +15,11 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 |---|---|---|
 | `GATEWAY_API_KEY` | `/v1/*` | Bearer token for the chat endpoint. **If unset, the endpoint is open (no auth).** |
 | `INVINCIBLE_OWNER_SECRET` | `/oauth/authorize` | One-time **browser login** to approve MCP connections (30-day signed session cookie). **Not** sent on `/mcp` — requests use short-lived OAuth Bearer tokens. **If unset, no new MCP grants can be approved.** Legacy alias `MCP_SHARED_SECRET` is read as a fallback (~30 days, one-time deprecation notice). |
-| `NVIDIA_API_KEY` | provider tier 1 | NVIDIA NIM hosted: GLM-5.2 (Z.ai); strongest coding/agentic tier. |
-| `GROQ_API_KEY` | provider tier 2 | Groq Llama 70B. |
-| `OPENROUTER_API_KEY` | provider tier 3 | OpenRouter free fallback. |
-| `GEMINI_API_KEY` | provider tier 4 | Gemini Flash — last resort. |
+| `NVIDIA_API_KEY` | provider tier 2 | NVIDIA NIM hosted: GLM-5.2 (Z.ai); strongest coding/agentic tier. |
+| `GROQ_API_KEY` | provider tier 3 | Groq Llama 70B. |
+| `OPENROUTER_API_KEY` | provider tier 4 | OpenRouter free fallback. |
+| `GEMINI_API_KEY` | provider tier 5 | Gemini Flash — last resort. |
+| `TOKENROUTER_API_KEY` | provider tier 1 | TokenRouter: deepseek/deepseek-v4-pro-0813-free. |
 | `INVINCIBLE_CONFIG_PATH` | startup | Path to a custom `providers.yaml` (set by CLI `--config`). |
 | `INVINCIBLE_DB_PATH` | startup | Path to the session database (set by CLI `--db-path`). |
 | `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the session database and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
@@ -59,12 +60,11 @@ Top-level mapping with a single `providers:` list. Each provider entry:
 
 ```yaml
 providers:
-  - name: nim-glm                # unique, used in logs & health tracking
+  - name: tokenrouter-deepseek    # unique, used in logs & health tracking
     tier: 1                        # ascending order = failover order
-    base_url: https://integrate.api.nvidia.com/v1
-    api_key_env: NVIDIA_API_KEY    # env var *name* — never the key itself
-    model_id: z-ai/glm-5.2
-    aliases: [strong]              # optional; soft routing hints (Phase 6)
+    base_url: https://api.tokenrouter.com/v1
+    api_key_env: TOKENROUTER_API_KEY  # env var *name* — never the key itself
+    model_id: deepseek/deepseek-v4-pro-0813-free
     max_context: 1000000           # tokens; used for context trimming
     timeout:                       # optional; per-field override (see below)
       read: 90.0
@@ -100,6 +100,7 @@ Shipped values and rationale:
 
 | Provider | Read timeout | Why |
 |---|---|---|
+| `tokenrouter-deepseek` | 90.0s | Free tier can be slow to first token. |
 | `nim-glm` | 90.0s | 1M-token context; generation can legitimately take a while. |
 | `groq-llama` | 45.0s | Large model, still generous. |
 | `openrouter-fallback` | 90.0s | 550B free tier can be slow to first token. |

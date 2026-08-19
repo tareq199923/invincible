@@ -311,8 +311,8 @@ def _attempt_records(caplog, provider="alpha"):
 
 
 def tiered_providers():
-    """The shipped tier order as mock providers: NIM -> Groq -> OpenRouter
-    -> Gemini (last)."""
+    """The shipped tier order as mock providers: TokenRouter -> NIM -> Groq
+    -> OpenRouter -> Gemini (last)."""
     return [
         {
             "name": "nim",

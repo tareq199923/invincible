@@ -148,3 +148,10 @@ def test_shipped_providers_yaml_validates():
     assert by_name["groq-llama"]["aliases"] == ["fast"]
     assert by_name["openrouter-fallback"]["aliases"] == ["free"]
     assert by_name["gemini-flash"]["aliases"] == ["backup"]
+    tokenrouter = by_name["tokenrouter-deepseek"]
+    assert tokenrouter["tier"] == 1
+    assert tokenrouter["base_url"] == "https://api.tokenrouter.com/v1"
+    assert tokenrouter["api_key_env"] == "TOKENROUTER_API_KEY"
+    assert tokenrouter["model_id"] == "deepseek/deepseek-v4-pro-0813-free"
+    assert "aliases" not in tokenrouter
+    assert [p["tier"] for p in router.providers] == [1, 2, 3, 4, 5]
