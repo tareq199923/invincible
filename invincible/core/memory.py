@@ -145,7 +145,10 @@ class MemoryStore:
         self._db: aiosqlite.Connection | None = None
 
     async def init(self):
-        shared_db = getattr(self._shared, "_db", None) if self._shared else None
+        # Prefer the shared store's public accessor; the duck-typed guard
+        # keeps connection-less test stubs on the standalone path below.
+        accessor = getattr(self._shared, "connection", None) if self._shared else None
+        shared_db = accessor() if callable(accessor) else None
         if shared_db is not None:
             self._db = shared_db
         elif self.db_path is not None:
