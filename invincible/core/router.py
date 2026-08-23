@@ -12,6 +12,8 @@ from invincible.core.compression import compress_messages, compression_enabled
 # the trimming helpers and provider-config helpers from the Router module.
 from invincible.core.config import (  # noqa: F401 - re-exports
     DEFAULT_TIMEOUT_CONFIG,
+    auth_headers,
+    auth_params,
     load_providers_config,
     resolve_timeout,
     validate_providers_config,
@@ -189,25 +191,13 @@ class Router:
         return f"{provider['base_url']}{provider.get('chat_path', '/chat/completions')}"
 
     def _request_headers(self, provider: dict, api_key: str) -> dict:
-        """Auth + content headers for a provider attempt.
-
-        Default is ``Authorization: Bearer``. ``auth_type: query`` puts the
-        key in a query parameter instead (``auth_param``, default ``key``) -
-        for providers that do not accept a header. Note: a key in the URL is
-        visible to any proxy on the request path; never logged by this
-        router (``_log_attempt`` emits sizes/status only).
-        """
-        if provider.get("auth_type") == "query":
-            return {"Content-Type": "application/json"}
-        return {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        """Auth + content headers for a provider attempt (see
+        ``core.config.auth_headers``; a key in the URL is visible to any
+        proxy on the request path and never logged)."""
+        return auth_headers(provider, api_key)
 
     def _request_params(self, provider: dict, api_key: str) -> dict | None:
-        if provider.get("auth_type") == "query":
-            return {provider.get("auth_param", "key"): api_key}
-        return None
+        return auth_params(provider, api_key)
 
     async def route_request(
         self,

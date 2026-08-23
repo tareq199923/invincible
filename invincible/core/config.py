@@ -22,8 +22,10 @@ _AUTH_TYPES = ("bearer", "query")
 # Extra keys a provider entry may carry (all optional).
 _OPTIONAL_PROVIDER_FIELDS = {
     "max_context", "timeout", "aliases", "auth_type", "auth_param", "chat_path",
-    "failover_on_400",
+    "failover_on_400", "enabled",
 }
+
+_ROUTING_MODES = ("auto", "pinned", "chain")
 
 
 def validate_providers_config(config: dict) -> None:
@@ -146,6 +148,10 @@ def validate_providers_config(config: dict) -> None:
                 f"Provider '{name}': 'failover_on_400' must be a boolean"
             )
 
+        enabled = provider.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            raise ValueError(f"Provider '{name}': 'enabled' must be a boolean")
+
         unknown_fields = set(provider) - (
             _REQUIRED_PROVIDER_FIELDS | _OPTIONAL_PROVIDER_FIELDS
         )
@@ -199,3 +205,93 @@ def resolve_timeout(provider: dict) -> httpx.Timeout:
     return httpx.Timeout(
         connect=cfg["connect"], read=cfg["read"], write=cfg["write"], pool=cfg["pool"]
     )
+
+
+def validate_routing_config(routing: dict, provider_names: set[str]) -> None:
+    """Validate the optional ``routing`` block of the registry file.
+
+    Shape: ``{mode: auto|pinned|chain, pinned?: {provider, model},
+    chain?: [{provider, model}, ...]}``. Pinned/chain references must name
+    known providers (checked at save time; runtime drift is still handled
+    defensively by the selection layer). Raises ValueError naming the
+    problem.
+    """
+    if not isinstance(routing, dict):
+        raise ValueError("Routing configuration must be a mapping")
+    unknown = set(routing) - {"mode", "pinned", "chain"}
+    if unknown:
+        raise ValueError(
+            f"Routing configuration: unknown field(s): {', '.join(sorted(unknown))}"
+        )
+
+    mode = routing.get("mode", "auto")
+    if mode not in _ROUTING_MODES:
+        raise ValueError(
+            f"Routing configuration: 'mode' must be one of: "
+            f"{', '.join(_ROUTING_MODES)}"
+        )
+
+    def _check_step(step, where: str) -> None:
+        if not isinstance(step, dict):
+            raise ValueError(f"Routing configuration: {where} must be a mapping")
+        missing = {"provider", "model"} - set(step)
+        if missing:
+            raise ValueError(
+                f"Routing configuration: {where} is missing "
+                f"field(s): {', '.join(sorted(missing))}"
+            )
+        if step["provider"] not in provider_names:
+            raise ValueError(
+                f"Routing configuration: {where} references unknown provider "
+                f"'{step['provider']}'"
+            )
+        if not isinstance(step["model"], str) or not step["model"].strip():
+            raise ValueError(
+                f"Routing configuration: {where} 'model' must be a non-empty string"
+            )
+
+    if mode == "pinned":
+        pinned = routing.get("pinned")
+        if pinned is None:
+            raise ValueError(
+                "Routing configuration: mode 'pinned' requires a 'pinned' mapping"
+            )
+        _check_step(pinned, "'pinned'")
+    elif mode == "chain":
+        chain = routing.get("chain")
+        if not isinstance(chain, list) or not chain:
+            raise ValueError(
+                "Routing configuration: mode 'chain' requires a non-empty 'chain' list"
+            )
+        seen = set()
+        for index, step in enumerate(chain):
+            _check_step(step, f"'chain[{index}]'")
+            if step["provider"] in seen:
+                raise ValueError(
+                    f"Routing configuration: 'chain[{index}]' repeats provider "
+                    f"'{step['provider']}'"
+                )
+            seen.add(step["provider"])
+
+
+def auth_headers(provider: dict, api_key: str) -> dict:
+    """Auth + content headers for a provider request.
+
+    Default is ``Authorization: Bearer``. ``auth_type: query`` puts the key
+    in a query parameter instead (``auth_param``, default ``key``) - for
+    providers that do not accept a header. A key in the URL is visible to
+    any proxy on the request path; never logged anywhere in Invincible.
+    """
+    if provider.get("auth_type") == "query":
+        return {"Content-Type": "application/json"}
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+
+def auth_params(provider: dict, api_key: str) -> dict | None:
+    """Query parameters for ``auth_type: query`` providers, else ``None``."""
+    if provider.get("auth_type") == "query":
+        return {provider.get("auth_param", "key"): api_key}
+    return None
