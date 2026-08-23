@@ -13,31 +13,41 @@ criteria, and a rough size.
   foundation is in place).
 - **Size** — `S` (days), `M` (1–2 weeks), `L` (multi-week, likely broken
   into smaller PRs).
-- **Status** — `Planned` / `In progress` / `Done`. Phase 0 is done; the
-  rest are planned.
+- **Status** — `Planned` / `In progress` / `Done`. Phases 0, 6, 9, and
+  10 are done; the rest are planned.
 - **Dependencies** — phases listed as prerequisites must land first; the
   arrows matter more than the numbers.
 
 ```
 Phase 0 (current state)
    │
-   ├──► Phase 1  Security hardening ───────────┐
-   │                                            │
-   ├──► Phase 2  Zero-clone distribution        │
-   │         │                                  │
-   │         ├──► Phase 3  Documentation site   │
-   │         │                                  │
-   ├──► Phase 4  Multi-user system ◄────────────┘ (needs Phase 1 identity/audit)
-   │         │
-   │         └──► Phase 5  Dashboard
+   ├─► Phase 11 Repo hygiene ─► Phase 12 Fixes ─► Phase 14 CI ─► Phase 13 Refactor + Settings ─► Phase 16 PostgreSQL storage ─┐
+   │                                                                                                                          │
+   ├─► Phase 2  Zero-clone distribution ◄─────────────────────────────────────────────────────────────────────────────────────┘
+   │         │                                                  (PyPI launches after the DB story settles)
+   │         └─► Phase 3  Documentation site
    │
-   ├──► Phase 6  More providers
-   ├──► Phase 7  More MCP tools
-   ├──► Phase 8  Deployment
+   ├─► Phase 1  Security hardening ◄─ audit table designed in 16 ─► Phase 4  Multi-user system ◄── 16 (real storage)
+   │                                                                  │
+   ├─► Phase 15 Observability ───────────────────────────────────► Phase 5  Dashboard
    │
-   ├──► Phase 9   Context compression      (parallel to 1/4 — no storage/identity)
-   │          │
-   │          └─► Phase 10  Context memory (soft ordering after 9, not a hard dep)
+   ├─► Phase 7  More MCP tools            (independent)
+   ├─► Phase 8  Deployment                (compose app+postgres pair lands in 16)
+   │
+   Done: Phase 6 More providers · Phase 9 Context compression · Phase 10 Context memory
+```
+
+The intended execution order across all three tracks (engineering quality,
+product, platform):
+
+```
+Foundation    11 → 12 → 14      hygiene, bug fixes, CI guardrails first
+Refactor      13                protected by green CI; Settings owns DB config
+Storage       16                PostgreSQL-only migration; biggest single phase
+Product       2 → 3             PyPI after 16: one install story, no SQLite era
+Platform      1 → 4             audit surface on the 16 tables, then users
+Observe       15 → 5            metrics land just before their consumer
+Then          7 · 8             parallel finishers
 ```
 
 ---
@@ -55,8 +65,8 @@ What exists today, so each phase's delta is clear.
 | **Auth** | `GATEWAY_API_KEY` bearer for `/v1/*` (plain `==` compare); OAuth 2.1 + PKCE for `/mcp` (`core/oauth_store.py`, `endpoints/oauth.py`) with browser owner login, per-client consent, short-lived access tokens, hashed tokens at rest. |
 | **CLI** | `invincible`/`inv`: `setup`, `start` (auto Cloudflare tunnel), `secret rotate`, `doctor`, `oauth list/revoke/test-client`. |
 | **Packaging** | `pyproject.toml`, package name `invincible-ai`, console scripts declared, `providers.yaml` packaged. Not yet on PyPI. |
-| **Docs** | 6 docs in `docs/` (architecture, API, config, MCP, security, testing). No roadmap, no changelog. |
-| **Tests** | 14 test files, pytest + pytest-asyncio, fake upstreams via `httpx.MockTransport`, no live providers ever called. |
+| **Docs** | 8 docs in `docs/` (architecture, API, config, MCP, security, testing, providers, roadmap). No changelog. |
+| **Tests** | 17 test files, pytest + pytest-asyncio, fake upstreams via `httpx.MockTransport`, no live providers ever called. |
 
 ---
 
@@ -83,7 +93,9 @@ per-approver identity** on the MCP approval flow.
 ### Scope
 
 1. **MCP approval audit log** (the core of this phase)
-   - New SQLite table (or dedicated table in the session DB) recording:
+   - The audit **table schema is designed and created in Phase 16** as part
+     of the PostgreSQL migration; this phase populates it and builds the
+     surface on top:
      `id`, `timestamp`, `client_id`, `action_type`, `command`/`path` (the
      sensitive args), `token`, `decision` (staged / approved / declined /
      expired), and `approver_client_id`.
@@ -100,9 +112,12 @@ per-approver identity** on the MCP approval flow.
 2. **Timing-safe `GATEWAY_API_KEY` compare**
    - Swap plain `==` for `hmac.compare_digest` in `main.py` `require_auth`
      (mirrors what the owner secret already does).
+   - *(Lands early via Phase 12; kept here as the acceptance gate.)*
 3. **Persist login rate-limit state** (or document the tradeoff)
-   - Move the per-IP failure window from in-memory to the SQLite DB so a
+   - Move the per-IP failure window from in-memory to the database so a
      restart does not reset brute-force friction (`endpoints/oauth.py`).
+   - *(Lands with Phase 16, which migrates all state to PostgreSQL and
+     persists provider health in the same pass.)*
 4. **Optional sessions-at-rest encryption**
    - Toggle (env var) that encrypts conversation rows in
      `core/session_store.py`; default off to preserve the existing
@@ -153,6 +168,12 @@ promise is: one install command, one interactive setup, done.
    - CI job to build + publish on tags (`build` is already a dev dep).
    - `pipx install invincible-ai` must work on Windows/macOS/Linux; verify
      the `invincible` / `inv` console scripts.
+   - **Ordering: this phase launches after Phase 16.** The product is
+     PostgreSQL-only by decision; publishing before that migration would
+     strand early users on a storage engine the project has abandoned.
+     The install story is therefore "pipx + a Postgres URL or the bundled
+     docker compose pair", not zero-config — say so plainly in every
+     onboarding surface.
 2. **`invincible setup` as the single entry point** (`cli.py`)
    - Already generates missing secrets and prompts for provider keys —
      audit the flow from a *fresh machine* perspective: what would a
@@ -253,7 +274,8 @@ turns the gateway into a shared service.
 ### Scope
 
 1. **User accounts & auth on `/v1/*`**
-   - User registry (SQLite): id, display name, hashed password or
+   - User registry (PostgreSQL, on the Phase 16 store): id, display name,
+     hashed password or
      per-user API key, role (`owner` / `user`).
    - Per-user keys verified timing-safely (Phase 1); `/v1/*` auth becomes
      "which user is this".
@@ -441,8 +463,10 @@ needs supervision, auto-restart, and predictable networking.
 
 1. **Docker**
    - `Dockerfile` (python:3.11-slim, non-root user, `pip install
-     invincible-ai`, volume for `sessions.db` and `.env`).
-   - `docker-compose.yml`: app + optional cloudflared sidecar.
+     invincible-ai`).
+   - `docker-compose.yml`: the **app + postgres service pair already
+     exists from Phase 16** — this phase hardens it for production
+     (named volumes, healthchecks with dependencies, restart policies).
 2. **systemd unit**
    - Example unit: `ExecStart=invincible start --no-tunnel`, hardening
      options (`NoNewPrivileges`, `ProtectHome`), env file pointing at the
@@ -591,17 +615,380 @@ send-time only and nothing ever shrinks the stored history.
 
 ---
 
+## Phase 11 — Repo hygiene & packaging cleanup
+
+**Priority P1 · Size S · Status: Planned · Prerequisite for: Phase 12**
+
+### Goal
+
+A clean repo and packaging baseline before any refactor work starts.
+
+### Problem it solves
+
+- Ad-hoc scripts sit at the repo root: `_test_tr.py` (untracked) and
+  `anthropic_test.py` (**git-tracked**, contains a hardcoded gateway
+  token string). Both bypass pytest; one ships a secret-shaped string.
+- Test dependencies (`pytest`, `pytest-asyncio`) are mixed into runtime
+  `requirements.txt`; there is no lockfile strategy.
+- The deprecated root-level `providers.yaml` fallback chain still lives
+  in `core/router.py`'s config resolution — three copies of provider
+  config exist (packaged, root, example).
+- `.gitignore` lists `sessions.db` twice.
+
+### Scope
+
+1. **Delete root scripts** — remove `_test_tr.py` and `anthropic_test.py`
+   and drop the `anthropic_test.py` ignore entry from `pytest.ini`.
+2. **Remove the root providers.yaml fallback** — packaged copy is
+   authoritative (loaded via `importlib.resources`); delete the
+   deprecated root file and its resolution branch; keep
+   `providers.yaml.example`.
+3. **Dev dependencies** — move pytest/pytest-asyncio into
+   `[project.optional-dependencies].dev`. `ruff` is **already** a dev
+   extra — nothing to do there.
+4. **Lockfile strategy** — adopt uv or pip-tools so CI and local runs
+   resolve identical versions.
+5. **Gitignore dedupe** — single `sessions.db` entry; confirm build
+   artifact patterns cover everything currently on disk untracked.
+6. **Version sync** — `invincible/__init__.py`'s `__version__ = "0.1.0"`
+   has drifted behind the `v0.2.0` git tag, and
+   `endpoints/mcp.py:166` separately hardcodes `"version": "0.1.0"` in
+   the MCP `initialize` response instead of importing `__version__`.
+   Bump `__version__` to match the tag and have `mcp.py` import it so
+   the two can't drift again.
+
+### Dependencies
+
+- None (first phase of the new sequence).
+
+### Acceptance criteria
+
+- `git ls-files` shows no scripts or secret-bearing files outside
+  `tests/`.
+- Fresh environment: `pip install -e .[dev]` is sufficient to run
+  pytest and ruff.
+- Provider config resolves from exactly one place.
+
+---
+
+## Phase 12 — Correctness & security fixes
+
+**Priority P1 · Size M · Status: Planned · Requires: Phase 11 · Prerequisite for: Phase 14**
+
+### Goal
+
+Close every verified bug before any structural refactor touches the same
+files.
+
+### Problem it solves
+
+Four confirmed defects, found during a full code audit:
+
+- Streamed OpenAI `tool_calls` are forwarded to the client but **lost
+  from persisted history** — `_append_content`
+  (`endpoints/openai_compat.py`) extracts only `delta.content`, while
+  the Anthropic path preserves them correctly.
+- Both failover loops treat **400 as retryable**
+  (`core/router.py`, `route_request` and its streaming mirror), so a
+  payload-invalid request burns every tier before surfacing.
+- `GATEWAY_API_KEY` is compared with plain `==`/`!=`
+  (`main.py::require_auth`), not a timing-safe digest.
+- The login rate limiter's module-level failure dict grows without
+  bound (`endpoints/oauth.py`).
+
+### Scope
+
+1. **Persist streamed OpenAI tool_calls** — accumulate tool-call deltas
+   in `_stream_body` exactly as the Anthropic stream state machine does;
+   persisted assistant turns become structurally complete. Tests must
+   fail before the fix.
+2. **400-failover policy (design decision, not a mechanical fix)** —
+   HEAD currently forwards 400 verbatim and does not failover on it,
+   matching the README and `test_upstream_error_forwarded`. An
+   uncommitted working-tree change that made *all* 400s (and 410)
+   failover was evaluated and reverted — blanket retry burns every
+   tier on a malformed payload and is the opposite of the discrimination
+   this item calls for. Failing over on 400 is *deliberate* for model
+   mismatch (each tier serves a different model, so tier-1's "model not
+   found" should cascade) but wrong for malformed payloads. Discriminate
+   via upstream error-body inspection or an explicit per-provider flag;
+   apply the chosen policy identically in both loops; test both classes
+   of 400.
+3. **Timing-safe gateway key compare** — `hmac.compare_digest` in
+   `main.py::require_auth` (supersedes Phase 1 item 2).
+4. **Bound the login-failure map** — periodic sweep of stale IPs or a
+   capped structure; document which.
+5. **Explicitly out of scope:** the sync-sqlite3 `PendingActionStore`
+   rewrite — absorbed into Phase 16's store migration.
+
+### Dependencies
+
+- Phase 11 (clean baseline).
+
+### Acceptance criteria
+
+- A streamed OpenAI tool-calling session round-trips through history
+  with intact tool calls.
+- Payload-invalid requests abort fast without exhausting tiers;
+  model-mismatch 400s still cascade — both documented and tested.
+- Auth comparison is timing-safe; rate-limiter memory is bounded.
+- Full suite stays green.
+
+---
+
+## Phase 13 — Failover engine unification & Settings
+
+**Priority P1 · Size M · Status: Planned · Requires: Phase 14 (CI green first)**
+
+### Goal
+
+One failover engine instead of two hand-mirrored loops, and one typed
+config surface instead of scattered env reads.
+
+### Problem it solves
+
+- `route_request` and `stream_open` duplicate ~100 lines of identical
+  failover logic — the streaming path's docstring literally says it
+  mirrors the non-streaming path "exactly". Every status-class change
+  must be made twice (Phase 12 already pays this tax).
+- `core/router.py` mixes schema validation, YAML loading, token
+  estimation, turn trimming, and HTTP routing in one ~770-line module;
+  `compat/common.py` imports token estimation from the Router even
+  though the compat layer's own docstring declares independence from it.
+- Roughly eleven env vars are read via scattered `os.getenv()` calls,
+  alongside hardcoded cooldown curves, TTLs, timeouts, and context
+  limits.
+
+### Scope
+
+1. **Single generator-based failover engine** parameterized by
+   streaming vs non-streaming; `route_request` and `stream_open` become
+   thin wrappers that only differ in how they consume attempt results.
+2. **Split the module**: `core/config.py` (schema validation + YAML
+   loading), `core/trimming.py` (`estimate_tokens`,
+   `group_into_turns`, `trim_messages`), `router.py` keeps the Router,
+   timeouts, and health wiring.
+3. **Layering fix** — compat imports trimming helpers from
+   `core/trimming.py`, never from the Router.
+4. **Central Settings object** — typed, validated, owns every
+   `INVINCIBLE_*` variable plus cooldown constants, TTLs, timeouts,
+   context limits, and (forward-looking) `INVINCIBLE_DB_URL` and pool
+   sizing for Phase 16.
+5. **Typing pass** — hints throughout `invincible/`, strict ruff
+   ruleset, mypy baseline clean.
+
+### Dependencies
+
+- **Phase 14 first**: the refactor must be protected by green CI.
+- Soft-depends on Phase 12 landing (both touch the failover loops).
+
+### Acceptance criteria
+
+- Exactly one implementation of the failover decision sequence exists.
+- No module under `invincible/compat/` imports from the Router.
+- All configuration flows through Settings; no bare `os.getenv` outside
+  it.
+- Behavior identical pre/post (existing router tests pass unchanged);
+  mypy and strict ruff clean.
+
+---
+
+## Phase 14 — Continuous integration
+
+**Priority P1 · Size S · Status: Planned · Requires: Phase 11 · Partially done**
+
+### Goal
+
+Every pull request proven by machines, not discipline.
+
+### Problem it solves
+
+`.github/workflows/tests.yml` already exists (ruff check + pytest matrix
+on 3.12/3.13/3.14, via `pip install -e ".[dev]"`) — this phase extends
+existing CI rather than creating it from nothing. Gaps: no Postgres
+service container, no coverage artifact, and the matrix (3.12–3.14)
+does not match `pyproject.toml`'s `requires-python = ">=3.10"` —
+3.10/3.11 are declared supported but never tested.
+
+### Scope
+
+1. **Extend the existing workflow** — keep ruff check + pytest; widen
+   the Python matrix to match `requires-python` (add 3.10, 3.11) or
+   narrow `requires-python` to match reality — decide and make the two
+   consistent.
+2. **Postgres service container job wired from day one** — initially
+   runs the existing suite; when Phase 16's store-integration tests
+   arrive they land in ready infrastructure instead of re-plumbing CI.
+3. **Coverage artifact** per run; branch protection requires green
+   checks before merge.
+
+### Dependencies
+
+- Phase 11 (dev deps separated so CI installs are honest).
+
+### Acceptance criteria
+
+- A red PR cannot merge.
+- The matrix covers all versions declared in `requires-python`.
+- Coverage report is downloadable from every run.
+
+---
+
+## Phase 15 — Observability
+
+**Priority P2 · Size M · Status: Planned · Feeds: Phase 5**
+
+### Goal
+
+See what the gateway is doing without attaching a debugger or tailing
+raw logs.
+
+### Problem it solves
+
+Observability today is log lines from `_log_attempt` plus a minimal
+`/health` that returns version only. Operators cannot answer "which
+provider is cooling down right now?" or "how many failovers happened
+this hour?" — and Phase 5's dashboard needs exactly this data exposed
+programmatically.
+
+### Scope
+
+1. **`/metrics`** (prometheus-client): request counts by route/status,
+   upstream attempts by provider × outcome class, cooldown/disable
+   gauges, stream durations, session-store timings.
+2. **Request-ID middleware** — ID assigned per request, present in logs
+   and error bodies, correlating multi-provider failover chains.
+3. **Extend `/health`** with live provider health detail: tier order,
+   cooldown expiry times, disable state, last failure timestamp
+   *(promoted from the cross-cutting backlog)*.
+4. **Readable console output** for `invincible start` — summarized
+   request/failover lines instead of raw uvicorn noise *(absorbs the
+   backlog item)*.
+
+### Dependencies
+
+- None hard; lands just before Phase 5 consumes it.
+
+### Acceptance criteria
+
+- Prometheus can scrape `/metrics` and render provider health gauges.
+- A single request's full failover chain is reconstructible from logs
+  via its request ID.
+- `/health` reflects cooldown state accurately within one request of a
+  failure occurring.
+
+---
+
+## Phase 16 — PostgreSQL storage migration
+
+**Priority P1 · Size L · Status: Planned · Requires: Phase 13 (Settings) · Prerequisite for: Phases 1, 2, 4, 8**
+
+### Goal
+
+PostgreSQL becomes the project's single supported storage backend:
+conversations, OAuth grants, facts, pending MCP actions, audit rows
+(Phase 1), and provider health all live in Postgres.
+
+### Decisions recorded up front
+
+- **Postgres-only.** SQLite support is removed. Motivation: server/team
+  deployment, Phase 4 write patterns, and modernization. This
+  deliberately retires the original one-process SQLite-first posture —
+  accepted tradeoff, since the laptop install story becomes
+  "pipx + a DB URL or the bundled compose pair".
+- **Data access:** SQLAlchemy 2.0 async Core over the asyncpg driver;
+  Alembic for versioned migrations. Raw asyncpg was rejected to avoid
+  hand-building pooling and migration tooling.
+- **Migrations run explicitly:** `invincible db upgrade`, verified by
+  `doctor` — never auto-run at startup.
+- **Timestamps stay epoch floats** (`DOUBLE PRECISION`) initially;
+  TIMESTAMPTZ conversion is deferred cleanup.
+- **JSONB** for message history and redirect URIs.
+
+### Problem it solves
+
+SQLite caps concurrent writers, stores everything in a file the MCP
+denylist must protect by name, forgets all health state on restart, and
+cannot back multi-worker deployment. Four storage sites migrate:
+`SessionStore`, `OAuthStore`, `MemoryStore` (shared connection today),
+and `PendingActionStore` — which currently uses **sync sqlite3 inside
+async paths** (`core/tool_executor.py`).
+
+### Scope
+
+1. **Dependencies** — add sqlalchemy[asyncio], asyncpg, alembic,
+   greenlet; remove aiosqlite.
+2. **Alembic baseline** creating: `sessions`, `facts`,
+   `oauth_clients`, `oauth_codes`, `oauth_tokens`, `pending_actions`,
+   `audit_log` (schema designed now, populated by Phase 1), and
+   `provider_health`.
+3. **Store rewrites preserving public APIs** — endpoints barely change:
+   - `append()` becomes one transaction with `SELECT … FOR UPDATE` per
+     session row (replacing the process-global asyncio.Lock
+     load-modify-save).
+   - Commit-per-operation becomes pooled transactions.
+   - OAuth lazy-expiry DELETE-on-every-lookup becomes batched
+     opportunistic cleanup.
+   - `PendingActionStore` moves to an async PG table — persistence is
+     now effectively free; revisit whether the opt-in persistence flag
+     should default on.
+4. **Config surface** — `INVINCIBLE_DB_URL` replaces
+   `INVINCIBLE_DB_PATH`; CLI `--db-path` options across `start` /
+   `oauth list|revoke|test-client` become DB-URL aware; pool sizing
+   comes from the Phase 13 Settings object.
+5. **CLI** — `setup` prompts for a DB URL or offers the bundled compose
+   path; `doctor` gains connectivity + schema-version checks; new
+   commands: `invincible db upgrade`, `invincible db import sessions.db`
+   (one-shot legacy importer covering sessions, facts, and oauth rows).
+6. **Test infrastructure** — the suite leans on SQLite `:memory:`
+   fixtures (`tests/conftest.py`); Postgres has no equivalent.
+   Introduce a real-PG fixture (testcontainers locally, the Phase 14
+   service container in CI) with schema-per-test isolation.
+7. **Compose pair** — `docker-compose.yml` with app + postgres
+   services; consumed and hardened by Phase 8.
+8. **Folded-in state persistence** — provider cooldowns/disables and
+   the login rate-limit window survive restarts via PG tables
+   *(promotes two backlog items)*.
+9. **Docs** — README install story, CONFIGURATION.md, ARCHITECTURE.md
+   module map, SECURITY.md: the denylist's file-protection of
+   `sessions.db` loses meaning, the security boundary moves to DB
+   credentials, and the DSN (which embeds a password) must be masked in
+   doctor output and logs.
+
+### Dependencies
+
+- Phase 13 (Settings owns the DB URL and pool config).
+- Phase 14 (PG service container + green-CI protection for an L-sized
+  change).
+
+### Acceptance criteria
+
+- Full suite green against a real Postgres instance in CI.
+- `invincible db import` round-trips a populated legacy `sessions.db`.
+- `doctor` reports connectivity and schema revision; mismatches are
+  loud.
+- `docker compose up` yields a healthy gateway with zero manual SQL.
+- Restarting the server preserves cooldowns, disables, and staged
+  approvals; docs updated everywhere SQLite is mentioned.
+
+---
+
 ## Cross-cutting backlog
 
 Ideas that don't fit one phase cleanly. Pull from here when planning a
 cycle.
 
+*Recently promoted:* persistent cooldowns/disables and login-rate-limit
+persistence → **Phase 16**; health-endpoint detail and prettier console
+output → **Phase 15**.
+
 - **Image content blocks** — Anthropic `image` blocks are currently
   skipped during flattening (`compat/anthropic.py`); OpenAI vision
   messages are untested upstream.
-- **Persistent cooldowns / disables** — `core/provider_health.py` is
-  in-memory; a restart forgets every 429 and even permanent 401/403
-  disables. Options: persist disables only, or full health state.
+- **Per-key rate limiting on `/v1/*`** — today the only throttle is
+  upstream providers' own 429s; one leaked key can burn every tier's
+  quota unopposed. Precursor to Phase 4 quotas: per-key request/token
+  windows enforced before routing.
 - **`/v1` token revocation** — `GATEWAY_API_KEY` has no rotation/revoke
   path; a leaked chat key is good until `.env` is edited.
 - **SSE robustness** — reconnect/keepalive behavior of the two streaming
@@ -610,18 +997,14 @@ cycle.
   server; verify behavior on Windows Ctrl+C vs. crash.
 - **Usage/credit tracking** for the chat gateway (precursor to Phase 4
   quotas; could land earlier as `invincible usage`).
-- **Health endpoint detail** — expose cooldown state on `/health`
-  (precursor to Phase 5's provider panel).
-- **Prettier console output** — structured/summarized logging for
-  `start` (requests, failovers) instead of raw uvicorn lines.
 - **Vector / semantic memory** — embeddings + similarity retrieval over
   session history, the heavier successor to Phase 10's regex facts.
   Deferred pending two explicit decisions: embeddings (API provider vs.
-  local model vs. SQLite FTS5 keyword search — FTS5 is available in
-  CPython's bundled SQLite) and store (embedded sqlite-vec/FTS5 vs. a
-  service like Qdrant — a second long-running service would deviate from
-  the one-process, SQLite-first, self-hosted posture and needs explicit
-  sign-off). Natural ordering: after Phase 4 (per-user index namespaces
+  local model vs. Postgres full-text search) and store
+  (`pgvector` inside the Phase 16 database vs. a dedicated service like
+  Qdrant — a second long-running service is still a deployment question
+  even though the SQLite-era "one-process" objection has been retired by
+  Phase 16). Natural ordering: after Phase 4 (per-user index namespaces
   become natural) and Phase 8 (a vector service is a deployment question).
 
 ---
