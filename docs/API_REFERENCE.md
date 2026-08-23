@@ -15,9 +15,14 @@ provider behind either request is chosen by the Router, never by the client.
 | `GET` | `/health` | none | `{"service", "status", "version"}` |
 | `POST` | `/v1/chat/completions` | `Authorization: Bearer <GATEWAY_API_KEY>` | OpenAI chat completion with failover |
 | `POST` | `/v1/messages` | `Authorization: Bearer <GATEWAY_API_KEY>` | Anthropic Messages completion with failover |
+| `GET/POST/PATCH/DELETE` | `/api/v1/providers[...]` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Provider management: list, add, update, remove, enable/disable, test connectivity |
+| `GET/PUT` | `/api/v1/routing` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Routing mode: `auto` / `pinned` / `chain` |
 
 Auth details: if `GATEWAY_API_KEY` is **unset**, both chat endpoints are
 open (no auth enforced). Wrong/missing key with the key set → `401`.
+The management surface (`/api/v1/*`) uses a separate credential
+(`INVINCIBLE_ADMIN_KEY`); it answers **503 when that key is unset**
+(fail closed), and the gateway key is never accepted there.
 
 ---
 
@@ -65,6 +70,21 @@ never from the client.
 ---
 
 ## 3. Response
+
+Every chat completion response (both protocols, streaming and not) carries
+`x-invincible-*` headers describing the attempt that actually served it:
+
+| Header | Meaning |
+|---|---|
+| `x-invincible-provider` | Registry name of the provider that served the request |
+| `x-invincible-model` | The exact upstream `model_id` sent (pinned/chain may override the provider default) |
+| `x-invincible-attempts` | Upstream attempts made (`1` = no failover occurred) |
+| `x-invincible-request-id` | Gateway-side id correlating the failover chain across `runs` records |
+
+Headers are absent on gateway error paths where no attempt reached a
+provider. Each attempt is also recorded in the `runs` table (session
+database): the queryable answer to "which model handled what, and why did
+it move".
 
 **Success (`200`)**: the upstream provider's JSON is forwarded **verbatim**
 — no normalization. Shape is standard OpenAI:

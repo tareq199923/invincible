@@ -25,6 +25,9 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 | `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the session database and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
 | `INVINCIBLE_COMPRESSION` | per-request | Send-time request compression (truncate long tool results, collapse blank-line runs) applied before context trimming. **On by default**; set to `0`/`false`/`off` to disable. Affects only what is sent to providers — stored session history stays verbatim. |
 
+| `INVINCIBLE_PROVIDERS_FILE` | management | **Opt-in**: writable provider-registry file. When set, it becomes the authoritative provider configuration (seeded from the packaged config on first use) and the management API can mutate it. When unset, providers load read-only and mutations refuse. |
+| `INVINCIBLE_ADMIN_KEY` | `/api/v1/*` | Bearer token for the management API (provider CRUD, routing modes). Deliberately independent of `GATEWAY_API_KEY`: chat clients must never manage providers. **If unset, the whole management surface answers 503 (fail closed).** |
+
 The two secrets are **independent**: a leaked tunnel URL alone is not enough
 to reach tool execution, and rotating one secret never affects the other.
 
@@ -132,6 +135,43 @@ Both protocols accept it: OpenAI `{"model": "fast", ...}` and Anthropic
 `{"model": "fast", ...}` (echoed back in the response as before). Aliases
 also appear in `GET /v1/models` after the real model ids. Full guide and
 supported provider shapes: [docs/PROVIDERS.md](PROVIDERS.md).
+
+### Provider management & routing modes (Phase 13.5)
+
+Providers may carry one extra optional field: `enabled: true|false`
+(default `true`). A disabled provider is invisible to routing until
+re-enabled - distinct from automatic cooldowns, which are transient.
+
+Set `INVINCIBLE_PROVIDERS_FILE` to enable management:
+
+- The file becomes authoritative; on first use it is seeded from the
+  packaged configuration (copy-on-first-use). Existing files need no
+  edits - every new field is optional.
+- Mutations go through the management API (`/api/v1/*`, see
+  [API_REFERENCE.md](API_REFERENCE.md)) or the registry directly, and are
+  persisted atomically (temp file + rename).
+- Without the variable, providers load read-only from the packaged YAML
+  and every mutation refuses - site-packages are never rewritten.
+
+Routing modes live in the same file under an optional top-level
+`routing:` block:
+
+```yaml
+routing:
+  mode: auto          # auto | pinned | chain
+  # mode: pinned
+  # pinned: {provider: groq-llama, model: openai/gpt-oss-120b}
+  # mode: chain
+  # chain:
+  #   - {provider: nim-glm, model: z-ai/glm-5.2}
+  #   - {provider: gemini-flash, model: gemini-2.5-flash}
+```
+
+`auto` keeps tier order with soft alias hints; `pinned` attempts exactly
+one provider/model and surfaces failures verbatim (no silent
+substitution); `chain` walks the listed pairs in order as an explicit
+fallback chain. Changes apply to the next request; in-flight requests are
+unaffected.
 
 ---
 
