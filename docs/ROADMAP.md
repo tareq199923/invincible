@@ -675,7 +675,7 @@ A clean repo and packaging baseline before any refactor work starts.
 
 ---
 
-## Phase 12 — Correctness & security fixes
+## Phase 12 — Correctness & security fixes (Done)
 
 **Priority P1 · Size M · Status: Planned · Requires: Phase 11 · Prerequisite for: Phase 14**
 
@@ -714,10 +714,11 @@ Four confirmed defects, found during a full code audit:
    tier on a malformed payload and is the opposite of the discrimination
    this item calls for. Failing over on 400 is *deliberate* for model
    mismatch (each tier serves a different model, so tier-1's "model not
-   found" should cascade) but wrong for malformed payloads. Discriminate
-   via upstream error-body inspection or an explicit per-provider flag;
-   apply the chosen policy identically in both loops; test both classes
-   of 400.
+   found" should cascade) but wrong for malformed payloads.
+   **Landed as an explicit per-provider flag**: `failover_on_400: true`
+   in `providers.yaml` (schema-validated boolean, default `false` =
+   forward), applied identically in both failover loops; both classes of
+   400 are tested.
 3. **Timing-safe gateway key compare** — `hmac.compare_digest` in
    `main.py::require_auth` (supersedes Phase 1 item 2).
 4. **Bound the login-failure map** — periodic sweep of stale IPs or a
@@ -732,11 +733,14 @@ Four confirmed defects, found during a full code audit:
 ### Acceptance criteria
 
 - A streamed OpenAI tool-calling session round-trips through history
-  with intact tool calls.
+  with intact tool calls. ✅
 - Payload-invalid requests abort fast without exhausting tiers;
-  model-mismatch 400s still cascade — both documented and tested.
-- Auth comparison is timing-safe; rate-limiter memory is bounded.
-- Full suite stays green.
+  model-mismatch 400s still cascade (opt-in via `failover_on_400`) —
+  both documented and tested. ✅
+- Auth comparison is timing-safe; rate-limiter memory is bounded. ✅
+- Full suite stays green. ✅ (426 passed; the conftest `client` fixture
+  now wires `app.state.memory` explicitly, fixing pre-existing
+  test-module state leakage that only alphabetical ordering hid.)
 
 ---
 
