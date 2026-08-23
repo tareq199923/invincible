@@ -19,6 +19,11 @@ world and are never affected mid-flight. Persistence is atomic
 (tmp file + ``os.replace``) and best-effort failures propagate to the
 caller so an admin API can report them.
 """
+# Deferred annotations: this class defines a method named ``list``, which
+# would otherwise shadow the builtin inside eagerly-evaluated signatures on
+# Python <= 3.13 (PEP 649 made 3.14 lazy, masking it locally).
+from __future__ import annotations
+
 import asyncio
 import copy
 import logging
