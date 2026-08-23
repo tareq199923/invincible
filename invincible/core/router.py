@@ -3,6 +3,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -19,6 +20,12 @@ from invincible.core.config import (  # noqa: F401 - re-exports
     validate_providers_config,
 )
 from invincible.core.provider_health import HealthTracker
+from invincible.core.selection import (
+    AUTO_ROUTING,
+    PinnedUnavailableError,
+    attempt_order,
+    routing_from_config,
+)
 from invincible.core.settings import settings
 from invincible.core.trimming import (  # noqa: F401 - re-exports
     DEFAULT_MAX_CONTEXT,
@@ -29,6 +36,9 @@ from invincible.core.trimming import (  # noqa: F401 - re-exports
 )
 
 logger = logging.getLogger("invincible.router")
+
+if TYPE_CHECKING:
+    from invincible.core.provider_registry import ProviderRegistry
 
 class UpstreamClientError(Exception):
     def __init__(self, status_code: int, body: dict):
@@ -151,40 +161,52 @@ def _all_providers_failed() -> AllProvidersFailedError:
 
 
 class Router:
-    def __init__(self, config_path: str | None = None, transport=None):
-        config = load_providers_config(config_path)
-        self.providers = config.get("providers", [])
-        # Shape is validated in load_providers_config (Phase 6); sort by
-        # tier here so failover order never depends on YAML order.
-        self.providers.sort(key=lambda p: p["tier"])
-        for provider in self.providers:
-            if not settings.provider_api_key(provider["api_key_env"]):
-                logger.warning(
-                    f"Provider '{provider['name']}' has no API key set via "
-                    f"{provider['api_key_env']}. It will be unavailable."
-                )
+    def __init__(
+        self,
+        config_path: str | None = None,
+        transport=None,
+        registry: "ProviderRegistry | None" = None,
+    ):
+        # Registry mode (Phase 13.5): the registry owns provider state and
+        # the routing mode; a snapshot is taken per request. Legacy mode
+        # (tests, direct construction) keeps loading static YAML exactly as
+        # before and runs in auto mode.
+        self.registry = registry
+        if registry is not None:
+            self.providers = []
+        else:
+            config = load_providers_config(config_path)
+            self.providers = config.get("providers", [])
+            # Shape is validated in load_providers_config (Phase 6); sort by
+            # tier here so failover order never depends on YAML order.
+            self.providers.sort(key=lambda p: p["tier"])
+            for provider in self.providers:
+                if not settings.provider_api_key(provider["api_key_env"]):
+                    logger.warning(
+                        f"Provider '{provider['name']}' has no API key set via "
+                        f"{provider['api_key_env']}. It will be unavailable."
+                    )
         self.health_tracker = HealthTracker()
         self.client = httpx.AsyncClient(transport=transport)
 
-    def _ordered_providers(self, model: str | None = None) -> list:
-        """Tier-ordered providers, optionally with a soft alias preference.
+    def _candidates(self, model: str | None = None) -> list[dict]:
+        """Per-request ordered candidate providers.
 
-        When ``model`` matches a provider's ``aliases`` or its exact
-        ``model_id``, those providers move to the front of the attempt
-        order (still tier-sorted among themselves). Everything else keeps
-        its position, so an alias is a routing hint - never a hard
-        constraint - and the failover guarantees stay intact.
+        Delegates to the selection layer with a fresh snapshot, so routing
+        mode changes and registry mutations apply to the next request but
+        never to an in-flight one. Pinned misconfiguration surfaces as the
+        normal gateway exhaustion error.
         """
-        if not model:
-            return self.providers
-        preferred = [
-            p for p in self.providers
-            if model == p.get("model_id") or model in (p.get("aliases") or [])
-        ]
-        if not preferred:
-            return self.providers
-        rest = [p for p in self.providers if p not in preferred]
-        return preferred + rest
+        if self.registry is not None:
+            snapshot = self.registry.list()
+            routing = routing_from_config(self.registry.routing())
+        else:
+            snapshot = self.providers
+            routing = AUTO_ROUTING
+        try:
+            return attempt_order(snapshot, self.health_tracker, routing, model)
+        except PinnedUnavailableError as e:
+            raise AllProvidersFailedError(str(e)) from None
 
     def _request_url(self, provider: dict) -> str:
         """Chat-completions URL for a provider (``chat_path`` override)."""
@@ -270,7 +292,7 @@ class Router:
         ``stream=True``. Exhaustion raises
         :class:`AllProvidersFailedError`.
         """
-        for provider in self._ordered_providers(model):
+        for provider in self._candidates(model):
             name = provider["name"]
 
             if not self.health_tracker.is_available(name):
