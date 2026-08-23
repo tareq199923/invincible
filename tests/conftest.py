@@ -6,6 +6,7 @@ import httpx
 import pytest
 import yaml
 
+from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore, _s256_challenge
 from invincible.core.router import Router
 from invincible.core.session_store import SessionStore
@@ -98,6 +99,12 @@ async def client(router_setter, monkeypatch):
     store = SessionStore(db_path=":memory:")
     await store.init()
     app.state.sessions = store
+    # Wire memory exactly like main.py's lifespan does (shared connection):
+    # without this, whatever a previous test module left on app.state leaks
+    # in here - e.g. a real MemoryStore whose DB a lifespan test closed.
+    memory = MemoryStore(shared=store)
+    await memory.init()
+    app.state.memory = memory
     app.state.pending_actions = PendingActionStore()
     oauth_store = OAuthStore(db_path=":memory:")
     await oauth_store.init()
@@ -108,6 +115,7 @@ async def client(router_setter, monkeypatch):
         yield async_client
     for router in router_setter.routers:
         await router.close()
+    await memory.close()
     await store.close()
     await oauth_store.close()
     app.state.oauth_store = None

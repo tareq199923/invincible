@@ -20,6 +20,9 @@ providers:
     # auth_type: bearer            # 'bearer' (default) or 'query'
     # auth_param: key              # query param name when auth_type: query
     # chat_path: /chat/completions # endpoint suffix (default shown)
+    failover_on_400: false         # retry the next tier on a 400 from this
+                                    # provider (for tiers running *different*
+                                    # models); default false = forward verbatim
 
   - name: groq-llama
     tier: 2

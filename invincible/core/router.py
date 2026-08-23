@@ -22,6 +22,7 @@ _AUTH_TYPES = ("bearer", "query")
 # Extra keys a provider entry may carry (all optional).
 _OPTIONAL_PROVIDER_FIELDS = {
     "max_context", "timeout", "aliases", "auth_type", "auth_param", "chat_path",
+    "failover_on_400",
 }
 
 
@@ -138,6 +139,12 @@ def validate_providers_config(config: dict) -> None:
             not isinstance(chat_path, str) or not chat_path.startswith("/")
         ):
             raise ValueError(f"Provider '{name}': 'chat_path' must start with '/'")
+
+        failover_on_400 = provider.get("failover_on_400")
+        if failover_on_400 is not None and not isinstance(failover_on_400, bool):
+            raise ValueError(
+                f"Provider '{name}': 'failover_on_400' must be a boolean"
+            )
 
         unknown_fields = set(provider) - (
             _REQUIRED_PROVIDER_FIELDS | _OPTIONAL_PROVIDER_FIELDS
@@ -463,6 +470,10 @@ class Router:
                     resp.status_code == 429
                     or resp.status_code in (402, 404, 408, 413)
                     or resp.status_code >= 500
+                    or (
+                        resp.status_code == 400
+                        and provider.get("failover_on_400", False)
+                    )
                 ):
                     _log_attempt(
                         name,
@@ -639,6 +650,10 @@ class Router:
                     resp.status_code == 429
                     or resp.status_code in (402, 404, 408, 413)
                     or resp.status_code >= 500
+                    or (
+                        resp.status_code == 400
+                        and provider.get("failover_on_400", False)
+                    )
                 ):
                     _log_attempt(
                         name,

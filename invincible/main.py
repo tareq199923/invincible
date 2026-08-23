@@ -1,3 +1,4 @@
+import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -81,7 +82,9 @@ async def require_auth(request: Request):
                 }
             },
         )
-    if token != gateway_key:
+    if not hmac.compare_digest(
+        token.encode("utf-8"), gateway_key.encode("utf-8")
+    ):
         raise HTTPException(
             status_code=401,
             detail={

@@ -34,6 +34,20 @@ def test_empty_providers_list_is_allowed():
     validate_providers_config({"providers": []})
 
 
+def test_failover_on_400_accepts_bool():
+    validate_providers_config(
+        {"providers": [valid_provider(failover_on_400=True)]}
+    )
+
+
+def test_failover_on_400_rejects_non_bool():
+    for bad in ("true", 1, [], {"on": True}):
+        with pytest.raises(ValueError, match="failover_on_400"):
+            validate_providers_config(
+                {"providers": [valid_provider(failover_on_400=bad)]}
+            )
+
+
 def test_missing_providers_key_raises():
     with pytest.raises(ValueError, match="missing the 'providers' key"):
         validate_providers_config({})

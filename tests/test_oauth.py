@@ -545,3 +545,63 @@ async def test_successful_login_resets_the_counter(client):
     for _ in range(4):
         attempt = await oauth_login(client, params, owner_secret="wrong")
         assert attempt.status_code == 401
+
+
+# --- login-failure map bounds (Phase 12) ---
+
+
+def _oauth_module():
+    from invincible.endpoints import oauth as oauth_module
+
+    return oauth_module
+
+
+def test_prune_drops_stale_and_empty_entries():
+    module = _oauth_module()
+    try:
+        now = 1000.0
+        window = module.LOGIN_WINDOW_SECONDS
+        module._login_failures.update(
+            {
+                "stale-ip": [now - window - 10],
+                "empty-ip": [],
+                "fresh-ip": [now - 5],
+            }
+        )
+        module._prune_login_failures(now)
+        assert "stale-ip" not in module._login_failures
+        assert "empty-ip" not in module._login_failures
+        assert module._login_failures["fresh-ip"] == [now - 5]
+    finally:
+        module._login_failures.clear()
+
+
+def test_lockout_check_pops_fully_expired_ip(monkeypatch):
+    module = _oauth_module()
+    try:
+        monkeypatch.setattr(module.time, "monotonic", lambda: 1000.0)
+        module._login_failures["gone"] = [
+            1000.0 - module.LOGIN_WINDOW_SECONDS - 1
+        ]
+        assert module._login_locked_out("gone") is None
+        assert "gone" not in module._login_failures
+    finally:
+        module._login_failures.clear()
+
+
+def test_record_failure_sweeps_when_map_exceeds_cap(monkeypatch):
+    module = _oauth_module()
+    try:
+        monkeypatch.setattr(module, "LOGIN_MAX_TRACKED_IPS", 3)
+        now = module.time.monotonic()
+        window = module.LOGIN_WINDOW_SECONDS
+        # One stale entry + fill the map to the (lowered) cap with fresh
+        # entries; the next failure record must sweep the stale one.
+        module._login_failures["stale"] = [now - window - 1]
+        for i in range(3):
+            module._login_failures[f"ip-{i}"] = [now - 1]
+        module._record_login_failure("brand-new")
+        assert "stale" not in module._login_failures
+        assert "brand-new" in module._login_failures
+    finally:
+        module._login_failures.clear()

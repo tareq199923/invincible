@@ -50,6 +50,11 @@ _legacy_warned = False
 # it) - this is brute-force friction, not an audit log.
 LOGIN_MAX_ATTEMPTS = 5
 LOGIN_WINDOW_SECONDS = 15 * 60
+# Safety valve for the in-memory failure map: once this many IPs are
+# tracked, entries whose failures have fully aged out of the window are
+# dropped on the next write. Without it, unique attacker IPs (or a
+# spoofed-IP flood) grow the dict without bound for the process lifetime.
+LOGIN_MAX_TRACKED_IPS = 10_000
 
 _login_failures: dict[str, list[float]] = {}  # client IP -> failure timestamps
 
@@ -58,19 +63,42 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _prune_login_failures(now: float) -> None:
+    """Drop expired per-IP entries and empty keys so the map stays bounded.
+
+    Called opportunistically: always for the IP being checked, and as a
+    full sweep whenever the map grows past LOGIN_MAX_TRACKED_IPS.
+    """
+    stale = [
+        ip
+        for ip, timestamps in _login_failures.items()
+        if not timestamps or now - timestamps[-1] >= LOGIN_WINDOW_SECONDS
+    ]
+    for ip in stale:
+        del _login_failures[ip]
+
+
 def _login_locked_out(ip: str) -> int | None:
     """Seconds until the lockout lifts, or None when the IP may try again."""
     now = time.monotonic()
+    if len(_login_failures) > LOGIN_MAX_TRACKED_IPS:
+        _prune_login_failures(now)
     failures = [t for t in _login_failures.get(ip, [])
                 if now - t < LOGIN_WINDOW_SECONDS]
-    _login_failures[ip] = failures
+    if failures:
+        _login_failures[ip] = failures
+    else:
+        _login_failures.pop(ip, None)
     if len(failures) < LOGIN_MAX_ATTEMPTS:
         return None
     return int(LOGIN_WINDOW_SECONDS - (now - failures[0])) + 1
 
 
 def _record_login_failure(ip: str) -> None:
-    _login_failures.setdefault(ip, []).append(time.monotonic())
+    now = time.monotonic()
+    if len(_login_failures) > LOGIN_MAX_TRACKED_IPS:
+        _prune_login_failures(now)
+    _login_failures.setdefault(ip, []).append(now)
 
 
 def _reset_login_failures(ip: str) -> None:
