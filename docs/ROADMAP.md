@@ -13,8 +13,8 @@ criteria, and a rough size.
   foundation is in place).
 - **Size** — `S` (days), `M` (1–2 weeks), `L` (multi-week, likely broken
   into smaller PRs).
-- **Status** — `Planned` / `In progress` / `Done`. Phases 0, 6, 9, and
-  10 are done; the rest are planned.
+- **Status** — `Planned` / `In progress` / `Done`. Phases 0, 6, 9, 10,
+  and 11 are done; the rest are planned.
 - **Dependencies** — phases listed as prerequisites must land first; the
   arrows matter more than the numbers.
 
@@ -34,7 +34,7 @@ Phase 0 (current state)
    ├─► Phase 7  More MCP tools            (independent)
    ├─► Phase 8  Deployment                (compose app+postgres pair lands in 16)
    │
-   Done: Phase 6 More providers · Phase 9 Context compression · Phase 10 Context memory
+   Done: Phase 6 More providers · Phase 9 Context compression · Phase 10 Context memory · Phase 11 Repo hygiene
 ```
 
 The intended execution order across all three tracks (engineering quality,
@@ -615,9 +615,9 @@ send-time only and nothing ever shrinks the stored history.
 
 ---
 
-## Phase 11 — Repo hygiene & packaging cleanup
+## Phase 11 — Repo hygiene & packaging cleanup (Done)
 
-**Priority P1 · Size S · Status: Planned · Prerequisite for: Phase 12**
+**Priority P1 · Size S · Status: Done (lockfile strategy deferred — see below) · Prerequisite for: Phase 12**
 
 ### Goal
 
@@ -646,8 +646,11 @@ A clean repo and packaging baseline before any refactor work starts.
 3. **Dev dependencies** — move pytest/pytest-asyncio into
    `[project.optional-dependencies].dev`. `ruff` is **already** a dev
    extra — nothing to do there.
-4. **Lockfile strategy** — adopt uv or pip-tools so CI and local runs
-   resolve identical versions.
+4. **Lockfile strategy — deferred.** `uv` is not installed on the
+   development machine and pip-tools was not adopted in this pass;
+   `requirements.txt` remains hand-maintained pins with no lock
+   verification. Revisit as a follow-up (or fold into Phase 13's
+   Settings/tooling pass).
 5. **Gitignore dedupe** — single `sessions.db` entry; confirm build
    artifact patterns cover everything currently on disk untracked.
 6. **Version sync** — `invincible/__init__.py`'s `__version__ = "0.1.0"`
@@ -664,10 +667,11 @@ A clean repo and packaging baseline before any refactor work starts.
 ### Acceptance criteria
 
 - `git ls-files` shows no scripts or secret-bearing files outside
-  `tests/`.
+  `tests/`. ✅
 - Fresh environment: `pip install -e .[dev]` is sufficient to run
-  pytest and ruff.
-- Provider config resolves from exactly one place.
+  pytest and ruff. ✅
+- Provider config resolves from exactly one place. ✅
+- Lockfile strategy: not met — deferred (see scope item 4).
 
 ---
 
