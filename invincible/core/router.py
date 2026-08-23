@@ -2,6 +2,7 @@
 import json
 import logging
 import time
+import uuid
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
@@ -20,6 +21,7 @@ from invincible.core.config import (  # noqa: F401 - re-exports
     validate_providers_config,
 )
 from invincible.core.provider_health import HealthTracker
+from invincible.core.run_store import new_run_entry
 from invincible.core.selection import (
     AUTO_ROUTING,
     PinnedUnavailableError,
@@ -166,12 +168,16 @@ class Router:
         config_path: str | None = None,
         transport=None,
         registry: "ProviderRegistry | None" = None,
+        run_recorder=None,
     ):
         # Registry mode (Phase 13.5): the registry owns provider state and
         # the routing mode; a snapshot is taken per request. Legacy mode
         # (tests, direct construction) keeps loading static YAML exactly as
         # before and runs in auto mode.
         self.registry = registry
+        # Optional async callable receiving one run-entry dict per upstream
+        # attempt (success, failover, or error). None = no recording.
+        self.run_recorder = run_recorder
         if registry is not None:
             self.providers = []
         else:
@@ -227,6 +233,8 @@ class Router:
         tools: list | None = None,
         tool_choice=None,
         model: str | None = None,
+        *,
+        session_id: str | None = None,
     ) -> dict:
         """Non-streaming chat completion through the provider tiers.
 
@@ -237,10 +245,10 @@ class Router:
         client errors and :class:`AllProvidersFailedError` when every
         provider failed, was disabled, or is in cooldown.
         """
-        async for parsed in self._iter_attempts(
-            messages, tools, tool_choice, model, stream=False
+        async for result, _info in self._iter_attempts(
+            messages, tools, tool_choice, model, stream=False, session_id=session_id
         ):
-            return parsed
+            return result
         # Unreachable: _iter_attempts terminates by raising instead.
         raise _all_providers_failed()
 
@@ -250,6 +258,8 @@ class Router:
         tools: list | None = None,
         tool_choice=None,
         model: str | None = None,
+        *,
+        session_id: str | None = None,
     ) -> tuple[dict | None, AsyncIterator[dict]]:
         """Open a streaming chat-completions response through the providers.
 
@@ -264,11 +274,10 @@ class Router:
         mid-stream error after the first chunk propagates to the caller so
         it can terminate the response cleanly.
         """
-        async for outcome in self._iter_attempts(
-            messages, tools, tool_choice, model, stream=True
+        async for result, _info in self._iter_attempts(
+            messages, tools, tool_choice, model, stream=True, session_id=session_id
         ):
-            first, tail = outcome
-            return first, tail
+            return result
         # Unreachable: _iter_attempts terminates by raising instead.
         raise _all_providers_failed()
 
@@ -279,7 +288,8 @@ class Router:
         tool_choice,
         model: str | None,
         stream: bool,
-    ) -> AsyncIterator[dict | tuple[dict | None, AsyncIterator[dict]]]:
+        session_id: str | None = None,
+    ) -> AsyncIterator[tuple[dict | tuple[dict | None, AsyncIterator[dict]], dict]]:
         """The single failover policy loop behind both public entry points
         (Phase 13): provider ordering, cooldown and missing-key skips,
         compress-then-trim payload preparation, the shared status
@@ -287,11 +297,14 @@ class Router:
         here. Transport mechanics live in :meth:`_attempt_nonstreaming` and
         :meth:`_attempt_streaming`.
 
-        Yields one successful attempt per transport mode: the parsed JSON
-        body when ``stream=False``, ``(first_chunk, tail)`` when
-        ``stream=True``. Exhaustion raises
+        Yields ``(result, route_info)`` where ``result`` is the parsed JSON
+        body (``stream=False``) or ``(first_chunk, tail)`` (``stream=True``)
+        and ``route_info`` describes the winning attempt (request_id,
+        provider_name, model_id, attempts). Exhaustion raises
         :class:`AllProvidersFailedError`.
         """
+        request_id = uuid.uuid4().hex
+        attempt_index = 0
         for provider in self._candidates(model):
             name = provider["name"]
 
@@ -335,10 +348,11 @@ class Router:
                 for m in trimmed_messages + (payload.get("tools") or [])
             )
 
+            attempt_index += 1
             attempt_started = time.monotonic()
             try:
                 if stream:
-                    yield await self._attempt_streaming(
+                    first, tail = await self._attempt_streaming(
                         provider,
                         api_key,
                         headers,
@@ -346,9 +360,18 @@ class Router:
                         payload_bytes,
                         estimated_tokens,
                         attempt_started,
+                        request_id=request_id,
+                        session_id=session_id,
+                        attempt_index=attempt_index,
                     )
+                    yield (first, tail), {
+                        "request_id": request_id,
+                        "provider_name": name,
+                        "model_id": provider["model_id"],
+                        "attempts": attempt_index,
+                    }
                 else:
-                    yield await self._attempt_nonstreaming(
+                    parsed = await self._attempt_nonstreaming(
                         provider,
                         api_key,
                         headers,
@@ -356,7 +379,16 @@ class Router:
                         payload_bytes,
                         estimated_tokens,
                         attempt_started,
+                        request_id=request_id,
+                        session_id=session_id,
+                        attempt_index=attempt_index,
                     )
+                    yield parsed, {
+                        "request_id": request_id,
+                        "provider_name": name,
+                        "model_id": provider["model_id"],
+                        "attempts": attempt_index,
+                    }
             except _Failover:
                 continue
 
@@ -371,13 +403,17 @@ class Router:
         payload_bytes: int,
         estimated_tokens: int,
         attempt_started: float,
+        request_id: str = "",
+        session_id: str | None = None,
+        attempt_index: int = 0,
     ) -> dict:
         """Non-streaming transport: POST, classify, parse.
 
         Owns the non-streaming side of the 401/403 asymmetry: those statuses
         surface as ``httpx.HTTPStatusError`` from ``raise_for_status`` and
         are handled there; any other hard client error is re-raised as
-        :class:`UpstreamClientError`.
+        :class:`UpstreamClientError`. Every terminal outcome records a run
+        row via the injected recorder (best-effort).
         """
         name = provider["name"]
         try:
@@ -392,6 +428,12 @@ class Router:
             if _status_wants_failover(provider, resp.status_code):
                 await self._handle_failover_status(
                     provider, name, resp, payload_bytes, estimated_tokens
+                )
+                await self._record_run(
+                    provider, attempt_index, time.time(), "failover",
+                    error_class=str(resp.status_code),
+                    request_id=request_id, session_id=session_id,
+                    started_at=attempt_started,
                 )
                 raise _Failover
 
@@ -415,6 +457,12 @@ class Router:
                 )
                 self.health_tracker.record_failure(name)
                 await resp.aclose()
+                await self._record_run(
+                    provider, attempt_index, time.time(), "failover",
+                    error_class="malformed_json",
+                    request_id=request_id, session_id=session_id,
+                    started_at=attempt_started,
+                )
                 raise _Failover from None
             self.health_tracker.record_success(name)
             _log_attempt(
@@ -424,6 +472,11 @@ class Router:
                 estimated_tokens,
                 resp.status_code,
                 False,
+            )
+            await self._record_run(
+                provider, attempt_index, time.time(), "ok",
+                request_id=request_id, session_id=session_id,
+                started_at=attempt_started,
             )
             return parsed
 
@@ -442,6 +495,12 @@ class Router:
                 )
                 self.health_tracker.disable(name)
                 await e.response.aclose()
+                await self._record_run(
+                    provider, attempt_index, time.time(), "disabled",
+                    error_class=str(status),
+                    request_id=request_id, session_id=session_id,
+                    started_at=attempt_started,
+                )
                 raise _Failover from None
             _log_attempt(
                 name,
@@ -453,6 +512,12 @@ class Router:
                 level=logging.WARNING,
             )
             body = await e.response.aread()
+            await self._record_run(
+                provider, attempt_index, time.time(), "error",
+                error_class=str(status),
+                request_id=request_id, session_id=session_id,
+                started_at=attempt_started,
+            )
             raise UpstreamClientError(
                 status_code=status, body=_parse_json_or_raw(body)
             ) from e
@@ -460,6 +525,13 @@ class Router:
         except httpx.RequestError as e:
             self._handle_network_error(
                 provider, name, payload_bytes, estimated_tokens, attempt_started, e
+            )
+            details = _network_error_details(e)
+            await self._record_run(
+                provider, attempt_index, time.time(), "failover",
+                error_class=details["error_kind"],
+                request_id=request_id, session_id=session_id,
+                started_at=attempt_started,
             )
             raise _Failover from None
 
@@ -472,6 +544,9 @@ class Router:
         payload_bytes: int,
         estimated_tokens: int,
         attempt_started: float,
+        request_id: str = "",
+        session_id: str | None = None,
+        attempt_index: int = 0,
     ) -> tuple[dict | None, AsyncIterator[dict]]:
         """Streaming transport: build/send, classify pre-read, open the SSE
         iterator, consume the first chunk.
@@ -479,7 +554,8 @@ class Router:
         Owns the streaming side of the 401/403 asymmetry (checked directly
         against ``resp.status_code`` before anything is consumed). A failure
         while fetching the first chunk still fails over; errors after that
-        propagate - no mid-stream provider switching.
+        propagate - no mid-stream provider switching. Every terminal outcome
+        records a run row via the injected recorder (best-effort).
         """
         name = provider["name"]
         try:
@@ -497,6 +573,12 @@ class Router:
                 await self._handle_failover_status(
                     provider, name, resp, payload_bytes, estimated_tokens
                 )
+                await self._record_run(
+                    provider, attempt_index, time.time(), "failover",
+                    error_class=str(resp.status_code),
+                    request_id=request_id, session_id=session_id,
+                    started_at=attempt_started,
+                )
                 raise _Failover
 
             if resp.status_code in (401, 403):
@@ -512,6 +594,12 @@ class Router:
                 )
                 self.health_tracker.disable(name)
                 await resp.aclose()
+                await self._record_run(
+                    provider, attempt_index, time.time(), "disabled",
+                    error_class=str(resp.status_code),
+                    request_id=request_id, session_id=session_id,
+                    started_at=attempt_started,
+                )
                 raise _Failover
 
             if resp.status_code >= 400:
@@ -526,6 +614,12 @@ class Router:
                 )
                 body = await resp.aread()
                 await resp.aclose()
+                await self._record_run(
+                    provider, attempt_index, time.time(), "error",
+                    error_class=str(resp.status_code),
+                    request_id=request_id, session_id=session_id,
+                    started_at=attempt_started,
+                )
                 raise UpstreamClientError(
                     status_code=resp.status_code, body=_parse_json_or_raw(body)
                 )
@@ -544,6 +638,11 @@ class Router:
                 resp.status_code,
                 False,
             )
+            await self._record_run(
+                provider, attempt_index, time.time(), "ok",
+                request_id=request_id, session_id=session_id,
+                started_at=attempt_started,
+            )
             return first, tail
 
         except json.JSONDecodeError as e:
@@ -560,11 +659,24 @@ class Router:
                 level=logging.WARNING,
             )
             self.health_tracker.record_failure(name)
+            await self._record_run(
+                provider, attempt_index, time.time(), "failover",
+                error_class="malformed_sse",
+                request_id=request_id, session_id=session_id,
+                started_at=attempt_started,
+            )
             raise _Failover from None
 
         except httpx.RequestError as e:
             self._handle_network_error(
                 provider, name, payload_bytes, estimated_tokens, attempt_started, e
+            )
+            details = _network_error_details(e)
+            await self._record_run(
+                provider, attempt_index, time.time(), "failover",
+                error_class=details["error_kind"],
+                request_id=request_id, session_id=session_id,
+                started_at=attempt_started,
             )
             raise _Failover from None
 
@@ -622,6 +734,45 @@ class Router:
             **details,
         )
         self.health_tracker.record_failure(name)
+
+    async def _record_run(
+        self,
+        provider: dict,
+        attempt_index: int,
+        finished_at: float,
+        outcome: str,
+        error_class: str | None = None,
+        request_id: str = "",
+        session_id: str | None = None,
+        started_at: float | None = None,
+    ) -> None:
+        """Best-effort provider-run recording via the injected recorder.
+
+        Never raises into the attempt path: persistence problems are logged
+        and swallowed so a run-record write can never fail a completion.
+        """
+        if self.run_recorder is None:
+            return
+        wall_started = (
+            time.time() - (time.monotonic() - started_at)
+            if started_at is not None
+            else finished_at
+        )
+        try:
+            await self.run_recorder(
+                new_run_entry(
+                    request_id=request_id,
+                    session_id=session_id,
+                    provider_name=provider["name"],
+                    model_id=provider["model_id"],
+                    attempt_index=attempt_index,
+                    started_at=wall_started,
+                    outcome=outcome,
+                    error_class=error_class,
+                )
+            )
+        except Exception as e:
+            logger.warning("Failed to persist provider run record: %s", e)
 
     async def close(self) -> None:
         await self.client.aclose()
