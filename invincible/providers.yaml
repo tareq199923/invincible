@@ -4,20 +4,20 @@
 # This copy is authoritative and is the only configuration loaded; the
 # deprecated root-level fallback was removed (Phase 11).
 providers:
-  - name: tokenrouter-deepseek
+  - name: tokenrouter-qwen
     tier: 1
     base_url: https://api.tokenrouter.com/v1
     api_key_env: TOKENROUTER_API_KEY
-    model_id: deepseek/deepseek-v4-pro-0813-free
+    model_id: qwen/qwen3.8-max-free
     max_context: 1000000
     timeout:
       read: 90.0   # free tier can be slow to first token
 
-  - name: nim-glm
+  - name: nim-deepseek
     tier: 2
     base_url: https://integrate.api.nvidia.com/v1
     api_key_env: NVIDIA_API_KEY
-    model_id: z-ai/glm-5.2
+    model_id: deepseek-ai/deepseek-v4-flash-0731
     aliases: [strong]           # request "strong" to prefer this provider
     max_context: 1000000
     timeout:
