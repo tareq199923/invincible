@@ -113,10 +113,11 @@ async def test_router_records_every_attempt_across_failover(tmp_path, monkeypatc
 async def test_router_without_recorder_still_serves(monkeypatch):
     """run_recorder=None is the legacy no-recording path.
 
-    Legacy mode loads the packaged providers.yaml, so at least one provider
-    key must exist or every candidate is skipped (CI has no .env).
+    Legacy mode loads the PACKAGED providers.yaml (tokenrouter/nim/groq/…),
+    not the conftest fixtures' alpha/beta/gamma - so the key that must exist
+    here is TOKENROUTER_API_KEY (tier 1 wins immediately). CI has no .env.
     """
-    monkeypatch.setenv("ALPHA_API_KEY", "k-a")
+    monkeypatch.setenv("TOKENROUTER_API_KEY", "k-tr")
 
     def handler(request):
         return httpx.Response(200, json=provider_body("alpha"))
@@ -130,7 +131,8 @@ async def test_router_without_recorder_still_serves(monkeypatch):
 
 
 async def test_recorder_failure_never_breaks_the_completion(monkeypatch):
-    monkeypatch.setenv("ALPHA_API_KEY", "k-a")
+    # Legacy mode reads the packaged providers.yaml -> tier-1 key needed.
+    monkeypatch.setenv("TOKENROUTER_API_KEY", "k-tr")
 
     async def exploding(entry):
         raise RuntimeError("disk on fire")
