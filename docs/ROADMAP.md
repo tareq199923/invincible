@@ -746,7 +746,20 @@ Four confirmed defects, found during a full code audit:
 
 ## Phase 13 — Failover engine unification & Settings
 
-**Priority P1 · Size M · Status: Planned · Requires: Phase 14 (CI green first)**
+**Priority P1 · Size M · Status: Done · Requires: Phase 14 (CI green first)**
+
+### What landed
+
+- One generator-based failover engine (`_iter_attempts`); `route_request`
+  and `stream_open` are thin wrappers over it.
+- `core/router.py` split: validation/YAML loading → `core/config.py`,
+  token estimation/turn grouping/trimming → `core/trimming.py`.
+- Layering fixed: compat layer and session store no longer import from the
+  Router; MemoryStore shares the session connection via an explicit
+  `SessionStore.connection()` accessor.
+- Live-read typed `Settings` owns every in-app env read plus the shared
+  cooldown/TTL/retention constants; bare `os.getenv` remains only in
+  Settings and the CLI (documented launcher/checker exemption).
 
 ### Goal
 
@@ -798,6 +811,35 @@ config surface instead of scattered env reads.
   it.
 - Behavior identical pre/post (existing router tests pass unchanged);
   mypy and strict ruff clean.
+
+---
+
+---
+
+## Phase 13.5 — Provider & Model control plane (Done)
+
+**Priority P1 · Size M/L · Status: Done · Requires: Phase 13**
+
+### Goal
+
+Providers become runtime-manageable first-class state, every request
+records which provider/model actually served it, and routing gains explicit
+modes beyond tier order.
+
+### What landed
+
+- `core/provider_registry.py`: CRUD / enable/disable / connectivity test,
+  atomic file persistence (`INVINCIBLE_PROVIDERS_FILE`, seeded
+  copy-on-first-use; packaged config stays read-only without it).
+- `core/selection.py`: `auto` / `pinned` / `chain` routing; pinned failures
+  surface verbatim (no silent substitution); per-request snapshots so
+  mutations never affect in-flight work.
+- `core/run_store.py`: one `runs` row per upstream attempt (provider, model,
+  outcome, error class, timing) in the shared session database.
+- `x-invincible-provider/model/attempts/request-id` headers on all four
+  chat response paths.
+- `/api/v1/providers[...]` and `/api/v1/routing` behind fail-closed
+  `INVINCIBLE_ADMIN_KEY`, independent of GATEWAY_API_KEY.
 
 ---
 
