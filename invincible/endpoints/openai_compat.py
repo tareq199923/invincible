@@ -1,6 +1,7 @@
 # invincible/endpoints/openai_compat.py
 import json
 import logging
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -33,20 +34,62 @@ def _append_content(content: str, chunk: dict) -> str:
     return content
 
 
-async def _stream_body(first, tail, store, session_id, to_persist, memory=None):
-    content = ""
-    try:
-        if first is not None:
-            content = _append_content(content, first)
-            yield _sse_event(first)
-        async for chunk in tail:
-            content = _append_content(content, chunk)
-            yield _sse_event(chunk)
-    except Exception as e:
-        logger.warning("Stream terminated after an upstream error: %s", e)
-        yield _sse_event({"error": {"message": str(e), "type": "stream_error"}})
-        return
-    new_turns = to_persist + [{"role": "assistant", "content": content}]
+def _delta_tool_calls(chunk: dict) -> list:
+    """The ``delta.tool_calls`` entries carried by one OpenAI stream chunk."""
+    choices = chunk.get("choices") or []
+    if not choices:
+        return []
+    return (choices[0].get("delta") or {}).get("tool_calls") or []
+
+
+def _accumulate_tool_call(states: dict, tool_call: dict) -> None:
+    """Merge one streamed ``tool_calls`` fragment into ``states``.
+
+    Fragments arrive keyed by upstream ``index``: the first carries the id
+    and function name, later ones append argument pieces. Mirrors the
+    Anthropic stream state machine so persisted history matches what the
+    client actually received.
+    """
+    index = tool_call.get("index", 0)
+    function = tool_call.get("function") or {}
+    state = states.get(index)
+    if state is None:
+        state = {
+            "id": tool_call.get("id"),
+            "name": function.get("name"),
+            "arguments": "",
+        }
+        states[index] = state
+    arguments = function.get("arguments")
+    if arguments:
+        state["arguments"] += arguments
+
+
+def _stream_assistant_message(content: str, states: dict) -> dict:
+    """Assemble the assistant turn to persist for a finished stream.
+
+    Same shape a non-streaming upstream would have returned (content is
+    None when the reply was tool calls only), so history stays consistent
+    with the protocol whether the provider streamed or not.
+    """
+    tool_calls = [
+        {
+            "id": state["id"] or f"call_{uuid.uuid4().hex}",
+            "type": "function",
+            "function": {
+                "name": state["name"] or "",
+                "arguments": state["arguments"] or "{}",
+            },
+        }
+        for _, state in sorted(states.items())
+    ]
+    message = {"role": "assistant", "content": content or None}
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    return message
+
+
+async def _persist_new_turns(new_turns, store, session_id, memory):
     try:
         await store.append(session_id, new_turns)
     except Exception:
@@ -55,6 +98,34 @@ async def _stream_body(first, tail, store, session_id, to_persist, memory=None):
         await record_turns(memory, session_id, new_turns)
     except Exception:
         logger.exception("Failed to record session facts for %s", session_id)
+
+
+async def _stream_body(first, tail, store, session_id, to_persist, memory=None):
+    content = ""
+    tool_states = {}
+
+    def new_turns():
+        return to_persist + [_stream_assistant_message(content, tool_states)]
+
+    try:
+        if first is not None:
+            content = _append_content(content, first)
+            for tool_call in _delta_tool_calls(first):
+                _accumulate_tool_call(tool_states, tool_call)
+            yield _sse_event(first)
+        async for chunk in tail:
+            content = _append_content(content, chunk)
+            for tool_call in _delta_tool_calls(chunk):
+                _accumulate_tool_call(tool_states, tool_call)
+            yield _sse_event(chunk)
+    except Exception as e:
+        logger.warning("Stream terminated after an upstream error: %s", e)
+        yield _sse_event({"error": {"message": str(e), "type": "stream_error"}})
+        # Persist what accumulated before the failure so history matches
+        # what the client saw (mirrors the Anthropic path's on_complete).
+        await _persist_new_turns(new_turns(), store, session_id, memory)
+        return
+    await _persist_new_turns(new_turns(), store, session_id, memory)
     yield "data: [DONE]\n\n"
 
 

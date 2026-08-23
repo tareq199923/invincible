@@ -3,7 +3,7 @@ import logging
 
 import httpx
 
-from invincible.main import _warn_if_gateway_open
+from invincible.main import _warn_if_gateway_open, app
 from tests.conftest import default_providers, provider_body, sse_body, stream_chunk
 
 MESSAGES = [{"role": "user", "content": "hi"}]
@@ -215,6 +215,146 @@ async def test_streaming_midstream_error_terminates_cleanly(client, router_sette
     assert "data: " in response.text
     assert '"error"' in response.text
     assert not response.text.endswith("data: [DONE]\n\n")
+
+
+async def test_streamed_tool_calls_are_persisted(client, router_setter):
+    """Streamed tool_call fragments are reassembled into the persisted
+    assistant turn, matching what a non-streaming upstream would return."""
+    chunks = [
+        stream_chunk("alpha", {"role": "assistant"}),
+        stream_chunk(
+            "alpha",
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": ""},
+                    }
+                ]
+            },
+        ),
+        stream_chunk(
+            "alpha",
+            {
+                "tool_calls": [
+                    {"index": 0, "function": {"arguments": '{"city": "Par'}}
+                ]
+            },
+        ),
+        stream_chunk(
+            "alpha",
+            {"tool_calls": [{"index": 0, "function": {"arguments": 'is"}'}}]},
+        ),
+        stream_chunk("alpha", {}, finish_reason="tool_calls"),
+    ]
+    router_setter(
+        handlers={"alpha.example.com": httpx.Response(200, content=sse_body(*chunks))}
+    )
+    await client.post(
+        "/v1/chat/completions",
+        headers={**AUTH, "X-Session-Id": "tool-stream"},
+        json={"messages": MESSAGES, "stream": True},
+    )
+
+    history = await app.state.sessions.load("tool-stream")
+    assistant = [m for m in history if m["role"] == "assistant"]
+    assert len(assistant) == 1
+    message = assistant[0]
+    assert message["content"] is None
+    assert message["tool_calls"] == [
+        {
+            "id": "call_abc",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        }
+    ]
+
+
+async def test_streamed_parallel_tool_calls_persist_in_index_order(
+    client, router_setter
+):
+    """Fragments for several tool calls interleave by index; the persisted
+    turn lists them in ascending index order with complete arguments."""
+    chunks = [
+        stream_chunk("alpha", {"role": "assistant"}),
+        stream_chunk(
+            "alpha",
+            {
+                "tool_calls": [
+                    {"index": 0, "id": "call_a", "function": {"name": "f1"}},
+                    {"index": 1, "id": "call_b", "function": {"name": "f2"}},
+                ]
+            },
+        ),
+        stream_chunk(
+            "alpha",
+            {
+                "tool_calls": [
+                    {"index": 1, "function": {"arguments": '{"x":1}'}},
+                    {"index": 0, "function": {"arguments": '{"y":2}'}},
+                ]
+            },
+        ),
+    ]
+    router_setter(
+        handlers={"alpha.example.com": httpx.Response(200, content=sse_body(*chunks))}
+    )
+    await client.post(
+        "/v1/chat/completions",
+        headers={**AUTH, "X-Session-Id": "parallel-tools"},
+        json={"messages": MESSAGES, "stream": True},
+    )
+
+    history = await app.state.sessions.load("parallel-tools")
+    assistant = [m for m in history if m["role"] == "assistant"][0]
+    assert [t["id"] for t in assistant["tool_calls"]] == ["call_a", "call_b"]
+    assert assistant["tool_calls"][0]["function"]["arguments"] == '{"y":2}'
+    assert assistant["tool_calls"][1]["function"]["arguments"] == '{"x":1}'
+
+
+async def test_midstream_error_persists_partial_tool_turn(client, router_setter):
+    """A stream that dies mid-flight still persists what accumulated, so the
+    stored history matches the partial output the client received."""
+    prefix_chunks = [
+        stream_chunk("alpha", {"role": "assistant"}),
+        stream_chunk(
+            "alpha",
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_partial",
+                        "function": {"name": "run", "arguments": '{"cmd"'},
+                    }
+                ]
+            },
+        ),
+    ]
+    stream = _FailingStream(sse_body(*prefix_chunks, done=False).encode())
+    router_setter(
+        handlers={
+            "alpha.example.com": httpx.Response(
+                200,
+                stream=stream,
+                headers={"content-type": "text/event-stream"},
+            )
+        }
+    )
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={**AUTH, "X-Session-Id": "partial-tool-stream"},
+        json={"messages": MESSAGES, "stream": True},
+    )
+    assert '"error"' in response.text
+
+    history = await app.state.sessions.load("partial-tool-stream")
+    assistant = [m for m in history if m["role"] == "assistant"]
+    assert len(assistant) == 1
+    assert assistant[0]["content"] is None
+    assert assistant[0]["tool_calls"][0]["id"] == "call_partial"
+    assert assistant[0]["tool_calls"][0]["function"]["arguments"] == '{"cmd"'
 
 
 async def test_missing_auth_returns_401(client):
