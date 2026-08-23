@@ -123,8 +123,8 @@ Defines the upstream providers: `tier` (failover order, ascending), `base_url`
 (OpenAI-compatible), `api_key_env` (env var *name*, never the key itself),
 `model_id`, optional `aliases` (soft routing hints — request `model: fast` to
 prefer Groq), `max_context`, and optional per-provider `timeout` overrides.
-The canonical copy is packaged at `invincible/providers.yaml` (a deprecated
-copy at the repo root is only a fallback).
+The canonical copy is packaged at `invincible/providers.yaml`. There is
+no repository-root fallback copy.
 
 Full reference — schema, validation rules, timeout resolution:
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md).

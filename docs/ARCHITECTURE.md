@@ -36,7 +36,7 @@ Packaging (`pyproject.toml`):
 - `providers.yaml` ships as **package data** and is loaded via
   `importlib.resources` (`invincible/core/router.py::load_providers_config`),
   so config resolution is identical from a checkout, editable install, or
-  wheel. A deprecated root-level copy is the last-resort fallback.
+  wheel. There is no repository-root fallback copy.
 - Two console scripts, `invincible` and `inv`, both point at
   `invincible.cli:cli`.
 - `python-dotenv` loads `.env` at import time in `main.py`.

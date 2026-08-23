@@ -157,37 +157,14 @@ def load_providers_config(config_path: str = None) -> dict:
     ``importlib.resources`` so it works identically from a Git checkout, an
     editable install, or a wheel - never from the current working directory.
 
-    Backward compatibility: if the packaged resource cannot be read, fall
-    back to the deprecated repository-root ``providers.yaml``. The packaged
-    copy always has priority; the root copy can be removed in a future
-    release.
-
     Raises FileNotFoundError for a missing explicit path and ValueError for
     malformed or non-mapping YAML.
     """
     if config_path is None:
-        try:
-            ref = importlib.resources.files("invincible").joinpath("providers.yaml")
-            with ref.open("r", encoding="utf-8") as f:
-                raw = f.read()
-            source = str(ref)
-        except (
-            FileNotFoundError,
-            ModuleNotFoundError,
-            TypeError,
-            AttributeError,
-        ) as exc:
-            legacy = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                "providers.yaml",
-            )
-            logger.warning(
-                "Packaged providers.yaml unavailable (%s); using deprecated "
-                "repository-root copy at %s", exc, legacy
-            )
-            with open(legacy, encoding="utf-8") as f:
-                raw = f.read()
-            source = legacy
+        ref = importlib.resources.files("invincible").joinpath("providers.yaml")
+        with ref.open("r", encoding="utf-8") as f:
+            raw = f.read()
+        source = str(ref)
     else:
         source = os.path.abspath(config_path)
         if not os.path.isfile(source):

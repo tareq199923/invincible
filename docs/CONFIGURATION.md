@@ -49,10 +49,8 @@ to reach tool execution, and rotating one secret never affects the other.
 
 The canonical copy is **packaged**: `invincible/providers.yaml`, loaded via
 `importlib.resources`. It works identically from a Git checkout, an editable
-install, or a wheel. A deprecated compatibility copy exists at the
-repository root (`providers.yaml`) and is used **only** if the packaged
-resource cannot be read — it is not authoritative; do not edit it expecting
-it to take effect.
+install, or a wheel. There is no repository-root fallback copy — the
+packaged copy is the only one and is always authoritative.
 
 ### Schema
 
