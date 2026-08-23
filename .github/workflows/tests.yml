@@ -12,7 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13", "3.14"]
+        # Matches pyproject requires-python (>=3.10): every claimed
+        # version is actually tested.
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - name: Checkout repository
@@ -32,5 +34,71 @@ jobs:
       - name: Lint with Ruff
         run: ruff check .
 
-      - name: Run tests
-        run: pytest -q
+      - name: Run tests with coverage
+        run: pytest -q --cov=invincible --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage artifact
+        if: matrix.python-version == '3.14'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  postgres-ready:
+    # Lane for Phase 16's PostgreSQL store-integration suite. Today it only
+    # proves the service container starts and accepts authenticated
+    # connections over TCP; the store tests will plug into this job.
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: invincible_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install asyncpg (ad hoc, not a repo dependency yet)
+        run: pip install asyncpg
+
+      - name: Verify PostgreSQL connectivity
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: invincible_test
+        run: |
+          python -c """
+          import asyncio, os, asyncpg
+
+          async def main():
+              conn = await asyncpg.connect(
+                  host=os.environ['PGHOST'],
+                  port=int(os.environ['PGPORT']),
+                  user=os.environ['PGUSER'],
+                  password=os.environ['PGPASSWORD'],
+                  database=os.environ['PGDATABASE'],
+              )
+              version = await conn.fetchval('SELECT version()')
+              print('Connected:', version.split(',')[0])
+              await conn.close()
+
+          asyncio.run(main())
+          """
