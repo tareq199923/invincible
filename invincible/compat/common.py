@@ -35,3 +35,20 @@ def estimate_token_sum(messages: list) -> int:
     estimate.
     """
     return sum(estimate_tokens(m) for m in messages)
+
+
+def route_headers(route_info: dict | None) -> dict:
+    """``x-invincible-*`` response headers describing the attempt that
+    actually served the request (Phase 13.5): provider, model, attempt
+    count (1 = no failover), and the gateway request id. Empty dict when
+    no route info exists (e.g. error paths where the request never
+    reached a provider). Purely string-valued; protocol-neutral by design.
+    """
+    if not route_info:
+        return {}
+    return {
+        "x-invincible-provider": route_info["provider_name"],
+        "x-invincible-model": route_info["model_id"],
+        "x-invincible-attempts": str(route_info["attempts"]),
+        "x-invincible-request-id": route_info["request_id"],
+    }

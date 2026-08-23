@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from invincible.compat.common import route_headers
 from invincible.core.memory import memory_system_message, record_turns
 from invincible.core.router import AllProvidersFailedError, UpstreamClientError
 
@@ -187,8 +188,8 @@ async def chat_completions(request: Request, body: ChatRequest):
 
     if body.stream:
         try:
-            first, tail = await request.app.state.router.stream_open(
-                full_messages, model=body.model
+            (first, tail), info = await request.app.state.router.stream_open_detailed(
+                full_messages, model=body.model, session_id=session_id
             )
         except UpstreamClientError as e:
             return JSONResponse(content=e.body, status_code=e.status_code)
@@ -203,12 +204,13 @@ async def chat_completions(request: Request, body: ChatRequest):
             headers={
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
+                **route_headers(info),
             },
         )
 
     try:
-        result = await request.app.state.router.route_request(
-            full_messages, model=body.model
+        result, info = await request.app.state.router.route_request_detailed(
+            full_messages, model=body.model, session_id=session_id
         )
         choices = result.get("choices") or []
         if choices and "message" in choices[0]:
@@ -218,7 +220,7 @@ async def chat_completions(request: Request, body: ChatRequest):
                 await record_turns(memory, session_id, new_turns)
             except Exception:
                 logger.exception("Failed to record session facts for %s", session_id)
-        return JSONResponse(content=result)
+        return JSONResponse(content=result, headers=route_headers(info))
     except UpstreamClientError as e:
         return JSONResponse(
             content=e.body,

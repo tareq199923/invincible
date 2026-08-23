@@ -245,10 +245,31 @@ class Router:
         client errors and :class:`AllProvidersFailedError` when every
         provider failed, was disabled, or is in cooldown.
         """
-        async for result, _info in self._iter_attempts(
+        result, _info = await self.route_request_detailed(
+            messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            model=model,
+            session_id=session_id,
+        )
+        return result
+
+    async def route_request_detailed(
+        self,
+        messages: list,
+        tools: list | None = None,
+        tool_choice=None,
+        model: str | None = None,
+        *,
+        session_id: str | None = None,
+    ) -> tuple[dict, dict]:
+        """Like :meth:`route_request` but also returns route metadata:
+        ``(parsed_body, {request_id, provider_name, model_id, attempts})``.
+        """
+        async for result, info in self._iter_attempts(
             messages, tools, tool_choice, model, stream=False, session_id=session_id
         ):
-            return result
+            return result, info
         # Unreachable: _iter_attempts terminates by raising instead.
         raise _all_providers_failed()
 
@@ -274,10 +295,32 @@ class Router:
         mid-stream error after the first chunk propagates to the caller so
         it can terminate the response cleanly.
         """
-        async for result, _info in self._iter_attempts(
+        result, _info = await self.stream_open_detailed(
+            messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            model=model,
+            session_id=session_id,
+        )
+        return result
+
+    async def stream_open_detailed(
+        self,
+        messages: list,
+        tools: list | None = None,
+        tool_choice=None,
+        model: str | None = None,
+        *,
+        session_id: str | None = None,
+    ) -> tuple[tuple[dict | None, AsyncIterator[dict]], dict]:
+        """Like :meth:`stream_open` but also returns route metadata:
+        ``((first_chunk, tail), {request_id, provider_name, model_id,
+        attempts})``.
+        """
+        async for result, info in self._iter_attempts(
             messages, tools, tool_choice, model, stream=True, session_id=session_id
         ):
-            return result
+            return result, info
         # Unreachable: _iter_attempts terminates by raising instead.
         raise _all_providers_failed()
 

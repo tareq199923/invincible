@@ -20,7 +20,7 @@ from invincible.compat.anthropic import (
     internal_to_anthropic,
     translate_tool_choice,
 )
-from invincible.compat.common import estimate_token_sum
+from invincible.compat.common import estimate_token_sum, route_headers
 from invincible.core.compression import compress_messages, compression_enabled
 from invincible.core.memory import memory_system_message, record_turns
 from invincible.core.router import AllProvidersFailedError, UpstreamClientError
@@ -104,11 +104,12 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
 
     if body.stream:
         try:
-            first, tail = await request.app.state.router.stream_open(
+            (first, tail), info = await request.app.state.router.stream_open_detailed(
                 full_messages,
                 tools=tools,
                 tool_choice=tool_choice,
                 model=body.model,
+                session_id=session_id,
             )
         except UpstreamClientError as e:
             return _error_message(e.status_code, "Upstream request failed")
@@ -126,15 +127,17 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
             headers={
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
+                **route_headers(info),
             },
         )
 
     try:
-        result = await request.app.state.router.route_request(
+        result, info = await request.app.state.router.route_request_detailed(
             full_messages,
             tools=tools,
             tool_choice=tool_choice,
             model=body.model,
+            session_id=session_id,
         )
     except UpstreamClientError as e:
         return _error_message(e.status_code, "Upstream request failed")
@@ -155,4 +158,4 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
         )
 
     anthropic_response = internal_to_anthropic(result, body.model, input_tokens)
-    return JSONResponse(content=anthropic_response)
+    return JSONResponse(content=anthropic_response, headers=route_headers(info))
