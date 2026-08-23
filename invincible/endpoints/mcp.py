@@ -24,6 +24,7 @@ import json
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
+from invincible import __version__
 from invincible.core import tool_executor
 from invincible.core.oauth_store import OAuthStore
 
@@ -163,7 +164,7 @@ async def _dispatch(method, rpc_id, params, request):
     if method == "initialize":
         return _result(rpc_id, {
             "protocolVersion": "2025-06-18",
-            "serverInfo": {"name": "invincible-mcp", "version": "0.1.0"},
+            "serverInfo": {"name": "invincible-mcp", "version": __version__},
             "capabilities": {"tools": {}},
         })
 

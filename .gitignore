@@ -11,6 +11,7 @@ __pycache__/
 .DS_Store
 body.json
 sessions.db
+sessions.db.bak
 .review_diff_tmp.txt
 dist/
 build/
@@ -19,7 +20,3 @@ build/
 .pytest_cache/
 .ruff_cache/
 .verify/
-
-
-sessions.db
-sessions.db.bak
