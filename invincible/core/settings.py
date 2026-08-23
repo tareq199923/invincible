@@ -62,6 +62,23 @@ class Settings:
         """Explicit providers.yaml override (INVINCIBLE_CONFIG_PATH)."""
         return os.getenv("INVINCIBLE_CONFIG_PATH")
 
+    def admin_key(self) -> str | None:
+        """Management-API credential (INVINCIBLE_ADMIN_KEY).
+
+        Deliberately separate from GATEWAY_API_KEY: chat clients must never
+        be able to mutate provider configuration. Unset disables the whole
+        management surface (fail closed).
+        """
+        return os.getenv("INVINCIBLE_ADMIN_KEY")
+
+    def providers_file(self) -> str | None:
+        """Writable provider-registry file (INVINCIBLE_PROVIDERS_FILE).
+
+        Unset = packaged YAML loaded read-only; management mutations refuse
+        until an operator points this at a real path.
+        """
+        return os.getenv("INVINCIBLE_PROVIDERS_FILE")
+
     def persist_pending_actions(self) -> bool:
         """Whether staged MCP actions survive a restart."""
         return bool(os.getenv("INVINCIBLE_PERSIST_PENDING_ACTIONS"))
