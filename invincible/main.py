@@ -1,6 +1,5 @@
 import hmac
 import logging
-import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -11,6 +10,7 @@ from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore
 from invincible.core.router import Router
 from invincible.core.session_store import SessionStore
+from invincible.core.settings import settings
 from invincible.core.tool_executor import PendingActionStore
 from invincible.endpoints.anthropic_compat import router as anthropic_router
 from invincible.endpoints.mcp import require_mcp_auth
@@ -29,7 +29,7 @@ def _warn_if_gateway_open() -> None:
     """The /v1/* chat endpoints fail open when GATEWAY_API_KEY is unset
     (documented behavior, convenient for local use). Make sure anyone
     exposing the server to something untrusted sees that loud and clear."""
-    if not os.getenv("GATEWAY_API_KEY"):
+    if not settings.gateway_api_key():
         logger.warning(
             "GATEWAY_API_KEY is not set - the /v1/* chat endpoints are "
             "UNAUTHENTICATED. Anyone who can reach this server can use your "
@@ -40,11 +40,11 @@ def _warn_if_gateway_open() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    db_path = os.getenv("INVINCIBLE_DB_PATH")
+    db_path = settings.db_path()
     _warn_if_gateway_open()
-    app.state.router = Router(config_path=os.getenv("INVINCIBLE_CONFIG_PATH"))
+    app.state.router = Router(config_path=settings.config_path())
     app.state.sessions = SessionStore(db_path=db_path)
-    if os.getenv("INVINCIBLE_PERSIST_PENDING_ACTIONS"):
+    if settings.persist_pending_actions():
         app.state.pending_actions = PendingActionStore(db_path=db_path)
     else:
         app.state.pending_actions = PendingActionStore()
@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Invincible", lifespan=lifespan)
 
 async def require_auth(request: Request):
-    gateway_key = os.getenv("GATEWAY_API_KEY")
+    gateway_key = settings.gateway_api_key()
     if not gateway_key:
         return
     auth = request.headers.get("Authorization")

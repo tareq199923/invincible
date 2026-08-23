@@ -3,6 +3,13 @@
 
 Both console scripts (``invincible`` and ``inv``) declared in pyproject.toml
 point at the ``cli`` group defined here, so the two commands are identical.
+
+Config-surface note (Phase 13): the running application reads every env var
+through ``core.settings``. This module is the documented exemption - it acts
+as launcher/checker, not service code: ``setup`` writes .env files, ``start``
+exports INVINCIBLE_* into the process before importing the app, ``doctor``
+checks key presence dynamically, and the oauth commands open the database
+directly with an explicit --db-path.
 """
 import asyncio
 import contextlib

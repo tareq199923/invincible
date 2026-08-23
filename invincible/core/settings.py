@@ -1,0 +1,104 @@
+# invincible/core/settings.py
+"""Central typed configuration surface for the running application
+(Phase 13).
+
+Every environment read performed inside the app - lifespan, auth, Router,
+stores, compression/memory toggles, tool sandboxing - funnels through the
+module-level ``settings`` instance, so variable names, parsing rules, and
+defaults exist in exactly one place. ``invincible/cli.py`` is a documented
+exemption: it acts as launcher/checker (writes .env, exports process env
+before importing the app, checks key presence dynamically) rather than as
+part of the running service.
+
+Design: **live reads, deliberately.** Accessors call ``os.getenv`` on every
+call instead of snapshotting at import or startup. The CLI start command
+exports ``INVINCIBLE_*`` variables immediately before lazily importing the
+FastAPI app, and tests flip toggles via monkeypatch between requests;
+either would break against an eager snapshot. Phase 16 (PostgreSQL) is
+expected to add explicitly constructed snapshots for DB URL/pool settings.
+"""
+import os
+
+# --- Tuning constants owned here so defaults live in one place ------------
+
+# Provider failure cooldown curve (core/provider_health.py): base seconds,
+# doubling per consecutive failure, capped.
+COOLDOWN_BASE_SECONDS = 30
+COOLDOWN_CAP_SECONDS = 300
+
+# Staged MCP actions expire this many seconds after creation unless
+# confirmed (PendingActionStore.TTL_SECONDS sources its default here).
+PENDING_ACTION_TTL_SECONDS = 600
+
+# Fact-injection cap (core/memory.py) when INVINCIBLE_MEMORY_MAX_FACTS is
+# unset or unparseable.
+DEFAULT_MEMORY_MAX_FACTS = 40
+
+# Stored-history turn cap when INVINCIBLE_HISTORY_MAX_TURNS is unset.
+DEFAULT_HISTORY_MAX_TURNS = 200
+
+# Off-switch vocabulary shared by every INVINCIBLE_* boolean toggle.
+_OFF_VALUES = ("0", "false", "off")
+
+
+def _env_flag(name: str) -> bool:
+    """The INVINCIBLE_* toggle convention: unset (or anything but the off
+    values, case-insensitive) means enabled."""
+    return os.getenv(name, "").strip().lower() not in _OFF_VALUES
+
+
+class Settings:
+    """Live-read accessors for every environment variable the app owns."""
+
+    def gateway_api_key(self) -> str | None:
+        """Bearer/x-api-key credential guarding /v1/* (unset = fail open)."""
+        return os.getenv("GATEWAY_API_KEY")
+
+    def db_path(self) -> str | None:
+        """SQLite database file override (INVINCIBLE_DB_PATH)."""
+        return os.getenv("INVINCIBLE_DB_PATH")
+
+    def config_path(self) -> str | None:
+        """Explicit providers.yaml override (INVINCIBLE_CONFIG_PATH)."""
+        return os.getenv("INVINCIBLE_CONFIG_PATH")
+
+    def persist_pending_actions(self) -> bool:
+        """Whether staged MCP actions survive a restart."""
+        return bool(os.getenv("INVINCIBLE_PERSIST_PENDING_ACTIONS"))
+
+    def compression_enabled(self) -> bool:
+        """Send-time request compression (default on)."""
+        return _env_flag("INVINCIBLE_COMPRESSION")
+
+    def memory_enabled(self) -> bool:
+        """Fact extraction/injection (default on)."""
+        return _env_flag("INVINCIBLE_MEMORY")
+
+    def memory_max_facts(self) -> int:
+        """Injection cap for the fact summary system message."""
+        try:
+            return max(1, int(os.getenv("INVINCIBLE_MEMORY_MAX_FACTS", "")))
+        except ValueError:
+            return DEFAULT_MEMORY_MAX_FACTS
+
+    def history_max_turns(self) -> int | None:
+        """Stored-history turn cap; ``0``/``off`` disables the cap."""
+        raw = os.getenv("INVINCIBLE_HISTORY_MAX_TURNS", "").strip().lower()
+        if raw in _OFF_VALUES:
+            return None
+        try:
+            return max(1, int(raw)) if raw else DEFAULT_HISTORY_MAX_TURNS
+        except ValueError:
+            return DEFAULT_HISTORY_MAX_TURNS
+
+    def read_roots(self) -> list[str]:
+        """Extra read_file sandbox roots, os.pathsep-separated, stripped."""
+        extra = os.getenv("INVINCIBLE_READ_ROOTS", "")
+        return [entry.strip() for entry in extra.split(os.pathsep) if entry.strip()]
+
+    def provider_api_key(self, api_key_env: str) -> str | None:
+        """Resolve one provider's API key via its configured env-var name."""
+        return os.getenv(api_key_env)
+
+
+settings = Settings()

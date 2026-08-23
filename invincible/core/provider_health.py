@@ -1,5 +1,7 @@
 import time
 
+from invincible.core.settings import COOLDOWN_BASE_SECONDS, COOLDOWN_CAP_SECONDS
+
 
 class ProviderHealth:
     def __init__(self):
@@ -19,8 +21,11 @@ class HealthTracker:
     def record_failure(self, provider_name: str):
         health = self.get(provider_name)
         health.consecutive_failures += 1
-        # 30s, 60s, 120s, 240s, capped at 300s
-        cooldown_seconds = min(30 * (2 ** (health.consecutive_failures - 1)), 300)
+        # 30s, 60s, 120s, 240s, ... capped
+        cooldown_seconds = min(
+            COOLDOWN_BASE_SECONDS * (2 ** (health.consecutive_failures - 1)),
+            COOLDOWN_CAP_SECONDS,
+        )
         health.cooldown_until = time.monotonic() + cooldown_seconds
 
     def record_success(self, provider_name: str):

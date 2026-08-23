@@ -26,14 +26,15 @@ Toggles: ``INVINCIBLE_MEMORY=0/false/off`` disables extraction and
 injection (default on). ``INVINCIBLE_MEMORY_MAX_FACTS`` sets the injection
 cap (default 40).
 """
-import os
 import re
 import time
 
 import aiosqlite
 
+from invincible.core.settings import DEFAULT_MEMORY_MAX_FACTS, settings
+
 SENTINEL_USER_ID = "default"
-DEFAULT_MAX_FACTS = 40
+DEFAULT_MAX_FACTS = DEFAULT_MEMORY_MAX_FACTS
 _TARGET_MAX_CHARS = 160
 
 # (entity, relation) paired with a pattern whose first group is the target.
@@ -58,19 +59,12 @@ _PATTERNS = [
 
 def memory_enabled() -> bool:
     """Whether fact extraction/injection is active (default on)."""
-    return os.getenv("INVINCIBLE_MEMORY", "").strip().lower() not in (
-        "0",
-        "false",
-        "off",
-    )
+    return settings.memory_enabled()
 
 
 def max_injected_facts() -> int:
     """Injection cap; most-recent-first beyond the limit."""
-    try:
-        return max(1, int(os.getenv("INVINCIBLE_MEMORY_MAX_FACTS", "")))
-    except ValueError:
-        return DEFAULT_MAX_FACTS
+    return settings.memory_max_facts()
 
 
 def _clean_target(raw: str) -> str:

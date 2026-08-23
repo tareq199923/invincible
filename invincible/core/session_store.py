@@ -6,6 +6,7 @@ import time
 
 import aiosqlite
 
+from invincible.core.settings import settings
 from invincible.core.trimming import group_into_turns
 
 
@@ -13,10 +14,11 @@ def default_db_path() -> str:
     """Pick the session database location.
 
     Priority: explicit ``db_path`` argument (handled by the caller), then
-    the INVINCIBLE_DB_PATH environment variable, then ``sessions.db`` in the
-    current working directory. Never resolves inside the installed package.
+    the INVINCIBLE_DB_PATH environment variable (via Settings), then
+    ``sessions.db`` in the current working directory. Never resolves inside
+    the installed package.
     """
-    env = os.getenv("INVINCIBLE_DB_PATH")
+    env = settings.db_path()
     if env:
         return env
     return os.path.join(os.getcwd(), "sessions.db")
@@ -127,10 +129,4 @@ class SessionStore:
 
 def history_max_turns() -> int | None:
     """Stored-history turn cap (default 200); ``0``/``off`` disables."""
-    raw = os.getenv("INVINCIBLE_HISTORY_MAX_TURNS", "").strip().lower()
-    if raw in ("0", "off"):
-        return None
-    try:
-        return max(1, int(raw)) if raw else 200
-    except ValueError:
-        return 200
+    return settings.history_max_turns()

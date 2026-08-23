@@ -69,6 +69,8 @@ import sqlite3
 import subprocess
 import time
 
+from invincible.core.settings import PENDING_ACTION_TTL_SECONDS, settings
+
 logger = logging.getLogger("invincible.tool_executor")
 
 # Matched against the full command string, case-insensitive. Each entry is
@@ -183,7 +185,8 @@ class PendingActionStore:
     staging must never break the MCP flow over a disk problem.
     """
 
-    TTL_SECONDS = 600  # 10 minutes; tests shrink this via monkeypatch
+    # Default sourced from Settings; tests shrink this via monkeypatch.
+    TTL_SECONDS = PENDING_ACTION_TTL_SECONDS
 
     def __init__(self, db_path: str = None):
         self._pending: dict = {}  # token -> {"type", "args", "created_at"}
@@ -329,11 +332,7 @@ _BASENAME_READ_DENYLIST = [
 
 def _allowed_read_roots() -> list:
     roots = [_REPO_ROOT, os.getcwd()]
-    extra = os.getenv("INVINCIBLE_READ_ROOTS", "")
-    for entry in extra.split(os.pathsep):
-        entry = entry.strip()
-        if entry:
-            roots.append(entry)
+    roots.extend(settings.read_roots())
     return [
         os.path.normcase(os.path.abspath(root)) for root in roots
     ]

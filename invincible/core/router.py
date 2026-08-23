@@ -1,7 +1,6 @@
 # invincible/core/router.py
 import json
 import logging
-import os
 import time
 from collections.abc import AsyncIterator
 
@@ -18,6 +17,7 @@ from invincible.core.config import (  # noqa: F401 - re-exports
     validate_providers_config,
 )
 from invincible.core.provider_health import HealthTracker
+from invincible.core.settings import settings
 from invincible.core.trimming import (  # noqa: F401 - re-exports
     DEFAULT_MAX_CONTEXT,
     RESERVE_TOKENS,
@@ -156,7 +156,7 @@ class Router:
         # tier here so failover order never depends on YAML order.
         self.providers.sort(key=lambda p: p["tier"])
         for provider in self.providers:
-            if not os.getenv(provider["api_key_env"]):
+            if not settings.provider_api_key(provider["api_key_env"]):
                 logger.warning(
                     f"Provider '{provider['name']}' has no API key set via "
                     f"{provider['api_key_env']}. It will be unavailable."
@@ -287,7 +287,7 @@ class Router:
                 logger.info(f"Provider {name} in cooldown. Skipping.")
                 continue
 
-            api_key = os.getenv(provider["api_key_env"])
+            api_key = settings.provider_api_key(provider["api_key_env"])
             if not api_key:
                 logger.warning(
                     f"No API key found for {name} "

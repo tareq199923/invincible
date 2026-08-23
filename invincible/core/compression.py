@@ -24,8 +24,9 @@ Hard guarantees:
   ``false``/``off``) to disable. Read per call so tests and restarts can
   flip it without rebuilding the Router.
 """
-import os
 import re
+
+from invincible.core.settings import settings
 
 # Tool results longer than this are truncated to head + marker + tail.
 DEFAULT_TOOL_RESULT_MAX_CHARS = 4000
@@ -42,13 +43,11 @@ def compression_enabled() -> bool:
     """Whether send-time compression is active (default on).
 
     ``INVINCIBLE_COMPRESSION`` values ``0``/``false``/``off`` (any case)
-    disable it; anything else (including unset) enables it.
+    disable it; anything else (including unset) enables it. The env read is
+    live (via Settings) so tests and restarts can flip it without rebuilding
+    the Router.
     """
-    return os.getenv("INVINCIBLE_COMPRESSION", "").strip().lower() not in (
-        "0",
-        "false",
-        "off",
-    )
+    return settings.compression_enabled()
 
 
 def _collapse_blank_runs(text: str) -> str:
