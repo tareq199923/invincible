@@ -35,12 +35,12 @@ class SessionStore:
     other's turns (a plain load-then-save would last-write-wins).
     """
 
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: str | None = None):
         self.db_path = db_path or default_db_path()
         self._db: aiosqlite.Connection | None = None
         self._append_lock = asyncio.Lock()
 
-    async def init(self):
+    async def init(self) -> None:
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute(
             """
@@ -53,12 +53,12 @@ class SessionStore:
         )
         await self._db.commit()
 
-    async def close(self):
+    async def close(self) -> None:
         if self._db is not None:
             await self._db.close()
             self._db = None
 
-    def connection(self):
+    def connection(self) -> aiosqlite.Connection | None:
         """The live aiosqlite connection, or ``None`` before :meth:`init`.
 
         Public accessor so a companion store (MemoryStore) can share this
@@ -82,7 +82,7 @@ class SessionStore:
             # rather than crashing the request.
             return []
 
-    async def save(self, session_id: str, messages: list):
+    async def save(self, session_id: str, messages: list) -> None:
         await self._db.execute(
             """
             INSERT INTO sessions (session_id, messages, updated_at)
@@ -95,7 +95,7 @@ class SessionStore:
         )
         await self._db.commit()
 
-    async def append(self, session_id: str, new_messages: list):
+    async def append(self, session_id: str, new_messages: list) -> None:
         """Atomically load, extend and save a session's history.
 
         The lock makes this safe under concurrency: two requests to the
@@ -116,7 +116,7 @@ class SessionStore:
             await self.save(session_id, current + new_messages)
             await self._enforce_retention(session_id)
 
-    async def _enforce_retention(self, session_id: str):
+    async def _enforce_retention(self, session_id: str) -> None:
         limit = history_max_turns()
         if limit is None:
             return

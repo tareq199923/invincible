@@ -156,7 +156,7 @@ def validate_providers_config(config: dict) -> None:
             )
 
 
-def load_providers_config(config_path: str = None) -> dict:
+def load_providers_config(config_path: str | None = None) -> dict:
     """Load and validate the provider configuration as a YAML mapping.
 
     An explicit ``config_path`` is authoritative. Otherwise the canonical

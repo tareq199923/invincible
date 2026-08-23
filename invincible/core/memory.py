@@ -28,10 +28,14 @@ cap (default 40).
 """
 import re
 import time
+from typing import TYPE_CHECKING
 
 import aiosqlite
 
 from invincible.core.settings import DEFAULT_MEMORY_MAX_FACTS, settings
+
+if TYPE_CHECKING:
+    from invincible.core.session_store import SessionStore
 
 SENTINEL_USER_ID = "default"
 DEFAULT_MAX_FACTS = DEFAULT_MEMORY_MAX_FACTS
@@ -75,7 +79,7 @@ def _clean_target(raw: str) -> str:
     return target[:_TARGET_MAX_CHARS]
 
 
-def extract_facts(messages: list) -> list:
+def extract_facts(messages: list) -> list[tuple[str, str, str]]:
     """Extract ``(entity, relation, target)`` tuples from message contents.
 
     Scans user and assistant messages alike, but the patterns only fire on
@@ -127,7 +131,11 @@ class MemoryStore:
     connection to ``db_path`` (or the same default path SessionStore uses).
     """
 
-    def __init__(self, db_path: str = None, shared=None):
+    def __init__(
+        self,
+        db_path: str | None = None,
+        shared: "SessionStore | None" = None,
+    ):
         self._shared = shared
         if db_path is None and shared is not None:
             db_path = getattr(shared, "db_path", None)
@@ -138,7 +146,7 @@ class MemoryStore:
         self.db_path = db_path
         self._db: aiosqlite.Connection | None = None
 
-    async def init(self):
+    async def init(self) -> None:
         # Prefer the shared store's public accessor; the duck-typed guard
         # keeps connection-less test stubs on the standalone path below.
         accessor = getattr(self._shared, "connection", None) if self._shared else None
@@ -170,7 +178,7 @@ class MemoryStore:
         )
         await self._db.commit()
 
-    async def close(self):
+    async def close(self) -> None:
         # A shared connection is owned (and closed) by the SessionStore.
         if self._shared is None and self._db is not None:
             await self._db.close()
@@ -198,7 +206,9 @@ class MemoryStore:
             await self._db.commit()
         return added
 
-    async def facts_for(self, session_id: str, limit: int = None) -> list:
+    async def facts_for(
+        self, session_id: str, limit: int | None = None
+    ) -> list[tuple[str, str, str]]:
         """Most recent facts for a session as ``(entity, relation, target)``."""
         limit = limit if limit is not None else max_injected_facts()
         async with self._db.execute(
@@ -214,14 +224,18 @@ class MemoryStore:
         return rows
 
 
-async def memory_system_message(memory, session_id: str) -> dict | None:
+async def memory_system_message(
+    memory: "MemoryStore | None", session_id: str
+) -> dict | None:
     """Build the injectable memory system message for a session, or None."""
     if memory is None or not memory_enabled():
         return None
     return render_facts_message(await memory.facts_for(session_id))
 
 
-async def record_turns(memory, session_id: str, messages: list) -> None:
+async def record_turns(
+    memory: "MemoryStore | None", session_id: str, messages: list
+) -> None:
     """Extract and store facts from a request's new turns (best-effort)."""
     if memory is None or not memory_enabled():
         return

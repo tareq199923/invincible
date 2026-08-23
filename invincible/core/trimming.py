@@ -56,7 +56,7 @@ def trim_messages(
     system_msgs = [m for m in messages if m.get("role") == "system"]
     rest = [m for m in messages if m.get("role") != "system"]
 
-    def turn_tokens(turn):
+    def turn_tokens(turn: list) -> int:
         return sum(estimate_tokens(m) for m in turn)
 
     system_tokens = sum(estimate_tokens(m) for m in system_msgs)

@@ -149,7 +149,7 @@ def _all_providers_failed() -> AllProvidersFailedError:
 
 
 class Router:
-    def __init__(self, config_path=None, transport=None):
+    def __init__(self, config_path: str | None = None, transport=None):
         config = load_providers_config(config_path)
         self.providers = config.get("providers", [])
         # Shape is validated in load_providers_config (Phase 6); sort by
@@ -267,7 +267,7 @@ class Router:
         tool_choice,
         model: str | None,
         stream: bool,
-    ):
+    ) -> AsyncIterator[dict | tuple[dict | None, AsyncIterator[dict]]]:
         """The single failover policy loop behind both public entry points
         (Phase 13): provider ordering, cooldown and missing-key skips,
         compress-then-trim payload preparation, the shared status
@@ -611,5 +611,5 @@ class Router:
         )
         self.health_tracker.record_failure(name)
 
-    async def close(self):
+    async def close(self) -> None:
         await self.client.aclose()
