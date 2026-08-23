@@ -10,7 +10,7 @@ messages may carry ``tool_calls`` and tool results are
 ``{"role": "tool", "tool_call_id", "content"}`` messages. It must never
 depend on FastAPI or the Router.
 """
-from invincible.core.router import estimate_tokens
+from invincible.core.trimming import estimate_tokens
 
 
 def build_message(role: str, content: str) -> dict:
@@ -29,8 +29,9 @@ def build_usage(input_tokens: int, output_tokens: int) -> dict:
 def estimate_token_sum(messages: list) -> int:
     """Rough total token estimate for a list of internal messages.
 
-    Reuses the Router's public heuristic (``router.estimate_tokens``) so the
-    compatibility layer never maintains its own token-counting logic. Always
-    returns at least 1 per message, identical to the trimmers' estimate.
+    Reuses the shared trimming heuristic (``core.trimming.estimate_tokens``)
+    so the compatibility layer never maintains its own token-counting logic.
+    Always returns at least 1 per message, identical to the trimmers'
+    estimate.
     """
     return sum(estimate_tokens(m) for m in messages)

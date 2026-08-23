@@ -6,6 +6,8 @@ import time
 
 import aiosqlite
 
+from invincible.core.trimming import group_into_turns
+
 
 def default_db_path() -> str:
     """Pick the session database location.
@@ -107,8 +109,6 @@ class SessionStore:
         if limit is None:
             return
         messages = await self.load(session_id)
-        from invincible.core.router import group_into_turns
-
         turns = group_into_turns(messages)
         if len(turns) > limit:
             kept = [m for turn in turns[-limit:] for m in turn]
