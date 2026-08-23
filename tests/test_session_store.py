@@ -11,12 +11,16 @@ from tests.conftest import provider_body, sse_body, stream_chunk
 
 @pytest.mark.asyncio
 async def test_corrupt_session_row_returns_empty_history(tmp_path):
+    # Phase 15a: corrupt payloads live in messages.payload now. Intent is
+    # unchanged - a corrupt stored row must degrade to an empty history,
+    # never crash the request.
     store = SessionStore(db_path=str(tmp_path / "sessions.db"))
     await store.init()
-    await store._db.execute(
-        "INSERT INTO sessions (session_id, messages, updated_at) VALUES (?, ?, ?)",
-        ("broken", "not json{", 1.0),
+    await store.append(
+        "broken", [{"role": "user", "content": "hi"},
+                   {"role": "assistant", "content": "hello"}]
     )
+    await store._db.execute("UPDATE messages SET payload = 'not json{'")
     await store._db.commit()
 
     assert await store.load("broken") == []

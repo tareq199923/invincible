@@ -156,16 +156,32 @@ def test_unknown_fields_are_rejected():
 
 
 def test_shipped_providers_yaml_validates():
+    """Structural contract of the shipped lineup.
+
+    Keyed by api_key_env and alias->tier mapping (stable across lineup
+    swaps); names and model_ids deliberately NOT pinned - they change with
+    the free-tier rotation. Schema validation itself already ran inside
+    Router() (unknown fields/typo keys fail loudly there).
+    """
     router = Router()
-    by_name = {p["name"]: p for p in router.providers}
-    assert by_name["nim-glm"]["aliases"] == ["strong"]
-    assert by_name["groq-llama"]["aliases"] == ["fast"]
-    assert by_name["openrouter-fallback"]["aliases"] == ["free"]
-    assert by_name["gemini-flash"]["aliases"] == ["backup"]
-    tokenrouter = by_name["tokenrouter-deepseek"]
+    providers = router.providers
+    by_env = {p["api_key_env"]: p for p in providers}
+
+    assert len(providers) == 5
+    assert [p["tier"] for p in providers] == [1, 2, 3, 4, 5]
+    for env in (
+        "TOKENROUTER_API_KEY", "NVIDIA_API_KEY", "GROQ_API_KEY",
+        "OPENROUTER_API_KEY", "GEMINI_API_KEY",
+    ):
+        assert env in by_env, f"shipped config lost provider key {env}"
+
+    tokenrouter = by_env["TOKENROUTER_API_KEY"]
     assert tokenrouter["tier"] == 1
     assert tokenrouter["base_url"] == "https://api.tokenrouter.com/v1"
-    assert tokenrouter["api_key_env"] == "TOKENROUTER_API_KEY"
-    assert tokenrouter["model_id"] == "deepseek/deepseek-v4-pro-0813-free"
     assert "aliases" not in tokenrouter
-    assert [p["tier"] for p in router.providers] == [1, 2, 3, 4, 5]
+
+    # Alias vocabulary stays bound to its tier: strong=2 fast=3 free=4 backup=5.
+    alias_tiers = {
+        p["aliases"][0]: p["tier"] for p in providers if p.get("aliases")
+    }
+    assert alias_tiers == {"strong": 2, "fast": 3, "free": 4, "backup": 5}

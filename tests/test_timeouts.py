@@ -33,14 +33,22 @@ def test_provider_with_full_timeout_override():
 
 def test_real_providers_yaml_parses_with_timeout_overrides():
     """Guards against a YAML typo breaking the actual providers.yaml
-    shipped in this repo."""
+    shipped in this repo.
+
+    Keyed by api_key_env (stable) rather than provider names/model ids,
+    which change with the free-tier lineup."""
     from invincible.core.router import Router
 
     router = Router()
-    by_name = {p["name"]: p for p in router.providers}
+    by_env = {p["api_key_env"]: p for p in router.providers}
 
-    assert resolve_timeout(by_name["nim-glm"]).read == 90.0
-    assert resolve_timeout(by_name["groq-llama"]).read == 45.0
-    assert resolve_timeout(by_name["openrouter-fallback"]).read == 90.0
-    assert resolve_timeout(by_name["gemini-flash"]).read == 90.0
-    assert resolve_timeout(by_name["tokenrouter-deepseek"]).read == 90.0
+    expected_reads = {
+        "TOKENROUTER_API_KEY": 90.0,
+        "NVIDIA_API_KEY": 90.0,
+        "GROQ_API_KEY": 45.0,
+        "OPENROUTER_API_KEY": 90.0,
+        "GEMINI_API_KEY": 90.0,
+    }
+    for env, read in expected_reads.items():
+        assert env in by_env, f"shipped config lost provider key {env}"
+        assert resolve_timeout(by_env[env]).read == read

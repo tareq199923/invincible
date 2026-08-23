@@ -706,23 +706,23 @@ def test_packaged_providers_config_loads_from_any_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config = load_providers_config()
     providers = config["providers"]
-    assert {p["name"] for p in providers} == {
-        "tokenrouter-deepseek", "nim-glm", "groq-llama",
-        "openrouter-fallback", "gemini-flash",
+    # Structural contract keyed by stable identifiers (api_key_env/tier);
+    # names and model_ids rotate with the free-tier lineup.
+    assert {p["api_key_env"] for p in providers} == {
+        "TOKENROUTER_API_KEY", "NVIDIA_API_KEY", "GROQ_API_KEY",
+        "OPENROUTER_API_KEY", "GEMINI_API_KEY",
     }
-    assert [p["name"] for p in sorted(providers, key=lambda p: p["tier"])] == [
-        "tokenrouter-deepseek", "nim-glm", "groq-llama",
-        "openrouter-fallback", "gemini-flash",
+    assert [p["tier"] for p in sorted(providers, key=lambda p: p["tier"])] == [
+        1, 2, 3, 4, 5,
     ]
-    tokenrouter = next(p for p in providers if p["name"] == "tokenrouter-deepseek")
+    tokenrouter = next(
+        p for p in providers if p["api_key_env"] == "TOKENROUTER_API_KEY"
+    )
     assert tokenrouter["base_url"] == "https://api.tokenrouter.com/v1"
-    assert tokenrouter["api_key_env"] == "TOKENROUTER_API_KEY"
-    assert tokenrouter["model_id"] == "deepseek/deepseek-v4-pro-0813-free"
     assert tokenrouter["tier"] == 1
-    nim = next(p for p in providers if p["name"] == "nim-glm")
+    nim = next(p for p in providers if p["api_key_env"] == "NVIDIA_API_KEY")
     assert nim["base_url"] == "https://integrate.api.nvidia.com/v1"
-    assert nim["api_key_env"] == "NVIDIA_API_KEY"
-    assert nim["model_id"] == "z-ai/glm-5.2"
+    assert nim["aliases"] == ["strong"]
     assert nim["tier"] == 2
     assert next(p for p in providers if p["name"] == "gemini-flash")["tier"] == 5
 
