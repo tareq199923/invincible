@@ -801,9 +801,9 @@ config surface instead of scattered env reads.
 
 ---
 
-## Phase 14 — Continuous integration
+## Phase 14 — Continuous integration (Done)
 
-**Priority P1 · Size S · Status: Planned · Requires: Phase 11 · Partially done**
+**Priority P1 · Size S · Status: Done · Requires: Phase 11 · Partially done → extended**
 
 ### Goal
 
@@ -811,12 +811,13 @@ Every pull request proven by machines, not discipline.
 
 ### Problem it solves
 
-`.github/workflows/tests.yml` already exists (ruff check + pytest matrix
-on 3.12/3.13/3.14, via `pip install -e ".[dev]"`) — this phase extends
-existing CI rather than creating it from nothing. Gaps: no Postgres
-service container, no coverage artifact, and the matrix (3.12–3.14)
-does not match `pyproject.toml`'s `requires-python = ">=3.10"` —
-3.10/3.11 are declared supported but never tested.
+`.github/workflows/tests.yml` already existed (ruff check + pytest matrix
+on 3.12/3.13/3.14, via `pip install -e ".[dev]"`) — this phase extended
+existing CI rather than creating it from nothing. Gaps closed here: no
+Postgres service container, no coverage artifact, and the matrix
+(3.12–3.14) did not match `pyproject.toml`'s
+`requires-python = ">=3.10"` — 3.10/3.11 were declared supported but
+never tested.
 
 ### Scope
 
@@ -830,15 +831,29 @@ does not match `pyproject.toml`'s `requires-python = ">=3.10"` —
 3. **Coverage artifact** per run; branch protection requires green
    checks before merge.
 
+### What landed
+
+- Matrix widened to **3.10–3.14** (decision: test the promise, not
+  narrow it); a codebase scan found no >3.10-only syntax, so the older
+  legs are expected green — first real proof lands on the next push.
+- `pytest -q --cov=invincible` on every leg; `coverage.xml` uploaded as
+  the `coverage-report` artifact from one leg. **Baseline: 92%**
+  (weakest: `tool_executor.py` 86%, `anthropic_compat.py` 88%).
+- New **`postgres-ready`** job: postgres:17 service with
+  `pg_isready` healthcheck; installs asyncpg ad hoc (not a repo
+  dependency until Phase 16) and proves authenticated TCP connectivity.
+
 ### Dependencies
 
 - Phase 11 (dev deps separated so CI installs are honest).
 
 ### Acceptance criteria
 
-- A red PR cannot merge.
-- The matrix covers all versions declared in `requires-python`.
-- Coverage report is downloadable from every run.
+- A red PR cannot merge. ⏳ *Manual step:* enable branch protection on
+  GitHub (require the `test` + `postgres-ready` checks) — repo settings,
+  not code.
+- The matrix covers all versions declared in `requires-python`. ✅
+- Coverage report is downloadable from every run. ✅
 
 ---
 
