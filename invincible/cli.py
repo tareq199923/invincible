@@ -19,8 +19,8 @@ import uvicorn
 from dotenv import load_dotenv
 
 from invincible import __version__
+from invincible.core.config import load_providers_config
 from invincible.core.oauth_store import OAuthStore
-from invincible.core.router import load_providers_config
 from invincible.core.session_store import SessionStore
 
 SUPPORTED_ENV_KEYS = (
