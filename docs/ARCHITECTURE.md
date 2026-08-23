@@ -49,23 +49,32 @@ Packaging (`pyproject.toml`):
 import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
                      │
         startup (lifespan)     │
-        Router(config_path=os.getenv("INVINCIBLE_CONFIG_PATH"))
+        ProviderRegistry(seed=packaged providers.yaml, file=
+                         INVINCIBLE_PROVIDERS_FILE)   (Phase 13.5)
+        Router(registry=...)  + runs recorder (bound after RunStore.init)
         SessionStore(db_path=os.getenv("INVINCIBLE_DB_PATH"))
-        await sessions.init()  (CREATE TABLE IF NOT EXISTS sessions)
+        await sessions.init()  (CREATE sessions_v2/turns/messages; one-shot
+                                legacy blob migration — Phase 15a)
         OAuthStore(same db_path)          (CREATE oauth tables)
         await oauth_store.init()
+        MemoryStore(shared=sessions) → init()
+        RunStore(shared=sessions) → init()               (Phase 13.5)
                      │
         serving               app.include_router(openai_router, deps=[require_auth])
+                              app.include_router(anthropic_router, deps=[require_auth])
+                              app.include_router(admin_router)  (own INVINCIBLE_ADMIN_KEY)
                               app.include_router(mcp_router, deps=[require_mcp_auth])
                               app.include_router(oauth_router)      (no dep — own auth)
                      │
         shutdown (lifespan)   await router.close()  (httpx client)
-                              await sessions.close() (sqlite)
+                              await runs.close() / memory.close()
+                              await sessions.close() (sqlite, owns shared conn)
                               await oauth_store.close() (sqlite)
 ```
 
 One `httpx.AsyncClient` lives inside the `Router` and is shared by all chat
-requests; the `SessionStore` holds one long-lived `aiosqlite` connection.
+requests; the `SessionStore` holds one long-lived `aiosqlite` connection
+that `MemoryStore` and `RunStore` share.
 
 ---
 

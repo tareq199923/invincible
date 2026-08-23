@@ -181,9 +181,12 @@ unaffected.
   inside the installed package).
 - Override with `INVINCIBLE_DB_PATH` or the CLI flag
   `invincible start --db-path <path>`.
-- Single table: `sessions (session_id TEXT PRIMARY KEY, messages TEXT,
-  updated_at REAL)` — the whole conversation is one JSON blob per session id,
-  replaced (upsert) on every save.
+- Normalized tables (Phase 15a): `sessions_v2` + `turns` + `messages` -
+  one row per message with the full original payload stored as JSON, and
+  turn boundaries mirroring the router's `group_into_turns` rule. The
+  pre-15a blob table (`sessions`) is kept as a frozen backup after a
+  one-shot, transactional migration on first boot; it is never read or
+  written again.
 - **Plaintext, no encryption.** `sessions.db` is gitignored; the `write_file`
   and `read_file` denylists protect it from the MCP tools (see
   [docs/SECURITY.md](SECURITY.md)).
