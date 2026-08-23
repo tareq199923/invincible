@@ -1,10 +1,8 @@
 # Canonical provider configuration for Invincible.
 # Packaged as package data and loaded via importlib.resources, so it works
 # identically from a Git checkout, an editable install, or a wheel.
-# A deprecated compatibility copy exists at the repository root
-# (providers.yaml); it is used only as a last-resort fallback and can be
-# removed in a future release. Do not edit the root copy expecting it to
-# take effect - this file is authoritative.
+# This copy is authoritative and is the only configuration loaded; the
+# deprecated root-level fallback was removed (Phase 11).
 providers:
   - name: tokenrouter-deepseek
     tier: 1
