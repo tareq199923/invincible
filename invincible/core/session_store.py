@@ -56,6 +56,16 @@ class SessionStore:
             await self._db.close()
             self._db = None
 
+    def connection(self):
+        """The live aiosqlite connection, or ``None`` before :meth:`init`.
+
+        Public accessor so a companion store (MemoryStore) can share this
+        store's single connection - required for ``:memory:`` databases,
+        where a second connection would be a different database - without
+        reaching into the private ``_db`` attribute (Phase 13 layering fix).
+        """
+        return self._db
+
     async def load(self, session_id: str) -> list:
         async with self._db.execute(
             "SELECT messages FROM sessions WHERE session_id = ?", (session_id,)
