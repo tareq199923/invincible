@@ -356,6 +356,10 @@ Result (error, e.g. missing file):
 
 Denylisted target (`.env`, `sessions.db`, `.git/`):
 
+> Live state (conversations, OAuth grants, task state) lives in PostgreSQL;
+> the `sessions.db` denylist entry remains so leftover pre-Phase-16 files
+> can never be read or written by these tools.
+
 ```json
 {
   "jsonrpc": "2.0",

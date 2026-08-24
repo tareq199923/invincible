@@ -129,15 +129,14 @@ Implications, stated plainly:
 - A `confirm_action` sent as a **notification** (no `id`) also executes —
   JSON-RPC notifications still run their side effects.
 - Pending entries are **persisted across restarts only when explicitly
-  opted in**: `PendingActionStore` writes through to the same SQLite file
-  as sessions (`INVINCIBLE_DB_PATH`, `sessions.db` in the working
-  directory) only when the `INVINCIBLE_PERSIST_PENDING_ACTIONS`
-  environment variable is set. By default it is **memory-only** — a
-  restart orphans every staged action and confirmations fail with
-  *Unknown or expired*, the original clean-slate design. Persistence
-  means staged shell commands sit in plaintext on disk pre-approval, so
-  it is deliberately off unless requested. There is no audit log of who
-  approved what.
+  opted in**: when the `INVINCIBLE_PERSIST_PENDING_ACTIONS` environment
+  variable is set, `PendingActionStore` writes through to the PostgreSQL
+  database (`INVINCIBLE_DB_URL`, `pending_actions` table). By default it
+  is **memory-only** — a restart orphans every staged action and
+  confirmations fail with *Unknown or expired*, the original clean-slate
+  design. Persistence means staged shell commands sit in plaintext in the
+  database pre-approval, so it is deliberately off unless requested. There
+  is no audit log of who approved what.
 - The server still prints an informational visibility line for each pending
   action to its own stdout (`[MCP] Pending <token>: …`) — **informational
   only**, it is not a gate.
@@ -182,15 +181,18 @@ paths that resolve **inside the repo root** and match:
 |---|---|
 | `.env` / `.env.*` | Invincible's own secrets file |
 | `providers.yaml` | Provider configuration |
-| `sessions.db` | The session database — which also holds the OAuth grant tables |
+| `sessions.db` | Legacy local store file — still denied so leftover/pre-migration files can't be touched (live state is PostgreSQL) |
 | `invincible/` (any file under it) | Invincible's own source code |
 | `tests/` (any file under it) | The test suite |
 | `.git/` (any file under it) | Git internals |
 
-> The OAuth store deliberately lives in the **same SQLite file** as
-> conversations (`sessions.db`) so the denylist entries above protect tokens
-> and client registrations too. Tokens are stored **SHA-256 hashed** — a
-> read of the file yields nothing usable anyway.
+> Live state — conversations **and** OAuth grants — sits in **PostgreSQL**
+> (`INVINCIBLE_DB_URL`). The security boundary moved from a filename to the
+> database credentials: treat the DSN like a secret, and note that
+> `invincible doctor` always prints it **password-masked**. Tokens are
+> stored **SHA-256 hashed**, so a leaked database dump still yields no
+> usable bearer tokens. The `sessions.db` denylist entries remain so
+> leftover pre-Phase-16 files can never be read or written by the tools.
 
 ### 2.3 `read_file` denylist — full inventory
 
@@ -203,7 +205,7 @@ tunnel are blocked:
 | Pattern (relative, case-insensitive) | Reason |
 |---|---|
 | `.env` / `.env.*` | Invincible's own secrets file |
-| `sessions.db` | The session database (plaintext history **and** the OAuth grant tables) |
+| `sessions.db` | Legacy local store file (plaintext history pre-Phase-16) — still blocked as a leftover guard |
 | `.git/` (any file under it) | Git internals (history may contain secrets) |
 
 Everything else — including `invincible/`, `tests/`, and `providers.yaml` —
@@ -255,10 +257,10 @@ Details:
 - Tokens are `secrets.token_urlsafe(16)` — unpredictable, issued one per
   action, valid for **10 minutes** (wall-clock expiry, correct across
   restarts). When persistence is opted in via
-  `INVINCIBLE_PERSIST_PENDING_ACTIONS`, tokens are written to the session
-  SQLite file (`INVINCIBLE_DB_PATH`) so they survive restarts
-  (`PendingActionStore` on `app.state`); otherwise the store is
-  memory-only and restarts orphan staged actions.
+  `INVINCIBLE_PERSIST_PENDING_ACTIONS`, tokens are written to the
+  PostgreSQL database (`INVINCIBLE_DB_URL`, `pending_actions` table) so
+  they survive restarts (`PendingActionStore` on `app.state`); otherwise
+  the store is memory-only and restarts orphan staged actions.
 - A token is **single-use**: the first `confirm_action` that resolves it
   pops the entry, so replaying a token can never execute the action twice.
 - Only a real JSON boolean `true` approves — a string `"true"` or a number
@@ -292,7 +294,7 @@ operator's own process.
 - **Authorization codes** are single-use, bound to the exact client /
   redirect URI / PKCE challenge, and expire after ~5 minutes.
 - **Access tokens** live ~1 hour, are valid only for `/mcp`, and are stored
-  **hashed (SHA-256)** in `sessions.db`. **Refresh tokens** live ~30 days
+  **hashed (SHA-256)** in PostgreSQL. **Refresh tokens** live ~30 days
   and are **rotated on every use** — a leaked old refresh token stops
   working the moment the new pair is issued (required for public clients).
 - **Revocation** (`POST /oauth/revoke`, plus `invincible oauth revoke
@@ -305,8 +307,10 @@ operator's own process.
 - **Auth**: `GATEWAY_API_KEY` (see above). Unset = open.
 - **Sessions**: `session_id` (from `X-Session-Id`) is a **partition key, not
   a credential**. Anyone authenticated to the endpoint can read/write any
-  session id. History is stored as **plaintext JSON in SQLite**
-  (`sessions.db`, gitignored).
+  session id. History is stored as **plaintext JSON in PostgreSQL**
+  (`INVINCIBLE_DB_URL`) — the database credentials are the security
+  boundary, and `invincible doctor` always prints the DSN password-masked
+  so it never leaks into terminal output or CI logs.
 - **Upstream keys**: API keys are read from the environment by *name*
   (`api_key_env`), never stored in `providers.yaml`.
 - **Failure data**: a provider's `401/403` response body is never forwarded
@@ -340,8 +344,8 @@ sandbox:
    runs.**
 2. **Approval is remote, and "the operator" is whoever holds a live access
    token.** There is no separate human-approval surface, no per-approver
-   identity, and no audit log. Pending actions are persisted to the session
-   SQLite file (`INVINCIBLE_DB_PATH`) **only when
+   identity, and no audit log. Pending actions are persisted to the
+   PostgreSQL database (`INVINCIBLE_DB_URL`) **only when
    `INVINCIBLE_PERSIST_PENDING_ACTIONS` is set** — the default is
    memory-only, so a restart orphans them — and there is no record of who
    approved what. Revocation is the control:
@@ -377,9 +381,12 @@ sandbox:
 7. **`/v1/*` is unauthenticated if `GATEWAY_API_KEY` is unset.** Forgetting
    the key opens your provider credits to anyone who can reach the port.
 8. **Sessions and grants persist plaintext (except tokens, which are
-   hashed).** `sessions.db` contains full conversation history unencrypted
-   and the OAuth client/code/refresh rows; the `.env` and `sessions.db`
-   denylist entries exist precisely so a remote AI cannot exfiltrate them.
+   hashed).** The PostgreSQL database holds full conversation history
+   unencrypted and the OAuth client/code/refresh rows — protect it with
+   credentials and network position, since the security boundary moved
+   from a filename to the DSN (masked in `doctor` output). The `.env`
+   denylist entry still stops exfiltration of secrets; the `sessions.db`
+   entries remain purely as leftover-file guards.
 9. **Chat-key threat scope.** `GATEWAY_API_KEY` (compared timing-safely
    since Phase 12) protects provider credits, not tool execution — but
    prefer long random tokens anyway (the CLI generates

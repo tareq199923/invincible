@@ -52,12 +52,12 @@ never from the client.
 
 ### Sessions
 
-- History is loaded from SQLite keyed by `X-Session-Id` (default
+- History is loaded from PostgreSQL keyed by `X-Session-Id` (default
   `default`), **prepended** to the request's `messages`, sent upstream.
 - On a successful reply, the request's new turns plus the assistant message
-  (`choices[0].message`) are **appended** to the stored history (atomic
-  under a per-store lock, so concurrent requests to one session never lose
-  each other's turns).
+  (`choices[0].message`) are **appended** to the stored history (serialized
+  per session via `SELECT … FOR UPDATE` on the session row, so concurrent
+  requests to one session never lose each other's turns).
 - **System messages are not persisted.** Clients resend the system prompt
   on every request; storing it would accumulate duplicates that trimming
   never removes (system messages are always kept). System prompts still go

@@ -10,25 +10,33 @@ non-obvious algorithms (context trimming, cooldowns, config resolution).
 ```
 invincible/
 ├── main.py                     FastAPI app, lifespan, auth wiring, /health, HEAD /
-├── cli.py                      Click CLI (setup / start / doctor / oauth)
+├── cli.py                      Click CLI (setup / start / doctor / dev-db / db / oauth / secret)
 ├── providers.yaml              Canonical provider config (packaged)
+├── migrations/                 Packaged Alembic environment (baseline 0001 = core.db metadata)
 ├── endpoints/
 │   ├── openai_compat.py        POST /v1/chat/completions, GET /v1/models
 │   ├── anthropic_compat.py     POST /v1/messages (Anthropic protocol)
 │   ├── mcp.py                  POST /mcp (JSON-RPC 2.0 dispatch, Bearer resource server)
-│   └── oauth.py                Built-in OAuth 2.1 + PKCE authorization server
-│                              (/.well-known/oauth-*, /oauth/register|authorize|token|revoke)
+│   ├── oauth.py                Built-in OAuth 2.1 + PKCE authorization server
+│   │                           (/.well-known/oauth-*, /oauth/register|authorize|token|revoke)
+│   ├── admin_api.py            /api/v1/* management surface (provider CRUD, routing modes)
+│   └── graph.py                GET /api/v1/sessions/{id}/graph (continuity projection)
 ├── models/
 │   └── anthropic.py            Pydantic request model (ignores unknown fields)
 ├── compat/
 │   ├── common.py               Protocol-neutral internal-message helpers
 │   └── anthropic.py            Pure Anthropic translators + SSE streaming
-├── core/
-│   ├── router.py               Provider loading, failover, trimming, timeouts
-│   ├── provider_health.py      Per-provider failure counts + cooldowns
-│   ├── session_store.py        SQLite conversation memory
-│   ├── oauth_store.py          SQLite OAuth store (clients, codes, hashed tokens, revocations)
-│   └── tool_executor.py        MCP tool execution + denylists + approval
+└── core/
+    ├── router.py               Provider loading, failover, trimming, timeouts
+    ├── provider_health.py      Per-provider failure counts + cooldowns
+    ├── settings.py             Typed live-read accessors for every INVINCIBLE_* variable
+    ├── db.py                   Engine factory + schema metadata (single source of truth)
+    ├── session_store.py        Conversation memory on PostgreSQL (sessions/turns/messages)
+    ├── oauth_store.py          OAuth store on PostgreSQL (clients, codes, hashed tokens)
+    ├── memory.py               Fact extraction/injection (facts table)
+    ├── run_store.py            Provider-run records (runs table)
+    ├── continuity.py           Task-state/checkpoint engine + continuation brief
+    └── tool_executor.py        MCP tool execution + denylists + approval
 ```
 
 Packaging (`pyproject.toml`):
@@ -49,33 +57,44 @@ Packaging (`pyproject.toml`):
 import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
                      │
         startup (lifespan)     │
+        url = INVINCIBLE_DB_URL (required; missing → error pointing at
+                                 `invincible dev-db`)
+        engine = make_engine(url)
+        create_all_from_metadata(engine)   (dev bootstrap from core.db metadata)
+        warn_if_schema_stale(engine)       (LOUD warning if alembic_version is
+                                            absent or ≠ head — never auto-migrates;
+                                            `invincible db upgrade` is explicit)
         ProviderRegistry(seed=packaged providers.yaml, file=
                          INVINCIBLE_PROVIDERS_FILE)   (Phase 13.5)
-        Router(registry=...)  + runs recorder (bound after RunStore.init)
-        SessionStore(db_path=os.getenv("INVINCIBLE_DB_PATH"))
-        await sessions.init()  (CREATE sessions_v2/turns/messages; one-shot
-                                legacy blob migration — Phase 15a)
-        OAuthStore(same db_path)          (CREATE oauth tables)
-        await oauth_store.init()
-        MemoryStore(shared=sessions) → init()
-        RunStore(shared=sessions) → init()               (Phase 13.5)
-        ContinuityEngine(shared=sessions, runs) → init() (Phase 15b)
+        Router(registry=...)  + runs recorder (bound after construction)
+        OAuthStore(engine)  MemoryStore(engine)  RunStore(engine)
+        SessionStore(engine)
+        ContinuityEngine(engine, runs=RunStore)
+        PendingActionStore(); attach_engine(engine) only when
+                INVINCIBLE_PERSIST_PENDING_ACTIONS is set (opt-in persistence)
                      │
         serving               app.include_router(openai_router, deps=[require_auth])
                               app.include_router(anthropic_router, deps=[require_auth])
                               app.include_router(admin_router)  (own INVINCIBLE_ADMIN_KEY)
                               app.include_router(mcp_router, deps=[require_mcp_auth])
                               app.include_router(oauth_router)      (no dep — own auth)
+                              app.include_router(graph_router)      (admin realm)
                      │
         shutdown (lifespan)   await router.close()  (httpx client)
                               await continuity.close() / runs.close() / memory.close()
-                              await sessions.close() (sqlite, owns shared conn)
-                              await oauth_store.close() (sqlite)
+                              await oauth_store.close()
+                              await pending.flush_persisted()  (drain staged-action writes)
+                              await engine.dispose()           (lifespan owns the engine)
 ```
 
 One `httpx.AsyncClient` lives inside the `Router` and is shared by all chat
-requests; the `SessionStore` holds one long-lived `aiosqlite` connection
-that `MemoryStore`, `RunStore`, and the `ContinuityEngine` share. The
+requests. All stores share **one async engine** built in the lifespan from
+`INVINCIBLE_DB_URL` — there is no per-store connection and no shared SQLite
+handle. Every store write is its own transaction: concurrent session
+appends serialize on `SELECT … FOR UPDATE` of the session row, and JSONB
+columns are bound as native objects (never pre-encoded). Schema truth is
+`core/db.py`'s `metadata`; the packaged Alembic environment tracks it via
+`alembic_version` (`invincible db upgrade`, verified by `doctor`). The
 continuity engine renders a continuation brief (canonical task state +
 checkpoints + interruption notice from runs) into every outgoing chat
 prompt, and exposes the same state to MCP tools (`task_state_set/get`,

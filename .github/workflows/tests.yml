@@ -9,12 +9,36 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # Phase 16 contract: the suite reads INVINCIBLE_TEST_DATABASE_URL.
+    # CI publishes Postgres on 5432 (the local convention stays 5433 via
+    # compose / `invincible dev-db` — do not "align" them). Trust auth and
+    # no password keep the DSN shape identical to the laptop default
+    # (postgresql+asyncpg://invincible@host/db), so no test helper needs
+    # password handling. The service is ephemeral CI infrastructure.
+    env:
+      INVINCIBLE_TEST_DATABASE_URL: postgresql+asyncpg://invincible@127.0.0.1:5432/invincible_test
+
     strategy:
       fail-fast: false
       matrix:
         # Matches pyproject requires-python (>=3.10): every claimed
-        # version is actually tested.
+        # version is actually tested — against real Postgres, not mocks.
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: invincible          # superuser: scratch-DB tests CREATE/DROP databases
+          POSTGRES_DB: invincible_test       # matches tests/conftest.py default
+          POSTGRES_HOST_AUTH_METHOD: trust   # passwordless by design; POSTGRES_PASSWORD deliberately unset
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U invincible -d invincible_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Checkout repository
@@ -31,9 +55,32 @@ jobs:
       - name: Install package
         run: pip install -e ".[dev]"
 
+      # Fail fast with one clear message if the service is broken, instead
+      # of 500 connection errors from the suite. asyncpg.connect does not
+      # accept the SQLAlchemy "+asyncpg" driver suffix, so strip it.
+      - name: Verify PostgreSQL connectivity
+        run: |
+          python -c """
+          import asyncio, os, asyncpg
+
+          dsn = os.environ['INVINCIBLE_TEST_DATABASE_URL'].replace('+asyncpg', '')
+
+          async def main():
+              conn = await asyncpg.connect(dsn)
+              version = await conn.fetchval('SELECT version()')
+              print('Connected:', version.split(',')[0])
+              await conn.close()
+
+          asyncio.run(main())
+          """
+
       - name: Lint with Ruff
         run: ruff check .
 
+      # Storage fixtures (pg_engine/client) hard-fail — they never skip —
+      # so a red job here means the suite genuinely could not reach or use
+      # Postgres. Scratch-database tests exercise CREATE/DROP DATABASE on
+      # the maintenance DB `postgres`, which initdb always creates.
       - name: Run tests with coverage
         run: pytest -q --cov=invincible --cov-report=term-missing --cov-report=xml
 
@@ -43,62 +90,3 @@ jobs:
         with:
           name: coverage-report
           path: coverage.xml
-
-  postgres-ready:
-    # Lane for Phase 16's PostgreSQL store-integration suite. Today it only
-    # proves the service container starts and accepts authenticated
-    # connections over TCP; the store tests will plug into this job.
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: invincible_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - name: Install asyncpg (ad hoc, not a repo dependency yet)
-        run: pip install asyncpg
-
-      - name: Verify PostgreSQL connectivity
-        env:
-          PGHOST: 127.0.0.1
-          PGPORT: "5432"
-          PGUSER: postgres
-          PGPASSWORD: postgres
-          PGDATABASE: invincible_test
-        run: |
-          python -c """
-          import asyncio, os, asyncpg
-
-          async def main():
-              conn = await asyncpg.connect(
-                  host=os.environ['PGHOST'],
-                  port=int(os.environ['PGPORT']),
-                  user=os.environ['PGUSER'],
-                  password=os.environ['PGPASSWORD'],
-                  database=os.environ['PGDATABASE'],
-              )
-              version = await conn.fetchval('SELECT version()')
-              print('Connected:', version.split(',')[0])
-              await conn.close()
-
-          asyncio.run(main())
-          """

@@ -21,8 +21,8 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 | `GEMINI_API_KEY` | provider tier 5 | Gemini Flash — last resort. |
 | `TOKENROUTER_API_KEY` | provider tier 1 | TokenRouter: deepseek/deepseek-v4-pro-0813-free. |
 | `INVINCIBLE_CONFIG_PATH` | startup | Path to a custom `providers.yaml` (set by CLI `--config`). |
-| `INVINCIBLE_DB_PATH` | startup | Path to the session database (set by CLI `--db-path`). |
-| `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the session database and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
+| `INVINCIBLE_DB_URL` | startup (**required since Phase 16**) | PostgreSQL DSN for **all** persistent state — conversations, OAuth grants, facts, task state, staged approvals. Example: `postgresql+asyncpg://invincible@localhost:5433/invincible`. Run `invincible dev-db` to provision a local instance, or use the bundled `docker compose up` pair. The DSN embeds credentials — treat it like a secret; `doctor` always prints it masked. |
+| `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the PostgreSQL database (`pending_actions` table) and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
 | `INVINCIBLE_CONTINUITY` | per-request | **On by default**: injects the continuation brief (canonical task state + latest checkpoint + interruption notice) from the Continuity Engine into outgoing chat prompts. Set `0`/`false`/`off` to disable rendering; state writes (MCP tools) are unaffected. |
 | `INVINCIBLE_COMPRESSION` | per-request | Send-time request compression (truncate long tool results, collapse blank-line runs) applied before context trimming. **On by default**; set to `0`/`false`/`off` to disable. Affects only what is sent to providers — stored session history stays verbatim. |
 
@@ -46,6 +46,11 @@ to reach tool execution, and rotating one secret never affects the other.
 - Inline comments and unrelated lines in an existing `.env` are preserved
   when rewriting (quoted and unquoted values both supported).
 - Provider keys are prompted with "leave empty to skip".
+- The database backend is chosen interactively at the end: **paste** an
+  existing `INVINCIBLE_DB_URL` (plain `postgresql://` URLs are
+  auto-upgraded to the required `postgresql+asyncpg://` driver; other
+  drivers are rejected), **dev-db** to provision a local PostgreSQL inline,
+  or **skip**. An already-set URL is never re-prompted unless `--force`.
 
 ---
 
@@ -201,21 +206,28 @@ turns as nodes/edges/timeline - is available to operators at
 
 ---
 
-## 3. Session database
+## 3. Database (PostgreSQL — required since Phase 16)
 
-- Default path: `sessions.db` in the **current working directory** (never
-  inside the installed package).
-- Override with `INVINCIBLE_DB_PATH` or the CLI flag
-  `invincible start --db-path <path>`.
-- Normalized tables (Phase 15a): `sessions_v2` + `turns` + `messages` -
-  one row per message with the full original payload stored as JSON, and
-  turn boundaries mirroring the router's `group_into_turns` rule. The
-  pre-15a blob table (`sessions`) is kept as a frozen backup after a
-  one-shot, transactional migration on first boot; it is never read or
-  written again.
-- **Plaintext, no encryption.** `sessions.db` is gitignored; the `write_file`
-  and `read_file` denylists protect it from the MCP tools (see
-  [docs/SECURITY.md](SECURITY.md)).
+- Everything persists to one PostgreSQL database addressed by
+  `INVINCIBLE_DB_URL` (SQLAlchemy 2 async Core over asyncpg). The server
+  **refuses to start** without it.
+- Local options: `invincible dev-db` (provisions or verifies a local
+  Postgres and prints/writes a working URL) or the bundled
+  `docker compose up` pair (publishes `127.0.0.1:5433`).
+- Schema: created by `invincible db upgrade` (packaged Alembic migrations;
+  writes `alembic_version`). Tables: `sessions`, `turns`, `messages`,
+  `facts`, `runs`, `task_states`, `checkpoints`, `oauth_clients`,
+  `oauth_codes`, `oauth_tokens`, `pending_actions`. Message payloads are
+  JSONB; turn boundaries mirror the router's `group_into_turns` rule.
+- `doctor` verifies connectivity and that the recorded schema revision
+  matches the packaged migration head (loud FAIL on mismatch or an
+  unmanaged-but-populated database). Startup never auto-migrates.
+- Legacy SQLite files (`sessions.db`) are no longer read by the server —
+  import them once with `invincible db import <path>`; the name survives
+  only in the tool denylists, which still block leftover files.
+- **Plaintext, no encryption.** Conversation history sits in the database
+  in plaintext; protect it with database credentials and network position
+  (see [docs/SECURITY.md](SECURITY.md)).
 
 ---
 
@@ -226,8 +238,10 @@ invincible setup [--env-file PATH] [--force]
 invincible secret rotate [--env-file PATH] [--show]
 invincible start [--host 127.0.0.1] [--port 8000] [--reload]
                 [--log-level info] [--env-file .env]
-                [--config PATH] [--db-path PATH]
-invincible oauth list | revoke <client_id> | test-client [--db-path PATH]
+                [--config PATH]
+invincible dev-db [--port 5433] [--env-file .env] [--write-env]
+invincible db upgrade | import <legacy-sessions.db> [--env-file .env]
+invincible oauth list | revoke <client_id> | test-client
 invincible --version | --help
 ```
 
@@ -251,14 +265,28 @@ Notes on `start`:
   variable always wins over the file.
 - `--config` validates the YAML up front (raising a CLI error on
   `FileNotFoundError`/`ValueError`) and sets `INVINCIBLE_CONFIG_PATH`.
-- `--db-path` sets `INVINCIBLE_DB_PATH`.
+- There is no database flag: `INVINCIBLE_DB_URL` comes from the environment
+  or `.env` (the DSN embeds credentials, so it is deliberately not a CLI
+  argument). Startup fails with a pointer at `invincible dev-db` when it is
+  missing.
 - Binding to `0.0.0.0` prints a reminder of the local access URL.
 - Both console scripts (`invincible` and `inv`) declared in `pyproject.toml`
   point at the same `cli` group.
+
+Notes on `oauth` and `db`:
+
+- Both groups accept `--env-file .env` (loaded with `override=False`) so
+  they pick up `INVINCIBLE_DB_URL` the same way `start` does.
+- `invincible db upgrade` runs the packaged Alembic migrations to head;
+  `invincible db import <path>` one-shot-imports a legacy SQLite
+  `sessions.db` (sessions/turns/messages, facts, OAuth rows). Neither ever
+  runs automatically.
+- `invincible dev-db --write-env` writes the provisioned URL straight into
+  your `.env`.
 
 Notes on `oauth revoke`:
 
 - Client ids are random URL-safe strings and may start with `-`. Because
   Click parses such an id as an option, pass it after a `--` separator:
   `invincible oauth revoke -- <client_id>`. Same surface for `oauth list`
-  and `oauth test-client` (both accept `--db-path`).
+  and `oauth test-client`.

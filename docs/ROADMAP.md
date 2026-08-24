@@ -54,6 +54,11 @@ Then          7 · 8             parallel finishers
 
 ## Phase 0 — Current state (Done)
 
+> **Historical snapshot** from before Phase 1. Storage has since changed:
+> Phase 16 moved conversations, OAuth grants, facts, task state, and
+> staged approvals to PostgreSQL and removed the SQLite era; provider
+> cooldowns/disables remain in-memory today.
+
 What exists today, so each phase's delta is clear.
 
 | Area | State |
@@ -93,9 +98,9 @@ per-approver identity** on the MCP approval flow.
 ### Scope
 
 1. **MCP approval audit log** (the core of this phase)
-   - The audit **table schema is designed and created in Phase 16** as part
-     of the PostgreSQL migration; this phase populates it and builds the
-     surface on top:
+   - Phase 16 slipped the audit table, so this phase designs **and
+     creates** it on the PostgreSQL store (packaged Alembic revision),
+     then populates it and builds the surface on top:
      `id`, `timestamp`, `client_id`, `action_type`, `command`/`path` (the
      sensitive args), `token`, `decision` (staged / approved / declined /
      expired), and `approver_client_id`.
@@ -114,10 +119,11 @@ per-approver identity** on the MCP approval flow.
      (mirrors what the owner secret already does).
    - *(Lands early via Phase 12; kept here as the acceptance gate.)*
 3. **Persist login rate-limit state** (or document the tradeoff)
-   - Move the per-IP failure window from in-memory to the database so a
-     restart does not reset brute-force friction (`endpoints/oauth.py`).
-   - *(Lands with Phase 16, which migrates all state to PostgreSQL and
-     persists provider health in the same pass.)*
+   - Move the per-IP failure window from in-memory to a new table on the
+     Phase 16 PostgreSQL engine (`endpoints/oauth.py`). Phase 16 shipped
+     the engine but **not** this table — it is created here (or in a
+     16.1); provider-health persistence likewise did **not** land in 16
+     and stays in the backlog.
 4. **Optional sessions-at-rest encryption**
    - Toggle (env var) that encrypts conversation rows in
      `core/session_store.py`; default off to preserve the existing
@@ -882,8 +888,9 @@ never tested.
   the `coverage-report` artifact from one leg. **Baseline: 92%**
   (weakest: `tool_executor.py` 86%, `anthropic_compat.py` 88%).
 - New **`postgres-ready`** job: postgres:17 service with
-  `pg_isready` healthcheck; installs asyncpg ad hoc (not a repo
-  dependency until Phase 16) and proves authenticated TCP connectivity.
+  `pg_isready` healthcheck proving authenticated TCP connectivity.
+  *(Folded into the `test` job during Phase 16's close-out — every
+  matrix leg now runs the real suite against the Postgres service.)*
 
 ### Dependencies
 
@@ -946,7 +953,55 @@ programmatically.
 
 ## Phase 16 — PostgreSQL storage migration
 
-**Priority P1 · Size L · Status: Planned · Requires: Phase 13 (Settings) · Prerequisite for: Phases 1, 2, 4, 8**
+**Priority P1 · Size L · Status: Done · Requires: Phase 13 (Settings) · Prerequisite for: Phases 1, 2, 4, 8**
+
+> **Progress note (implementation status):**
+>
+> Landed: PostgreSQL schema foundation (`core/db.py` metadata as single
+> source of truth); all stores rewritten over SQLAlchemy 2.0 async Core /
+> asyncpg (`SessionStore`, `MemoryStore`, `RunStore`, `OAuthStore`,
+> `PendingActionStore`, `ContinuityEngine`) with per-session
+> `SELECT … FOR UPDATE` serialization on appends and JSONB bound natively
+> (no double-encoding); test suite runs against a real Postgres database.
+> CLI surface: `INVINCIBLE_DB_URL` replaces `INVINCIBLE_DB_PATH`
+> everywhere (the DSN is a secret-bearing connection string, so there are
+> deliberately no `--db-url`/`--db-path` flags — env/.env only);
+> `invincible dev-db` provisions or verifies a local Postgres (Docker
+> fallback included) and prints/writes a working URL; `setup` offers an
+> interactive paste/dev-db/skip choice for the DB URL with plain-
+> `postgresql://` → `+asyncpg` normalization; `doctor` reports connectivity,
+> masked DSN, and schema revision, failing loudly on mismatch/unmanaged
+> schemas; new `invincible db upgrade` (packaged Alembic environment under
+> `invincible/migrations/`, baseline revision verified table-for-table
+> against `create_all`) and `invincible db import <sessions.db>` (one-shot
+> legacy importer covering sessions/turns/messages, facts, and OAuth rows,
+> id-preserving with sequence re-sync); `docker-compose.yml` +
+> `Dockerfile` app/postgres pair where the app container upgrades before
+> serving.
+>
+> Close-out: the CI gate landed — the Postgres service container was
+> **folded into the `test` job**, so every Python matrix leg runs the full
+> suite against real Postgres (`INVINCIBLE_TEST_DATABASE_URL`, trust auth,
+> port 5432 in CI / 5433 locally); docs now describe PostgreSQL as the live
+> backend everywhere.
+>
+> **Slips (named honestly):**
+> - `audit_log` was **not** created. Phase 1 designs *and* creates it on
+>   this store when it populates the audit surface.
+> - Provider health (`provider_health`) was **not** persisted; cooldowns/
+>   disables remain in-memory (`core/provider_health.py`,
+>   `time.monotonic()`), and restart-preservation of health is **out of
+>   16** (backlog; candidate 16.1 or Phase 15). Staged approvals survive
+>   restarts only with `INVINCIBLE_PERSIST_PENDING_ACTIONS` set (opt-in).
+> - TIMESTAMPTZ conversion remains deferred (timestamps are epoch floats).
+>
+> **Decision recorded during implementation (not in the original phase
+> plan):** *schema-truth handshake* — `invincible db upgrade` writes
+> `alembic_version`; `doctor` FAILs loudly on revision mismatch or an
+> unmanaged-but-populated schema; startup logs a loud warning but never
+> auto-runs migrations. This refines the existing "migrations run
+> explicitly, never auto-run at startup" decision above; the create_all
+> bootstrap stays as a dev convenience with the warning attached.
 
 ### Goal
 
@@ -987,6 +1042,8 @@ async paths** (`core/tool_executor.py`).
    `oauth_clients`, `oauth_codes`, `oauth_tokens`, `pending_actions`,
    `audit_log` (schema designed now, populated by Phase 1), and
    `provider_health`.
+   *(Slipped — see progress note: only the first six exist; `audit_log`
+   moves to Phase 1, health persistence out of 16 entirely.)*
 3. **Store rewrites preserving public APIs** — endpoints barely change:
    - `append()` becomes one transaction with `SELECT … FOR UPDATE` per
      session row (replacing the process-global asyncio.Lock
@@ -1014,6 +1071,8 @@ async paths** (`core/tool_executor.py`).
 8. **Folded-in state persistence** — provider cooldowns/disables and
    the login rate-limit window survive restarts via PG tables
    *(promotes two backlog items)*.
+   *(Slipped — see progress note: health/rate-limit persistence did not
+   land; staged-approval persistence is opt-in via the existing flag.)*
 9. **Docs** — README install story, CONFIGURATION.md, ARCHITECTURE.md
    module map, SECURITY.md: the denylist's file-protection of
    `sessions.db` loses meaning, the security boundary moves to DB
@@ -1028,13 +1087,18 @@ async paths** (`core/tool_executor.py`).
 
 ### Acceptance criteria
 
-- Full suite green against a real Postgres instance in CI.
+- Full suite green against a real Postgres instance **in CI** — the
+  Postgres service container is folded into the `test` matrix; all five
+  Python legs gate on it.
 - `invincible db import` round-trips a populated legacy `sessions.db`.
 - `doctor` reports connectivity and schema revision; mismatches are
   loud.
 - `docker compose up` yields a healthy gateway with zero manual SQL.
-- Restarting the server preserves cooldowns, disables, and staged
-  approvals; docs updated everywhere SQLite is mentioned.
+- Staged approvals survive restarts **when
+  `INVINCIBLE_PERSIST_PENDING_ACTIONS` is set** (opt-in). Provider
+  cooldowns/disables remain in-memory — restart-preservation of health
+  slipped out of 16 (see progress note).
+- Docs updated everywhere SQLite was described as current behavior.
 
 ---
 
@@ -1043,9 +1107,11 @@ async paths** (`core/tool_executor.py`).
 Ideas that don't fit one phase cleanly. Pull from here when planning a
 cycle.
 
-*Recently promoted:* persistent cooldowns/disables and login-rate-limit
-persistence → **Phase 16**; health-endpoint detail and prettier console
-output → **Phase 15**.
+*Recently promoted:* health-endpoint detail and prettier console output →
+**Phase 15**. Health persistence and login-rate-limit persistence were
+briefly folded into Phase 16 and **slipped back out** — they live here
+again (candidates: a future 16.1 or Phase 15). The compose pair itself
+**did** land in 16.
 
 - **Image content blocks** — Anthropic `image` blocks are currently
   skipped during flattening (`compat/anthropic.py`); OpenAI vision

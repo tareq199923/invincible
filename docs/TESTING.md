@@ -8,15 +8,25 @@ is exercised in-process with `httpx.ASGITransport`.
 
 ## 1. Running
 
+Since Phase 16 the suite runs against a **real PostgreSQL database** (no
+SQLite mocks) — storage fixtures hard-fail rather than skip when it is
+unreachable:
+
 ```bash
-pip install -r requirements.txt   # or: pip install -e ".[dev]"
+pip install -e ".[dev]"
+# Default target; override for other ports/hosts — CI sets this itself
+# (service container on 5432, trust auth):
+export INVINCIBLE_TEST_DATABASE_URL=postgresql+asyncpg://invincible@127.0.0.1:5433/invincible_test
 pytest
 ```
+
+`invincible dev-db` provisions a matching local instance (databases
+`invincible` and `invincible_test`). No provider API keys are required —
+every upstream is faked.
 
 - `pytest.ini` sets `asyncio_mode = auto`, so async tests need no explicit
   markers (the two `.asyncio` markers that exist in test files are
   redundant but harmless).
-- No `.env` or API keys are required — every fixture injects its own.
 
 ---
 
@@ -42,11 +52,18 @@ pytest
 - **`router_setter`** — replaces `app.state.router` (the test app is the
   real `invincible.main.app`), tracking every router so the fixture can
   close its httpx client afterwards.
+- **`pg_engine`** — a function-scoped async engine on the shared test
+  database (`INVINCIBLE_TEST_DATABASE_URL`): `create_all` from
+  `core.db.metadata`, then `TRUNCATE … RESTART IDENTITY` after each test so
+  storage tests never see each other's rows.
 - **`client`** — an `httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
   base_url="http://test")`; sets `GATEWAY_API_KEY=test-gateway-key` and
   `INVINCIBLE_OWNER_SECRET=test-owner-secret` (MCP auth flows through the
-  OAuth endpoints, which need the owner secret for the login step). Uses a
-  `SessionStore(db_path=":memory:")` so tests are isolated.
+  OAuth endpoints, which need the owner secret for the login step), and
+  wires every store to `pg_engine`.
+- **`pg_live`** — skip-gate for tests that need more than `pg_engine`
+  (scratch databases, CLI provisioning flows); skips cleanly when no local
+  Postgres is reachable.
 - **`provider_body(name, content)`** — a canned OpenAI-shaped success body.
 
 ### Pattern: pending-action approval tests
@@ -77,7 +94,7 @@ sleeping.
 | `test_session_store.py` | History replayed on second request within a session; **no cross-session leakage** (session-a's secret not visible in session-b); corrupt rows → empty history; **concurrent appends lose no turns** (25 parallel `append` calls all land); **OpenAI system messages not persisted** (mirrors the Anthropic guarantee) while still sent upstream every request; streamed replies persisted and replayed. |
 | `test_timeouts.py` | Defaults when no `timeout:` block; partial override merges with defaults; full override; **real shipped `providers.yaml` parses** with the expected read timeouts (guards YAML typos). |
 | `test_mcp_endpoint.py` | MCP auth (missing/wrong → 401, unset secret → 503); `tools/list` names (incl. `confirm_action`); blocked command → `isError` with **no token issued**; two-call approval flow: `execute_bash`/`write_file` stage pending without executing/writing, `confirm_action` approve → real result / deny → `Declined.` / unknown or non-boolean approve → nothing runs; token replay → `Unknown or expired`, never double-executes; unknown tool → -32601; read_file success / `.env` blocked / own-source allowed; write to protected path blocked without staging; JSON-RPC hardening: parse error -32700, non-object -32600, bad params -32602; notifications (no `id`) → 204 with empty body, even on param errors. |
-| `test_tool_executor.py` | Parameterized denylist sweep over ~24 dangerous commands (Unix + Windows) and ~10 safe ones (incl. `rm -rf ./build`, `rd /s C:\build`, `del C:\temp\out.txt`); blocked commands/paths never issue a token; pending calls return `pending_confirmation` without executing/writing (probe asserts no run); `confirm_action` approve runs/writes for real, decline doesn't, unknown/expired → `not_found`; tokens are single-use (no double execution); write denylist blocks `.env*`, `providers.yaml`, `sessions.db`, `invincible/`, `tests/`, `.git/`; read denylist blocks only secrets but **allows** `providers.yaml`, `invincible/`, `tests/`; paths outside the repo are not write-denied; read errors are structured, not exceptions; **pending actions survive a store restart over the same db file** (bash + write_file, still single-use), expired entries are purged on load, an unavailable database degrades to memory-only without breaking staging, and a **cross-process restart is simulated with divergent monotonic clocks** (regression: `created_at` uses wall-clock `time.time()`, not process-relative `time.monotonic()`, so persisted expiry works after a real restart). |
+| `test_tool_executor.py` | Parameterized denylist sweep over ~24 dangerous commands (Unix + Windows) and ~10 safe ones (incl. `rm -rf ./build`, `rd /s C:\build`, `del C:\temp\out.txt`); blocked commands/paths never issue a token; pending calls return `pending_confirmation` without executing/writing (probe asserts no run); `confirm_action` approve runs/writes for real, decline doesn't, unknown/expired → `not_found`; tokens are single-use (no double execution); write denylist blocks `.env*`, `providers.yaml`, `sessions.db`, `invincible/`, `tests/`, `.git/`; read denylist blocks only secrets but **allows** `providers.yaml`, `invincible/`, `tests/`; paths outside the repo are not write-denied; read errors are structured, not exceptions; **pending actions survive a restart over the shared PostgreSQL test database** (bash + write_file, still single-use, via `attach_engine` + `load_persisted`), expired entries are purged on load, an unreachable database degrades to memory-only without breaking staging, and persisted rows use wall-clock `created_at` (`time.time()`), so expiry works across real process restarts. |
 | `test_main.py` | Lifespan wiring: without `INVINCIBLE_PERSIST_PENDING_ACTIONS` the `PendingActionStore` is memory-only (`_db is None` — clean slate on restart); with it set, the shared db file is passed through (persistence active). |
 | `test_cli.py` | CLI registration + version; both console scripts declared in pyproject; `setup` creates/updates `.env`, preserves existing values/comments, generates secrets only when missing; `start` port validation, env-file loading, config path handling. |
 

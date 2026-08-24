@@ -56,7 +56,7 @@ serves two roles in one process:
 |---|---|
 | **Tiered failover** | Providers sorted by `tier`, tried in order; 429/5xx → cooldown + next tier; 401/403 → permanent disable; network errors → next tier. All providers down → HTTP 503. |
 | **Exponential cooldown** | 30s → 60s → 120s → 240s → capped at 300s; a success resets the counter (in-memory, process-scoped). |
-| **Conversation memory** | SQLite-backed, keyed by the `X-Session-Id` header (default `default`). History is merged into every request and the assistant reply is persisted back. |
+| **Conversation memory** | PostgreSQL-backed (Phase 16), keyed by the `X-Session-Id` header (default `default`). History is merged into every request and the assistant reply is persisted back. |
 | **Context trimming** | Per-provider `max_context`; system messages always kept; everything else dropped as atomic *turns* (an assistant `tool_calls` is never separated from its tool results); the most recent turn is always sent. |
 | **Per-provider timeouts** | Split connect/read/write/pool with sane defaults and per-provider overrides (NIM, Gemini, and the OpenRouter fallback get 90s reads; Groq 45s). |
 | **MCP tool server** | `read_file` (no approval), `execute_bash` and `write_file` (staged, then approved via a token round-trip through the `confirm_action` tool), guarded by denylists and an **OAuth 2.1 + PKCE bearer-token** auth layer (browser owner-login + per-client consent, tokens don't survive on requests like a shared header does). |
@@ -66,20 +66,20 @@ serves two roles in one process:
 
 ## Installation
 
-Requires Python 3.10+.
-
-```bash
-python -m venv venv
-source venv/bin/activate            # or venv\Scripts\activate on Windows
-pip install -r requirements.txt
-```
-
-Optional: install the package itself so the `invincible` / `inv` commands
-work from anywhere:
+Requires Python 3.10+ **and** a PostgreSQL database (all state —
+conversations, OAuth grants, task state, staged approvals — lives there;
+`INVINCIBLE_DB_URL` is required to start).
 
 ```bash
 pip install -e .
 invincible --version                 # verify
+```
+
+Easiest local database setup (pick one):
+
+```bash
+invincible dev-db                    # provisions/verifies local Postgres, prints the URL
+docker compose up                    # or: bundled app + postgres pair; the app upgrades its own schema
 ```
 
 ---
@@ -89,15 +89,22 @@ invincible --version                 # verify
 ```bash
 cp .env.example .env                # then fill in API keys
 
-invincible setup                    # generates missing secrets, prompts for keys
+invincible setup                    # secrets, provider keys, and your DB URL choice
+invincible dev-db                   # local Postgres ready + URL (or use docker compose)
+invincible db upgrade               # create/migrate the schema (explicit, never auto-run)
 invincible start                    # http://127.0.0.1:8000
 ```
 
 `invincible setup` writes missing secret values (`GATEWAY_API_KEY`,
-`INVINCIBLE_OWNER_SECRET`) as random `secrets.token_urlsafe(32)` tokens and
-prompts for the provider keys, preserving your existing `.env` comments and
-values. `INVINCIBLE_OWNER_SECRET` is the one-time browser login for
-approving MCP connections — not something `/mcp` requests send anymore.
+`INVINCIBLE_OWNER_SECRET`) as random `secrets.token_urlsafe(32)` tokens,
+prompts for the provider keys, and asks how you want to supply
+`INVINCIBLE_DB_URL` (paste a DSN / provision locally via dev-db / skip) —
+preserving your existing `.env` comments and values.
+`INVINCIBLE_OWNER_SECRET` is the one-time browser login for approving MCP
+connections — not something `/mcp` requests send anymore.
+
+The bundled `docker compose up` pair needs none of the manual DB steps: the
+app container runs `invincible db upgrade` before serving.
 
 See [Examples](#examples) for ready-to-run `curl` calls, or continue reading
 for the full configuration, API, and tooling reference.
@@ -120,8 +127,8 @@ Everything is environment variables plus one YAML file — no other config.
 | `GEMINI_API_KEY` | provider tier 5 | Gemini Flash — last resort. |
 | `TOKENROUTER_API_KEY` | provider tier 1 | TokenRouter: deepseek/deepseek-v4-pro-0813-free. |
 | `INVINCIBLE_CONFIG_PATH` | startup | Path to a custom `providers.yaml` (set by CLI `--config`). |
-| `INVINCIBLE_DB_PATH` | startup | Path to the session database (set by CLI `--db-path`). |
-| `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the session database and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
+| `INVINCIBLE_DB_URL` | startup (**required since Phase 16**) | PostgreSQL DSN for all persistent state, e.g. `postgresql+asyncpg://invincible@localhost:5433/invincible`. Provision with `invincible dev-db` or the bundled compose pair; masked in `doctor` output. |
+| `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the PostgreSQL database (`pending_actions` table) and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
 
 The two secrets are **independent**: a leaked tunnel URL alone is not enough
 to reach tool execution, and rotating one secret never affects the other.
@@ -152,8 +159,11 @@ Two commands, both exposed as `invincible` and `inv`:
 |---|---|
 | `invincible setup` | Create/update `.env`: generates missing secrets (`token_urlsafe(32)`, never echoed), prompts for provider keys, preserves existing comments/values; carries a legacy `MCP_SHARED_SECRET` over to `INVINCIBLE_OWNER_SECRET` automatically. `--force` re-prompts existing values. |
 | `invincible secret rotate` | Generate a brand-new `INVINCIBLE_OWNER_SECRET` and rewrite it in place — no manual `.env` editing, never echoes the value (unless `--show`). Preserves every other line; migrates a legacy `MCP_SHARED_SECRET` key away. Does **not** revoke already-issued OAuth grants (that's `invincible oauth revoke`). |
-| `invincible start` | Start the server **and** a Cloudflare tunnel (named `invincible` by default) so the gateway is reachable remotely. Options: `--host` (default `127.0.0.1`), `--port` (default `8000`), `--reload`, `--log-level`, `--env-file`, `--config` (custom providers.yaml), `--db-path` (session database), `--tunnel/--no-tunnel`, `--tunnel-name` (or `INVINCIBLE_TUNNEL_NAME`). The tunnel is shut down with the server (Ctrl+C or a crash); a dead tunnel is reported as soon as it exits. |
-| `invincible doctor` | Environment/config diagnostics, including the owner-secret presence. |
+| `invincible start` | Start the server **and** a Cloudflare tunnel (named `invincible` by default) so the gateway is reachable remotely. Options: `--host` (default `127.0.0.1`), `--port` (default `8000`), `--reload`, `--log-level`, `--env-file`, `--config` (custom providers.yaml), `--tunnel/--no-tunnel`, `--tunnel-name` (or `INVINCIBLE_TUNNEL_NAME`). The tunnel is shut down with the server (Ctrl+C or a crash); a dead tunnel is reported as soon as it exits. There is no database flag — `INVINCIBLE_DB_URL` comes from the env/.env. |
+| `invincible doctor` | Environment/config diagnostics: providers.yaml, secrets, and PostgreSQL connectivity + schema revision (DSN always password-masked); loud FAIL on a stale/unmanaged schema. |
+| `invincible dev-db` | Provision or verify a local Postgres development database (Docker fallback included) and print/write a working `INVINCIBLE_DB_URL`. |
+| `invincible db upgrade` | Run the packaged Alembic migrations to head against `INVINCIBLE_DB_URL`. Explicit by design — nothing auto-migrates. |
+| `invincible db import <sessions.db>` | One-shot legacy SQLite importer (sessions/turns/messages, facts, OAuth rows). |
 | `invincible oauth list` | Show registered OAuth clients, their redirect URIs, and active/revoked grants. |
 | `invincible oauth revoke <client_id>` | Revoke every access/refresh token for a client immediately. |
 | `invincible oauth test-client` | Headless helper: registers a client, approves it, and prints a ready-to-use Bearer token + curl for `/mcp` (no browser needed). |
@@ -195,7 +205,7 @@ Full CLI reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md) → *CLI refe
   arrive — nothing is buffered. Providers that fail before the first chunk
   trigger the normal failover; an error after streaming has begun terminates
   the stream with a well-formed `data: {"error": …}` event.
-- **Sessions**: history is loaded from SQLite keyed by the `X-Session-Id`
+- **Sessions**: history is loaded from PostgreSQL keyed by the `X-Session-Id`
   header (default `default`), prepended to your messages, and the assistant
   reply is persisted back. `session_id` is a partition key, not a credential.
   For streamed responses the reply is reconstructed from the chunk deltas and
@@ -238,7 +248,7 @@ The upstream model always comes from `providers.yaml`.
   preserved). `image` content blocks are still skipped. A mid-stream
   upstream failure emits a well-formed Anthropic `error` event and closes —
   never malformed SSE.
-- **Sessions**: the same `X-Session-Id` header and SQLite store are used,
+- **Sessions**: the same `X-Session-Id` header and PostgreSQL store are used,
   and history is serialized in the shared internal format — an OpenAI
   client and a Claude Code session on the same id see the same
   conversation.
@@ -503,11 +513,11 @@ More MCP protocol details: [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md).
                   │ + ctx trimming │   └─────────────────────┘
                   └───────┬────────┘
                           │
-            ┌─────────────▼──────────────┐
-            │ core/provider_health.py   │
-            │ core/session_store.py     │
-            │ (SQLite conversation mem) │
-            └────────────────────────────┘
+            ┌──────────────────────────┐
+            │ core/provider_health.py  │
+            │ core/session_store.py    │
+            │ (PostgreSQL stores)      │
+            └──────────────────────────┘
 ```
 
 The compatibility layers (OpenAI and Anthropic) only translate; both
@@ -527,7 +537,9 @@ store, and trimming logic consume.
 | `invincible/endpoints/mcp.py` | `POST /mcp`; JSON-RPC 2.0 dispatch, `tools/list`, `tools/call`. |
 | `invincible/core/router.py` | Provider loading, tiered failover, response trimming, timeouts. |
 | `invincible/core/provider_health.py` | Per-provider failure counts + exponential cooldowns. |
-| `invincible/core/session_store.py` | SQLite-backed conversation memory, partitioned by session id. |
+| `invincible/core/db.py` | SQLAlchemy engine factory + schema metadata (single source of truth). |
+| `invincible/migrations/` | Packaged Alembic environment (`invincible db upgrade`). |
+| `invincible/core/session_store.py` | Conversation memory on PostgreSQL, partitioned by session id. |
 | `invincible/core/tool_executor.py` | Denylists, pending-action approval (`confirm_action`), tool execution. |
 | `invincible/cli.py` | Click CLI: `setup` (env file wizard) and `start` (uvicorn wrapper). |
 | `invincible/providers.yaml` | Canonical provider configuration (packaged, authoritative). |
@@ -564,8 +576,8 @@ store, and trimming logic consume.
   a valid OAuth Bearer token can approve pending actions; there is no
   terminal prompt and no separate human-authentication surface. Revoke the
   client with `invincible oauth revoke <client_id>` to cut that off.
-- Sessions are stored **plaintext** in SQLite; cooldowns and provider
-  disables are **in-memory only**.
+- Sessions are stored **plaintext** in PostgreSQL (protect the DSN);
+  cooldowns and provider disables are **in-memory only**.
 
 Full details: [docs/SECURITY.md](docs/SECURITY.md) → *Known limits*.
 
