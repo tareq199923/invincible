@@ -10,6 +10,14 @@ providers:
     api_key_env: TOKENROUTER_API_KEY
     model_id: qwen/qwen3.8-max-free
     max_context: 1000000
+    # Free tier is unreliable on large/tool-heavy requests (Claude Code
+    # sends its full ~30-tool schema on every turn): observed both a
+    # generic 400 ("bad_response_status_code") and a 403 ("no access to
+    # model alpha-model") for the *same* payload on different attempts,
+    # meaning tokenrouter sometimes internally reroutes heavy requests to
+    # a backend this free token can't reach. Fail over to the next tier
+    # instead of surfacing that as a hard error to the client.
+    failover_on_400: true
     timeout:
       read: 90.0   # free tier can be slow to first token
 
