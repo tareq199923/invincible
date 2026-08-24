@@ -13,8 +13,11 @@ dependencies = [
     "httpx",
     "PyYAML",
     "python-dotenv",
-    "aiosqlite",
     "click",
+    "sqlalchemy[asyncio]>=2",
+    "asyncpg",
+    "greenlet",
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]
