@@ -105,6 +105,48 @@ def _network_error_details(e: Exception) -> dict:
     message = str(e) or getattr(e, "message", "") or "no_message"
     return {"error_type": cls, "error_kind": kind, "error_msg": message.strip()[:200]}
 
+
+def _dump_debug_payload(name: str, status: int, payload: dict) -> None:
+    """Temporary debug aid: dump the exact outgoing payload for a 400 to a
+    local file so it can be replayed directly against the provider outside
+    the gateway. Local-machine only, best-effort, never raises. Remove once
+    the root cause is confirmed."""
+    import pathlib as _pathlib
+    try:
+        out = _pathlib.Path("debug_last_400_payload.json")
+        out.write_text(
+            json.dumps(
+                {"provider": name, "status": status, "payload": payload},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        logger.warning("Dumped failing payload to %s", out.resolve())
+    except Exception as e:
+        logger.warning("Failed to dump debug payload: %s", e)
+
+def _log_upstream_error_body(name: str, status: int, parsed_body: dict) -> None:
+    """Log the upstream provider's own error body (error visibility fix).
+
+    ``UpstreamClientError.body`` was previously only ever handed to the
+    caller (which discards it behind a generic client-facing message) and
+    never written to the log, so a 400 from a provider was indistinguishable
+    from any other 400 in the console. This is the single place that logs
+    it: truncated, and only the parsed/raw error body - never the outgoing
+    payload, headers, or keys.
+    """
+    try:
+        rendered = json.dumps(parsed_body, ensure_ascii=False)
+    except (TypeError, ValueError):
+        rendered = str(parsed_body)
+    logger.warning(
+        "Upstream client error from %s (status=%s): %s",
+        name,
+        status,
+        rendered[:500],
+    )
+
 async def _iter_stream(resp: httpx.Response) -> AsyncIterator[dict]:
     """Yield parsed OpenAI SSE events from a streaming httpx response.
 
@@ -555,6 +597,10 @@ class Router:
                 level=logging.WARNING,
             )
             body = await e.response.aread()
+            parsed_body = _parse_json_or_raw(body)
+            _log_upstream_error_body(name, status, parsed_body)
+            if status == 400:
+                _dump_debug_payload(name, status, payload)
             await self._record_run(
                 provider, attempt_index, time.time(), "error",
                 error_class=str(status),
@@ -562,7 +608,7 @@ class Router:
                 started_at=attempt_started,
             )
             raise UpstreamClientError(
-                status_code=status, body=_parse_json_or_raw(body)
+                status_code=status, body=parsed_body
             ) from e
 
         except httpx.RequestError as e:
@@ -657,6 +703,10 @@ class Router:
                 )
                 body = await resp.aread()
                 await resp.aclose()
+                parsed_body = _parse_json_or_raw(body)
+                _log_upstream_error_body(name, resp.status_code, parsed_body)
+                if resp.status_code == 400:
+                    _dump_debug_payload(name, resp.status_code, payload)
                 await self._record_run(
                     provider, attempt_index, time.time(), "error",
                     error_class=str(resp.status_code),
@@ -664,7 +714,7 @@ class Router:
                     started_at=attempt_started,
                 )
                 raise UpstreamClientError(
-                    status_code=resp.status_code, body=_parse_json_or_raw(body)
+                    status_code=resp.status_code, body=parsed_body
                 )
 
             tail = _iter_stream(resp)
