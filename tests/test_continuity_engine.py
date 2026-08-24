@@ -173,6 +173,28 @@ async def test_context_truncates_huge_payload_render(stack):
     assert "…[truncated]" in msg["content"]
 
 
+async def test_context_global_budget_omits_overflow_tasks(stack):
+    """m5: fat tasks exceed the whole-brief cap - rendering stops with an
+    explicit omission marker and the total stays under budget. Recency
+    selection keeps the five most-recently-updated keys (k0 ages out)."""
+    _, _, eng = stack
+    import asyncio as _aio
+    import re as _re
+
+    for i in range(6):
+        await eng.set_state(
+            "s", {"blob": "x" * 900, "i": i}, actor="x", task_key=f"k{i}"
+        )
+        await _aio.sleep(0.001)  # distinct updated_at for stable recency
+    msg = await eng.context_message("s")
+    body = msg["content"]
+    assert len(body) <= 4200  # 4096 cap + header/footer slop
+    assert "additional tasks omitted" in body
+    rendered = _re.findall(r"Task '(k\d)'", body)
+    assert rendered, "at least one task must render before the cut"
+    assert "k0" not in rendered  # oldest key dropped by recency limit
+
+
 async def test_interruption_signal_from_runs_after_last_checkpoint(stack):
     _, runs, eng = stack
     await eng.set_state("s", {"next": 6}, actor="mcp:task_state_set")
