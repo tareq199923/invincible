@@ -19,13 +19,12 @@ from invincible.core.db import (
     task_states,
     turns,
 )
-
-TEST_URL = "postgresql+asyncpg://invincible@127.0.0.1:5433/invincible_test"
+from tests.conftest import TEST_DB_URL
 
 
 @pytest.fixture
 async def engine():
-    eng = create_async_engine(TEST_URL)
+    eng = create_async_engine(TEST_DB_URL)
     async with eng.begin() as conn:
         await conn.run_sync(metadata.drop_all)
         await conn.run_sync(metadata.create_all)

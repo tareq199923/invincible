@@ -264,10 +264,18 @@ async def test_doctor_live_empty_unmanaged_database_hinted(
     pg_live, admin_pg, monkeypatch, tmp_path
 ):
     """A reachable but completely empty database points at db upgrade."""
+    from sqlalchemy.engine import make_url
+
     _set_secrets(monkeypatch)
-    fresh_url = "postgresql+asyncpg://invincible@127.0.0.1:5433/invincible_doctor_empty"
-    await admin_pg("DROP DATABASE IF EXISTS invincible_doctor_empty WITH (FORCE)")
-    await admin_pg("CREATE DATABASE invincible_doctor_empty")
+    # Derived from the contract URL so CI (5432) and local (5433) both work.
+    fresh_url = (
+        make_url(TEST_DB_URL)
+        .set(database="invincible_doctor_empty")
+        .render_as_string(hide_password=False)
+    )
+    db_name = "invincible_doctor_empty"
+    await admin_pg(f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)")
+    await admin_pg(f"CREATE DATABASE {db_name}")
     try:
         monkeypatch.setenv("INVINCIBLE_DB_URL", fresh_url)
         _config_and_chdir(monkeypatch, tmp_path)
@@ -281,7 +289,7 @@ async def test_doctor_live_empty_unmanaged_database_hinted(
         assert line.startswith("FAIL")
         assert "empty database" in line
     finally:
-        await admin_pg("DROP DATABASE IF EXISTS invincible_doctor_empty WITH (FORCE)")
+        await admin_pg(f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)")
 
 
 # --- rich console ------------------------------------------------------------
