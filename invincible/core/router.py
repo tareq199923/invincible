@@ -107,13 +107,27 @@ def _network_error_details(e: Exception) -> dict:
 
 
 def _dump_debug_payload(name: str, status: int, payload: dict) -> None:
-    """Temporary debug aid: dump the exact outgoing payload for a 400 to a
-    local file so it can be replayed directly against the provider outside
-    the gateway. Local-machine only, best-effort, never raises. Remove once
-    the root cause is confirmed."""
+    """Opt-in debug aid: dump the exact outgoing payload for a 400 so it can
+    be replayed directly against the provider outside the gateway.
+
+    Hardened after the first iteration clobbered its own evidence (and got
+    committed) because every 400 - including mocked ones from the test
+    suite - wrote the same fixed filename:
+
+    - fires ONLY when INVINCIBLE_DEBUG_400 is set (1/true/on)
+    - one file PER EVENT: debug_400_<provider>_<epoch>.json, so repeated
+      failures build an evidence trail instead of overwriting
+    - payloads contain conversation content; the glob is gitignored and
+      files are local-machine only. Best-effort: never raises.
+    """
     import pathlib as _pathlib
+
+    if not settings.debug_dump_400():
+        return
     try:
-        out = _pathlib.Path("debug_last_400_payload.json")
+        out = _pathlib.Path(
+            f"debug_400_{name}_{int(time.time())}.json"
+        )
         out.write_text(
             json.dumps(
                 {"provider": name, "status": status, "payload": payload},

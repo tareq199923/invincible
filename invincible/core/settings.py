@@ -83,6 +83,15 @@ class Settings:
         """Whether staged MCP actions survive a restart."""
         return bool(os.getenv("INVINCIBLE_PERSIST_PENDING_ACTIONS"))
 
+    def debug_dump_400(self) -> bool:
+        """Opt-in: dump the exact outgoing payload on non-failover 400s to
+        debug_400_<provider>_<epoch>.json. DEFAULT OFF (explicit allowlist,
+        unlike the opt-out INVINCIBLE_* feature toggles) - dumps contain
+        conversation content and are gitignored."""
+        return os.getenv("INVINCIBLE_DEBUG_400", "").strip().lower() in (
+            "1", "true", "on", "yes",
+        )
+
     def compression_enabled(self) -> bool:
         """Send-time request compression (default on)."""
         return _env_flag("INVINCIBLE_COMPRESSION")

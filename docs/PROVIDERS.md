@@ -119,3 +119,34 @@ Two small hooks exist for providers close to the OpenAI shape:
 | `Provider 'X': unknown field(s): ...` | Typos are rejected; check the schema table above. |
 | `Duplicate alias ...` | Alias must be unique across providers. |
 | Provider skipped at request time | The `api_key_env` var is unset; check `inv doctor`. |
+---
+
+## Aggregator quirks: opaque 400s (TokenRouter, Phase 13.5 case study)
+
+Aggregators that proxy to many backend models sometimes wrap **their own
+upstream failures** as an OpenAI-style `400` with a generic body:
+
+```json
+{"error": {"message": "openai_error",
+           "type": "bad_response_status_code"}}
+```
+
+Confirmed live case (root cause proven by replaying the payload directly
+against the provider, bypassing the gateway): the TokenRouter free tier
+routed large/tool-heavy requests to an internal backend model the token
+had no access to, returning
+`403 - This token has no access to model <backend>` — surfaced through the
+aggregator as a meaningless `400`.
+
+**Recognition pattern**: the gateway logs the upstream body via
+`_log_upstream_error_body`; if the message is generic (`openai_error`,
+`bad_response_status_code`) while smaller/simpler requests to the same
+provider succeed, suspect the aggregator's internal routing or tier
+entitlements — not your payload.
+
+**Mitigation**: set `failover_on_400: true` on the entry (already enabled
+for TokenRouter) so affected requests degrade to the next tier instead of
+failing client sessions. For definitive diagnosis, replay the exact
+payload against the provider outside the gateway (see
+`tools/replay_payload.py`), optionally with
+`INVINCIBLE_DEBUG_400=1` to capture outgoing payloads per event.

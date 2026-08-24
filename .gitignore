@@ -22,3 +22,7 @@ build/
 .verify/
 .coverage
 coverage.xml
+
+# 400 debug dumps - contain conversation content
+debug_400_*.json
+debug_last_400_payload.json
