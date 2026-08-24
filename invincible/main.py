@@ -7,6 +7,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 
 from invincible import __version__
 from invincible.core.config import load_providers_config
+from invincible.core.continuity import ContinuityEngine
 from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore
 from invincible.core.provider_registry import ProviderRegistry
@@ -71,8 +72,15 @@ async def lifespan(app: FastAPI):
     app.state.runs = RunStore(shared=app.state.sessions)
     await app.state.runs.init()
     app.state.router.run_recorder = app.state.runs.record
+    # Phase 15b continuity engine: canonical task state shared by LLM
+    # requests and MCP tools; reads runs for interruption awareness.
+    app.state.continuity = ContinuityEngine(
+        shared=app.state.sessions, runs=app.state.runs
+    )
+    await app.state.continuity.init()
     yield
     await app.state.router.close()
+    await app.state.continuity.close()
     await app.state.runs.close()
     await app.state.memory.close()
     await app.state.sessions.close()

@@ -56,7 +56,11 @@ async def test_mcp_tools_list(client, bearer_headers):
     )
     assert response.status_code == 200
     names = {t["name"] for t in response.json()["result"]["tools"]}
-    assert names == {"read_file", "execute_bash", "write_file", "confirm_action"}
+    # Phase 15b added the continuity tools alongside the file/exec surface.
+    assert names == {
+        "read_file", "execute_bash", "write_file", "confirm_action",
+        "task_state_set", "task_state_get", "checkpoint_create",
+    }
 
 
 async def test_mcp_call_blocked_command(client, bearer_headers):

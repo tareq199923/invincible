@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 
 from invincible import __version__
 from invincible.core import tool_executor
+from invincible.core.continuity import ContinuityConflictError
 from invincible.core.oauth_store import OAuthStore
 
 router = APIRouter()
@@ -99,6 +100,65 @@ TOOLS = [
                 "approve": {"type": "boolean"},
             },
             "required": ["token", "approve"],
+        },
+    },
+    {
+        "name": "task_state_set",
+        "description": (
+            "Persist canonical task progress into Invincible's shared "
+            "continuity store for this session. Every later LLM request "
+            "(any provider/model) receives this state as its continuation "
+            "brief, and later MCP reads return it - one canonical store, "
+            "no per-model memory. Payload must be a JSON OBJECT of "
+            "structured facts you want preserved verbatim (e.g. "
+            '{"task":"count 1-100","completed_through":5,"next_value":6}).'
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "payload": {"type": "string",
+                            "description": "JSON object of structured state"},
+                "task_key": {"type": "string"},
+                "status": {"type": "string",
+                           "enum": ["active", "blocked", "done",
+                                    "cancelled"]},
+                "expected_version": {"type": "integer",
+                                     "description": "optimistic CAS guard"},
+                "session_id": {"type": "string"},
+            },
+            "required": ["payload"],
+        },
+    },
+    {
+        "name": "task_state_get",
+        "description": (
+            "Read the latest trusted task state previously persisted via "
+            "task_state_set (or any other writer). Returns "
+            "{status,payload,version} or a note when nothing is tracked."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_key": {"type": "string"},
+                "session_id": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "checkpoint_create",
+        "description": (
+            "Snapshot the current task-state version as a named checkpoint "
+            "(e.g. 'completed through 37'). Checkpoints mark reliable "
+            "progress points that survive provider failover and appear in "
+            "the session's continuation brief."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "note": {"type": "string"},
+                "task_key": {"type": "string"},
+                "session_id": {"type": "string"},
+            },
         },
     },
 ]
@@ -208,6 +268,55 @@ async def _dispatch(method, rpc_id, params, request):
                 if status == "declined":
                     return _result(rpc_id, _tool_content("Declined.", is_error=True))
                 return _result(rpc_id, _tool_content(json.dumps(result)))
+
+            if name in ("task_state_set", "task_state_get", "checkpoint_create"):
+                engine = getattr(request.app.state, "continuity", None)
+                if engine is None:
+                    return _result(rpc_id, _tool_content(
+                        "Continuity engine not initialized on this server.",
+                        is_error=True,
+                    ))
+                session_id = args.get("session_id") or "mcp"
+                task_key = args.get("task_key") or "default"
+                try:
+                    if name == "task_state_set":
+                        try:
+                            payload = json.loads(args.get("payload") or "")
+                        except json.JSONDecodeError as e:
+                            return _result(rpc_id, _tool_content(
+                                f"payload must be a JSON object: {e}",
+                                is_error=True,
+                            ))
+                        head = await engine.set_state(
+                            session_id,
+                            payload,
+                            actor="mcp:task_state_set",
+                            task_key=task_key,
+                            status=args.get("status") or "active",
+                            expected_version=args.get("expected_version"),
+                        )
+                        return _result(rpc_id, _tool_content(json.dumps(head)))
+                    if name == "task_state_get":
+                        state = await engine.get_state(session_id, task_key)
+                        if state is None:
+                            return _result(rpc_id, _tool_content(json.dumps({
+                                "note": f"no state tracked for task "
+                                        f"'{task_key}' in this session",
+                                "payload": None,
+                                "version": 0,
+                            })))
+                        return _result(rpc_id, _tool_content(json.dumps(state)))
+                    cp = await engine.create_checkpoint(
+                        session_id,
+                        task_key=task_key,
+                        note=args.get("note") or "",
+                        actor="mcp:checkpoint_create",
+                    )
+                    return _result(rpc_id, _tool_content(json.dumps(cp)))
+                except ContinuityConflictError as e:
+                    return _result(rpc_id, _tool_content(str(e), is_error=True))
+                except ValueError as e:
+                    return _result(rpc_id, _tool_content(str(e), is_error=True))
 
             return _error(rpc_id, -32601, f"Unknown tool: {name}")
 

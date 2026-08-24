@@ -59,6 +59,7 @@ import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
         await oauth_store.init()
         MemoryStore(shared=sessions) → init()
         RunStore(shared=sessions) → init()               (Phase 13.5)
+        ContinuityEngine(shared=sessions, runs) → init() (Phase 15b)
                      │
         serving               app.include_router(openai_router, deps=[require_auth])
                               app.include_router(anthropic_router, deps=[require_auth])
@@ -67,14 +68,18 @@ import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
                               app.include_router(oauth_router)      (no dep — own auth)
                      │
         shutdown (lifespan)   await router.close()  (httpx client)
-                              await runs.close() / memory.close()
+                              await continuity.close() / runs.close() / memory.close()
                               await sessions.close() (sqlite, owns shared conn)
                               await oauth_store.close() (sqlite)
 ```
 
 One `httpx.AsyncClient` lives inside the `Router` and is shared by all chat
 requests; the `SessionStore` holds one long-lived `aiosqlite` connection
-that `MemoryStore` and `RunStore` share.
+that `MemoryStore`, `RunStore`, and the `ContinuityEngine` share. The
+continuity engine renders a continuation brief (canonical task state +
+checkpoints + interruption notice from runs) into every outgoing chat
+prompt, and exposes the same state to MCP tools (`task_state_set/get`,
+`checkpoint_create`) — one canonical store for LLMs and tools alike.
 
 ---
 

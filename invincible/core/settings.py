@@ -91,6 +91,12 @@ class Settings:
         """Fact extraction/injection (default on)."""
         return _env_flag("INVINCIBLE_MEMORY")
 
+    def continuity_enabled(self) -> bool:
+        """Continuation-brief injection from the ContinuityEngine (15b,
+        default on). State WRITES are unaffected by this toggle - it only
+        gates rendering into outgoing prompts."""
+        return _env_flag("INVINCIBLE_CONTINUITY")
+
     def memory_max_facts(self) -> int:
         """Injection cap for the fact summary system message."""
         try:

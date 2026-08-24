@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from invincible.compat.common import route_headers
+from invincible.core.continuity import context_system_message
 from invincible.core.memory import memory_system_message, record_turns
 from invincible.core.router import AllProvidersFailedError, UpstreamClientError
 
@@ -175,11 +176,16 @@ async def chat_completions(request: Request, body: ChatRequest):
     memory = getattr(request.app.state, "memory", None)
 
     history = await store.load(session_id)
-    # Injected after history as a system message: routed but never
-    # persisted (system role is excluded below), so it never accumulates.
+    # Injected after history as system messages: routed but never persisted
+    # (system role is excluded below), so they never accumulate.
     memory_msg = await memory_system_message(memory, session_id)
+    continuity = getattr(request.app.state, "continuity", None)
+    continuity_msg = await context_system_message(continuity, session_id)
     full_messages = (
-        history + ([memory_msg] if memory_msg else []) + body.messages
+        history
+        + ([memory_msg] if memory_msg else [])
+        + ([continuity_msg] if continuity_msg else [])
+        + body.messages
     )
     # Clients resend the system prompt on every request; persisting it would
     # accumulate duplicates that trimming never removes (system messages are

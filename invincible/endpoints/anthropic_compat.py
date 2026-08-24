@@ -22,6 +22,7 @@ from invincible.compat.anthropic import (
 )
 from invincible.compat.common import estimate_token_sum, route_headers
 from invincible.core.compression import compress_messages, compression_enabled
+from invincible.core.continuity import context_system_message
 from invincible.core.memory import memory_system_message, record_turns
 from invincible.core.router import AllProvidersFailedError, UpstreamClientError
 from invincible.models.anthropic import AnthropicMessagesRequest
@@ -86,10 +87,15 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
         return _error_message(400, str(e))
 
     history = await store.load(session_id)
-    # Injected memory is routed but never persisted (system role).
+    # Injected memory/continuity are routed but never persisted (system role).
     memory_msg = await memory_system_message(memory, session_id)
+    continuity = getattr(request.app.state, "continuity", None)
+    continuity_msg = await context_system_message(continuity, session_id)
     full_messages = (
-        history + ([memory_msg] if memory_msg else []) + internal_messages
+        history
+        + ([memory_msg] if memory_msg else [])
+        + ([continuity_msg] if continuity_msg else [])
+        + internal_messages
     )
     # Estimate on the compressed messages so reported usage tracks what is
     # actually sent (Phase 9). Per-provider trimming still makes this an

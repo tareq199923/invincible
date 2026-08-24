@@ -23,6 +23,7 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 | `INVINCIBLE_CONFIG_PATH` | startup | Path to a custom `providers.yaml` (set by CLI `--config`). |
 | `INVINCIBLE_DB_PATH` | startup | Path to the session database (set by CLI `--db-path`). |
 | `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the session database and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
+| `INVINCIBLE_CONTINUITY` | per-request | **On by default**: injects the continuation brief (canonical task state + latest checkpoint + interruption notice) from the Continuity Engine into outgoing chat prompts. Set `0`/`false`/`off` to disable rendering; state writes (MCP tools) are unaffected. |
 | `INVINCIBLE_COMPRESSION` | per-request | Send-time request compression (truncate long tool results, collapse blank-line runs) applied before context trimming. **On by default**; set to `0`/`false`/`off` to disable. Affects only what is sent to providers — stored session history stays verbatim. |
 
 | `INVINCIBLE_PROVIDERS_FILE` | management | **Opt-in**: writable provider-registry file. When set, it becomes the authoritative provider configuration (seeded from the packaged config on first use) and the management API can mutate it. When unset, providers load read-only and mutations refuse. |
@@ -172,6 +173,26 @@ one provider/model and surfaces failures verbatim (no silent
 substitution); `chain` walks the listed pairs in order as an explicit
 fallback chain. Changes apply to the next request; in-flight requests are
 unaffected.
+
+### Continuity Engine (Phase 15b)
+
+LLMs do not share memory — Invincible maintains canonical, provider-neutral
+task state and hands a continuation brief to whoever handles the next
+request (LLM *or* MCP tool), through one engine:
+
+- **Write state** via MCP tools: `task_state_set` (versioned JSON payload,
+  CAS via `expected_version`), `checkpoint_create` (named progress marker).
+  Any tool-capable client can therefore persist structured progress that
+  survives provider/model switches.
+- **Read state**: `task_state_get`, or just make a chat request — the brief
+  (active task payloads + latest checkpoint + "previous attempt ended on
+  provider X" notice) is injected as an ephemeral system message.
+- State lives in `task_states`/`checkpoints` tables in the session database;
+  versions are per-key monotonic, so *latest trusted state* is well-defined
+  without timestamp comparisons.
+
+Payloads are capped at 4 KB; rendering is truncated per task. Free-text LLM
+output is never auto-promoted into canonical state.
 
 ---
 
