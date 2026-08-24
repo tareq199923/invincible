@@ -194,6 +194,11 @@ request (LLM *or* MCP tool), through one engine:
 Payloads are capped at 4 KB; rendering is truncated per task. Free-text LLM
 output is never auto-promoted into canonical state.
 
+A read-only projection of this history - runs chain, states, checkpoints,
+turns as nodes/edges/timeline - is available to operators at
+`GET /api/v1/sessions/{id}/graph` (same admin key; see
+[API_REFERENCE.md](API_REFERENCE.md) §9).
+
 ---
 
 ## 3. Session database

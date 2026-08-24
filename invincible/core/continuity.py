@@ -311,8 +311,10 @@ class ContinuityEngine:
     # ------------------------------------------------------------------
     # Continuation brief (the thing handed to the next model)
 
-    async def _interruption_note(self, session_id: str) -> str | None:
-        """Describe a post-checkpoint upstream failure, if one exists."""
+    async def interruption_note(self, session_id: str) -> str | None:
+        """Public projection hook: describe the post-checkpoint upstream
+        failure for this session, if one exists. The graph API surfaces it
+        as the answer to \"why did work move / where did it stop?\"."""
         if self._runs is None:
             return None
         cps = await self.checkpoints(session_id, limit=1)
@@ -358,7 +360,7 @@ class ContinuityEngine:
         if not task_keys:
             return None
 
-        interruption = await self._interruption_note(session_id)
+        interruption = await self.interruption_note(session_id)
         lines = [
             "[Session continuity — canonical task state maintained by "
             "Invincible. Trust this over reconstructed transcript details.]"

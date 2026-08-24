@@ -18,6 +18,7 @@ from invincible.core.settings import settings
 from invincible.core.tool_executor import PendingActionStore
 from invincible.endpoints.admin_api import router as admin_router
 from invincible.endpoints.anthropic_compat import router as anthropic_router
+from invincible.endpoints.graph import router as graph_router
 from invincible.endpoints.mcp import require_mcp_auth
 from invincible.endpoints.mcp import router as mcp_router
 from invincible.endpoints.oauth import router as oauth_router
@@ -126,6 +127,7 @@ app.include_router(oauth_router)
 app.include_router(mcp_router, dependencies=[Depends(require_mcp_auth)])
 # Management surface carries its own fail-closed authz (INVINCIBLE_ADMIN_KEY).
 app.include_router(admin_router)
+app.include_router(graph_router)
 
 @app.head("/mcp")
 async def mcp_head():

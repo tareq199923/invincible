@@ -17,6 +17,7 @@ provider behind either request is chosen by the Router, never by the client.
 | `POST` | `/v1/messages` | `Authorization: Bearer <GATEWAY_API_KEY>` | Anthropic Messages completion with failover |
 | `GET/POST/PATCH/DELETE` | `/api/v1/providers[...]` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Provider management: list, add, update, remove, enable/disable, test connectivity |
 | `GET/PUT` | `/api/v1/routing` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Routing mode: `auto` / `pinned` / `chain` |
+| `GET` | `/api/v1/sessions/{id}/graph` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Continuity-graph projection: runs chain, task states, checkpoints as nodes/edges/timeline |
 
 Auth details: if `GATEWAY_API_KEY` is **unset**, both chat endpoints are
 open (no auth enforced). Wrong/missing key with the key set → `401`.
@@ -280,3 +281,27 @@ Router errors become Anthropic-shaped, sanitized errors
 `422` is reserved for Pydantic structural validation (e.g. missing
 `messages`). Upstream provider error bodies are **never** forwarded verbatim.
 The router's failover/trimming semantics in sections 4–5 apply unchanged.
+
+---
+
+## 9. Continuity graph (`GET /api/v1/sessions/{id}/graph`, Phase 15c)
+
+A pure PROJECTION over the authoritative stores - runs, task states,
+checkpoints, turns. The graph owns nothing and is never a source of truth.
+
+Response shape:
+
+- `nodes[]` - `kind`: `session` | `run` | `task_state` | `checkpoint` |
+  `turn`. Run nodes carry provider/model/outcome/error class/attempt index;
+  state nodes carry version/status/payload/actor.
+- `edges[]` - `failover_from` (same request_id, consecutive attempts:
+  "why did work move from A to B"), `followed_by` (different requests),
+  `supersedes` (state v(n)->v(n+1)), `pins` (checkpoint->state version),
+  `attempted_for` / `canonical_for` / `contains` (session anchors).
+- `timeline[]` - node ids ordered by timestamp.
+- `summary` - providers used, attempt/failover counts, latest task
+  versions/payloads, and the current interruption note ("previous attempt
+  ended unexpectedly on provider X ...").
+
+Query: `?limit=N` caps how many runs/state versions are projected
+(default 200, max 1000).

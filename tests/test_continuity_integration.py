@@ -167,7 +167,7 @@ async def test_interrupted_signal_reaches_next_request_after_failover(
     assert engine._runs is app.state.runs
 
     # Newest post-checkpoint failure is gamma (tier order alpha->beta->gamma).
-    note = await engine._interruption_note("default")
+    note = await engine.interruption_note("default")
     assert note and "'gamma'" in note
 
     # Phase 2: beta healthy (alpha/gamma still down).
