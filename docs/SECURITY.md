@@ -24,7 +24,7 @@ execution.
 | Aspect | Value |
 |---|---|
 | Header | `Authorization: Bearer <key>` |
-| Comparison | plain `==` string comparison (not timing-safe) |
+| Comparison | `hmac.compare_digest` — timing-safe (hardened in Phase 12) |
 | If unset | **Endpoint is open** — no auth enforced at all |
 | Failure | HTTP 401, body `{"error": {"message": "...", "type": "auth_error"}}` |
 
@@ -380,7 +380,17 @@ sandbox:
    hashed).** `sessions.db` contains full conversation history unencrypted
    and the OAuth client/code/refresh rows; the `.env` and `sessions.db`
    denylist entries exist precisely so a remote AI cannot exfiltrate them.
-9. **`/v1` auth comparison is not timing-safe.** `GATEWAY_API_KEY` uses plain
-   `==`; the owner secret uses `hmac.compare_digest`. The chat key protects
-   provider credits, not tool execution — but if you want defense in depth,
-   prefer long random tokens (the CLI generates `token_urlsafe(32)`).
+9. **Chat-key threat scope.** `GATEWAY_API_KEY` (compared timing-safely
+   since Phase 12) protects provider credits, not tool execution — but
+   prefer long random tokens anyway (the CLI generates
+   `token_urlsafe(32)`).
+10. **Continuity payloads render into prompts.** Content written through
+   the MCP continuity tools is stored verbatim and injected as a system
+   message for later requests. It carries exactly the trust level of the
+   facts-memory injection: whoever holds an MCP token can shape future
+   prompts in their own session. Payloads are size-capped and never
+   treated as instructions by Invincible itself.
+11. **Graph API shows raw snippets.** `/api/v1/sessions/{id}/graph`
+   includes first-message JSON snippets per turn — admin-realm only
+   (`INVINCIBLE_ADMIN_KEY`), same exposure class as reading the session
+   via other management endpoints.

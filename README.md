@@ -11,6 +11,17 @@
 A local, Python (FastAPI) server that runs on your development machine and
 serves two roles in one process:
 
+> **Recent additions (Phases 13–15):** runtime provider management with
+> `auto`/`pinned`/`chain` routing modes (`/api/v1/*`, fail-closed
+> `INVINCIBLE_ADMIN_KEY`), per-request `x-invincible-provider/model/attempts`
+> headers, a shared Continuity Engine (canonical task state + checkpoints
+> injected into every prompt, writable from MCP via `task_state_set/get`
+> and `checkpoint_create`), and a continuity-graph projection at
+> `GET /api/v1/sessions/{id}/graph`. See
+> [docs/API_REFERENCE.md](docs/API_REFERENCE.md),
+> [docs/CONFIGURATION.md](docs/CONFIGURATION.md) and
+> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 1. **Local Failover Proxy** — an OpenAI-compatible `/v1/chat/completions`
    endpoint that fans requests across tiered upstream providers (TokenRouter,
    NVIDIA NIM, Groq, OpenRouter, Gemini) and transparently fails over on rate limits (429)

@@ -227,7 +227,8 @@ Response:
 {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
 ```
 
-Response: `result.tools` is an array of four tool descriptors:
+Response: `result.tools` is an array of seven tool descriptors (the
+original file/exec/approval surface plus the Phase 15b continuity tools):
 
 ```json
 {
@@ -270,10 +271,42 @@ Response: `result.tools` is an array of four tool descriptors:
           "properties": {"token": {"type": "string"}, "approve": {"type": "boolean"}},
           "required": ["token", "approve"]
         }
+      },
+      {
+        "name": "task_state_set",
+        "description": "Persist canonical task progress into the shared continuity store ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "payload": {"type": "string"},
+            "task_key": {"type": "string"},
+            "status": {"type": "string", "enum": ["active","blocked","done","cancelled"]},
+            "expected_version": {"type": "integer"},
+            "session_id": {"type": "string"}
+          },
+          "required": ["payload"]
+        }
+      },
+      {
+        "name": "task_state_get",
+        "description": "Read the latest trusted task state ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {"task_key": {"type": "string"}, "session_id": {"type": "string"}}
+        }
+      },
+      {
+        "name": "checkpoint_create",
+        "description": "Snapshot the current task-state version as a named checkpoint ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {"note": {"type": "string"}, "task_key": {"type": "string"}, "session_id": {"type": "string"}}
+        }
       }
     ]
   }
 }
+
 ```
 
 ### `tools/call`
