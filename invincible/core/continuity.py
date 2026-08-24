@@ -38,10 +38,13 @@ import time
 
 import aiosqlite
 
+from invincible.core.session_store import shared_db_write_lock
+
 logger = logging.getLogger("invincible.continuity")
 
 MAX_PAYLOAD_CHARS = 4096
 MAX_RENDER_CHARS_PER_TASK = 1200
+_BRIEF_TOTAL_CHAR_CAP = 4096  # m5: whole-brief budget, not just per-task
 _MAX_TASK_KEYS_RENDERED = 5
 
 _VALID_STATUSES = ("active", "blocked", "done", "cancelled")
@@ -100,6 +103,7 @@ class ContinuityEngine:
         elif self.db_path is not None:
             self._shared = None
             self._db = await aiosqlite.connect(self.db_path)
+            await self._db.execute("PRAGMA foreign_keys = ON")
         if self._db is None:
             return
         await self._db.executescript(_SCHEMA)
@@ -144,7 +148,7 @@ class ContinuityEngine:
                 f"status must be one of: {', '.join(_VALID_STATUSES)}"
             )
 
-        async with self._lock:
+        async with self._lock, shared_db_write_lock():
             async with self._db.execute(
                 """
                 SELECT COALESCE(MAX(version), 0) FROM task_states
@@ -254,18 +258,19 @@ class ContinuityEngine:
         actor: str = "user",
     ) -> dict:
         """Pin the CURRENT head version (0 = nothing tracked yet)."""
-        head = await self.get_state(session_id, task_key)
-        version = head["version"] if head else 0
-        now = time.time()
-        cursor = await self._db.execute(
-            """
-            INSERT INTO checkpoints (
-                session_id, task_key, state_version, note, created_at
-            ) VALUES (?, ?, ?, ?, ?)
-            """,
-            (session_id, task_key, version, note[:500], now),
-        )
-        await self._db.commit()
+        async with shared_db_write_lock():
+            head = await self.get_state(session_id, task_key)
+            version = head["version"] if head else 0
+            now = time.time()
+            cursor = await self._db.execute(
+                """
+                INSERT INTO checkpoints (
+                    session_id, task_key, state_version, note, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (session_id, task_key, version, note[:500], now),
+            )
+            await self._db.commit()
         return {
             "id": cursor.lastrowid,
             "session_id": session_id,
@@ -367,22 +372,37 @@ class ContinuityEngine:
         ]
         if interruption:
             lines.append(interruption)
+
+        # m5: whole-brief budget. Each task (state + checkpoint) is added
+        # atomically; once the cap would be exceeded, stop and say so.
+        used = sum(len(line) + 1 for line in lines)
+        omitted = False
         for task_key in task_keys:
             state = await self.get_state(session_id, task_key)
             if state is None:
                 continue
-            lines.append(
+            chunk_lines = [
                 f"Task '{task_key}' (status: {state['status']}, "
-                f"v{state['version']}):"
-            )
-            lines.append(self._render_payload(state["payload"]))
+                f"v{state['version']}):",
+                self._render_payload(state["payload"]),
+            ]
             cps = await self.checkpoints(session_id, task_key, limit=1)
             if cps:
                 cp = cps[0]
-                lines.append(
+                chunk_lines.append(
                     f"Latest checkpoint #{cp['id']} (at v{cp['state_version']}): "
                     f"{cp['note']}"
                 )
+            chunk = "\n".join(chunk_lines)
+            if used + len(chunk) > _BRIEF_TOTAL_CHAR_CAP and task_keys.index(
+                task_key
+            ) > 0:
+                omitted = True
+                break
+            lines.append(chunk)
+            used += len(chunk) + 1
+        if omitted:
+            lines.append("[…additional tasks omitted to bound prompt size]")
         lines.append("[End session continuity]")
         return {"role": "system", "content": "\n".join(lines)}
 

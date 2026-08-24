@@ -18,6 +18,8 @@ import time
 
 import aiosqlite
 
+from invincible.core.session_store import shared_db_write_lock
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY,
@@ -59,6 +61,7 @@ class RunStore:
             # cwd database.
             self._shared = None
             self._db = await aiosqlite.connect(self.db_path)
+            await self._db.execute("PRAGMA foreign_keys = ON")
         if self._db is None:
             return
         await self._db.execute(_SCHEMA)
@@ -82,30 +85,32 @@ class RunStore:
 
         Required keys: request_id, provider_name, model_id, attempt_index,
         outcome, started_at. Optional: session_id, error_class, finished_at,
-        meta (JSON-serialized mapping).
+        meta (JSON-serialized mapping). Runs under the shared DB write lock
+        so it can never commit a sibling store's open transaction (M1).
         """
-        cursor = await self._db.execute(
-            """
-            INSERT INTO runs (
-                request_id, session_id, provider_name, model_id,
-                attempt_index, outcome, error_class, started_at,
-                finished_at, meta
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                entry["request_id"],
-                entry.get("session_id"),
-                entry["provider_name"],
-                entry["model_id"],
-                entry["attempt_index"],
-                entry["outcome"],
-                entry.get("error_class"),
-                entry["started_at"],
-                entry.get("finished_at"),
-                json.dumps(entry["meta"]) if entry.get("meta") else None,
-            ),
-        )
-        await self._db.commit()
+        async with shared_db_write_lock():
+            cursor = await self._db.execute(
+                """
+                INSERT INTO runs (
+                    request_id, session_id, provider_name, model_id,
+                    attempt_index, outcome, error_class, started_at,
+                    finished_at, meta
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry["request_id"],
+                    entry.get("session_id"),
+                    entry["provider_name"],
+                    entry["model_id"],
+                    entry["attempt_index"],
+                    entry["outcome"],
+                    entry.get("error_class"),
+                    entry["started_at"],
+                    entry.get("finished_at"),
+                    json.dumps(entry["meta"]) if entry.get("meta") else None,
+                ),
+            )
+            await self._db.commit()
         return cursor.lastrowid
 
     async def recent(

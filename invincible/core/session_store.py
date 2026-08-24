@@ -90,6 +90,24 @@ CREATE TABLE IF NOT EXISTS _invincible_schema (
 );
 """
 
+# Cross-store write serialization (Phase 15 review, M1).
+#
+# MemoryStore, RunStore, and ContinuityEngine share THIS store's single
+# aiosqlite connection. SQLite transactions live on the connection, not the
+# coroutine: if a sibling store commits while SessionStore's explicit
+# BEGIN..commit window is open, the sibling's commit() finalizes SessionStore's
+# PARTIAL transaction - and a later rollback() can no longer undo it, leaving
+# malformed half-turns behind. Every writer that touches this connection must
+# therefore hold this one process-wide lock across its whole transaction.
+_WRITE_LOCK = asyncio.Lock()
+
+
+def shared_db_write_lock() -> asyncio.Lock:
+    """The lock every shared-connection writer must hold across its
+    transaction. Lock ordering: any store-private lock FIRST, then this one
+    - never the reverse."""
+    return _WRITE_LOCK
+
 
 class SessionStore:
     """Single-user local conversation storage backed by SQLite.
@@ -109,6 +127,9 @@ class SessionStore:
 
     async def init(self) -> None:
         self._db = await aiosqlite.connect(self.db_path)
+        # Enforce the declared REFERENCES clauses (m3 review fix). Safe for
+        # legacy databases: enforcement applies to NEW writes only.
+        await self._db.execute("PRAGMA foreign_keys = ON")
         await self._db.executescript(_V2_SCHEMA)
         await self._db.commit()
         await self._migrate_legacy_if_needed()
@@ -154,7 +175,7 @@ class SessionStore:
     async def save(self, session_id: str, messages: list) -> None:
         """Full replace: wipe the session's turns/messages and re-insert
         ``messages`` through the same boundary walker used by appends."""
-        async with self._append_lock:
+        async with self._append_lock, shared_db_write_lock():
             await self._db.execute("BEGIN")
             try:
                 await self._delete_session_rows(session_id)
@@ -184,7 +205,7 @@ class SessionStore:
         """
         if not new_messages:
             return
-        async with self._append_lock:
+        async with self._append_lock, shared_db_write_lock():
             await self._db.execute("BEGIN")
             try:
                 await self._ensure_session_row(session_id, time.time())
@@ -406,28 +427,29 @@ class SessionStore:
             parsed.append((session_id, float(updated_at), messages))
 
         inserted = 0
-        await self._db.execute("BEGIN")
-        try:
-            for session_id, updated_at, messages in parsed:
-                await self._db.execute(
-                    """
-                    INSERT INTO sessions_v2 (session_id, created_at, updated_at)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(session_id) DO UPDATE SET
-                        updated_at = excluded.updated_at
-                    """,
-                    (session_id, updated_at, updated_at),
-                )
-                # created_at is unknowable from the blob era; updated_at is
-                # the best available floor (documented trade-off).
-                inserted += await self._insert_grouped(session_id, messages)
-            if inserted != expected_count:
-                raise RuntimeError(
-                    "Legacy session migration post-condition failed: "
-                    f"{inserted} messages inserted, {expected_count} expected"
-                )
-            await self._mark_migrated(time.time())
-        except Exception:
-            await self._db.rollback()
-            raise
-        await self._db.commit()
+        async with shared_db_write_lock():
+            await self._db.execute("BEGIN")
+            try:
+                for session_id, updated_at, messages in parsed:
+                    await self._db.execute(
+                        """
+                        INSERT INTO sessions_v2 (session_id, created_at, updated_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(session_id) DO UPDATE SET
+                            updated_at = excluded.updated_at
+                        """,
+                        (session_id, updated_at, updated_at),
+                    )
+                    # created_at is unknowable from the blob era; updated_at is
+                    # the best available floor (documented trade-off).
+                    inserted += await self._insert_grouped(session_id, messages)
+                if inserted != expected_count:
+                    raise RuntimeError(
+                        "Legacy session migration post-condition failed: "
+                        f"{inserted} messages inserted, {expected_count} expected"
+                    )
+                await self._mark_migrated(time.time())
+            except Exception:
+                await self._db.rollback()
+                raise
+            await self._db.commit()

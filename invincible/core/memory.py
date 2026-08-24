@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 
 import aiosqlite
 
+from invincible.core.session_store import shared_db_write_lock
 from invincible.core.settings import DEFAULT_MEMORY_MAX_FACTS, settings
 
 if TYPE_CHECKING:
@@ -160,6 +161,7 @@ class MemoryStore:
             # never touch the real cwd database.
             self._shared = None
             self._db = await aiosqlite.connect(self.db_path)
+            await self._db.execute("PRAGMA foreign_keys = ON")
         if self._db is None:
             return
         await self._db.execute(
@@ -188,21 +190,26 @@ class MemoryStore:
         """Extract facts from new turns and store them; returns rows added.
 
         Idempotent: the UNIQUE constraint plus INSERT OR IGNORE means
-        re-persisting a turn never duplicates facts.
+        re-persisting a turn never duplicates facts. Runs under the shared
+        DB write lock so it can never commit a sibling store's open
+        transaction (Phase 15 review M1).
         """
         facts = extract_facts(messages)
+        if not facts or self._db is None:
+            return 0
         added = 0
-        for entity, relation, target in facts:
-            cursor = await self._db.execute(
-                """
-                INSERT OR IGNORE INTO facts
-                    (user_id, session_id, entity, relation, target, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (SENTINEL_USER_ID, session_id, entity, relation, target, time.time()),
-            )
-            added += cursor.rowcount
-        if facts:
+        async with shared_db_write_lock():
+            for entity, relation, target in facts:
+                cursor = await self._db.execute(
+                    """
+                    INSERT OR IGNORE INTO facts
+                        (user_id, session_id, entity, relation, target, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (SENTINEL_USER_ID, session_id, entity, relation, target,
+                     time.time()),
+                )
+                added += cursor.rowcount
             await self._db.commit()
         return added
 

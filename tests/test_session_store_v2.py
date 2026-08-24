@@ -16,6 +16,7 @@ import json
 import random
 
 import aiosqlite
+import pytest
 
 from invincible.core.memory import MemoryStore
 from invincible.core.run_store import RunStore
@@ -393,6 +394,82 @@ async def test_concurrent_appends_both_persist():
         assert [len(t) for t in group_into_turns(flat)] == await turn_sizes(store)
     finally:
         await store.close()
+
+
+async def test_sibling_commit_cannot_split_session_transaction():
+    """Phase 15 review M1 regression: a sibling store (RunStore) writing on
+    the SHARED connection while SessionStore's BEGIN..commit window is open
+    must serialize behind it - never commit SessionStore's PARTIAL
+    transaction.
+
+    Deterministic reproduction: a spy inside the window opens a gate that
+    unblocks a sibling runs.record() task, then raises out of the window.
+    Pre-fix, the sibling committed the partial turn rows mid-window and they
+    survived the rollback (corrupted whole-turn invariant). Post-fix, the
+    sibling blocks on shared_db_write_lock until the window closes; the
+    rollback wipes everything; the run row lands afterwards.
+    """
+    store = SessionStore(db_path=":memory:")
+    await store.init()
+    runs = RunStore(shared=store)
+    await runs.init()
+
+    started = asyncio.Event()
+
+    async def sibling():
+        import time as _time
+
+        await started.wait()          # fires MID-WINDOW of the append below
+        await runs.record(            # post-fix: blocks on shared write lock
+            {
+                "request_id": "sneaky",
+                "session_id": "s",
+                "provider_name": "beta",
+                "model_id": "m",
+                "attempt_index": 1,
+                "outcome": "ok",
+                "started_at": _time.time(),
+                "finished_at": _time.time(),
+            }
+        )
+
+    sibling_task = asyncio.create_task(sibling())
+
+    async def spying_bump(session_id, now):
+        nonlocal _gate_fired
+        if not _gate_fired:
+            _gate_fired = True
+            started.set()
+            raise RuntimeError("forced failure mid-window")
+        await original_bump(session_id, now)
+
+    original_bump = store._bump_updated_at
+    _gate_fired = False
+    store._bump_updated_at = spying_bump
+    try:
+        with pytest.raises(RuntimeError, match="forced failure"):
+            await store.append("s", [user("a1"), assistant("a2")])
+    finally:
+        store._bump_updated_at = original_bump
+
+    await sibling_task  # completes only once the window closed
+
+    # Partial transaction must be GONE: no turns, no messages, no session row.
+    assert await turn_count(store) == 0
+    async with store.connection().execute(
+        "SELECT COUNT(*) FROM sessions_v2"
+    ) as cursor:
+        assert (await cursor.fetchone())[0] == 0
+    assert await store.load("s") == []
+    # The sibling's row survived - it committed AFTER our rollback.
+    rows = await runs.recent(session_id="s")
+    assert len(rows) == 1 and rows[0]["request_id"] == "sneaky"
+
+    # Store stays healthy for subsequent use.
+    await store.append("s", [user("fresh")])
+    assert await store.load("s") == [user("fresh")]
+    await runs.close()
+    await store.close()
 
 
 async def test_memory_and_run_stores_coexist_on_shared_connection(tmp_path):
