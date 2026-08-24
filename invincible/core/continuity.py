@@ -1,44 +1,23 @@
 # invincible/core/continuity.py
-"""Canonical task-state continuity shared by LLM requests and MCP tools
-(Phase 15b - Phase 15 Requirement C).
+"""Canonical task-state continuity on PostgreSQL (Phase 16 port of 15b).
 
-Core idea: LLMs do NOT share memory. Invincible maintains canonical,
-provider-neutral task state and hands a continuation brief to whichever
-provider/model handles the next request - or to an MCP tool that asks for
-it. Both worlds read/write through THIS engine; there is no separate
-"MCP memory".
+Same model as Phase 15b: versioned ``task_states`` per
+``(session_id, task_key)`` with optimistic CAS, immutable ``checkpoints``
+pinning a state version, and the rendered continuation brief.
 
-State model:
-
-- ``task_states`` - versioned JSON payloads per ``(session_id, task_key)``.
-  Writes are compare-and-set on ``version`` (optimistic concurrency);
-  versions are monotonic per key, so "latest trusted state" is simply
-  ``max(version)`` - never a timestamp comparison.
-- ``checkpoints`` - immutable snapshots pinning a state version plus a
-  human note ("completed through 37"). Recovery = latest checkpoint ∪ any
-  newer committed state version.
-- Interruption awareness: when the newest failed/slow-killed upstream
-  attempt (from the ``runs`` records) post-dates the latest checkpoint,
-  the rendered continuation brief says so explicitly, so the next model
-  knows it is RESUMING, not starting.
-
-Scope note: state enters this engine through EXPLICIT writes (MCP tools
-today, admin/API later). Automatic extraction from LLM prose is
-deliberately deferred - free text is never promoted to canonical state by
-this module (structured state is the only canonical representation).
-
-Provider neutrality: payloads are plain JSON dicts. Provider/model names
-appear only in ``updated_by`` provenance strings and the runs table - the
-same state serves GPT, Claude, Gemini, Qwen, anything.
+Concurrency note: the SQLite-era asyncio lock is GONE. PostgreSQL gives us
+the guarantee natively - the UNIQUE(session, task_key, version) constraint
+makes a racing duplicate insert fail, which this engine maps to
+:class:`ContinuityConflictError`. "Latest trusted state" is still simply
+``max(version)``.
 """
-import asyncio
 import json
 import logging
 import time
 
-import aiosqlite
+from sqlalchemy import func, select
 
-from invincible.core.session_store import shared_db_write_lock
+from invincible.core.db import checkpoints, task_states
 
 logger = logging.getLogger("invincible.continuity")
 
@@ -49,73 +28,27 @@ _MAX_TASK_KEYS_RENDERED = 5
 
 _VALID_STATUSES = ("active", "blocked", "done", "cancelled")
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_states (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    task_key TEXT NOT NULL DEFAULT 'default',
-    status TEXT NOT NULL DEFAULT 'active',
-    payload TEXT NOT NULL,
-    version INTEGER NOT NULL,
-    updated_by TEXT NOT NULL,
-    request_id TEXT,
-    updated_at REAL NOT NULL,
-    UNIQUE(session_id, task_key, version)
-);
-CREATE INDEX IF NOT EXISTS idx_task_states_session
-    ON task_states(session_id, task_key, version DESC);
-CREATE TABLE IF NOT EXISTS checkpoints (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    task_key TEXT NOT NULL DEFAULT 'default',
-    state_version INTEGER NOT NULL,
-    note TEXT NOT NULL DEFAULT '',
-    created_at REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_checkpoints_session
-    ON checkpoints(session_id, task_key, created_at DESC);
-"""
+_SCHEMA_NOTE = """Schema owned by core.db metadata (task_states,
+checkpoints tables)."""
 
 
 class ContinuityConflictError(Exception):
-    """CAS rejection: another writer advanced the version first."""
+    """CAS rejection or concurrent-update race (UNIQUE violation)."""
 
 
 class ContinuityEngine:
-    def __init__(self, db_path: str | None = None, shared=None, runs=None):
-        self._shared = shared
+    def __init__(self, engine, runs=None):
+        self.engine = engine
         self._runs = runs
-        if db_path is None and shared is not None:
-            db_path = getattr(shared, "db_path", None)
-        if db_path is None and shared is None:
-            from invincible.core.session_store import default_db_path
-
-            db_path = default_db_path()
-        self.db_path = db_path
-        self._db = None
-        self._lock = asyncio.Lock()
 
     async def init(self) -> None:
-        accessor = getattr(self._shared, "connection", None) if self._shared else None
-        shared_db = accessor() if callable(accessor) else None
-        if shared_db is not None:
-            self._db = shared_db
-        elif self.db_path is not None:
-            self._shared = None
-            self._db = await aiosqlite.connect(self.db_path)
-            await self._db.execute("PRAGMA foreign_keys = ON")
-        if self._db is None:
-            return
-        await self._db.executescript(_SCHEMA)
-        await self._db.commit()
+        """Schema owned by core.db metadata."""
 
     async def close(self) -> None:
-        if self._shared is None and self._db is not None:
-            await self._db.close()
-        self._db = None
+        """Engine owned/disposed by the lifespan."""
 
     # ------------------------------------------------------------------
-    # State writes (CAS)
+    # State writes (versioned upsert; native UNIQUE = race safety)
 
     async def set_state(
         self,
@@ -129,14 +62,16 @@ class ContinuityEngine:
         request_id: str | None = None,
     ) -> dict:
         """Versioned upsert. Returns the new head
-        ``{task_key,status,payload,version}``.
+        ``{session_id,task_key,status,payload,version}``.
 
-        Raises ValueError for oversized/non-dict payloads or bad statuses;
-        raises :class:`ContinuityConflictError` when ``expected_version``
-        no longer matches the current head.
+        Raises ValueError for oversized/non-dict payloads/bad statuses.
+        Raises :class:`ContinuityConflictError` when ``expected_version``
+        no longer matches, or when a concurrent writer wins the insert race.
         """
         if not isinstance(payload, dict):
             raise ValueError("payload must be a JSON object (dict)")
+        # Size guard only - the column is JSONB, so the dict itself is bound
+        # (SQLAlchemy serializes once; never pre-dump into a JSONB column).
         blob = json.dumps(payload, ensure_ascii=False)
         if len(blob) > MAX_PAYLOAD_CHARS:
             raise ValueError(
@@ -148,15 +83,26 @@ class ContinuityEngine:
                 f"status must be one of: {', '.join(_VALID_STATUSES)}"
             )
 
-        async with self._lock, shared_db_write_lock():
-            async with self._db.execute(
-                """
-                SELECT COALESCE(MAX(version), 0) FROM task_states
-                WHERE session_id = ? AND task_key = ?
-                """,
-                (session_id, task_key),
-            ) as cursor:
-                (head,) = await cursor.fetchone()
+        from sqlalchemy import text
+        from sqlalchemy.exc import IntegrityError
+
+        async with self.engine.begin() as conn:
+            # Serialize writers per (session, task_key): without this, two
+            # concurrent no-expected_version writes can both read the same
+            # head and race for version N+1. The transaction-scoped advisory
+            # lock replaces the SQLite era's process-wide write lock; CAS
+            # callers with expected_version still conflict deterministically.
+            await conn.execute(
+                text("SELECT pg_advisory_xact_lock("
+                     "hashtext(:s), hashtext(:k))"),
+                {"s": session_id, "k": task_key},
+            )
+            head = (await conn.execute(
+                select(func.max(task_states.c.version))
+                .where(task_states.c.session_id == session_id,
+                       task_states.c.task_key == task_key)
+            )).scalar_one()
+            head = head or 0
             if expected_version is not None and expected_version != head:
                 raise ContinuityConflictError(
                     f"expected version {expected_version} but current head "
@@ -164,25 +110,24 @@ class ContinuityEngine:
                 )
             new_version = head + 1
             now = time.time()
-            await self._db.execute(
-                """
-                INSERT INTO task_states (
-                    session_id, task_key, status, payload, version,
-                    updated_by, request_id, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    session_id,
-                    task_key,
-                    status,
-                    blob,
-                    new_version,
-                    actor,
-                    request_id,
-                    now,
-                ),
-            )
-            await self._db.commit()
+            try:
+                await conn.execute(
+                    task_states.insert().values(
+                        session_id=session_id,
+                        task_key=task_key,
+                        status=status,
+                        payload=payload,
+                        version=new_version,
+                        updated_by=actor,
+                        request_id=request_id,
+                        updated_at=now,
+                    )
+                )
+            except IntegrityError as exc:
+                raise ContinuityConflictError(
+                    f"concurrent update on task '{task_key}' "
+                    f"(lost race for v{new_version})"
+                ) from exc
         return {
             "session_id": session_id,
             "task_key": task_key,
@@ -203,49 +148,46 @@ class ContinuityEngine:
         self, session_id: str, task_key: str = "default", limit: int = 20
     ) -> list[dict]:
         """Newest-first version history for one task key."""
-        if self._db is None:
-            return []
-        async with self._db.execute(
-            """
-            SELECT status, payload, version, updated_by, updated_at
-            FROM task_states WHERE session_id = ? AND task_key = ?
-            ORDER BY version DESC LIMIT ?
-            """,
-            (session_id, task_key, limit),
-        ) as cursor:
-            rows = await cursor.fetchall()
+        return await self._history_rows(session_id, task_key, limit)
+
+    async def _history_rows(self, session_id, task_key, limit):
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(
+                    task_states.c.status,
+                    task_states.c.payload,
+                    task_states.c.version,
+                    task_states.c.updated_by,
+                    task_states.c.updated_at,
+                )
+                .where(task_states.c.session_id == session_id,
+                       task_states.c.task_key == task_key)
+                .order_by(task_states.c.version.desc())
+                .limit(limit)
+            )).all()
         out = []
         for status, payload_blob, version, updated_by, updated_at in rows:
-            try:
-                payload = json.loads(payload_blob)
-            except json.JSONDecodeError:
-                payload = {"raw": payload_blob}
-            out.append(
-                {
-                    "session_id": session_id,
-                    "task_key": task_key,
-                    "status": status,
-                    "payload": payload,
-                    "version": version,
-                    "updated_by": updated_by,
-                    "updated_at": updated_at,
-                }
-            )
+            out.append({
+                "session_id": session_id,
+                "task_key": task_key,
+                "status": status,
+                "payload": payload_blob,   # JSONB -> dict already
+                "version": version,
+                "updated_by": updated_by,
+                "updated_at": updated_at,
+            })
         return out
 
     async def active_task_keys(self, session_id: str, limit: int = 5) -> list[str]:
-        """Task keys with any state, most-recently-updated first."""
-        if self._db is None:
-            return []
-        async with self._db.execute(
-            """
-            SELECT task_key, MAX(updated_at) AS latest FROM task_states
-            WHERE session_id = ? GROUP BY task_key
-            ORDER BY latest DESC LIMIT ?
-            """,
-            (session_id, limit),
-        ) as cursor:
-            return [row[0] for row in await cursor.fetchall()]
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(task_states.c.task_key)
+                .where(task_states.c.session_id == session_id)
+                .group_by(task_states.c.task_key)
+                .order_by(func.max(task_states.c.updated_at).desc())
+                .limit(limit)
+            )).scalars().all()
+        return list(rows)
 
     # ------------------------------------------------------------------
     # Checkpoints
@@ -258,68 +200,53 @@ class ContinuityEngine:
         actor: str = "user",
     ) -> dict:
         """Pin the CURRENT head version (0 = nothing tracked yet)."""
-        async with shared_db_write_lock():
-            head = await self.get_state(session_id, task_key)
-            version = head["version"] if head else 0
+        async with self.engine.begin() as conn:
+            head = (await conn.execute(
+                select(func.max(task_states.c.version))
+                .where(task_states.c.session_id == session_id,
+                       task_states.c.task_key == task_key)
+            )).scalar_one()
+            version = head or 0
             now = time.time()
-            cursor = await self._db.execute(
-                """
-                INSERT INTO checkpoints (
-                    session_id, task_key, state_version, note, created_at
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                (session_id, task_key, version, note[:500], now),
+            result = await conn.execute(
+                checkpoints.insert().values(
+                    session_id=session_id,
+                    task_key=task_key,
+                    state_version=version,
+                    note=(note or "")[:500],
+                    created_at=now,
+                )
             )
-            await self._db.commit()
         return {
-            "id": cursor.lastrowid,
+            "id": result.inserted_primary_key[0],
             "session_id": session_id,
             "task_key": task_key,
             "state_version": version,
-            "note": note[:500],
+            "note": (note or "")[:500],
             "created_at": now,
         }
 
     async def checkpoints(
         self, session_id: str, task_key: str | None = None, limit: int = 20
     ) -> list[dict]:
-        """Newest-first checkpoints, optionally scoped to one task key."""
-        if self._db is None:
-            return []
+        query = (
+            checkpoints.select()
+            .where(checkpoints.c.session_id == session_id)
+            .order_by(checkpoints.c.id.desc())
+            .limit(limit)
+        )
         if task_key is not None:
-            sql = (
-                "SELECT id, task_key, state_version, note, created_at "
-                "FROM checkpoints WHERE session_id = ? AND task_key = ? "
-                "ORDER BY id DESC LIMIT ?"
-            )
-            params: tuple = (session_id, task_key, limit)
-        else:
-            sql = (
-                "SELECT id, task_key, state_version, note, created_at "
-                "FROM checkpoints WHERE session_id = ? ORDER BY id DESC LIMIT ?"
-            )
-            params = (session_id, limit)
-        async with self._db.execute(sql, params) as cursor:
-            rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "session_id": session_id,
-                "task_key": r[1],
-                "state_version": r[2],
-                "note": r[3],
-                "created_at": r[4],
-            }
-            for r in rows
-        ]
+            query = query.where(checkpoints.c.task_key == task_key)
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(query)).mappings().all()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
-    # Continuation brief (the thing handed to the next model)
+    # Continuation brief
 
     async def interruption_note(self, session_id: str) -> str | None:
         """Public projection hook: describe the post-checkpoint upstream
-        failure for this session, if one exists. The graph API surfaces it
-        as the answer to \"why did work move / where did it stop?\"."""
+        failure for this session, if one exists."""
         if self._runs is None:
             return None
         cps = await self.checkpoints(session_id, limit=1)
@@ -328,8 +255,6 @@ class ContinuityEngine:
         for run in recent:  # newest-first
             if float(run.get("finished_at") or 0) <= cp_after:
                 continue
-            # The NEWEST post-checkpoint run decides: a successful attempt
-            # means work already continued past the interruption.
             if run.get("outcome") == "ok":
                 return None
             provider = run.get("provider_name", "?")
@@ -350,14 +275,10 @@ class ContinuityEngine:
 
     async def context_message(self, session_id: str) -> dict | None:
         """The injectable system message carrying the continuation brief,
-        or None when the session tracks no tasks.
-
-        Rendered output is bounded (per-task truncation + key cap) because
-        system messages are never trimmed by ``trim_messages``.
-        """
+        or None when the session tracks no tasks."""
         from invincible.core.settings import settings
 
-        if self._db is None or not settings.continuity_enabled():
+        if not settings.continuity_enabled():
             return None
         task_keys = await self.active_task_keys(
             session_id, limit=_MAX_TASK_KEYS_RENDERED
@@ -373,11 +294,9 @@ class ContinuityEngine:
         if interruption:
             lines.append(interruption)
 
-        # m5: whole-brief budget. Each task (state + checkpoint) is added
-        # atomically; once the cap would be exceeded, stop and say so.
         used = sum(len(line) + 1 for line in lines)
         omitted = False
-        for task_key in task_keys:
+        for idx, task_key in enumerate(task_keys):
             state = await self.get_state(session_id, task_key)
             if state is None:
                 continue
@@ -394,9 +313,7 @@ class ContinuityEngine:
                     f"{cp['note']}"
                 )
             chunk = "\n".join(chunk_lines)
-            if used + len(chunk) > _BRIEF_TOTAL_CHAR_CAP and task_keys.index(
-                task_key
-            ) > 0:
+            if used + len(chunk) > _BRIEF_TOTAL_CHAR_CAP and idx > 0:
                 omitted = True
                 break
             lines.append(chunk)
@@ -407,8 +324,11 @@ class ContinuityEngine:
         return {"role": "system", "content": "\n".join(lines)}
 
 
-async def context_system_message(engine, session_id: str) -> dict | None:
-    """Toggle-aware wrapper used by endpoints (mirrors memory.py style)."""
+async def context_system_message(
+    engine_or_engine_holder, session_id: str
+) -> dict | None:
+    """Toggle-aware wrapper used by endpoints."""
+    engine = engine_or_engine_holder
     if engine is None:
         return None
     return await engine.context_message(session_id)

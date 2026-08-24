@@ -4,7 +4,7 @@ including the failover-interruption e2e and never-persist guarantee.
 
 The conftest `client` fixture builds app.state directly (no lifespan), so
 these tests attach ContinuityEngine/RunStore exactly the way main.py's
-lifespan does - shared with app.state.sessions.
+lifespan does - on the same engine as app.state.sessions.
 """
 import json
 
@@ -19,10 +19,10 @@ MARKER = "Session continuity"
 
 
 async def attach_continuity(with_runs=False):
-    engine = ContinuityEngine(shared=app_state_sessions(), runs=None)
+    shared_engine = app_state_sessions().engine
+    engine = ContinuityEngine(engine=shared_engine, runs=None)
     if with_runs:
-        runs = RunStore(shared=app_state_sessions())
-        await runs.init()
+        runs = RunStore(engine=shared_engine)
         engine._runs = runs
         app_state_runs(runs)
     await engine.init()

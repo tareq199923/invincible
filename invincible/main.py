@@ -8,6 +8,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from invincible import __version__
 from invincible.core.config import load_providers_config
 from invincible.core.continuity import ContinuityEngine
+from invincible.core.db import (
+    create_all_from_metadata,
+    make_engine,
+    warn_if_schema_stale,
+)
 from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore
 from invincible.core.provider_registry import ProviderRegistry
@@ -46,46 +51,59 @@ def _warn_if_gateway_open() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    db_path = settings.db_path()
     _warn_if_gateway_open()
-    # Provider state (Phase 13.5): the packaged/override YAML seeds a
-    # file-backed registry when INVINCIBLE_PROVIDERS_FILE is set; without
-    # it the registry runs read-only and management mutations refuse.
+    url = settings.db_url()
+    if not url:
+        raise RuntimeError(
+            "INVINCIBLE_DB_URL is required since Phase 16 "
+            "(e.g. postgresql+asyncpg://invincible:pw@localhost:5433/invincible). "
+            "For local development run `invincible dev-db` first."
+        )
+    engine = make_engine(url)
+    # Dev bootstrap: metadata is the schema source of truth. The Alembic
+    # revision handshake (decided during Phase 16 implementation) only WARNS
+    # here - migrations run explicitly via `invincible db upgrade`, never
+    # auto-run at startup; doctor fails loudly on mismatches instead.
+    await create_all_from_metadata(engine)
+    await warn_if_schema_stale(engine)
+    app.state.engine = engine
+
     seed_config = load_providers_config(settings.config_path())
     app.state.registry = ProviderRegistry(
         file_path=settings.providers_file(), seed_config=seed_config
     )
     app.state.router = Router(registry=app.state.registry)
-    app.state.sessions = SessionStore(db_path=db_path)
+
+    oauth_store = OAuthStore(engine)
+    await oauth_store.init()
+    memory = MemoryStore(engine)
+    await memory.init()
+    runs = RunStore(engine)
+    await runs.init()
+    continuity = ContinuityEngine(engine=engine, runs=runs)
+    await continuity.init()
+
+    pending = PendingActionStore()
     if settings.persist_pending_actions():
-        app.state.pending_actions = PendingActionStore(db_path=db_path)
-    else:
-        app.state.pending_actions = PendingActionStore()
-    app.state.oauth_store = OAuthStore(db_path=db_path)
+        pending.attach_engine(engine)
+    app.state.pending_actions = pending
+    app.state.oauth_store = oauth_store
+    app.state.memory = memory
+    app.state.runs = runs
+    app.state.continuity = continuity
+
+    app.state.sessions = SessionStore(engine)
     await app.state.sessions.init()
-    await app.state.oauth_store.init()
-    # Phase 10 fact memory: shares the session DB connection so a
-    # `:memory:` database stays one database (tests, ephemeral runs).
-    app.state.memory = MemoryStore(shared=app.state.sessions)
-    await app.state.memory.init()
-    # Phase 13.5 provider-run records share the same connection; the
-    # recorder is bound only after the store is live.
-    app.state.runs = RunStore(shared=app.state.sessions)
-    await app.state.runs.init()
-    app.state.router.run_recorder = app.state.runs.record
-    # Phase 15b continuity engine: canonical task state shared by LLM
-    # requests and MCP tools; reads runs for interruption awareness.
-    app.state.continuity = ContinuityEngine(
-        shared=app.state.sessions, runs=app.state.runs
-    )
-    await app.state.continuity.init()
+    app.state.router.run_recorder = runs.record
     yield
     await app.state.router.close()
-    await app.state.continuity.close()
-    await app.state.runs.close()
-    await app.state.memory.close()
-    await app.state.sessions.close()
-    await app.state.oauth_store.close()
+    await continuity.close()
+    await runs.close()
+    await memory.close()
+    await oauth_store.close()
+    # Drain fire-and-forget staged-action writes before the engine goes.
+    await pending.flush_persisted()
+    await engine.dispose()
 
 app = FastAPI(title="Invincible", lifespan=lifespan)
 

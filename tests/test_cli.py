@@ -7,11 +7,11 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-import invincible
 from invincible import __version__
 from invincible.cli import cli
+from invincible.core.oauth_store import OAuthStore
 from invincible.core.router import load_providers_config
-from invincible.core.session_store import SessionStore
+from tests.conftest import TEST_DB_URL
 
 
 def _env_dict(text):
@@ -66,7 +66,7 @@ def test_setup_creates_env_file(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
         cli, ["setup", "--env-file", str(target)],
-        input="nim-key\ngroq-key\nor-key\ngem-key\ntok-key\n",
+        input="nim-key\ngroq-key\nor-key\ngem-key\ntok-key\nskip\n",
     )
     assert result.exit_code == 0
     assert str(target) in result.output
@@ -86,7 +86,7 @@ def test_setup_creates_env_file(tmp_path):
 def test_setup_generates_gateway_and_owner_secrets_without_printing(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n\n\n\n\n"
+        cli, ["setup", "--env-file", str(target)], input="\n\n\n\n\nskip\n"
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -110,7 +110,9 @@ def test_setup_preserves_existing_values(tmp_path):
         encoding="utf-8",
     )
     before = target.read_text(encoding="utf-8")
-    result = CliRunner().invoke(cli, ["setup", "--env-file", str(target)], input="")
+    result = CliRunner().invoke(
+        cli, ["setup", "--env-file", str(target)], input="skip\n"
+    )
     assert result.exit_code == 0
     assert target.read_text(encoding="utf-8") == before
 
@@ -122,7 +124,7 @@ def test_setup_carries_legacy_mcp_shared_secret_into_new_key(tmp_path):
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n\n\n\n\n"
+        cli, ["setup", "--env-file", str(target)], input="\n\n\n\n\nskip\n"
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -138,7 +140,7 @@ def test_setup_preserves_unrelated_vars_comments_and_blank_lines(tmp_path):
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\n"
+        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\nskip\n"
     )
     assert result.exit_code == 0
     lines = target.read_text(encoding="utf-8").splitlines()
@@ -160,7 +162,7 @@ def test_setup_preserves_unicode_comments_and_values(tmp_path):
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\n"
+        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\nskip\n"
     )
     assert result.exit_code == 0
     text = target.read_text(encoding="utf-8")
@@ -171,10 +173,12 @@ def test_setup_preserves_unicode_comments_and_values(tmp_path):
 def test_setup_repeated_runs_do_not_duplicate_keys(tmp_path):
     target = tmp_path / ".env"
     first = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\n"
+        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\nskip\n"
     )
     assert first.exit_code == 0
-    second = CliRunner().invoke(cli, ["setup", "--env-file", str(target)], input="")
+    second = CliRunner().invoke(
+        cli, ["setup", "--env-file", str(target)], input="skip\n"
+    )
     assert second.exit_code == 0
     text = target.read_text(encoding="utf-8")
     for key in ("GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET", "NVIDIA_API_KEY",
@@ -193,7 +197,7 @@ def test_setup_force_updates_values(tmp_path):
     )
     result = CliRunner().invoke(
         cli, ["setup", "--env-file", str(target), "--force"],
-        input="new-gw\nnew-owner\nnew-nim\nnew-groq\nnew-or\nnew-gem\nnew-tok\n",
+        input="new-gw\nnew-owner\nnew-nim\nnew-groq\nnew-or\nnew-gem\nnew-tok\nskip\n",
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -212,7 +216,7 @@ def test_setup_force_empty_input_preserves_existing(tmp_path):
     target = tmp_path / ".env"
     target.write_text("GEMINI_API_KEY=keep-me\n", encoding="utf-8")
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target), "--force"], input="\n" * 6
+        cli, ["setup", "--env-file", str(target), "--force"], input="\n" * 6 + "skip\n"
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -223,7 +227,7 @@ def test_setup_force_empty_input_preserves_existing(tmp_path):
 def test_setup_write_failure_returns_nonzero(tmp_path):
     target = tmp_path / "missing-dir" / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\n"
+        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\nskip\n"
     )
     assert result.exit_code == 1
     assert "Could not write env file" in result.output
@@ -651,7 +655,7 @@ def test_start_missing_env_file_warns_without_secrets(monkeypatch, tmp_path):
     assert "API_KEY=" not in result.output
 
 
-def test_start_propagates_config_and_db_path(monkeypatch, tmp_path):
+def test_start_propagates_custom_config(monkeypatch, tmp_path):
     config = tmp_path / "custom.yaml"
     config.write_text(
         "providers:\n  - name: solo\n    tier: 1\n    base_url: https://solo.example.com/v1\n"
@@ -662,23 +666,24 @@ def test_start_propagates_config_and_db_path(monkeypatch, tmp_path):
 
     def fake_run(*args, **kwargs):
         seen["config"] = os.environ.get("INVINCIBLE_CONFIG_PATH")
-        seen["db"] = os.environ.get("INVINCIBLE_DB_PATH")
 
     monkeypatch.setattr("invincible.cli.uvicorn.run", fake_run)
     monkeypatch.delenv("INVINCIBLE_CONFIG_PATH", raising=False)
-    monkeypatch.delenv("INVINCIBLE_DB_PATH", raising=False)
-    db_target = tmp_path / "data" / "sessions.db"
-    result = CliRunner().invoke(
-        cli, ["start", "--config", str(config), "--db-path", str(db_target)]
-    )
+    result = CliRunner().invoke(cli, ["start", "--config", str(config)])
     assert result.exit_code == 0
     assert seen["config"] == str(config)
-    assert seen["db"] == str(db_target)
-    # `start` writes these straight into the process environment; monkeypatch
-    # cannot restore them (delenv on an absent var records nothing), so clean
+    # `start` writes this straight into the process environment; monkeypatch
+    # cannot restore it (delenv on an absent var records nothing), so clean
     # up explicitly to avoid leaking into later tests.
     os.environ.pop("INVINCIBLE_CONFIG_PATH", None)
-    os.environ.pop("INVINCIBLE_DB_PATH", None)
+
+
+def test_start_has_no_db_path_option():
+    """Phase 16: INVINCIBLE_DB_URL (env/.env) is the only database source -
+    the DSN is secret-bearing, so there is deliberately no --db-path flag."""
+    result = CliRunner().invoke(cli, ["start", "--help"])
+    assert result.exit_code == 0
+    assert "--db-path" not in result.output
 
 
 def test_start_missing_config_fails_cleanly(monkeypatch, tmp_path):
@@ -750,44 +755,193 @@ def test_malformed_custom_config_raises_clear_error(tmp_path):
         load_providers_config(str(path))
 
 
-def test_default_db_path_is_cwd_and_not_inside_package(tmp_path, monkeypatch):
-    monkeypatch.delenv("INVINCIBLE_DB_PATH", raising=False)
-    monkeypatch.chdir(tmp_path)
-    store = SessionStore()
-    assert store.db_path == str(tmp_path / "sessions.db")
-    package_dir = os.path.dirname(os.path.abspath(invincible.__file__))
-    assert package_dir not in store.db_path
+def test_default_db_url_resolution_comes_from_env(monkeypatch):
+    """The store layer takes an engine; the CLI resolves INVINCIBLE_DB_URL
+    from the environment (or .env) - there is no path default anymore."""
+    from invincible.cli import _resolve_db_url
 
-    custom = tmp_path / "custom" / "sessions.db"
-    monkeypatch.setenv("INVINCIBLE_DB_PATH", str(custom))
-    assert SessionStore().db_path == str(custom)
-    assert SessionStore(db_path=":memory:").db_path == ":memory:"
+    monkeypatch.delenv("INVINCIBLE_DB_URL", raising=False)
+    with pytest.raises(Exception, match="invincible dev-db"):
+        _resolve_db_url()
+    monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
+    assert _resolve_db_url() == TEST_DB_URL
+
+
+# --- setup database-backend step (Phase 16) ---
+#
+# Prompt-count notes: of SUPPORTED_ENV_KEYS only the five provider keys
+# prompt when unset (GATEWAY_API_KEY / INVINCIBLE_OWNER_SECRET are
+# auto-generated), so a fresh .env consumes exactly five input lines before
+# the database-backend choice.
+
+
+def test_setup_paste_branch_writes_validated_url(tmp_path):
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(
+        cli,
+        ["setup", "--env-file", str(target)],
+        input=(
+            "\n" * 5
+            + "paste\npostgresql+asyncpg://invincible:pw@db.example:5432/inv\n"
+        ),
+    )
+    assert result.exit_code == 0, result.output
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert (
+        values["INVINCIBLE_DB_URL"]
+        == "postgresql+asyncpg://invincible:pw@db.example:5432/inv"
+    )
+
+
+def test_setup_paste_branch_normalizes_plain_postgres_scheme(tmp_path):
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(
+        cli,
+        ["setup", "--env-file", str(target)],
+        input=(
+            "\n" * 5
+            + "paste\npostgresql://invincible@127.0.0.1:5433/invincible\n"
+        ),
+    )
+    assert result.exit_code == 0, result.output
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert values["INVINCIBLE_DB_URL"] == (
+        "postgresql+asyncpg://invincible@127.0.0.1:5433/invincible"
+    )
+    assert "Normalized postgresql://" in result.output
+
+
+def test_setup_paste_branch_rejects_unsupported_driver(tmp_path):
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(
+        cli,
+        ["setup", "--env-file", str(target)],
+        input=(
+            "\n" * 5
+            + "paste\npostgresql+psycopg2://invincible@db/inv\n"
+              "postgresql+asyncpg://invincible@db/inv\n"
+        ),
+    )
+    assert result.exit_code == 0, result.output
+    assert "Unsupported driver 'postgresql+psycopg2'" in result.output
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert values["INVINCIBLE_DB_URL"] == (
+        "postgresql+asyncpg://invincible@db/inv"
+    )
+
+
+def test_setup_skip_branch_omits_db_url(tmp_path):
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(
+        cli, ["setup", "--env-file", str(target)], input="\n" * 5 + "skip\n"
+    )
+    assert result.exit_code == 0
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert "INVINCIBLE_DB_URL" not in values
+
+
+def test_setup_existing_db_url_not_reprompted(tmp_path, monkeypatch):
+    target = tmp_path / ".env"
+    before = "GATEWAY_API_KEY=gw\nINVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n"
+    target.write_text(before, encoding="utf-8")
+    monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
+    # Gateway + DB URL exist and are kept verbatim; owner secret is newly
+    # generated (absent from the file); provider keys prompt-skip; the DB
+    # step must NOT appear.
+    result = CliRunner().invoke(
+        cli, ["setup", "--env-file", str(target)], input="\n" * 5
+    )
+    assert result.exit_code == 0, result.output
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert values["GATEWAY_API_KEY"] == "gw"
+    assert values["INVINCIBLE_DB_URL"] == (
+        "postgresql+asyncpg://keep@db/x"
+    )
+    assert values["INVINCIBLE_OWNER_SECRET"]
+
+
+def test_setup_force_reprompts_db_choice(tmp_path):
+    target = tmp_path / ".env"
+    target.write_text(
+        "INVINCIBLE_DB_URL=postgresql+asyncpg://old@db/x\n",
+        encoding="utf-8",
+    )
+    # --force: gateway + five provider keys prompt (owner regenerates
+    # silently); empty answers keep/regenerate as usual. Then the DB step
+    # reappears; 'skip' leaves the existing URL untouched.
+    result = CliRunner().invoke(
+        cli,
+        ["setup", "--env-file", str(target), "--force"],
+        input="\n" * 6 + "skip\n",
+    )
+    assert result.exit_code == 0, result.output
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert values["INVINCIBLE_DB_URL"] == "postgresql+asyncpg://old@db/x"
+
+
+def test_setup_dev_db_branch_provisions_and_writes(tmp_path, monkeypatch):
+    target = tmp_path / ".env"
+
+    def fake_provision(port=5433):
+        return (
+            "postgresql+asyncpg://invincible@127.0.0.1:5433/invincible",
+            ["found local Postgres", "database already present: 'invincible'"],
+        )
+
+    monkeypatch.setattr("invincible.cli._provision_dev_db", fake_provision)
+    result = CliRunner().invoke(
+        cli, ["setup", "--env-file", str(target)], input="\n" * 5 + "dev-db\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert "Provisioning a local development database..." in result.output
+    assert "dev-db: found local Postgres" in result.output
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert values["INVINCIBLE_DB_URL"] == (
+        "postgresql+asyncpg://invincible@127.0.0.1:5433/invincible"
+    )
+
+
+def test_setup_dev_db_failure_skips_url_gracefully(tmp_path, monkeypatch):
+    from invincible.cli import DevDbError
+
+    def boom(port=5433):
+        raise DevDbError("no server, no docker")
+
+    monkeypatch.setattr("invincible.cli._provision_dev_db", boom)
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(
+        cli, ["setup", "--env-file", str(target)], input="\n" * 5 + "dev-db\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert "Could not provision locally (no server, no docker)" in result.output
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert "INVINCIBLE_DB_URL" not in values
 
 
 # --- oauth administration ---
 
 
-def test_oauth_list_shows_clients_and_grants(tmp_path):
-    import asyncio
+@pytest.fixture
+async def seeded_client_id(pg_engine):
+    """Register a client + token pair on the shared test database."""
+    store = OAuthStore(engine=pg_engine)
+    registration = await store.register_client(
+        ["http://localhost:9999/callback"], "seed-client"
+    )
+    await store.issue_token_pair(registration["client_id"])
+    return registration["client_id"]
 
-    from invincible.core.oauth_store import OAuthStore
 
-    db = tmp_path / "oauth.db"
+async def test_oauth_list_shows_clients_and_grants(
+    seeded_client_id, monkeypatch
+):
+    client_id = seeded_client_id
+    monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
 
-    async def seed():
-        store = OAuthStore(db_path=str(db))
-        await store.init()
-        registration = await store.register_client(
-            ["http://localhost:9999/callback"], "seed-client"
-        )
-        await store.issue_token_pair(registration["client_id"])
-        await store.close()
-        return registration["client_id"]
-
-    client_id = asyncio.run(seed())
-
-    result = CliRunner().invoke(cli, ["oauth", "list", "--db-path", str(db)])
-    assert result.exit_code == 0
+    result = CliRunner().invoke(cli, ["oauth", "list"])
+    assert result.exit_code == 0, result.output
+    # The shared test DB may hold clients from other tests; this one must
+    # appear with its grants.
     assert client_id in result.output
     assert "seed-client" in result.output
     assert "http://localhost:9999/callback" in result.output
@@ -795,98 +949,87 @@ def test_oauth_list_shows_clients_and_grants(tmp_path):
     assert "active refresh: expires" in result.output
 
 
-def test_oauth_list_empty_is_quiet(tmp_path):
-    db = tmp_path / "empty.db"
-    result = CliRunner().invoke(cli, ["oauth", "list", "--db-path", str(db)])
+async def test_oauth_list_empty_db_is_quiet(pg_engine, monkeypatch):
+    from sqlalchemy import delete
+
+    from invincible.core.db import oauth_clients, oauth_codes, oauth_tokens
+
+    async with pg_engine.begin() as conn:
+        for table in (oauth_tokens, oauth_codes, oauth_clients):
+            await conn.execute(delete(table))
+    monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
+
+    result = CliRunner().invoke(cli, ["oauth", "list"])
     assert result.exit_code == 0
     assert "No registered OAuth clients." in result.output
 
 
-def test_oauth_revoke_unknown_client_fails(tmp_path):
-    db = tmp_path / "oauth.db"
-    result = CliRunner().invoke(cli, ["oauth", "revoke", "nope", "--db-path", str(db)])
+def test_oauth_revoke_unknown_client_fails(monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
+    result = CliRunner().invoke(cli, ["oauth", "revoke", "nope"])
     assert result.exit_code == 1
     assert "Unknown client id" in result.output
 
 
-def test_oauth_revoke_revokes_all_tokens(tmp_path):
-    import asyncio
+async def test_oauth_revoke_revokes_all_tokens(seeded_client_id, monkeypatch):
+    client_id = seeded_client_id
+    monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
 
-    from invincible.core.oauth_store import OAuthStore
-
-    db = tmp_path / "oauth.db"
-
-    async def seed():
-        store = OAuthStore(db_path=str(db))
-        await store.init()
-        registration = await store.register_client(
-            ["http://localhost:9999/callback"], "seed-client"
-        )
-        await store.issue_token_pair(registration["client_id"])
-        await store.close()
-        return registration["client_id"]
-
-    client_id = asyncio.run(seed())
-
-    result = CliRunner().invoke(
-        cli, ["oauth", "revoke", "--db-path", str(db), "--", client_id]
-    )
+    result = CliRunner().invoke(cli, ["oauth", "revoke", "--", client_id])
     assert result.exit_code == 0
     assert f"Revoked 2 token(s) for client {client_id}." in result.output
 
-    listed = CliRunner().invoke(cli, ["oauth", "list", "--db-path", str(db)])
+    listed = CliRunner().invoke(cli, ["oauth", "list"])
     assert "revoked: 2" in listed.output
 
 
-def test_oauth_revoke_accepts_dash_prefixed_client_id(tmp_path):
+async def test_oauth_revoke_accepts_dash_prefixed_client_id(
+    pg_engine, monkeypatch
+):
     """Client ids are random URL-safe strings, so a generated id can start
     with '-' - which Click would otherwise parse as an option ("No such
     option", exit code 2). The id must follow a '--' separator.
     Deterministic regression for the CI flake that hit a random dashed id."""
-    import asyncio
+    from sqlalchemy import insert
 
-    from invincible.core.oauth_store import OAuthStore, _now
+    from invincible.core.db import oauth_clients, oauth_tokens
+    from invincible.core.oauth_store import _now
 
-    db = tmp_path / "oauth.db"
     dashed_id = "-dash-prefixed-id"
-
-    async def seed():
-        store = OAuthStore(db_path=str(db))
-        await store.init()
-        await store._db.execute(
-            "INSERT INTO oauth_clients"
-            " (client_id, client_name, redirect_uris, created_at)"
-            " VALUES (?, ?, ?, ?)",
-            (
-                dashed_id,
-                "dashed-client",
-                '["http://localhost:9999/callback"]',
-                _now(),
-            ),
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            insert(oauth_clients).values(
+                client_id=dashed_id,
+                client_name="dashed-client",
+                redirect_uris=["http://localhost:9999/callback"],
+                created_at=_now(),
+            )
         )
-        await store._insert_token("access", dashed_id, 3600)
-        await store._insert_token("refresh", dashed_id, 30 * 24 * 3600)
-        await store._db.commit()
-        await store.close()
+        for token_type, ttl in (("access", 3600), ("refresh", 30 * 24 * 3600)):
+            await conn.execute(
+                insert(oauth_tokens).values(
+                    token_hash=f"hash-{token_type}-dashed",
+                    token_type=token_type,
+                    client_id=dashed_id,
+                    expires_at=_now() + ttl,
+                    revoked=False,
+                    created_at=_now(),
+                )
+            )
+    monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
 
-    asyncio.run(seed())
-
-    result = CliRunner().invoke(
-        cli, ["oauth", "revoke", "--db-path", str(db), "--", dashed_id]
-    )
+    result = CliRunner().invoke(cli, ["oauth", "revoke", "--", dashed_id])
     assert result.exit_code == 0, result.output
     assert f"Revoked 2 token(s) for client {dashed_id}." in result.output
 
-    listed = CliRunner().invoke(cli, ["oauth", "list", "--db-path", str(db)])
+    listed = CliRunner().invoke(cli, ["oauth", "list"])
     assert "revoked: 2" in listed.output
 
 
-def test_oauth_test_client_prints_bearer_curl(monkeypatch, tmp_path):
+def test_oauth_test_client_prints_bearer_curl(pg_engine, monkeypatch):
     monkeypatch.setenv("INVINCIBLE_OWNER_SECRET", "owner-secret")
-    db = tmp_path / "oauth.db"
-    result = CliRunner().invoke(
-        cli, ["oauth", "test-client", "--db-path", str(db)]
-    )
+    monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
+    result = CliRunner().invoke(cli, ["oauth", "test-client"])
     assert result.exit_code == 0, result.output
     assert "client_id:" in result.output
     assert "access token expires in 3600s" in result.output
@@ -896,11 +1039,19 @@ def test_oauth_test_client_prints_bearer_curl(monkeypatch, tmp_path):
 
 
 def test_oauth_test_client_requires_owner_secret(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)  # isolate from any repo-root .env
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
     monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
-    db = tmp_path / "oauth.db"
-    result = CliRunner().invoke(
-        cli, ["oauth", "test-client", "--db-path", str(db)]
-    )
+    monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
+    result = CliRunner().invoke(cli, ["oauth", "test-client"])
     assert result.exit_code == 1
     assert "INVINCIBLE_OWNER_SECRET is not set" in result.output
+
+
+def test_oauth_test_client_requires_db_url(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)  # isolate from any repo-root .env
+    monkeypatch.setenv("INVINCIBLE_OWNER_SECRET", "owner-secret")
+    monkeypatch.delenv("INVINCIBLE_DB_URL", raising=False)
+    result = CliRunner().invoke(cli, ["oauth", "test-client"])
+    assert result.exit_code == 1
+    assert "invincible dev-db" in result.output

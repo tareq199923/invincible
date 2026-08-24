@@ -1,0 +1,44 @@
+# Invincible app + postgres pair (Phase 16).
+#
+# `docker compose up` yields a running gateway with zero manual SQL: the
+# app container runs `invincible db upgrade` before starting uvicorn.
+# The postgres credentials below are DEV-ONLY defaults (they match the
+# `invincible dev-db` Docker fallback); override them for anything
+# reachable outside localhost.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: invincible
+      POSTGRES_PASSWORD: invincible
+      POSTGRES_DB: invincible
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - invincible-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U invincible -d invincible"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      INVINCIBLE_DB_URL: postgresql+asyncpg://invincible:invincible@db:5432/invincible
+      GATEWAY_API_KEY: ${GATEWAY_API_KEY:-}
+      INVINCIBLE_OWNER_SECRET: ${INVINCIBLE_OWNER_SECRET:-}
+      INVINCIBLE_ADMIN_KEY: ${INVINCIBLE_ADMIN_KEY:-}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      TOKENROUTER_API_KEY: ${TOKENROUTER_API_KEY:-}
+    ports:
+      - "8000:8000"
+
+volumes:
+  invincible-pgdata:

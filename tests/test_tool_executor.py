@@ -158,16 +158,18 @@ async def test_confirm_action_expired_token(monkeypatch):
     assert len(store) == 0
 
 
-async def test_pending_actions_survive_store_restart(tmp_path):
-    """With a db_path, staged actions are still confirmable after a restart
-    (a fresh store over the same database file)."""
-    db_path = str(tmp_path / "sessions.db")
-
-    first = tool_executor.PendingActionStore(db_path=db_path)
+async def test_pending_actions_survive_store_restart(pg_engine):
+    """With an attached engine, staged actions are still confirmable after
+    a restart (a fresh store over the same engine, rows reloaded)."""
+    first = tool_executor.PendingActionStore()
+    first.attach_engine(pg_engine)
     staged = tool_executor.execute_bash("echo hello", first)
     assert len(first) == 1
+    await first.flush_persisted()
 
-    restarted = tool_executor.PendingActionStore(db_path=db_path)
+    restarted = tool_executor.PendingActionStore()
+    restarted.attach_engine(pg_engine)
+    await restarted.load_persisted()
     assert len(restarted) == 1
     result = await tool_executor.confirm_action(restarted, staged["token"], True)
     assert result["returncode"] == 0
@@ -175,53 +177,59 @@ async def test_pending_actions_survive_store_restart(tmp_path):
     assert len(restarted) == 0  # single-use survives the restart too
 
 
-async def test_pending_actions_write_file_survive_restart(tmp_path):
-    db_path = str(tmp_path / "sessions.db")
+async def test_pending_actions_write_file_survive_restart(pg_engine, tmp_path):
+    first = tool_executor.PendingActionStore()
+    first.attach_engine(pg_engine)
     target = tmp_path / "out.txt"
-
-    first = tool_executor.PendingActionStore(db_path=db_path)
     staged = tool_executor.write_file(str(target), "hello world", first)
+    await first.flush_persisted()
 
-    restarted = tool_executor.PendingActionStore(db_path=db_path)
+    restarted = tool_executor.PendingActionStore()
+    restarted.attach_engine(pg_engine)
+    await restarted.load_persisted()
     result = await tool_executor.confirm_action(restarted, staged["token"], True)
     assert result["status"] == "written"
     assert target.read_text() == "hello world"
 
 
-async def test_expired_pending_actions_purged_on_load(tmp_path, monkeypatch):
+async def test_expired_pending_actions_purged_on_load(pg_engine, monkeypatch):
     """A restart must not resurrect expired staged actions."""
     monkeypatch.setattr(tool_executor.PendingActionStore, "TTL_SECONDS", -1)
-    db_path = str(tmp_path / "sessions.db")
 
-    first = tool_executor.PendingActionStore(db_path=db_path)
+    first = tool_executor.PendingActionStore()
+    first.attach_engine(pg_engine)
     staged = tool_executor.execute_bash("echo hello", first)
+    await first.flush_persisted()
 
-    restarted = tool_executor.PendingActionStore(db_path=db_path)
+    restarted = tool_executor.PendingActionStore()
+    restarted.attach_engine(pg_engine)
+    await restarted.load_persisted()
     assert len(restarted) == 0  # swept during load
     result = await tool_executor.confirm_action(restarted, staged["token"], True)
     assert result["status"] == "not_found"
 
 
-async def test_pending_actions_survive_cross_process_restart(tmp_path, monkeypatch):
-    """A persisted action must survive a *real* restart, where the new
-    process has an unrelated monotonic clock. Regression for the bug that
-    used time.monotonic() for created_at: reloading under a different
-    process's monotonic epoch compared two unrelated numbers and could
-    expire every staged action instantly."""
-    db_path = str(tmp_path / "sessions.db")
+async def test_pending_actions_survive_cross_process_restart(
+    pg_engine, monkeypatch
+):
+    """A persisted action must survive a *real* restart, where wall-clock
+    time advances but nothing else about the row changes. Regression guard:
+    created_at is written with time.time(), so expiry works across
+    processes regardless of any process-relative clock."""
     t0 = 1_000_000.0
 
-    monkeypatch.setattr(tool_executor.time, "monotonic", lambda: 1000.0)
     monkeypatch.setattr(tool_executor.time, "time", lambda: t0)
-    first = tool_executor.PendingActionStore(db_path=db_path)
+    first = tool_executor.PendingActionStore()
+    first.attach_engine(pg_engine)
     staged = tool_executor.execute_bash("echo hello", first)
+    await first.flush_persisted()
 
-    # "Restart": a new process whose monotonic clock is unrelated to the
-    # old one (e.g. QPC epoch, days of uptime), 5 real minutes later -
+    # "Restart": a new store loading rows written 5 real minutes later -
     # still well inside the 10-minute TTL.
-    monkeypatch.setattr(tool_executor.time, "monotonic", lambda: 50_000.0)
     monkeypatch.setattr(tool_executor.time, "time", lambda: t0 + 300)
-    restarted = tool_executor.PendingActionStore(db_path=db_path)
+    restarted = tool_executor.PendingActionStore()
+    restarted.attach_engine(pg_engine)
+    await restarted.load_persisted()
 
     assert len(restarted) == 1
     result = await tool_executor.confirm_action(restarted, staged["token"], True)
@@ -230,43 +238,45 @@ async def test_pending_actions_survive_cross_process_restart(tmp_path, monkeypat
 
 
 async def test_pending_actions_expired_purged_on_cross_process_restart(
-    tmp_path, monkeypatch
+    pg_engine, monkeypatch
 ):
     """Mirror of the survival test: real wall-clock time past the TTL must
-    purge persisted actions on load, whatever the new process's monotonic
-    clock says."""
-    db_path = str(tmp_path / "sessions.db")
+    purge persisted actions on load."""
     t0 = 1_000_000.0
 
-    monkeypatch.setattr(tool_executor.time, "monotonic", lambda: 1000.0)
     monkeypatch.setattr(tool_executor.time, "time", lambda: t0)
-    first = tool_executor.PendingActionStore(db_path=db_path)
+    first = tool_executor.PendingActionStore()
+    first.attach_engine(pg_engine)
     staged = tool_executor.execute_bash("echo hello", first)
+    await first.flush_persisted()
 
-    # New process, unrelated monotonic clock, 11+ minutes of real time later.
-    monkeypatch.setattr(tool_executor.time, "monotonic", lambda: 50_000.0)
+    # New process, 11+ minutes of real time later.
     monkeypatch.setattr(tool_executor.time, "time", lambda: t0 + 700)
-    restarted = tool_executor.PendingActionStore(db_path=db_path)
+    restarted = tool_executor.PendingActionStore()
+    restarted.attach_engine(pg_engine)
+    await restarted.load_persisted()
 
     assert len(restarted) == 0  # swept during load
     result = await tool_executor.confirm_action(restarted, staged["token"], True)
     assert result["status"] == "not_found"
 
 
-async def test_pending_store_degrades_to_memory_when_db_unavailable(
-    tmp_path, monkeypatch
-):
+async def test_pending_store_degrades_to_memory_when_db_unavailable(monkeypatch):
     """A broken database must not break staging: warn and continue in
     memory only."""
-    db_path = str(tmp_path / "sessions.db")
-    monkeypatch.setattr(
-        "sqlite3.connect", lambda path: (_ for _ in ()).throw(OSError("nope"))
-    )
+    from invincible.core.db import make_engine
 
-    store = tool_executor.PendingActionStore(db_path=db_path)
+    bad_engine = make_engine(
+        "postgresql+asyncpg://invincible@127.0.0.1:9/nowhere"
+    )
+    store = tool_executor.PendingActionStore()
+    store.attach_engine(bad_engine)
+    await store.load_persisted()  # logs a warning, keeps memory truth
+
     staged = tool_executor.execute_bash("echo hello", store)
     assert staged["status"] == "pending_confirmation"
     assert len(store) == 1
+    await bad_engine.dispose()
 
 
 async def test_confirm_action_token_is_single_use(monkeypatch):

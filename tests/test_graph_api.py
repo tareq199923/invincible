@@ -16,13 +16,11 @@ GATEWAY = {"Authorization": "Bearer test-gateway-key"}
 
 
 @pytest.fixture
-async def graph_stack(client, monkeypatch, tmp_path):
+async def graph_stack(client, pg_engine, monkeypatch):
     monkeypatch.setenv("INVINCIBLE_ADMIN_KEY", "admin-secret")
     # Attach runs + continuity exactly like the lifespan does.
-    runs = RunStore(shared=app.state.sessions)
-    await runs.init()
-    engine = ContinuityEngine(shared=app.state.sessions, runs=runs)
-    await engine.init()
+    runs = RunStore(engine=pg_engine)
+    engine = ContinuityEngine(engine=pg_engine, runs=runs)
     app.state.runs = runs
     app.state.continuity = engine
     try:

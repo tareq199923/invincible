@@ -54,8 +54,14 @@ class Settings:
         """Bearer/x-api-key credential guarding /v1/* (unset = fail open)."""
         return os.getenv("GATEWAY_API_KEY")
 
+    def db_url(self) -> str | None:
+        """PostgreSQL DSN (INVINCIBLE_DB_URL). Required since Phase 16;
+        e.g. postgresql+asyncpg://invincible:pw@localhost:5433/invincible"""
+        return os.getenv("INVINCIBLE_DB_URL")
+
     def db_path(self) -> str | None:
-        """SQLite database file override (INVINCIBLE_DB_PATH)."""
+        """Legacy SQLite path - retained ONLY as input for
+        ``invincible db import``. The server never opens SQLite files."""
         return os.getenv("INVINCIBLE_DB_PATH")
 
     def config_path(self) -> str | None:

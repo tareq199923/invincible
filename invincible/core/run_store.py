@@ -1,140 +1,65 @@
 # invincible/core/run_store.py
-"""Provider-run records (Phase 13.5).
+"""Provider-run records on PostgreSQL (Phase 16).
 
-One row per upstream attempt - successes, failovers, and terminal errors -
-so "which provider/model actually handled a request and why did it move"
-is queryable state rather than only log lines. This is the data source for
-the future continuity graph and dashboard; Phase 16 carries the same shape
-into PostgreSQL.
-
-Shares the session SQLite database via ``SessionStore.connection()``
-(same pattern as MemoryStore; required for ``:memory:`` databases, where a
-second connection would be a different database). Writes are best-effort
-from the caller's perspective: :meth:`record` raises, but the Router wraps
-every call so persistence problems can never fail a chat completion.
+One row per upstream attempt - successes, failovers, errors. Queryable
+execution history feeding the continuity brief, the graph API, and the
+future dashboard. Shape carried over from Phase 13.5; ``meta`` is JSONB.
 """
-import json
-import time
 
-import aiosqlite
-
-from invincible.core.session_store import shared_db_write_lock
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS runs (
-    id INTEGER PRIMARY KEY,
-    request_id TEXT NOT NULL,
-    session_id TEXT,
-    provider_name TEXT NOT NULL,
-    model_id TEXT NOT NULL,
-    attempt_index INTEGER NOT NULL,
-    outcome TEXT NOT NULL,
-    error_class TEXT,
-    started_at REAL NOT NULL,
-    finished_at REAL,
-    meta TEXT
-)
-"""
+from invincible.core.db import runs
 
 
 class RunStore:
-    def __init__(self, db_path: str | None = None, shared=None):
-        self._shared = shared
-        if db_path is None and shared is not None:
-            db_path = getattr(shared, "db_path", None)
-        if db_path is None and shared is None:
-            from invincible.core.session_store import default_db_path
-
-            db_path = default_db_path()
-        self.db_path = db_path
-        self._db: aiosqlite.Connection | None = None
+    def __init__(self, engine):
+        self.engine = engine
 
     async def init(self) -> None:
-        accessor = getattr(self._shared, "connection", None) if self._shared else None
-        shared_db = accessor() if callable(accessor) else None
-        if shared_db is not None:
-            self._db = shared_db
-        elif self.db_path is not None:
-            # Shared store without a live connection (test stubs) or a
-            # standalone store: open our own connection. A stub with no
-            # path leaves _db None - inert, so tests never touch the real
-            # cwd database.
-            self._shared = None
-            self._db = await aiosqlite.connect(self.db_path)
-            await self._db.execute("PRAGMA foreign_keys = ON")
-        if self._db is None:
-            return
-        await self._db.execute(_SCHEMA)
-        await self._db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_runs_session "
-            "ON runs(session_id, started_at)"
-        )
-        await self._db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_runs_outcome ON runs(outcome)"
-        )
-        await self._db.commit()
+        """Schema owned by core.db metadata."""
 
     async def close(self) -> None:
-        # A shared connection is owned (and closed) by the SessionStore.
-        if self._shared is None and self._db is not None:
-            await self._db.close()
-        self._db = None
+        """Engine owned/disposed by the lifespan."""
 
     async def record(self, entry: dict) -> int:
         """Insert one run row; returns the new row id.
 
         Required keys: request_id, provider_name, model_id, attempt_index,
         outcome, started_at. Optional: session_id, error_class, finished_at,
-        meta (JSON-serialized mapping). Runs under the shared DB write lock
-        so it can never commit a sibling store's open transaction (M1).
+        meta (JSON-serializable mapping).
         """
-        async with shared_db_write_lock():
-            cursor = await self._db.execute(
-                """
-                INSERT INTO runs (
-                    request_id, session_id, provider_name, model_id,
-                    attempt_index, outcome, error_class, started_at,
-                    finished_at, meta
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    entry["request_id"],
-                    entry.get("session_id"),
-                    entry["provider_name"],
-                    entry["model_id"],
-                    entry["attempt_index"],
-                    entry["outcome"],
-                    entry.get("error_class"),
-                    entry["started_at"],
-                    entry.get("finished_at"),
-                    json.dumps(entry["meta"]) if entry.get("meta") else None,
-                ),
+        meta = entry.get("meta")
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                runs.insert().values(
+                    request_id=entry["request_id"],
+                    session_id=entry.get("session_id"),
+                    provider_name=entry["provider_name"],
+                    model_id=entry["model_id"],
+                    attempt_index=entry["attempt_index"],
+                    outcome=entry["outcome"],
+                    error_class=entry.get("error_class"),
+                    started_at=entry["started_at"],
+                    finished_at=entry.get("finished_at"),
+                    # JSONB column: bind the object; SQLAlchemy serializes.
+                    meta=meta if meta is not None else None,
+                )
             )
-            await self._db.commit()
-        return cursor.lastrowid
+            return result.inserted_primary_key[0]
 
     async def recent(
         self, session_id: str | None = None, limit: int = 50
     ) -> list[dict]:
         """Most recent runs, newest first; optionally scoped to a session."""
-        if session_id is None:
-            cursor = await self._db.execute(
-                "SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,)
+        query = runs.select().order_by(runs.c.id.desc()).limit(limit)
+        if session_id is not None:
+            query = (
+                runs.select()
+                .where(runs.c.session_id == session_id)
+                .order_by(runs.c.id.desc())
+                .limit(limit)
             )
-        else:
-            cursor = await self._db.execute(
-                "SELECT * FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT ?",
-                (session_id, limit),
-            )
-        rows = await cursor.fetchall()
-        columns = [d[0] for d in cursor.description]
-        out = []
-        for row in rows:
-            item = dict(zip(columns, row, strict=False))
-            if isinstance(item.get("meta"), str):
-                item["meta"] = json.loads(item["meta"])
-            out.append(item)
-        return out
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(query)).mappings().all()
+        return [dict(r) for r in rows]
 
 
 def new_run_entry(
@@ -150,6 +75,8 @@ def new_run_entry(
     meta: dict | None = None,
 ) -> dict:
     """Assemble one record with finished_at stamped now."""
+    import time
+
     return {
         "request_id": request_id,
         "session_id": session_id,

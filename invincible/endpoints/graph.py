@@ -9,8 +9,7 @@ A to B, and what state did B inherit?"
 STRICTLY A PROJECTION: every node is derived from authoritative stores
 (SessionStore turns/messages, RunStore attempts, ContinuityEngine states +
 checkpoints). The graph owns no state of its own and is never a source of
-truth (Rule 7). Reads go through the stores' public APIs plus minimal SQL
-over the shared connection for turn structure.
+truth (Rule 7). Reads go through the stores' public APIs only.
 
 Authz mirrors the rest of /api/v1/*: fail-closed INVINCIBLE_ADMIN_KEY -
 session content is sensitive, so the gateway/chat key is never accepted.
@@ -45,35 +44,10 @@ def _require(request: Request, attr: str):
 
 
 async def _session_and_turns(store, session_id: str):
-    """(session_row|None, [turn dicts]) via the shared connection."""
-    db = store.connection()
-    if db is None:
-        return None, []
-    async with db.execute(
-        "SELECT created_at, updated_at FROM sessions_v2 WHERE session_id = ?",
-        (session_id,),
-    ) as cursor:
-        session_row = await cursor.fetchone()
-    async with db.execute(
-        """
-        SELECT t.seq,
-               COUNT(m.id),
-               COALESCE((
-                   SELECT substr(m2.payload, 1, 120) FROM messages m2
-                   WHERE m2.turn_id = t.id ORDER BY m2.seq ASC LIMIT 1
-               ), '')
-        FROM turns t LEFT JOIN messages m ON m.turn_id = t.id
-        WHERE t.session_id = ? GROUP BY t.id ORDER BY t.seq ASC
-        """,
-        (session_id,),
-    ) as cursor:
-        turns = [
-            {"seq": r[0], "message_count": r[1], "first_payload_snippet": r[2]}
-            for r in await cursor.fetchall()
-        ]
-    if session_row is None:
-        return None, turns
-    return {"created_at": session_row[0], "updated_at": session_row[1]}, turns
+    """(session_row|None, [turn dicts]) via SessionStore's public reads."""
+    session_row = await store.session_meta(session_id)
+    turns = await store.turn_overview(session_id)
+    return session_row, turns
 
 
 @router.get("/{session_id}/graph")

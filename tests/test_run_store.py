@@ -6,69 +6,59 @@ import pytest
 from invincible.core.provider_registry import ProviderRegistry
 from invincible.core.router import AllProvidersFailedError, Router
 from invincible.core.run_store import RunStore
-from invincible.core.session_store import SessionStore
 from tests.conftest import default_providers, provider_body
 
 MESSAGES = [{"role": "user", "content": "hi"}]
 
 
-async def make_store():
-    store = SessionStore(db_path=":memory:")
-    await store.init()
-    runs = RunStore(shared=store)
-    await runs.init()
-    return store, runs
+@pytest.fixture
+async def runs(pg_engine):
+    return RunStore(engine=pg_engine)
 
 
-async def test_record_and_recent_roundtrip():
-    store, runs = await make_store()
-    try:
-        await runs.record(
-            {
-                "request_id": "req-1",
-                "session_id": "s-1",
-                "provider_name": "alpha",
-                "model_id": "m-a",
-                "attempt_index": 1,
-                "outcome": "failover",
-                "error_class": "500",
-                "started_at": 100.0,
-                "finished_at": 101.0,
-                "meta": {"reason": "server_error"},
-            }
-        )
-        await runs.record(
-            {
-                "request_id": "req-1",
-                "session_id": "s-1",
-                "provider_name": "beta",
-                "model_id": "m-b",
-                "attempt_index": 2,
-                "outcome": "ok",
-                "started_at": 101.0,
-                "finished_at": 102.0,
-            }
-        )
-        rows = await runs.recent()
-        assert len(rows) == 2
-        assert rows[0]["provider_name"] == "beta" and rows[0]["outcome"] == "ok"
-        assert rows[0]["meta"] is None
-        # Newest first, meta JSON decoded.
-        failover_row = rows[1]
-        assert failover_row["outcome"] == "failover"
-        assert failover_row["meta"] == {"reason": "server_error"}
+async def test_record_and_recent_roundtrip(runs):
+    await runs.record(
+        {
+            "request_id": "req-1",
+            "session_id": "s-1",
+            "provider_name": "alpha",
+            "model_id": "m-a",
+            "attempt_index": 1,
+            "outcome": "failover",
+            "error_class": "500",
+            "started_at": 100.0,
+            "finished_at": 101.0,
+            "meta": {"reason": "server_error"},
+        }
+    )
+    await runs.record(
+        {
+            "request_id": "req-1",
+            "session_id": "s-1",
+            "provider_name": "beta",
+            "model_id": "m-b",
+            "attempt_index": 2,
+            "outcome": "ok",
+            "started_at": 101.0,
+            "finished_at": 102.0,
+        }
+    )
+    rows = await runs.recent()
+    assert len(rows) == 2
+    assert rows[0]["provider_name"] == "beta" and rows[0]["outcome"] == "ok"
+    assert rows[0]["meta"] is None
+    # Newest first, meta JSON decoded.
+    failover_row = rows[1]
+    assert failover_row["outcome"] == "failover"
+    assert failover_row["meta"] == {"reason": "server_error"}
 
-        scoped = await runs.recent(session_id="other")
-        assert scoped == []
-    finally:
-        # aiosqlite worker threads must be stopped on their own loop; an
-        # unclosed connection GC'd later tears down against a dead loop
-        # (the CI "Event loop is closed" warning).
-        await runs.close()
-        await store.close()
+    scoped = await runs.recent(session_id="other")
+    assert scoped == []
 
 
-async def test_router_records_every_attempt_across_failover(tmp_path, monkeypatch):
+async def test_router_records_every_attempt_across_failover(
+    tmp_path, monkeypatch, pg_engine
+):
 
     from tests.conftest import default_providers
 
@@ -84,10 +74,7 @@ async def test_router_records_every_attempt_across_failover(tmp_path, monkeypatc
         file_path=str(tmp_path / "p.yaml"),
         seed_config={"providers": default_providers()},
     )
-    store = SessionStore(db_path=":memory:")
-    await store.init()
-    runs = RunStore(shared=store)
-    await runs.init()
+    runs = RunStore(engine=pg_engine)
 
     router = Router(
         transport=httpx.MockTransport(handler),
@@ -107,7 +94,6 @@ async def test_router_records_every_attempt_across_failover(tmp_path, monkeypatc
     assert rows[0]["request_id"] == rows[1]["request_id"]
     assert {r["attempt_index"] for r in rows} == {1, 2}
     await router.close()
-    await store.close()
 
 
 async def test_router_without_recorder_still_serves(monkeypatch):

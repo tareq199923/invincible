@@ -2,7 +2,9 @@ import json
 
 import httpx
 import pytest
+from sqlalchemy import select
 
+from invincible.core.db import facts as facts_table
 from invincible.core.memory import (
     MemoryStore,
     extract_facts,
@@ -22,14 +24,8 @@ def assistant(content):
 
 
 @pytest.fixture
-async def memory():
-    store = SessionStore(db_path=":memory:")
-    await store.init()
-    mem = MemoryStore(shared=store)
-    await mem.init()
-    yield mem
-    await mem.close()
-    await store.close()
+async def memory(pg_engine):
+    yield MemoryStore(engine=pg_engine)
 
 
 # --- extraction ---------------------------------------------------------------
@@ -91,14 +87,15 @@ async def test_facts_are_scoped_per_session(memory):
 
 
 @pytest.mark.asyncio
-async def test_facts_use_sentinel_user_key(memory):
+async def test_facts_use_sentinel_user_key(memory, pg_engine):
     rows = await memory.facts_for("s1")
     assert rows == []
     await memory.record("s1", [user("remember that the sky is blue")])
-    async with memory._db.execute(
-        "SELECT user_id FROM facts WHERE session_id = 's1'"
-    ) as cursor:
-        (user_id,) = await cursor.fetchone()
+    async with pg_engine.connect() as conn:
+        user_id = (await conn.execute(
+            select(facts_table.c.user_id)
+            .where(facts_table.c.session_id == "s1")
+        )).scalar_one()
     assert user_id == "default"
 
 
@@ -136,38 +133,33 @@ async def test_memory_system_message_disabled_by_env(memory, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_history_is_bounded_to_turn_cap(monkeypatch):
+async def test_history_is_bounded_to_turn_cap(monkeypatch, pg_engine):
     monkeypatch.setenv("INVINCIBLE_HISTORY_MAX_TURNS", "3")
-    store = SessionStore(db_path=":memory:")
-    await store.init()
+    store = SessionStore(engine=pg_engine)
     for i in range(6):
         await store.append("s1", [user(f"turn {i}"), assistant(f"reply {i}")])
     history = await store.load("s1")
     users = [m["content"] for m in history if m["role"] == "user"]
     assert users == ["turn 3", "turn 4", "turn 5"]
-    await store.close()
 
 
 @pytest.mark.asyncio
-async def test_retention_disabled_when_off(monkeypatch):
+async def test_retention_disabled_when_off(monkeypatch, pg_engine):
     monkeypatch.setenv("INVINCIBLE_HISTORY_MAX_TURNS", "off")
-    store = SessionStore(db_path=":memory:")
-    await store.init()
+    store = SessionStore(engine=pg_engine)
     for i in range(5):
         await store.append("s1", [user(f"turn {i}")])
     assert len(await store.load("s1")) == 5
-    await store.close()
 
 
 # --- end-to-end through the OpenAI endpoint ------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_facts_injected_on_next_request(client, monkeypatch):
+async def test_facts_injected_on_next_request(client, pg_engine, monkeypatch):
     monkeypatch.delenv("INVINCIBLE_MEMORY", raising=False)
     store = app.state.sessions
-    memory = MemoryStore(shared=store)
-    await memory.init()
+    memory = MemoryStore(engine=pg_engine)
     app.state.memory = memory
 
     received = {}

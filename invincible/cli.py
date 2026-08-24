@@ -4,12 +4,13 @@
 Both console scripts (``invincible`` and ``inv``) declared in pyproject.toml
 point at the ``cli`` group defined here, so the two commands are identical.
 
-Config-surface note (Phase 13): the running application reads every env var
-through ``core.settings``. This module is the documented exemption - it acts
-as launcher/checker, not service code: ``setup`` writes .env files, ``start``
-exports INVINCIBLE_* into the process before importing the app, ``doctor``
-checks key presence dynamically, and the oauth commands open the database
-directly with an explicit --db-path.
+Config-surface note (Phase 13/16): the running application reads every env
+var through ``core.settings``. This module is the documented exemption - it
+acts as launcher/checker, not service code: ``setup`` writes .env files
+(and provisions a dev database), ``start`` exports INVINCIBLE_* into the
+process before importing the app, ``doctor`` checks key presence
+dynamically, and the ``dev-db`` / ``db`` commands open the database
+explicitly via INVINCIBLE_DB_URL.
 """
 import asyncio
 import contextlib
@@ -21,14 +22,26 @@ import subprocess
 import threading
 import time
 
+import asyncpg
 import click
 import uvicorn
 from dotenv import load_dotenv
+from sqlalchemy import text
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 from invincible import __version__
 from invincible.core.config import load_providers_config
+from invincible.core.db import (
+    make_engine,
+    migration_heads,
+    migrations_config,
+    run_coro_sync,
+    stored_schema_revision,
+)
+from invincible.core.db import metadata as db_metadata
+from invincible.core.db_import import import_legacy_sqlite
 from invincible.core.oauth_store import OAuthStore
-from invincible.core.session_store import SessionStore
 
 SUPPORTED_ENV_KEYS = (
     "GATEWAY_API_KEY",
@@ -41,14 +54,235 @@ SUPPORTED_ENV_KEYS = (
 )
 SECRET_ENV_KEYS = ("GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET")
 LEGACY_OWNER_SECRET_KEY = "MCP_SHARED_SECRET"
-DB_PATH_HELP = (
-    "Session database file path (default: INVINCIBLE_DB_PATH or ./sessions.db)."
-)
+
+# --- local dev database (dev-db / setup) ------------------------------------
+DEV_DB_PORT = 5433      # project convention: tests + local dev live here
+DEV_DB_NAME = "invincible"
+DEV_DB_USER = "invincible"
+DEV_DB_PASSWORD = "invincible"  # dev-only credentials for containers WE start
+DEV_DB_CONTAINER = "invincible-dev-pg"
+
+
+class DevDbError(Exception):
+    """Local Postgres could not be reached or started."""
 
 
 def _generate_secret() -> str:
     """Generate a new cryptographically random secret (never echoed)."""
     return secrets.token_urlsafe(32)
+
+
+# --- shared database-URL helpers ---------------------------------------------
+
+
+def _mask_url(url: str | None) -> str:
+    """DSN safe for display: password masked, everything else intact."""
+    if not url:
+        return ""
+    try:
+        return make_url(url).render_as_string(hide_password=True)
+    except (ArgumentError, ValueError):
+        return "<unparseable database url>"
+
+
+def _normalize_db_url(raw: str) -> str:
+    """Validate a pasted INVINCIBLE_DB_URL; returns the canonical
+    ``postgresql+asyncpg`` form. Raises ``ValueError`` with an
+    operator-facing message when the input cannot be used as-is.
+
+    Plain ``postgresql://`` URLs are auto-upgraded to the asyncpg driver -
+    they would otherwise pass a loose prefix check here and fail confusingly
+    at `invincible start` later.
+    """
+    try:
+        parsed = make_url(raw.strip())
+    except ArgumentError as exc:
+        raise ValueError(f"Not a valid database URL: {exc}") from exc
+    driver = parsed.drivername
+    if driver == "postgresql":
+        click.echo(
+            "Normalized postgresql:// -> postgresql+asyncpg:// "
+            "(asyncpg is the only supported driver)"
+        )
+        parsed = parsed.set(drivername="postgresql+asyncpg")
+    elif driver != "postgresql+asyncpg":
+        raise ValueError(
+            f"Unsupported driver '{driver}' - Invincible requires "
+            "postgresql+asyncpg://"
+        )
+    # hide_password=False is REQUIRED: SA 2.0 masks by default, which would
+    # silently write a broken DSN into .env.
+    return parsed.render_as_string(hide_password=False)
+
+
+def _resolve_db_url() -> str:
+    """INVINCIBLE_DB_URL from the environment/.env - the single source of
+    truth for every command that opens the database directly. The DSN is a
+    secret-bearing connection string, so there is deliberately no
+    --db-url flag anywhere; override per invocation via the environment."""
+    url = os.getenv("INVINCIBLE_DB_URL")
+    if not url:
+        raise click.ClickException(
+            "INVINCIBLE_DB_URL is not set. Run `invincible dev-db` to "
+            "provision a local development database, or `invincible setup`."
+        )
+    return url
+
+
+# --- local dev-database provisioning -----------------------------------------
+
+
+def _plain_dsn(url: str) -> str:
+    """Strip the +asyncpg driver for raw asyncpg.connect() calls."""
+    return make_url(url).set(
+        drivername="postgresql"
+    ).render_as_string(hide_password=False)
+
+
+async def _try_connect(dsn: str) -> bool:
+    """Cheap reachability probe with a short timeout. Any failure counts
+    as unreachable - this must never crash the caller."""
+    try:
+        conn = await asyncpg.connect(_plain_dsn(dsn), timeout=3)
+    except Exception:
+        return False
+    await conn.close()
+    return True
+
+
+def _admin_dsn(host: str, port: int, user: str,
+               password: str | None = None) -> str:
+    auth = f":{password}" if password else ""
+    return f"postgresql://{user}{auth}@{host}:{port}/postgres"
+
+
+def _app_dsn_from_admin(dsn: str, database: str = DEV_DB_NAME) -> str:
+    """The application-facing +asyncpg URL for the dev database."""
+    return (
+        make_url(dsn)
+        .set(drivername="postgresql+asyncpg", database=database)
+        .render_as_string(hide_password=False)
+    )
+
+
+async def _ensure_database(admin_dsn: str, database: str = DEV_DB_NAME) -> bool:
+    """Create ``database`` on a reachable server if missing.
+
+    Returns True when created, False when it already existed."""
+    conn = await asyncpg.connect(admin_dsn, timeout=3)
+    try:
+        exists = await conn.fetchval(
+            "SELECT 1 FROM pg_database WHERE datname = $1", database
+        )
+        if exists:
+            return False
+        # Identifiers cannot be query parameters in CREATE DATABASE.
+        if not database.isidentifier():
+            raise DevDbError(f"Unsafe database name: {database!r}")
+        await conn.execute(f'CREATE DATABASE "{database}"')
+        return True
+    finally:
+        await conn.close()
+
+
+def _start_postgres_via_docker(port: int) -> str:
+    """Start a disposable Postgres container and return its admin DSN.
+
+    Prefers the bundled compose pair when running from a checkout; falls
+    back to a plain `docker run`. Raises DevDbError with guidance when
+    Docker is unavailable or fails."""
+    docker = shutil.which("docker")
+    if not docker:
+        raise DevDbError(
+            "No reachable PostgreSQL found and Docker is not available. "
+            "Install/start PostgreSQL locally, or run `docker run -d --name "
+            f"{DEV_DB_CONTAINER} -e POSTGRES_USER={DEV_DB_USER} "
+            f"-e POSTGRES_PASSWORD={DEV_DB_PASSWORD} -p {port}:5432 "
+            "postgres:16-alpine`, then rerun this command."
+        )
+    repo_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    compose_file = os.path.join(repo_root, "docker-compose.yml")
+    cwd = None
+    if os.path.isfile(compose_file):
+        cmd = [docker, "compose", "up", "-d", "db"]
+        cwd = repo_root
+    else:
+        cmd = [
+            docker, "run", "-d", "--name", DEV_DB_CONTAINER,
+            "-e", f"POSTGRES_USER={DEV_DB_USER}",
+            "-e", f"POSTGRES_PASSWORD={DEV_DB_PASSWORD}",
+            "-p", f"127.0.0.1:{port}:5432",
+            "postgres:16-alpine",
+        ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=180, cwd=cwd,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise DevDbError(f"Could not start Docker Postgres: {exc}") from exc
+    if result.returncode != 0:
+        tail = (result.stderr or result.stdout or "").strip().splitlines()
+        detail = tail[-1] if tail else f"exit code {result.returncode}"
+        raise DevDbError(f"Docker Postgres failed to start: {detail}")
+    return _admin_dsn("127.0.0.1", port, DEV_DB_USER, DEV_DB_PASSWORD)
+
+
+async def _provision_dev_db_async(port: int) -> tuple[str, list[str]]:
+    """Find or start a local Postgres server and make sure the dev database
+    exists. Returns ``(app_url, notes)``. Raises DevDbError when nothing
+    can be provisioned."""
+    notes: list[str] = []
+
+    existing = os.getenv("INVINCIBLE_DB_URL")
+    if existing:
+        if await _try_connect(existing):
+            return existing, ["verified existing INVINCIBLE_DB_URL"]
+        notes.append(
+            "INVINCIBLE_DB_URL is set but unreachable; provisioning locally"
+        )
+
+    candidates = [
+        _admin_dsn("127.0.0.1", port, DEV_DB_USER),
+        _admin_dsn("127.0.0.1", port, "postgres"),
+        _admin_dsn("localhost", 5432, DEV_DB_USER),
+        _admin_dsn("localhost", 5432, "postgres"),
+    ]
+    admin = None
+    for dsn in candidates:
+        if await _try_connect(dsn):
+            admin = dsn
+            notes.append(f"found local Postgres ({_mask_url(dsn)})")
+            break
+
+    if admin is None:
+        admin = _start_postgres_via_docker(port)
+        notes.append("started Postgres via Docker")
+        for _ in range(30):  # first start / image pull can take a while
+            if await _try_connect(admin):
+                break
+            await asyncio.sleep(1)
+        else:
+            raise DevDbError(
+                "Docker Postgres did not become reachable within 30s - "
+                "check `docker logs invincible-dev-pg` and retry."
+            )
+
+    created = await _ensure_database(admin)
+    verb = "created database" if created else "database already present:"
+    notes.append(f"{verb} '{DEV_DB_NAME}'")
+    return _app_dsn_from_admin(admin), notes
+
+
+def _provision_dev_db(port: int = DEV_DB_PORT) -> tuple[str, list[str]]:
+    """Sync entry point shared by `dev-db` and `setup`; never raises
+    anything but ClickException."""
+    try:
+        return run_coro_sync(_provision_dev_db_async(port))
+    except DevDbError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 def _parse_env_line(line):
@@ -166,6 +400,47 @@ def setup(env_file, force):
                 )
                 if entered:
                     new_values[key] = entered
+
+    # Database backend (Phase 16): INVINCIBLE_DB_URL is a secret-bearing
+    # connection string, so it gets its own interactive step instead of the
+    # flat prompt list. Existing values are left alone unless --force.
+    if not existing.get("INVINCIBLE_DB_URL") or force:
+        choice = click.prompt(
+            "Database backend (INVINCIBLE_DB_URL)",
+            type=click.Choice(("paste", "dev-db", "skip")),
+            default="skip",
+        )
+        if choice == "paste":
+            while True:
+                entered = click.prompt(
+                    "PostgreSQL URL (postgresql+asyncpg://...)"
+                )
+                if not entered.strip():
+                    break  # empty keeps any existing value untouched
+                try:
+                    new_values["INVINCIBLE_DB_URL"] = _normalize_db_url(entered)
+                    break
+                except ValueError as exc:
+                    click.echo(f"Invalid URL: {exc}", err=True)
+        elif choice == "dev-db":
+            click.echo("Provisioning a local development database...")
+            try:
+                url, notes = _provision_dev_db()
+            except (DevDbError, click.ClickException) as exc:
+                message = (
+                    exc.message
+                    if isinstance(exc, click.ClickException)
+                    else str(exc)
+                )
+                click.echo(
+                    f"Could not provision locally ({message}); "
+                    "skipping INVINCIBLE_DB_URL.",
+                    err=True,
+                )
+            else:
+                for note in notes:
+                    click.echo(f"dev-db: {note}")
+                new_values["INVINCIBLE_DB_URL"] = url
 
     _apply_env_updates(env_path, lines, new_values)
 
@@ -360,15 +635,13 @@ def _stop_tunnel(proc, reader, stopping) -> None:
               help=".env file to load before startup.")
 @click.option("--config", "config_path", type=click.Path(dir_okay=False),
               default=None, help="Custom providers.yaml configuration.")
-@click.option("--db-path", type=click.Path(dir_okay=False), default=None,
-              help="Session database file path.")
 @click.option("--tunnel/--no-tunnel", default=True,
               help="Start a Cloudflare tunnel alongside the server.")
 @click.option("--tunnel-name", default=None,
               help="Cloudflare tunnel name for `cloudflared tunnel run` "
                    f"(default: {TUNNEL_NAME_ENV_KEY} env var or "
                    f"'{DEFAULT_TUNNEL_NAME}').")
-def start(host, port, reload, log_level, env_file, config_path, db_path,
+def start(host, port, reload, log_level, env_file, config_path,
           tunnel, tunnel_name):
     """Start the Invincible gateway server."""
     if not 1 <= port <= 65535:
@@ -390,8 +663,14 @@ def start(host, port, reload, log_level, env_file, config_path, db_path,
             raise click.ClickException(str(exc)) from exc
         os.environ["INVINCIBLE_CONFIG_PATH"] = config_abs
 
-    if db_path:
-        os.environ["INVINCIBLE_DB_PATH"] = os.path.abspath(db_path)
+    # INVINCIBLE_DB_URL comes from the environment/.env only - there is no
+    # --db-path/--db-url flag: the DSN is a secret-bearing connection string.
+    if not env_abs and not os.getenv("INVINCIBLE_DB_URL"):
+        click.echo(
+            "Warning: INVINCIBLE_DB_URL is not set and no env file was "
+            f"found at {os.path.abspath(env_file)} - startup will fail. "
+            "Run `invincible dev-db` first.", err=True,
+        )
 
     if host == "0.0.0.0":
         click.echo(
@@ -463,16 +742,83 @@ def _doctor_config_source() -> str:
     return _legacy_providers_path()
 
 
-async def _check_session_db(db_path):
-    """Try to open and initialize the session database like the app does at
-    startup (creating the file if missing). Returns (ok, note)."""
-    store = SessionStore(db_path=db_path)
+async def _has_any_schema_tables(engine) -> bool:
+    """Whether any Phase 16 application table exists in the database."""
+    names = sorted(db_metadata.tables)
+    async with engine.connect() as conn:
+        count = (await conn.execute(
+            text(
+                "SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_name = ANY(:names)"
+            ),
+            {"names": names},
+        )).scalar_one()
+    return bool(count)
+
+
+async def _schema_revision_row(engine):
+    """(label, ok, note) comparing the stored alembic revision to the
+    packaged migration head. Unmanaged or stale schemas are loud FAILs."""
+    label = "schema revision matches head"
+    heads = migration_heads()
+    stored = await stored_schema_revision(engine)
+    if heads is None:
+        return (label, False, "packaged migration scripts unavailable")
+    if stored is None:
+        if await _has_any_schema_tables(engine):
+            return (
+                label, False,
+                "tables exist but are unmanaged by Alembic - run "
+                "`invincible db upgrade`",
+            )
+        return (
+            label, False,
+            "empty database - run `invincible db upgrade`",
+        )
+    if stored not in heads:
+        return (
+            label, False,
+            f"database at {stored}, expected {'/'.join(heads)} - run "
+            "`invincible db upgrade`",
+        )
+    return (label, True, f"revision {stored}")
+
+
+async def _check_database(url: str | None):
+    """Connectivity + schema revision against INVINCIBLE_DB_URL (Phase 16).
+
+    Returns three ``(label, ok, note)`` rows so doctor reports connectivity
+    and schema status separately, per the acceptance criteria. The DSN is
+    always rendered password-masked."""
+    if not url:
+        hint = "run `invincible dev-db` or `invincible setup`"
+        return [
+            ("INVINCIBLE_DB_URL exists", False, hint),
+            ("PostgreSQL reachable", False, "no URL configured"),
+            ("schema revision matches head", False, "no URL configured"),
+        ]
+    engine = make_engine(url)
     try:
-        await store.init()
-    except Exception as exc:
-        return False, f"cannot open {store.db_path}: {exc}"
-    await store.close()
-    return True, store.db_path
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        except Exception as exc:
+            # Connection failures can echo DSN internals; mask the URL and
+            # keep only the first line of the error.
+            detail = str(exc).splitlines()[0][:120]
+            return [
+                ("INVINCIBLE_DB_URL exists", True, ""),
+                ("PostgreSQL reachable", False, f"{_mask_url(url)}: {detail}"),
+                ("schema revision matches head", False,
+                 "database unreachable"),
+            ]
+        return [
+            ("INVINCIBLE_DB_URL exists", True, ""),
+            ("PostgreSQL reachable", True, _mask_url(url)),
+            await _schema_revision_row(engine),
+        ]
+    finally:
+        await engine.dispose()
 
 
 def _run_doctor_checks():
@@ -488,8 +834,9 @@ def _run_doctor_checks():
     except (OSError, ValueError) as exc:
         checks.append(("providers.yaml loads", False, str(exc)))
 
-    ok, note = asyncio.run(_check_session_db(None))
-    checks.append(("session database accessible", ok, note))
+    checks.extend(
+        run_coro_sync(_check_database(os.getenv("INVINCIBLE_DB_URL")))
+    )
 
     for key in ("GATEWAY_API_KEY",):
         checks.append((f"{key} exists", bool(os.getenv(key)), ""))
@@ -629,52 +976,64 @@ def _format_ts(timestamp: float) -> str:
 
 
 @click.group()
-def oauth():
+@click.option("--env-file", default=".env", show_default=True,
+              help=".env file to load before running (existing process "
+                   "environment always wins).")
+@click.pass_context
+def oauth(ctx, env_file):
     """Inspect and revoke OAuth (MCP bearer-token) grants."""
+    _load_env_file(env_file)
+
+
+def _open_oauth_store():
+    """OAuthStore over a fresh engine built from INVINCIBLE_DB_URL.
+
+    The caller owns the engine and must dispose it (the store's own
+    init/close are no-ops since Phase 16 - engines belong to callers)."""
+    return OAuthStore(make_engine(_resolve_db_url()))
 
 
 @oauth.command("list")
-@click.option("--db-path", type=click.Path(dir_okay=False), default=None,
-              help=DB_PATH_HELP)
-def oauth_list(db_path):
+def oauth_list():
     """List registered OAuth clients and their active grants."""
-    store = OAuthStore(db_path=db_path)
+    url = _resolve_db_url()
+    engine = make_engine(url)
+    store = OAuthStore(engine)
 
     async def _run():
-        await store.init()
-        clients = await store.list_clients()
-        for client in clients:
-            name = client["client_name"] or "(unnamed)"
-            uris = ", ".join(client["redirect_uris"])
-            click.echo(
-                f"{client['client_id']}  {name}\n"
-                f"  registered: {_format_ts(client['created_at'])}\n"
-                f"  redirect URIs: {uris}"
-            )
-            tokens = await store.list_active_tokens(client["client_id"])
-            active = [t for t in tokens if not t["revoked"]]
-            revoked = [t for t in tokens if t["revoked"]]
-            for token in active:
+        try:
+            clients = await store.list_clients()
+            for client in clients:
+                name = client["client_name"] or "(unnamed)"
+                uris = ", ".join(client["redirect_uris"])
                 click.echo(
-                    f"  active {token['token_type']}: expires "
-                    f"{_format_ts(token['expires_at'])}"
+                    f"{client['client_id']}  {name}\n"
+                    f"  registered: {_format_ts(client['created_at'])}\n"
+                    f"  redirect URIs: {uris}"
                 )
-            if revoked:
-                click.echo(f"  revoked: {len(revoked)}")
-            if not tokens:
-                click.echo("  no grants")
-        if not clients:
-            click.echo("No registered OAuth clients.")
-        await store.close()
+                tokens = await store.list_active_tokens(client["client_id"])
+                active = [t for t in tokens if not t["revoked"]]
+                revoked = [t for t in tokens if t["revoked"]]
+                for token in active:
+                    click.echo(
+                        f"  active {token['token_type']}: expires "
+                        f"{_format_ts(token['expires_at'])}"
+                    )
+                if revoked:
+                    click.echo(f"  revoked: {len(revoked)}")
+                if not tokens:
+                    click.echo("  no grants")
+            if not clients:
+                click.echo("No registered OAuth clients.")
+        finally:
+            await engine.dispose()
 
-    asyncio.run(_run())
+    run_coro_sync(_run())
 
 
 @oauth.command("revoke")
 @click.argument("client_id")
-@click.option("--db-path", type=click.Path(dir_okay=False), default=None,
-              help=DB_PATH_HELP)
-def oauth_revoke(client_id, db_path):
+def oauth_revoke(client_id):
     """Revoke every access/refresh token issued to a client.
 
     New connections from that client will fail until it is re-registered
@@ -684,19 +1043,22 @@ def oauth_revoke(client_id, db_path):
     Click parses such an id as an option, pass it after a '--' separator:
     invincible oauth revoke -- <client_id>
     """
-    store = OAuthStore(db_path=db_path)
+    url = _resolve_db_url()
+    engine = make_engine(url)
+    store = OAuthStore(engine)
 
     async def _run():
-        await store.init()
-        client = await store.get_client(client_id)
-        if client is None:
-            raise click.ClickException(f"Unknown client id: {client_id}")
-        count = await store.revoke_client_tokens(client_id)
-        click.echo(f"Revoked {count} token(s) for client {client_id}.")
-        await store.close()
+        try:
+            client = await store.get_client(client_id)
+            if client is None:
+                raise click.ClickException(f"Unknown client id: {client_id}")
+            count = await store.revoke_client_tokens(client_id)
+            click.echo(f"Revoked {count} token(s) for client {client_id}.")
+        finally:
+            await engine.dispose()
 
     try:
-        asyncio.run(_run())
+        run_coro_sync(_run())
     except click.ClickException:
         raise
     except Exception as exc:
@@ -707,9 +1069,7 @@ def oauth_revoke(client_id, db_path):
 @click.option("--redirect-uri", default="http://127.0.0.1:9999/callback",
               show_default=True,
               help="Loopback redirect URI to register for the test client.")
-@click.option("--db-path", type=click.Path(dir_okay=False), default=None,
-              help=DB_PATH_HELP)
-def oauth_test_client(redirect_uri, db_path):
+def oauth_test_client(redirect_uri):
     """Headless helper: register a client, approve it, and print a Bearer
     token - so /mcp can be exercised with curl without a browser."""
     import base64
@@ -728,6 +1088,7 @@ def oauth_test_client(redirect_uri, db_path):
     parsed = urlparse(redirect_uri)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise click.ClickException(f"Invalid redirect URI: {redirect_uri}")
+    db_url = _resolve_db_url()
 
     verifier = secrets.token_urlsafe(32)
     challenge = base64.urlsafe_b64encode(
@@ -735,8 +1096,8 @@ def oauth_test_client(redirect_uri, db_path):
     ).rstrip(b"=").decode("ascii")
 
     async def _run():
-        store = OAuthStore(db_path=db_path)
-        await store.init()
+        engine = make_engine(db_url)
+        store = OAuthStore(engine)
         app.state.oauth_store = store
         try:
             async with httpx.AsyncClient(
@@ -763,7 +1124,7 @@ def oauth_test_client(redirect_uri, db_path):
                 )
             tokens = response.json()
         finally:
-            await store.close()
+            await engine.dispose()
 
         click.echo(f"client_id:   {client_id}")
         click.echo("registered:  http://127.0.0.1:8000/oauth/authorize (approve)")
@@ -782,7 +1143,7 @@ def oauth_test_client(redirect_uri, db_path):
         )
 
     try:
-        asyncio.run(_run())
+        run_coro_sync(_run())
     except click.ClickException:
         raise
     except Exception as exc:
@@ -834,6 +1195,114 @@ async def _headless_approve(client, owner_secret_value, redirect_uri, challenge)
     return client_id, code
 
 
+# --- local dev database -------------------------------------------------------
+
+
+@click.command("dev-db")
+@click.option("--port", default=DEV_DB_PORT, show_default=True, type=int,
+              help="Local Postgres port to probe (and to publish when "
+                   "starting one via Docker).")
+@click.option("--env-file", default=".env", show_default=True,
+              help=".env file used by --write-env.")
+@click.option("--write-env/--no-write-env", default=False,
+              help="Write the resulting INVINCIBLE_DB_URL into the .env "
+                   "file.")
+def dev_db(port, env_file, write_env):
+    """Spin up or verify a local Postgres development database.
+
+    Probes an existing server first (INVINCIBLE_DB_URL, then conventional
+    localhost ports), starts the bundled Docker pair when nothing is
+    reachable, creates the 'invincible' database if needed, and prints a
+    working INVINCIBLE_DB_URL."""
+    _load_env_file(env_file)
+    try:
+        url, notes = _provision_dev_db(port)
+    except DevDbError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    for note in notes:
+        click.echo(f"dev-db: {note}")
+    click.echo(f"Database ready: {_mask_url(url)}")
+    click.echo(f"INVINCIBLE_DB_URL={url}")
+    click.echo(
+        'Add it to your .env (or rerun with --write-env), then run '
+        '`invincible db upgrade`.'
+    )
+    if write_env:
+        env_path = os.path.abspath(env_file)
+        lines = []
+        if os.path.isfile(env_path):
+            try:
+                with open(env_path, encoding="utf-8") as f:
+                    lines = f.read().splitlines(keepends=True)
+            except OSError as exc:
+                raise click.ClickException(
+                    f"Could not read env file {env_path}: {exc}"
+                ) from exc
+        _apply_env_updates(env_path, lines, {"INVINCIBLE_DB_URL": url})
+        click.echo(f"Wrote INVINCIBLE_DB_URL to {env_path}")
+
+
+# --- database maintenance -----------------------------------------------------
+
+
+@click.group()
+@click.option("--env-file", default=".env", show_default=True,
+              help=".env file to load before running (existing process "
+                   "environment always wins).")
+@click.pass_context
+def db(ctx, env_file):
+    """Database maintenance: Alembic migrations and legacy SQLite import."""
+    _load_env_file(env_file)
+
+
+@db.command("upgrade")
+def db_upgrade():
+    """Run Alembic migrations to head against INVINCIBLE_DB_URL.
+
+    Migrations are explicit by design - neither this tool nor `start` ever
+    auto-runs them against production without being asked."""
+    url = _resolve_db_url()
+    heads = migration_heads()
+    if not heads:
+        raise click.ClickException("Packaged migration scripts unavailable")
+    cfg = migrations_config(db_url=url)
+    try:
+        from alembic import command as alembic_command
+
+        alembic_command.upgrade(cfg, "head")
+    except Exception as exc:
+        raise click.ClickException(
+            f"Migration failed: {str(exc).splitlines()[0][:200]}"
+        ) from exc
+    click.echo(f"Database upgraded to revision {'/'.join(heads)} "
+               f"({_mask_url(url)})")
+
+
+@db.command("import")
+@click.argument("sqlite_path", type=click.Path(exists=True, dir_okay=False))
+def db_import_cmd(sqlite_path):
+    """Import a legacy Phase <= 15 sessions.db (SQLite) into PostgreSQL.
+
+    One-shot importer covering sessions/turns/messages, facts, and OAuth
+    rows; row ids are preserved and identity sequences re-synced. Existing
+    target rows are left untouched."""
+    url = _resolve_db_url()
+    engine = make_engine(url)
+    try:
+        counts = run_coro_sync(import_legacy_sqlite(engine, sqlite_path))
+    except Exception as exc:
+        raise click.ClickException(
+            f"Import failed: {str(exc).splitlines()[0][:200]}"
+        ) from exc
+    finally:
+        run_coro_sync(engine.dispose())
+    for table in sorted(counts):
+        click.echo(f"{table}: imported {counts[table]} row(s)")
+    total = sum(counts.values())
+    click.echo(f"Import complete ({total} row(s) total) into {_mask_url(url)}")
+
+
 @click.group()
 @click.version_option(__version__, "--version", "-V", prog_name="invincible")
 def cli():
@@ -845,6 +1314,8 @@ cli.add_command(start)
 cli.add_command(doctor)
 cli.add_command(secret)
 cli.add_command(oauth)
+cli.add_command(db)
+cli.add_command(dev_db)
 
 if __name__ == "__main__":
     cli()

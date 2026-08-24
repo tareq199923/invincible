@@ -13,6 +13,11 @@ Type decisions (recorded in the Phase 16 plan):
 - Surrogate PKs are ``BigInteger`` + ``Identity``; natural keys (session_id,
   token_hash, code, client_id, token) stay ``Text`` primary keys.
 """
+import asyncio
+import concurrent.futures
+import importlib
+import logging
+
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -31,6 +36,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import create_async_engine
 
+logger = logging.getLogger("invincible.db")
+
 metadata = MetaData()
 
 
@@ -41,6 +48,21 @@ def make_engine(url: str, **kwargs):
     return create_async_engine(url, **kwargs)
 
 
+def run_coro_sync(coro):
+    """Run ``coro`` to completion from synchronous code.
+
+    Plain ``asyncio.run`` breaks when an event loop is already running on
+    this thread (pytest-asyncio tests driving the CLI, embedded runners),
+    so in that case the coroutine executes on a helper thread with its own
+    fresh loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
 async def create_all_from_metadata(engine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
@@ -49,6 +71,87 @@ async def create_all_from_metadata(engine) -> None:
 async def drop_all_from_metadata(engine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(metadata.drop_all)
+
+
+# ---------------------------------------------------------------------------
+# Schema-truth handshake (Phase 16, decided during implementation):
+# `invincible db upgrade` writes alembic_version; doctor FAILs loudly on a
+# mismatch or an unmanaged-but-populated schema; startup only WARNS (migrations
+# run explicitly - never auto-run against production).
+
+
+def migrations_config(db_url: str | None = None):
+    """Alembic Config pointing at the packaged ``invincible/migrations``
+    directory, so ``db upgrade`` works from any cwd and any install mode."""
+    from alembic.config import Config
+
+    try:
+        ref = importlib.resources.files("invincible").joinpath("migrations")
+        location = str(ref)
+    except (ModuleNotFoundError, TypeError, AttributeError) as exc:
+        raise RuntimeError(
+            "Packaged migrations directory not found"
+        ) from exc
+    cfg = Config()
+    cfg.set_main_option("script_location", location)
+    if db_url:
+        cfg.set_main_option("sqlalchemy.url", db_url)
+    return cfg
+
+
+def migration_heads() -> tuple[str, ...] | None:
+    """Head revision(s) of the packaged migration scripts; None when the
+    scripts cannot be loaded (doctor reports that loudly)."""
+    try:
+        from alembic.script import ScriptDirectory
+
+        script = ScriptDirectory.from_config(migrations_config())
+        return tuple(script.get_heads())
+    except Exception as exc:  # noqa: BLE001 - any failure means "unknown"
+        logger.warning("Could not load migration scripts: %s", exc)
+        return None
+
+
+async def stored_schema_revision(engine) -> str | None:
+    """The database's current alembic revision, or None when the schema is
+    not under migration control (no alembic_version table)."""
+    from sqlalchemy import text
+
+    async with engine.connect() as conn:
+        exists = (await conn.execute(text(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = 'alembic_version'"
+        ))).scalar()
+        if not exists:
+            return None
+        return (await conn.execute(
+            text("SELECT version_num FROM alembic_version")
+        )).scalar()
+
+
+async def warn_if_schema_stale(engine) -> None:
+    """Loud startup warning when the schema is not at the migration head.
+
+    Deliberately non-blocking: dev databases bootstrap via create_all below,
+    but operators are always told to run `invincible db upgrade`."""
+    heads = migration_heads()
+    if heads is None:
+        logger.warning(
+            "Schema check skipped: packaged migration scripts unavailable."
+        )
+        return
+    stored = await stored_schema_revision(engine)
+    if stored is None:
+        logger.warning(
+            "Database schema is not managed by Alembic (no alembic_version). "
+            "Run `invincible db upgrade` to bring it under migration control."
+        )
+    elif stored not in heads:
+        logger.warning(
+            "Database schema revision %s does not match migration head %s. "
+            "Run `invincible db upgrade`.",
+            stored, "/".join(heads),
+        )
 
 
 # ---------------------------------------------------------------------------

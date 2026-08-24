@@ -2,8 +2,8 @@
 """ContinuityEngine unit tests (Phase 15b): CAS versioning, checkpoints,
 continuation-brief rendering, interruption signal.
 
-Every test shares one auto-closed stack fixture - unclosed stores leave
-non-daemon aiosqlite worker threads that block interpreter shutdown.
+All state lives in the shared ``pg_engine`` test database; teardown
+truncation keeps tests isolated (no store handles to leak).
 """
 
 import pytest
@@ -13,23 +13,17 @@ from invincible.core.continuity import (
     ContinuityEngine,
 )
 from invincible.core.run_store import RunStore
-from invincible.core.session_store import SessionStore
 
 
 @pytest.fixture
-async def stack():
-    store = SessionStore(db_path=":memory:")
-    await store.init()
-    runs = RunStore(shared=store)
-    await runs.init()
-    engine = ContinuityEngine(shared=store, runs=runs)
-    await engine.init()
+async def stack(pg_engine):
+    runs = RunStore(engine=pg_engine)
+    engine = ContinuityEngine(engine=pg_engine, runs=runs)
     try:
-        yield store, runs, engine
+        yield pg_engine, runs, engine
     finally:
         await engine.close()
         await runs.close()
-        await store.close()
 
 
 def run_entry(request_id, outcome="ok", provider="alpha",
@@ -229,25 +223,6 @@ async def test_toggle_off_disables_rendering(monkeypatch, stack):
     assert await eng.context_message("s") is None
     monkeypatch.setenv("INVINCIBLE_CONTINUITY", "on")
     assert await eng.context_message("s") is not None
-
-
-async def test_shared_connection_pattern_with_session_store(tmp_path):
-    """Same on-disk DB through SessionStore.connection() — rows must land
-    in the session database the engine borrowed."""
-    store = SessionStore(db_path=str(tmp_path / "shared.db"))
-    await store.init()
-    eng = ContinuityEngine(shared=store)
-    try:
-        await eng.init()
-        await eng.set_state("sess", {"ok": True}, actor="test")
-        assert (await eng.get_state("sess"))["payload"] == {"ok": True}
-        async with store.connection().execute(
-            "SELECT COUNT(*) FROM task_states"
-        ) as cursor:
-            assert (await cursor.fetchone())[0] >= 1
-    finally:
-        await eng.close()
-        await store.close()
 
 
 async def test_concurrent_sets_serialize_versions(stack):

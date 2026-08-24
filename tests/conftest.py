@@ -1,14 +1,27 @@
 import json
+import os
 import secrets
+import socket
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 import yaml
+from sqlalchemy import text
+from sqlalchemy.engine import make_url
 
+from invincible.core.continuity import ContinuityEngine
+from invincible.core.db import (
+    create_all_from_metadata,
+    make_engine,
+)
+from invincible.core.db import (
+    metadata as db_metadata,
+)
 from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore, _s256_challenge
 from invincible.core.router import Router
+from invincible.core.run_store import RunStore
 from invincible.core.session_store import SessionStore
 from invincible.core.tool_executor import PendingActionStore
 from invincible.main import app
@@ -91,32 +104,126 @@ def router_setter(make_router):
     return _set
 
 
+TEST_DB_URL = os.getenv(
+    "INVINCIBLE_TEST_DATABASE_URL",
+    "postgresql+asyncpg://invincible@127.0.0.1:5433/invincible_test",
+)
+
+_TRUNCATE_SQL = "TRUNCATE {} RESTART IDENTITY CASCADE".format(
+    ", ".join(f'"{t}"' for t in sorted(db_metadata.tables))
+)
+
+
+@pytest.fixture(scope="session")
+def pg_live():
+    """Opt-in marker fixture for tests that need the *real* local Postgres
+    beyond what ``pg_engine`` already requires (scratch databases, CLI
+    subprocess-style flows). Auto-skips so the suite stays runnable - and
+    informative - on machines without a server at TEST_DB_URL."""
+    host = urlparse(TEST_DB_URL).hostname or "127.0.0.1"
+    port = urlparse(TEST_DB_URL).port or 5432
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            pass
+    except OSError:
+        pytest.skip(
+            f"local Postgres not reachable at {host}:{port} "
+            "(INVINCIBLE_TEST_DATABASE_URL)"
+        )
+
+
 @pytest.fixture
-async def client(router_setter, monkeypatch):
+async def pg_engine():
+    """Function-scoped engine on invincible_test with a clean schema:
+    create_all up front, TRUNCATE after each test so storage tests never
+    see each other's rows."""
+    eng = make_engine(TEST_DB_URL)
+    await create_all_from_metadata(eng)
+    try:
+        yield eng
+    finally:
+        async with eng.begin() as conn:
+            await conn.execute(text(_TRUNCATE_SQL))
+        await eng.dispose()
+
+
+@pytest.fixture
+async def stamp_revision(pg_engine):
+    """Async callable: force the schema's recorded alembic revision (None
+    drops the table). Clears the stamp afterwards so revision tests never
+    leak. Async on purpose - it shares pg_engine's event loop."""
+
+    async def _stamp(revision: str | None) -> None:
+        async with pg_engine.begin() as conn:
+            if revision is None:
+                await conn.execute(
+                    text("DROP TABLE IF EXISTS alembic_version"))
+                return
+            await conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS alembic_version ("
+                " version_num VARCHAR(32) NOT NULL)"
+            ))
+            await conn.execute(text("DELETE FROM alembic_version"))
+            await conn.execute(text(
+                "INSERT INTO alembic_version (version_num) VALUES (:r)"
+            ), {"r": revision})
+
+    yield _stamp
+    await _stamp(None)
+
+
+@pytest.fixture
+async def admin_pg(pg_live):
+    """Async callable running SQL against the maintenance database - used
+    to create/drop scratch databases for CLI-tier integration tests."""
+    import asyncpg
+
+    admin_url = make_url(TEST_DB_URL).set(database="postgres")
+    dsn = admin_url.render_as_string().replace("+asyncpg", "")
+
+    async def _run_sql(statement: str) -> None:
+        conn = await asyncpg.connect(dsn, timeout=5)
+        try:
+            await conn.execute(statement)
+        finally:
+            await conn.close()
+
+    return _run_sql
+
+
+@pytest.fixture
+async def client(pg_engine, router_setter, monkeypatch):
     monkeypatch.setenv("GATEWAY_API_KEY", "test-gateway-key")
     monkeypatch.setenv("INVINCIBLE_OWNER_SECRET", TEST_OWNER_SECRET)
     router_setter({})
-    store = SessionStore(db_path=":memory:")
-    await store.init()
+    store = SessionStore(engine=pg_engine)
     app.state.sessions = store
-    # Wire memory exactly like main.py's lifespan does (shared connection):
-    # without this, whatever a previous test module left on app.state leaks
-    # in here - e.g. a real MemoryStore whose DB a lifespan test closed.
-    memory = MemoryStore(shared=store)
+    memory = MemoryStore(engine=pg_engine)
     await memory.init()
     app.state.memory = memory
-    app.state.pending_actions = PendingActionStore()
-    oauth_store = OAuthStore(db_path=":memory:")
+    pending = PendingActionStore()
+    if os.getenv("INVINCIBLE_PERSIST_PENDING_ACTIONS"):
+        pending.attach_engine(pg_engine)
+        await pending.load_persisted()
+    app.state.pending_actions = pending
+    oauth_store = OAuthStore(engine=pg_engine)
     await oauth_store.init()
     app.state.oauth_store = oauth_store
+    runs_store = RunStore(engine=pg_engine)
+    await runs_store.init()
+    app.state.runs = runs_store
+    continuity = ContinuityEngine(engine=pg_engine, runs=runs_store)
+    await continuity.init()
+    app.state.continuity = continuity
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as async_client:
         yield async_client
     for router in router_setter.routers:
         await router.close()
+    await continuity.close()
+    await runs_store.close()
     await memory.close()
-    await store.close()
     await oauth_store.close()
     app.state.oauth_store = None
 

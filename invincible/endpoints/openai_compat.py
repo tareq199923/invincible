@@ -122,7 +122,8 @@ async def _stream_body(first, tail, store, session_id, to_persist, memory=None):
             yield _sse_event(chunk)
     except Exception as e:
         logger.warning("Stream terminated after an upstream error: %s", e)
-        yield _sse_event({"error": {"message": str(e), "type": "stream_error"}})
+        yield _sse_event({"error": {"message": "stream terminated",
+                                    "type": "stream_error"}})
         # Persist what accumulated before the failure so history matches
         # what the client saw (mirrors the Anthropic path's on_complete).
         await _persist_new_turns(new_turns(), store, session_id, memory)
@@ -232,8 +233,11 @@ async def chat_completions(request: Request, body: ChatRequest):
             content=e.body,
             status_code=e.status_code
         )
-    except Exception as e:
+    except Exception:
+        # Never leak internal exception text (SQL/DSN details) to clients;
+        # the full traceback is already in the server log.
+        logger.exception("chat completion failed")
         return JSONResponse(
-            content={"error": {"message": str(e), "type": "gateway_error"}},
-            status_code=503
+            content={"error": {"message": "gateway error", "type": "gateway_error"}},
+            status_code=503,
         )

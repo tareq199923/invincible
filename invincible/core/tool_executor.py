@@ -23,11 +23,11 @@ Security model - decided explicitly up front, not bolted on after the fact:
       physical access to the machine. By default the store is in-memory
       only and a restart orphans staged actions (the original design: a
       clean slate on restart). Persistence is opt-in: when the
-      ``INVINCIBLE_PERSIST_PENDING_ACTIONS`` environment variable is set
-      (main.py then passes it a ``db_path`` - INVINCIBLE_DB_PATH, the same
-      file as sessions), staged actions are written to SQLite and survive a
-      restart. Timestamps use wall-clock time (``time.time()``) because
-      ``created_at`` crosses process boundaries when persisted; a
+      ``INVINCIBLE_PERSIST_PENDING_ACTIONS`` environment variable is set,
+      main.py attaches the shared PostgreSQL engine (INVINCIBLE_DB_URL)
+      and staged actions are written to the ``pending_actions`` table and
+      survive a restart. Timestamps use wall-clock time (``time.time()``)
+      because ``created_at`` crosses process boundaries when persisted; a
       monotonic clock is only meaningful inside one process.
   4. TRUST BOUNDARY (changed deliberately, on purpose): before, only
      someone with physical access to the server's terminal could approve an
@@ -59,16 +59,17 @@ valid bearer token decides what runs, and anything staged for approval is
 visible in plain sight at the server's own stdout before it is approved.
 """
 import asyncio
-import contextlib
 import json
 import logging
 import os
 import re
 import secrets
-import sqlite3
 import subprocess
 import time
 
+from sqlalchemy import delete
+
+from invincible.core.db import pending_actions
 from invincible.core.settings import PENDING_ACTION_TTL_SECONDS, settings
 
 logger = logging.getLogger("invincible.tool_executor")
@@ -174,69 +175,90 @@ class PendingActionStore:
     ``take()`` pops the entry, making each token single-use: confirming the
     same token twice can never execute the action twice (replay guard).
 
-    Persistence: when constructed with a ``db_path``, entries are written
-    through to a small SQLite table in that file and reloaded on startup,
-    so a server restart keeps staged approvals alive. This is opt-in by
-    design - main.py only passes a ``db_path`` when the
-    ``INVINCIBLE_PERSIST_PENDING_ACTIONS`` environment variable is set;
-    the default (no ``db_path``) is memory-only, so a restart orphans
-    staged actions, matching the original design. If the database is
-    unavailable the store degrades to in-memory only and logs a warning -
-    staging must never break the MCP flow over a disk problem.
+    Persistence (Phase 16): opt-in via ``attach_engine(engine)`` - main.py
+    calls it only when ``INVINCIBLE_PERSIST_PENDING_ACTIONS`` is set, and
+    then loads existing rows through :meth:`load_persisted`. Writes are
+    fire-and-forget tasks on the running loop against the shared PG engine;
+    any failure logs a warning and leaves memory as the source of truth -
+    staging must never break the MCP flow over a storage problem. The
+    default (no engine) is memory-only, so a restart orphans staged
+    actions, matching the original design.
     """
 
     # Default sourced from Settings; tests shrink this via monkeypatch.
     TTL_SECONDS = PENDING_ACTION_TTL_SECONDS
 
-    def __init__(self, db_path: str = None):
+    def __init__(self):
         self._pending: dict = {}  # token -> {"type", "args", "created_at"}
-        self._db = None
-        if db_path:
-            try:
-                self._db = sqlite3.connect(db_path)
-                self._db.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS pending_actions (
-                        token TEXT PRIMARY KEY,
-                        type TEXT NOT NULL,
-                        args TEXT NOT NULL,
-                        created_at REAL NOT NULL
-                    )
-                    """
-                )
-                self._db.commit()
-                for token, action_type, args_json, created_at in self._db.execute(
-                    "SELECT token, type, args, created_at FROM pending_actions"
-                ):
-                    self._pending[token] = {
-                        "type": action_type,
-                        "args": json.loads(args_json),
-                        "created_at": created_at,
-                    }
-            except Exception as e:
-                logger.warning(
-                    "PendingActionStore persistence unavailable (%s); "
-                    "staged actions will not survive a restart", e
-                )
-                self._db = None
-        self._sweep()
+        self._engine = None
+        self._background_tasks: set = set()
 
-    def _db_run(self, fn) -> None:
-        """Run a write through the persistence connection; on any failure
-        drop the connection and continue in memory only."""
-        if self._db is None:
+    def attach_engine(self, engine) -> None:
+        """Opt-in persistence target (shared PG engine)."""
+        self._engine = engine
+
+    async def flush_persisted(self) -> None:
+        """Wait for outstanding fire-and-forget persistence writes.
+
+        Used at shutdown (and by tests) so a clean exit never drops the
+        last staged-action writes."""
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+
+    async def load_persisted(self) -> None:
+        """Reload staged actions written by a previous process."""
+        if self._engine is None:
             return
         try:
-            fn(self._db)
-            self._db.commit()
+            from invincible.core.db import pending_actions
+
+            async with self.engine_connect() as conn:
+                rows = (await conn.execute(
+                    pending_actions.select()
+                )).all()
+                for token, action_type, args, created_at in rows:
+                    self._pending[token] = {
+                        "type": action_type,
+                        # JSONB column: SQLAlchemy already decoded to a dict.
+                        "args": (
+                            args if isinstance(args, dict)
+                            else json.loads(args)
+                        ),
+                        "created_at": created_at,
+                    }
+                self._sweep()
         except Exception as e:
             logger.warning(
-                "Pending action persistence failed (%s); continuing in "
-                "memory only", e
+                "PendingActionStore persistence load failed (%s); "
+                "continuing in memory only", e
             )
-            with contextlib.suppress(Exception):
-                self._db.close()
-            self._db = None
+
+    def engine_connect(self):
+        return self._engine.connect()
+
+    def _persist(self, coro_factory) -> None:
+        """Schedule a best-effort persistence write on the running loop."""
+        if self._engine is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def _run():
+            try:
+                async with self._engine.begin() as conn:
+                    await conn.execute(coro_factory())
+            except Exception as e:
+                logger.warning(
+                    "Pending action persistence failed (%s); continuing "
+                    "in memory only", e
+                )
+            finally:
+                self._background_tasks.discard(task)
+
+        task = loop.create_task(_run())
+        self._background_tasks.add(task)
 
     def _sweep(self, now: float | None = None) -> None:
         cutoff = (now if now is not None else time.time()) - self.TTL_SECONDS
@@ -247,32 +269,27 @@ class PendingActionStore:
         for token in expired:
             del self._pending[token]
         if expired:
-            self._db_run(
-                lambda db: db.executemany(
-                    "DELETE FROM pending_actions WHERE token = ?",
-                    [(t,) for t in expired],
-                )
-            )
+            self._persist(lambda: delete(pending_actions).where(
+                pending_actions.c.token.in_(expired)
+            ))
 
     def put(self, action_type: str, args: dict) -> str:
         """Stage an action and return its confirmation token."""
         self._sweep()
         token = secrets.token_urlsafe(16)
+        created = time.time()
         self._pending[token] = {
             "type": action_type,
             "args": args,
-            "created_at": time.time(),
+            "created_at": created,
         }
-        self._db_run(
-            lambda db: db.execute(
-                "INSERT INTO pending_actions (token, type, args, created_at) "
-                "VALUES (?, ?, ?, ?)",
-                (
-                    token,
-                    action_type,
-                    json.dumps(args),
-                    self._pending[token]["created_at"],
-                ),
+        self._persist(
+            lambda: pending_actions.insert().values(
+                token=token,
+                type=action_type,
+                # JSONB column: bind the dict; SQLAlchemy serializes once.
+                args=args,
+                created_at=created,
             )
         )
         return token
@@ -281,10 +298,9 @@ class PendingActionStore:
         """Pop and return the pending record, or None if unknown/expired."""
         self._sweep()
         record = self._pending.pop(token, None)
-        self._db_run(
-            lambda db: db.execute(
-                "DELETE FROM pending_actions WHERE token = ?", (token,)
-            )
+        self._persist(
+            lambda: delete(pending_actions).where(
+                pending_actions.c.token == token)
         )
         if record is None:
             return None

@@ -10,22 +10,26 @@ from tests.conftest import provider_body, sse_body, stream_chunk
 
 
 @pytest.mark.asyncio
-async def test_corrupt_session_row_returns_empty_history(tmp_path):
-    # Phase 15a: corrupt payloads live in messages.payload now. Intent is
-    # unchanged - a corrupt stored row must degrade to an empty history,
-    # never crash the request.
-    store = SessionStore(db_path=str(tmp_path / "sessions.db"))
-    await store.init()
+async def test_non_dict_payload_row_degrades_gracefully(pg_engine):
+    # Phase 15a intent, Phase 16 reality: a corrupt stored row must never
+    # crash history loading. On PostgreSQL/JSONB an invalid JSON document
+    # cannot be written at all, so "corrupt" means a non-object JSON scalar
+    # (e.g. after manual editing); load() skips it instead of blowing up.
+    from sqlalchemy import text
+
+    store = SessionStore(engine=pg_engine)
     await store.append(
         "broken", [{"role": "user", "content": "hi"},
                    {"role": "assistant", "content": "hello"}]
     )
-    await store._db.execute("UPDATE messages SET payload = 'not json{'")
-    await store._db.commit()
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE messages SET payload = '17' WHERE seq = 0")
+        )
 
-    assert await store.load("broken") == []
-
-    await store.close()
+    assert await store.load("broken") == [
+        {"role": "assistant", "content": "hello"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -111,11 +115,11 @@ async def test_different_session_ids_do_not_share_history(router_setter, client)
 
 
 @pytest.mark.asyncio
-async def test_concurrent_appends_lose_no_turns(tmp_path):
-    """append() serializes read-modify-write per store, so N concurrent
-    requests to the same session all land instead of last-write-wins."""
-    store = SessionStore(db_path=str(tmp_path / "sessions.db"))
-    await store.init()
+async def test_concurrent_appends_lose_no_turns(pg_engine):
+    """append() serializes writers per session via SELECT ... FOR UPDATE
+    (Phase 16 scope item 3), so N concurrent requests to the same session
+    all land instead of last-write-wins or unique-violation crashes."""
+    store = SessionStore(engine=pg_engine)
 
     async def append_turn(i):
         await store.append(
@@ -131,8 +135,6 @@ async def test_concurrent_appends_lose_no_turns(tmp_path):
     assistants = [m["content"] for m in history if m["role"] == "assistant"]
     assert sorted(users, key=lambda s: int(s[1:])) == [f"q{i}" for i in range(25)]
     assert sorted(assistants, key=lambda s: int(s[1:])) == [f"a{i}" for i in range(25)]
-
-    await store.close()
 
 
 @pytest.mark.asyncio
