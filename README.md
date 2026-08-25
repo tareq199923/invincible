@@ -4,6 +4,13 @@
 > `ai-gateway`). Throughout this repo the project is referred to as
 > **Invincible**.
 
+> **Project direction:** Invincible is evolving into a **remote-first,
+> multi-user AI continuity platform** — accounts, projects, shared memory
+> across models, context intelligence, and a web dashboard
+> (invincible-ai.me). The release documented below is the current,
+> working **local gateway**. See [docs/ROADMAP.md](docs/ROADMAP.md) for
+> the direction, what is implemented today, and what is planned.
+
 ---
 
 ## What is Invincible?
@@ -557,7 +564,7 @@ store, and trimming logic consume.
 | [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md) | Client-facing `/mcp` spec: JSON-RPC shape, tools, notifications, tunnel setup. |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, auth realms, denylist inventory, approval flow, known limits. |
 | [docs/TESTING.md](docs/TESTING.md) | How tests work, fixtures, per-file coverage map. |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Planned future work by phase: hardening, distribution, docs site, multi-user, dashboard, more providers/tools, deployment. |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Current platform direction, a verified snapshot of what is implemented, and the phased plan (identity, isolation, accounts, memory/context intelligence, dashboard, deployment). |
 
 ---
 
