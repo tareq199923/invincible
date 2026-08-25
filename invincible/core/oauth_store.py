@@ -73,7 +73,8 @@ class OAuthStore:
         return False
 
     async def register_client(
-        self, redirect_uris: list, client_name: str = ""
+        self, redirect_uris: list, client_name: str = "",
+        owner_user_id: int | None = None,
     ) -> dict:
         if not isinstance(redirect_uris, list) or not redirect_uris:
             raise OAuthError("invalid_request", "redirect_uris is required")
@@ -93,6 +94,9 @@ class OAuthStore:
                     client_id=client_id,
                     client_name=client_name.strip(),
                     redirect_uris=redirect_uris,
+                    # Phase 2 subject: the user on whose behalf this
+                    # client operates (stamped by the consent flow).
+                    owner_user_id=owner_user_id,
                     created_at=_now(),
                 )
             )
@@ -114,7 +118,7 @@ class OAuthStore:
 
     async def create_code(
         self, client_id: str, redirect_uri: str, code_challenge: str,
-        ttl: float = CODE_TTL,
+        ttl: float = CODE_TTL, subject_user_id: int | None = None,
     ) -> str:
         code = secrets.token_urlsafe(24)
         async with self.engine.begin() as conn:
@@ -124,6 +128,7 @@ class OAuthStore:
                     client_id=client_id,
                     redirect_uri=redirect_uri,
                     code_challenge=code_challenge,
+                    subject_user_id=subject_user_id,
                     expires_at=_now() + ttl,
                     used=False,
                 )
@@ -172,7 +177,8 @@ class OAuthStore:
     # --- tokens ---
 
     async def _insert_token(
-        self, token_type: str, client_id: str, ttl: float
+        self, token_type: str, client_id: str, ttl: float,
+        subject_user_id: int | None = None,
     ) -> str:
         raw = secrets.token_urlsafe(32)
         async with self.engine.begin() as conn:
@@ -181,6 +187,7 @@ class OAuthStore:
                     token_hash=token_hash(raw),
                     token_type=token_type,
                     client_id=client_id,
+                    subject_user_id=subject_user_id,
                     expires_at=_now() + ttl,
                     revoked=False,
                     created_at=_now(),
@@ -188,10 +195,13 @@ class OAuthStore:
             )
         return raw
 
-    async def issue_token_pair(self, client_id: str) -> dict:
-        access = await self._insert_token("access", client_id, ACCESS_TOKEN_TTL)
-        refresh = await self._insert_token("refresh", client_id,
-                                           REFRESH_TOKEN_TTL)
+    async def issue_token_pair(
+        self, client_id: str, subject_user_id: int | None = None,
+    ) -> dict:
+        access = await self._insert_token(
+            "access", client_id, ACCESS_TOKEN_TTL, subject_user_id)
+        refresh = await self._insert_token(
+            "refresh", client_id, REFRESH_TOKEN_TTL, subject_user_id)
         return {"access_token": access, "refresh_token": refresh}
 
     async def _row_for(self, raw_token: str):
@@ -202,6 +212,7 @@ class OAuthStore:
                     oauth_tokens.c.token_hash,
                     oauth_tokens.c.token_type,
                     oauth_tokens.c.client_id,
+                    oauth_tokens.c.subject_user_id,
                     oauth_tokens.c.expires_at,
                     oauth_tokens.c.revoked,
                 ).where(oauth_tokens.c.token_hash == token_hash(raw_token))
@@ -211,29 +222,29 @@ class OAuthStore:
         row = await self._row_for(raw_token)
         if row is None:
             return None
-        _, token_type, client_id, _, revoked = row
+        _, token_type, client_id, subject_user_id, _, revoked = row
         if token_type != "access" or revoked:
             return None
-        return {"client_id": client_id}
+        return {"client_id": client_id, "subject_user_id": subject_user_id}
 
     async def rotate_refresh(self, raw_token: str) -> dict:
         row = await self._row_for(raw_token)
         if row is None:
             raise OAuthError("invalid_grant",
                              "refresh token is invalid or expired")
-        token_hash_value, token_type, client_id, _, revoked = row
+        token_hash_value, token_type, client_id, subject, _, revoked = row
         if token_type != "refresh" or revoked:
             raise OAuthError("invalid_grant",
                              "refresh token is invalid or expired")
         await self._revoke_by_hash(token_hash_value)
-        return await self.issue_token_pair(client_id)
+        return await self.issue_token_pair(client_id, subject)
 
     async def revoke(self, raw_token: str) -> bool:
         row = await self._row_for(raw_token)
         if row is None:
             return False
-        token_hash_value, _, _, _, revoked = row
-        if revoked:
+        token_hash_value = row[0]
+        if row[5]:
             return False
         await self._revoke_by_hash(token_hash_value)
         return True

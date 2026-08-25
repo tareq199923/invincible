@@ -60,9 +60,16 @@ class ContinuityEngine:
         status: str = "active",
         expected_version: int | None = None,
         request_id: str | None = None,
+        session_pk: int | None = None,
     ) -> dict:
         """Versioned upsert. Returns the new head
         ``{session_id,task_key,status,payload,version}``.
+
+        ``session_pk`` (Phase 2): the owning surrogate session resolved by
+        the caller under the acting principal - when given, the version
+        chain, advisory lock, and uniqueness all scope to it, so two
+        principals sharing a client string never interact. None keeps the
+        pre-isolation string-keyed path (tests / local-only callers).
 
         Raises ValueError for oversized/non-dict payloads/bad statuses.
         Raises :class:`ContinuityConflictError` when ``expected_version``
@@ -86,20 +93,32 @@ class ContinuityEngine:
         from sqlalchemy import text
         from sqlalchemy.exc import IntegrityError
 
+        pk_filter = (
+            task_states.c.session_pk == session_pk
+            if session_pk is not None
+            else task_states.c.session_id == session_id
+        )
+
         async with self.engine.begin() as conn:
             # Serialize writers per (session, task_key): without this, two
             # concurrent no-expected_version writes can both read the same
             # head and race for version N+1. The transaction-scoped advisory
             # lock replaces the SQLite era's process-wide write lock; CAS
             # callers with expected_version still conflict deterministically.
-            await conn.execute(
-                text("SELECT pg_advisory_xact_lock("
-                     "hashtext(:s), hashtext(:k))"),
-                {"s": session_id, "k": task_key},
-            )
+            if session_pk is not None:
+                await conn.execute(
+                    text("SELECT pg_advisory_xact_lock(:p, hashtext(:k))"),
+                    {"p": session_pk, "k": task_key},
+                )
+            else:
+                await conn.execute(
+                    text("SELECT pg_advisory_xact_lock("
+                         "hashtext(:s), hashtext(:k))"),
+                    {"s": session_id, "k": task_key},
+                )
             head = (await conn.execute(
                 select(func.max(task_states.c.version))
-                .where(task_states.c.session_id == session_id,
+                .where(pk_filter,
                        task_states.c.task_key == task_key)
             )).scalar_one()
             head = head or 0
@@ -114,6 +133,7 @@ class ContinuityEngine:
                 await conn.execute(
                     task_states.insert().values(
                         session_id=session_id,
+                        session_pk=session_pk,
                         task_key=task_key,
                         status=status,
                         payload=payload,
@@ -140,17 +160,27 @@ class ContinuityEngine:
     # State reads
 
     async def get_state(
-        self, session_id: str, task_key: str = "default"
+        self, session_id: str, task_key: str = "default",
+        *, session_pk: int | None = None,
     ) -> dict | None:
-        return next(iter(await self.history(session_id, task_key, limit=1)), None)
+        return next(iter(await self.history(
+            session_id, task_key, limit=1, session_pk=session_pk)), None)
 
     async def history(
-        self, session_id: str, task_key: str = "default", limit: int = 20
+        self, session_id: str, task_key: str = "default", limit: int = 20,
+        *, session_pk: int | None = None,
     ) -> list[dict]:
         """Newest-first version history for one task key."""
-        return await self._history_rows(session_id, task_key, limit)
+        return await self._history_rows(
+            session_id, task_key, limit, session_pk=session_pk)
 
-    async def _history_rows(self, session_id, task_key, limit):
+    async def _history_rows(self, session_id, task_key, limit,
+                            session_pk=None):
+        scope = (
+            task_states.c.session_pk == session_pk
+            if session_pk is not None
+            else task_states.c.session_id == session_id
+        )
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 select(
@@ -160,7 +190,7 @@ class ContinuityEngine:
                     task_states.c.updated_by,
                     task_states.c.updated_at,
                 )
-                .where(task_states.c.session_id == session_id,
+                .where(scope,
                        task_states.c.task_key == task_key)
                 .order_by(task_states.c.version.desc())
                 .limit(limit)
@@ -178,11 +208,19 @@ class ContinuityEngine:
             })
         return out
 
-    async def active_task_keys(self, session_id: str, limit: int = 5) -> list[str]:
+    async def active_task_keys(
+        self, session_id: str, limit: int = 5,
+        *, session_pk: int | None = None,
+    ) -> list[str]:
+        scope = (
+            task_states.c.session_pk == session_pk
+            if session_pk is not None
+            else task_states.c.session_id == session_id
+        )
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 select(task_states.c.task_key)
-                .where(task_states.c.session_id == session_id)
+                .where(scope)
                 .group_by(task_states.c.task_key)
                 .order_by(func.max(task_states.c.updated_at).desc())
                 .limit(limit)
@@ -198,12 +236,19 @@ class ContinuityEngine:
         task_key: str = "default",
         note: str = "",
         actor: str = "user",
+        *,
+        session_pk: int | None = None,
     ) -> dict:
         """Pin the CURRENT head version (0 = nothing tracked yet)."""
+        scope = (
+            task_states.c.session_pk == session_pk
+            if session_pk is not None
+            else task_states.c.session_id == session_id
+        )
         async with self.engine.begin() as conn:
             head = (await conn.execute(
                 select(func.max(task_states.c.version))
-                .where(task_states.c.session_id == session_id,
+                .where(scope,
                        task_states.c.task_key == task_key)
             )).scalar_one()
             version = head or 0
@@ -211,6 +256,7 @@ class ContinuityEngine:
             result = await conn.execute(
                 checkpoints.insert().values(
                     session_id=session_id,
+                    session_pk=session_pk,
                     task_key=task_key,
                     state_version=version,
                     note=(note or "")[:500],
@@ -227,11 +273,17 @@ class ContinuityEngine:
         }
 
     async def checkpoints(
-        self, session_id: str, task_key: str | None = None, limit: int = 20
+        self, session_id: str, task_key: str | None = None, limit: int = 20,
+        *, session_pk: int | None = None,
     ) -> list[dict]:
+        scope = (
+            checkpoints.c.session_pk == session_pk
+            if session_pk is not None
+            else checkpoints.c.session_id == session_id
+        )
         query = (
             checkpoints.select()
-            .where(checkpoints.c.session_id == session_id)
+            .where(scope)
             .order_by(checkpoints.c.id.desc())
             .limit(limit)
         )
@@ -244,14 +296,17 @@ class ContinuityEngine:
     # ------------------------------------------------------------------
     # Continuation brief
 
-    async def interruption_note(self, session_id: str) -> str | None:
+    async def interruption_note(self, session_id: str,
+                                *, session_pk: int | None = None) -> str | None:
         """Public projection hook: describe the post-checkpoint upstream
         failure for this session, if one exists."""
         if self._runs is None:
             return None
-        cps = await self.checkpoints(session_id, limit=1)
+        cps = await self.checkpoints(session_id, limit=1,
+                                     session_pk=session_pk)
         cp_after = cps[0]["created_at"] if cps else 0.0
-        recent = await self._runs.recent(session_id=session_id, limit=10)
+        recent = await self._runs.recent(
+            session_id=session_id, limit=10, session_pk=session_pk)
         for run in recent:  # newest-first
             if float(run.get("finished_at") or 0) <= cp_after:
                 continue
@@ -273,7 +328,8 @@ class ContinuityEngine:
             rendered = rendered[:MAX_RENDER_CHARS_PER_TASK] + "…[truncated]"
         return rendered
 
-    async def context_message(self, session_id: str) -> dict | None:
+    async def context_message(self, session_id: str, *,
+                              session_pk: int | None = None) -> dict | None:
         """The injectable system message carrying the continuation brief,
         or None when the session tracks no tasks."""
         from invincible.core.settings import settings
@@ -281,12 +337,13 @@ class ContinuityEngine:
         if not settings.continuity_enabled():
             return None
         task_keys = await self.active_task_keys(
-            session_id, limit=_MAX_TASK_KEYS_RENDERED
+            session_id, limit=_MAX_TASK_KEYS_RENDERED, session_pk=session_pk
         )
         if not task_keys:
             return None
 
-        interruption = await self.interruption_note(session_id)
+        interruption = await self.interruption_note(session_id,
+                                                    session_pk=session_pk)
         lines = [
             "[Session continuity — canonical task state maintained by "
             "Invincible. Trust this over reconstructed transcript details.]"
@@ -297,7 +354,8 @@ class ContinuityEngine:
         used = sum(len(line) + 1 for line in lines)
         omitted = False
         for idx, task_key in enumerate(task_keys):
-            state = await self.get_state(session_id, task_key)
+            state = await self.get_state(session_id, task_key,
+                                         session_pk=session_pk)
             if state is None:
                 continue
             chunk_lines = [
@@ -305,7 +363,8 @@ class ContinuityEngine:
                 f"v{state['version']}):",
                 self._render_payload(state["payload"]),
             ]
-            cps = await self.checkpoints(session_id, task_key, limit=1)
+            cps = await self.checkpoints(session_id, task_key, limit=1,
+                                         session_pk=session_pk)
             if cps:
                 cp = cps[0]
                 chunk_lines.append(
@@ -325,10 +384,10 @@ class ContinuityEngine:
 
 
 async def context_system_message(
-    engine_or_engine_holder, session_id: str
+    engine_or_engine_holder, session_id: str, *, session_pk: int | None = None
 ) -> dict | None:
     """Toggle-aware wrapper used by endpoints."""
     engine = engine_or_engine_holder
     if engine is None:
         return None
-    return await engine.context_message(session_id)
+    return await engine.context_message(session_id, session_pk=session_pk)

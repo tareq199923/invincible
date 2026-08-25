@@ -207,10 +207,10 @@ def test_metadata_covers_all_expected_tables():
     expected = {
         # Phase 1 identity & ownership
         "users", "projects", "api_keys", "audit_log", "memories",
-        # sessions / continuity / oauth / mcp
+        # sessions / continuity / oauth / mcp / rate limiting
         "sessions", "turns", "messages", "facts", "runs", "task_states",
         "checkpoints", "oauth_clients", "oauth_codes", "oauth_tokens",
-        "pending_actions",
+        "pending_actions", "login_attempts",
     }
     assert set(metadata.tables) == expected
 

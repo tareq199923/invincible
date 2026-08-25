@@ -23,7 +23,8 @@ class RunStore:
         """Insert one run row; returns the new row id.
 
         Required keys: request_id, provider_name, model_id, attempt_index,
-        outcome, started_at. Optional: session_id, error_class, finished_at,
+        outcome, started_at. Optional: session_id, session_pk (Phase 2
+        owning surrogate session), error_class, finished_at,
         meta (JSON-serializable mapping).
         """
         meta = entry.get("meta")
@@ -32,6 +33,7 @@ class RunStore:
                 runs.insert().values(
                     request_id=entry["request_id"],
                     session_id=entry.get("session_id"),
+                    session_pk=entry.get("session_pk"),
                     provider_name=entry["provider_name"],
                     model_id=entry["model_id"],
                     attempt_index=entry["attempt_index"],
@@ -46,11 +48,24 @@ class RunStore:
             return result.inserted_primary_key[0]
 
     async def recent(
-        self, session_id: str | None = None, limit: int = 50
+        self, session_id: str | None = None, limit: int = 50,
+        *, session_pk: int | None = None,
     ) -> list[dict]:
-        """Most recent runs, newest first; optionally scoped to a session."""
+        """Most recent runs, newest first; optionally scoped to a session.
+
+        ``session_pk`` (Phase 2) scopes to the owning surrogate session -
+        the isolation predicate. The loose string filter remains for
+        unscoped callers.
+        """
         query = runs.select().order_by(runs.c.id.desc()).limit(limit)
-        if session_id is not None:
+        if session_pk is not None:
+            query = (
+                runs.select()
+                .where(runs.c.session_pk == session_pk)
+                .order_by(runs.c.id.desc())
+                .limit(limit)
+            )
+        elif session_id is not None:
             query = (
                 runs.select()
                 .where(runs.c.session_id == session_id)
@@ -71,6 +86,7 @@ def new_run_entry(
     started_at: float,
     outcome: str,
     session_id: str | None = None,
+    session_pk: int | None = None,
     error_class: str | None = None,
     meta: dict | None = None,
 ) -> dict:
@@ -80,6 +96,7 @@ def new_run_entry(
     return {
         "request_id": request_id,
         "session_id": session_id,
+        "session_pk": session_pk,
         "provider_name": provider_name,
         "model_id": model_id,
         "attempt_index": attempt_index,

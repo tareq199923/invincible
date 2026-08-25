@@ -55,6 +55,25 @@ class SessionStore:
     # ------------------------------------------------------------------
     # Ownership resolution
 
+    async def lookup(
+        self, session_id: str, *, user_id: int, project_id: int
+    ) -> int | None:
+        """Surrogate session id for this ownership triple, or None when
+        the principal has no such session (read paths)."""
+        async with self.engine.begin() as conn:
+            return await self._lookup_pk(conn, session_id, user_id, project_id)
+
+    async def resolve_or_create(
+        self, session_id: str, *, user_id: int, project_id: int
+    ) -> int:
+        """Resolve-or-create within one transaction and take the row lock;
+        returns the surrogate id (write paths, e.g. MCP task tools)."""
+        uid, pid = await self._owner(user_id, project_id)
+        async with self.engine.begin() as conn:
+            return await self._resolve_for_write(
+                conn, session_id, uid, pid
+            )
+
     async def _owner(
         self, user_id: int | None, project_id: int | None
     ) -> tuple[int, int]:

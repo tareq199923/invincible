@@ -379,7 +379,12 @@ runs = Table(
     metadata,
     Column("id", BigInteger, Identity(), primary_key=True),
     Column("request_id", Text, nullable=False),
+    # Loose client session string (kept for ad-hoc querying); ownership
+    # predicates go through ``session_pk`` (Phase 2).
     Column("session_id", Text),
+    # Phase 2: surrogate session this attempt belongs to (resolved under
+    # the requesting principal). NULL = pre-Phase-2 row.
+    Column("session_pk", BigInteger, ForeignKey("sessions.id")),
     Column("provider_name", Text, nullable=False),
     Column("model_id", Text, nullable=False),
     Column("attempt_index", Integer, nullable=False),
@@ -392,12 +397,15 @@ runs = Table(
 
 Index("idx_runs_session", runs.c.session_id, runs.c.started_at)
 Index("idx_runs_outcome", runs.c.outcome)
+Index("idx_runs_session_pk", runs.c.session_pk, runs.c.id.desc())
 
 task_states = Table(
     "task_states",
     metadata,
     Column("id", BigInteger, Identity(), primary_key=True),
     Column("session_id", Text, nullable=False),
+    # Phase 2: owning surrogate session; NULL only on pre-backfill rows.
+    Column("session_pk", BigInteger, ForeignKey("sessions.id")),
     Column("task_key", Text, nullable=False, server_default="default"),
     Column("status", Text, nullable=False, server_default="active"),
     Column("payload", JSONB, nullable=False),
@@ -405,11 +413,23 @@ task_states = Table(
     Column("updated_by", Text, nullable=False),
     Column("request_id", Text),
     Column("updated_at", Float, nullable=False),
-    UniqueConstraint(
-        "session_id", "task_key", "version", name="uq_task_states_version"
-    ),
 )
+# NOTE: the Phase 15a-era UNIQUE(session_id, task_key, version) is GONE as
+# of Phase 2 - the client string is not globally unique anymore, so that
+# constraint would collide two principals sharing one string. Version
+# uniqueness is enforced per owning session by the partial index below;
+# un-backfilled legacy rows (session_pk NULL) are inert history.
 
+# Phase 2 isolation: version uniqueness is scoped to the owning surrogate
+# session, so two principals using the same client string never collide.
+Index(
+    "uq_task_states_owner_version",
+    task_states.c.session_pk,
+    task_states.c.task_key,
+    task_states.c.version.desc(),
+    unique=True,
+    postgresql_where=task_states.c.session_pk.isnot(None),
+)
 Index(
     "idx_task_states_session",
     task_states.c.session_id,
@@ -422,6 +442,7 @@ checkpoints = Table(
     metadata,
     Column("id", BigInteger, Identity(), primary_key=True),
     Column("session_id", Text, nullable=False),
+    Column("session_pk", BigInteger, ForeignKey("sessions.id")),
     Column("task_key", Text, nullable=False, server_default="default"),
     Column("state_version", Integer, nullable=False),
     Column("note", Text, nullable=False, server_default=""),
@@ -434,10 +455,20 @@ Index(
     checkpoints.c.task_key,
     checkpoints.c.created_at.desc(),
 )
+Index(
+    "idx_checkpoints_session_pk",
+    checkpoints.c.session_pk,
+    checkpoints.c.created_at.desc(),
+)
 
 
 # ---------------------------------------------------------------------------
 # OAuth 2.1 + PKCE  (shapes carried over verbatim; uris -> JSONB list)
+#
+# Phase 2 user subjects: every client/code/token carries the identity of
+# the user who authorized it, so MCP tokens resolve to a Principal and
+# task writes land under that user's sessions. NULL only on pre-Phase-2
+# rows; the 0003 migration backfills them to the system *local* owner.
 
 oauth_clients = Table(
     "oauth_clients",
@@ -445,6 +476,7 @@ oauth_clients = Table(
     Column("client_id", String, primary_key=True),
     Column("client_name", String, nullable=False, server_default=""),
     Column("redirect_uris", JSONB, nullable=False),
+    Column("owner_user_id", BigInteger, ForeignKey("users.id")),
     Column("created_at", Float, nullable=False),
 )
 
@@ -455,6 +487,7 @@ oauth_codes = Table(
     Column("client_id", String, nullable=False),
     Column("redirect_uri", String, nullable=False),
     Column("code_challenge", String, nullable=False),
+    Column("subject_user_id", BigInteger, ForeignKey("users.id")),
     Column("expires_at", Float, nullable=False),
     Column("used", Boolean, nullable=False, server_default="false"),
 )
@@ -465,9 +498,27 @@ oauth_tokens = Table(
     Column("token_hash", String, primary_key=True),
     Column("token_type", String, nullable=False),
     Column("client_id", String, nullable=False),
+    # The authorizing user this token acts as.
+    Column("subject_user_id", BigInteger, ForeignKey("users.id")),
     Column("expires_at", Float, nullable=False),
     Column("revoked", Boolean, nullable=False, server_default="false"),
     Column("created_at", Float, nullable=False),
+)
+
+
+# ---------------------------------------------------------------------------
+# Persistent login rate limiting (Phase 2). One row per client IP; a
+# fixed window of failed owner-login attempts locks that IP out for the
+# rest of the window. Survives restarts (the Phase-1-era limiter was
+# process memory).
+
+login_attempts = Table(
+    "login_attempts",
+    metadata,
+    Column("ip", Text, primary_key=True),
+    Column("window_start", Float, nullable=False),
+    Column("count", Integer, nullable=False),
+    Column("updated_at", Float, nullable=False),
 )
 
 
