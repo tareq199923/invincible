@@ -60,7 +60,8 @@ every upstream is faked.
   base_url="http://test")`; sets `GATEWAY_API_KEY=test-gateway-key` and
   `INVINCIBLE_OWNER_SECRET=test-owner-secret` (MCP auth flows through the
   OAuth endpoints, which need the owner secret for the login step), and
-  wires every store to `pg_engine`.
+  wires every store to `pg_engine` (including `app.state.engine` and
+  `app.state.api_keys`, so dual-realm auth resolves against the test DB).
 - **`pg_live`** — skip-gate for tests that need more than `pg_engine`
   (scratch databases, CLI provisioning flows); skips cleanly when no local
   Postgres is reachable.
@@ -97,6 +98,9 @@ sleeping.
 | `test_tool_executor.py` | Parameterized denylist sweep over ~24 dangerous commands (Unix + Windows) and ~10 safe ones (incl. `rm -rf ./build`, `rd /s C:\build`, `del C:\temp\out.txt`); blocked commands/paths never issue a token; pending calls return `pending_confirmation` without executing/writing (probe asserts no run); `confirm_action` approve runs/writes for real, decline doesn't, unknown/expired → `not_found`; tokens are single-use (no double execution); write denylist blocks `.env*`, `providers.yaml`, `sessions.db`, `invincible/`, `tests/`, `.git/`; read denylist blocks only secrets but **allows** `providers.yaml`, `invincible/`, `tests/`; paths outside the repo are not write-denied; read errors are structured, not exceptions; **pending actions survive a restart over the shared PostgreSQL test database** (bash + write_file, still single-use, via `attach_engine` + `load_persisted`), expired entries are purged on load, an unreachable database degrades to memory-only without breaking staging, and persisted rows use wall-clock `created_at` (`time.time()`), so expiry works across real process restarts. |
 | `test_main.py` | Lifespan wiring: without `INVINCIBLE_PERSIST_PENDING_ACTIONS` the `PendingActionStore` is memory-only (`_db is None` — clean slate on restart); with it set, the shared db file is passed through (persistence active). |
 | `test_cli.py` | CLI registration + version; both console scripts declared in pyproject; `setup` creates/updates `.env`, preserves existing values/comments, generates secrets only when missing; `start` port validation, env-file loading, config path handling. |
+| `test_identity.py` | **Phase 1**: argon2id round-trip + rejection (incl. NULL/garbage hashes); API-key minting shape (`inv_` prefix, sha256 hash, visible prefix, uniqueness); lifecycle create→resolve→revoke→unresolvable (idempotent revoke); revoked keys excluded from resolution; `last_used_at` telemetry; listings never leak raw/hash; default-project get-or-create ("personal", reused); audit-log record/recent round trip. |
+| `test_dual_realm.py` | **Phase 1 auth acceptance**: legacy gateway key → session lands under the system *local* owner; API key → session under that user's project; same client string under two principals yields distinct rows (Phase 2 groundwork); unknown/missing tokens → 401 when gateway key set; revoked API keys → 401; unset gateway key preserves fail-open local behavior (and still prefers valid API keys); crafted cross-realm collision resolves as legacy (precedence pinned); Anthropic streaming threads the principal into persistence. |
+| `test_migration_identity.py` | **Phase 1 migration acceptance** (live tier, scratch DBs): populated-0001 → head preserves row counts for sessions/turns/messages with full content mapping (unicode, tool_calls JSONB) and seeds exactly one local owner; fresh `create_all` database takes the seed-only branch; downgrade to 0001 restores the legacy string-keyed shape without losing rows and re-upgrades cleanly. |
 
 ---
 

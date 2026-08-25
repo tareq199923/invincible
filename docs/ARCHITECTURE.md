@@ -10,10 +10,11 @@ non-obvious algorithms (context trimming, cooldowns, config resolution).
 ```
 invincible/
 ├── main.py                     FastAPI app, lifespan, auth wiring, /health, HEAD /
-├── cli.py                      Click CLI (setup / start / doctor / dev-db / db / oauth / secret)
+├── cli.py                      Click CLI (setup / start / doctor / dev-db / db / oauth / secret / api-key)
 ├── providers.yaml              Canonical provider config (packaged)
-├── migrations/                 Packaged Alembic environment (baseline 0001 = core.db metadata)
+├── migrations/                 Packaged Alembic environment (0001 baseline, 0002 identity)
 ├── endpoints/
+│   ├── auth.py                 require_auth: dual-realm Principal resolution for /v1/* (Phase 1)
 │   ├── openai_compat.py        POST /v1/chat/completions, GET /v1/models
 │   ├── anthropic_compat.py     POST /v1/messages (Anthropic protocol)
 │   ├── mcp.py                  POST /mcp (JSON-RPC 2.0 dispatch, Bearer resource server)
@@ -30,7 +31,9 @@ invincible/
     ├── router.py               Provider loading, failover, trimming, timeouts
     ├── provider_health.py      Per-provider failure counts + cooldowns
     ├── settings.py             Typed live-read accessors for every INVINCIBLE_* variable
-    ├── db.py                   Engine factory + schema metadata (single source of truth)
+    ├── principal.py            Authenticated Principal model (legacy | api_key | anonymous)
+    ├── identity.py             Phase 1: argon2id primitives, API-key lifecycle, audit log
+    ├── db.py                   Engine factory + schema metadata + local-owner bootstrap
     ├── session_store.py        Conversation memory on PostgreSQL (sessions/turns/messages)
     ├── oauth_store.py          OAuth store on PostgreSQL (clients, codes, hashed tokens)
     ├── memory.py               Fact extraction/injection (facts table)
@@ -150,7 +153,9 @@ Claude Code
   │  POST /v1/messages?beta=true
   │  anthropic-version / anthropic-beta headers (accepted, ignored)
   ▼
-main.py::require_auth                     same GATEWAY_API_KEY as OpenAI
+endpoints/auth::require_auth              dual-realm Principal (Phase 1):
+                                          legacy GATEWAY_API_KEY or inv_* API
+                                          key; fail-open local when unset
   ▼
 anthropic_compat::anthropic_messages
   │  1. anthropic_to_internal(messages, system) → internal model

@@ -242,6 +242,7 @@ invincible start [--host 127.0.0.1] [--port 8000] [--reload]
 invincible dev-db [--port 5433] [--env-file .env] [--write-env]
 invincible db upgrade | import <legacy-sessions.db> [--env-file .env]
 invincible oauth list | revoke <client_id> | test-client
+invincible api-key create [--label TEXT] | list | revoke <id-or-prefix>
 invincible --version | --help
 ```
 
@@ -290,3 +291,17 @@ Notes on `oauth revoke`:
   Click parses such an id as an option, pass it after a `--` separator:
   `invincible oauth revoke -- <client_id>`. Same surface for `oauth list`
   and `oauth test-client`.
+
+Notes on `api-key` (Platform Phase 1):
+
+- `create` prints the raw key **once** — storage keeps only its SHA-256
+  hash plus a visible prefix. Use the key as
+  `Authorization: Bearer inv_…` on `/v1/*`.
+- Keys are minted under the system *local* owner; per-user key management
+  surfaces with the Phase 3 account API.
+- `list` shows prefixes, labels, and status — never hashes or raw keys.
+- `revoke` accepts either the numeric id or the visible prefix; revoking
+  an already-revoked key is reported as an error, so scripts can rely on
+  exit codes.
+- Both commands read `INVINCIBLE_DB_URL` from the environment or `.env`,
+  like `oauth`/`db`.

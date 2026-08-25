@@ -95,29 +95,34 @@ Verified snapshot of shipped capability (file pointers in
 | Gateway | OpenAI `POST /v1/chat/completions` + Anthropic `POST /v1/messages`, SSE streaming on both, translated through one internal message model (`invincible/compat/`). |
 | Failover | Single loop (`core/router.py::_iter_attempts`): tier order, soft alias preference, 429/5xx/network → exponential cooldown (30s→300s cap), 401/403 permanent disable, opt-in `failover_on_400`; per-provider context trimming + send-time compression; `x-invincible-provider/model/attempts/request-id` response headers; one `runs` row per upstream attempt. |
 | Storage | PostgreSQL-only (SQLAlchemy 2.0 async Core / asyncpg); packaged Alembic environment; `core/db.py` metadata is the schema source of truth; explicit `invincible db upgrade`; `doctor` verifies connectivity + revision loudly. |
-| Sessions | Normalized `sessions`/`turns`/`messages`; whole-turn retention cap; per-session `SELECT … FOR UPDATE` serialization; streamed replies reconstructed and persisted. |
+| Identity | Phase 1: `users`/`projects`/`api_keys`/`audit_log`/`memories` tables; system *local* owner (user + default project) seeded at startup and by migration `0002`; sessions on surrogate identity with UNIQUE(user_id, project_id, client_session_id); argon2id primitives; API-key lifecycle in CLI. |
+| Sessions | Normalized `sessions`/`turns`/`messages`; whole-turn retention cap; per-session `SELECT … FOR UPDATE` serialization; streamed replies reconstructed and persisted; store API keeps client session strings with optional ownership context falling back to the local owner. |
 | Continuity | ContinuityEngine: versioned `task_states` per `(session, task_key)` with optimistic CAS (UNIQUE constraint + advisory locks), immutable checkpoints pinning versions, size-bounded continuation-brief injection, interruption detection from runs; MCP tools `task_state_set/get/checkpoint_create`. |
 | Memory | Deterministic `(entity, relation, target)` fact extraction at persist time; idempotent; bounded latest-N system-message injection; `INVINCIBLE_MEMORY*` toggles. |
 | MCP | `POST /mcp` JSON-RPC 2.0: `read_file`, `execute_bash`, `write_file`, `confirm_action`; text-pattern denylists; single-use token approvals; opt-in PG persistence of staged actions. |
-| Auth | Three separate realms: `GATEWAY_API_KEY` bearer/x-api-key on `/v1/*` (timing-safe compare; FAILS OPEN when unset — loud startup warning); `INVINCIBLE_ADMIN_KEY` on `/api/v1/*` (fail-closed); OAuth 2.1 + PKCE authorization server on `/oauth/*` (dynamic registration, owner-secret browser consent, hashed tokens, refresh rotation, revocation). |
+| Auth | Three separate realms: `/v1/*` resolves a **Principal** dual-realm (Phase 1) — legacy `GATEWAY_API_KEY` bearer/x-api-key timing-safe compare mapping to the system *local* owner, or per-user `inv_*` API keys (SHA-256 hashed at rest, shown once, revocable via CLI); FAILS OPEN to the local identity when the gateway key is unset (loud startup warning); `INVINCIBLE_ADMIN_KEY` on `/api/v1/*` (fail-closed); OAuth 2.1 + PKCE authorization server on `/oauth/*` (dynamic registration, owner-secret browser consent, hashed tokens, refresh rotation, revocation). |
 | Control plane | File-backed ProviderRegistry (CRUD/enable/disable/connectivity-test), `auto`/`pinned`/`chain` routing modes, `GET /api/v1/sessions/{id}/graph` projection. |
-| CLI | `setup` (.env wizard incl. DB URL), `start` (uvicorn + Cloudflare tunnel with an orphan-free lifecycle), `doctor`, `dev-db`, `db upgrade`, `db import` (legacy SQLite), `secret rotate`, `oauth list/revoke/test-client`. Both `invincible` and `inv`. |
+| CLI | `setup` (.env wizard incl. DB URL), `start` (uvicorn + Cloudflare tunnel with an orphan-free lifecycle), `doctor`, `dev-db`, `db upgrade`, `db import` (legacy SQLite), `secret rotate`, `oauth list/revoke/test-client`, `api-key create/list/revoke`. Both `invincible` and `inv`. |
 | Packaging/deploy | pyproject (name `invincible-ai`), packaged `providers.yaml` + migrations, Dockerfile, docker-compose app+postgres pair. |
-| Quality gates | pytest + pytest-asyncio against real Postgres (27 test files); CI runs ruff check + pytest × Python 3.10–3.14 with a postgres:17 service; coverage artifact (~92% at last measurement). |
+| Quality gates | pytest + pytest-asyncio against real Postgres (30 test files); CI runs ruff check + pytest × Python 3.10–3.14 with a postgres:17 service; coverage artifact (~92% at last measurement). |
 
-Honest single-tenant limitations (the reason the platform phases exist):
+Honest limitations remaining after Phase 1 (the reason the platform phases
+exist):
 
-- No users, projects, or API-key entities exist anywhere; there is one
-  shared `GATEWAY_API_KEY` and one global admin key.
-- `sessions.session_id` is a client-supplied global PK; ownership is
-  unverified on every path (e.g., the graph endpoint serves any session to
-  whoever holds the admin key).
+- Identity schema and principals exist, but **no ownership predicates on
+  reads/writes yet**: any authenticated caller can still address any
+  session bucket (e.g., the graph endpoint serves any session to whoever
+  holds the admin key). That is Phase 2's entire scope.
+- There is no signup/login surface yet (Phase 3); users/API keys are
+  created via CLI or direct DB access, and only API keys under the system
+  *local* owner are mintable today.
 - MCP tokens identify a client, not a user; any token holder can reach any
   session bucket and approve any staged action.
-- `facts.user_id` exists but is pinned to the sentinel `"default"`.
+- `facts.user_id` exists but is pinned to the sentinel `"default"` (the
+  table is superseded by `memories` after Phase 4).
 - Usage is computed (`compat/common.py::build_usage`) but never persisted;
-  there is no audit log; login rate limiting and provider cooldowns are
-  in-memory only.
+  `audit_log` has stores but no writers on sensitive paths yet (Phase 2);
+  login rate limiting and provider cooldowns are in-memory only.
 
 ---
 
@@ -128,17 +133,22 @@ Execution order; each phase leaves the repository green
 **In progress** when its first PR lands.
 
 ### Phase 1 — Identity and Ownership
-**Scope:** `users` / `projects` / `api_keys` / `audit_log` / `memories`
-schema; sessions rebuilt with surrogate identity + ownership columns
-(`user_id`, `project_id`, `client_session_id`) with the turns/messages FK
-chain repointed; security primitives (argon2id password hashing, hashed
-API keys shown once with visible prefixes); an authenticated Principal
-threaded through stores; one Alembic revision with a count-preserving
-backfill to a system *local* owner; local-mode compatibility (the legacy
-gateway key keeps working, mapped to that owner).
-**Acceptance:** migration preserves row counts everywhere; the existing
-suite passes unchanged in behavior; dual-realm auth (legacy key vs API
-keys) resolves unambiguously.
+**Status: Implemented.** Scope landed: `users` / `projects` / `api_keys` /
+`audit_log` / `memories` schema; sessions rebuilt with surrogate identity +
+ownership columns (`user_id`, `project_id`, `client_session_id`) with the
+turns/messages FK chain repointed; security primitives (argon2id password
+hashing, hashed API keys shown once with visible prefixes); an
+authenticated Principal threaded through the chat endpoints' session
+persistence; one Alembic revision (`0002`) with a count-preserving,
+in-migration-asserted backfill to a system *local* owner; local-mode
+compatibility (the legacy gateway key keeps working, mapped to that owner;
+unset-key fail-open behavior preserved). API keys are mintable via
+`invincible api-key create/list/revoke`; dual-realm resolution is fixed
+(legacy first) and collision-tested.
+**Acceptance:** migration preserves row counts everywhere (scratch-DB
+tests both directions, plus downgrade); the existing suite passes unchanged
+in behavior; dual-realm auth (legacy key vs API keys) resolves
+unambiguously.
 
 ### Phase 2 — Isolation and Security
 **Scope:** server-side ownership predicates on every query path

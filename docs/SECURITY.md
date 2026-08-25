@@ -19,18 +19,34 @@ execution.
 > [§1.2](#12-mcp--oauth-21--pkce-bearer-tokens). Your old `.env` value still
 > works (the legacy key is read as a fallback), but its role has changed.
 
-### `/v1/*` — `GATEWAY_API_KEY`
+### `/v1/*` — dual-realm auth (Platform Phase 1)
 
-| Aspect | Value |
-|---|---|
-| Header | `Authorization: Bearer <key>` |
-| Comparison | `hmac.compare_digest` — timing-safe (hardened in Phase 12) |
-| If unset | **Endpoint is open** — no auth enforced at all |
-| Failure | HTTP 401, body `{"error": {"message": "...", "type": "auth_error"}}` |
+Requests resolve a Principal in this fixed order (implemented in
+`invincible/endpoints/auth.py::require_auth`):
 
-Implemented in `invincible/main.py::require_auth`. Note the open-if-unset
-behavior: on a dev box without a key, anyone who can reach the port can use
-your provider credits. Set the key.
+| Step | Realm | Result |
+|---|---|---|
+| 1 | `Authorization: Bearer <GATEWAY_API_KEY>` or `x-api-key`, timing-safe compared (`hmac.compare_digest`) | System *local* owner (`kind="legacy"`) |
+| 2 | `Bearer inv_…` matching an **API key** (SHA-256 hash lookup; revoked keys excluded) | That key's user + its default project (`kind="api_key"`) |
+| 3 | Gateway key **unset** | Documented fail-open local identity (`kind="anonymous"`) |
+| 4 | anything else | HTTP 401, body `{"detail": {"error": {"message": "...", "type": "auth_error"}}}` |
+
+API-key properties:
+
+- Raw values are shown **once**, at creation (`invincible api-key create`);
+  storage keeps only a SHA-256 hash plus a visible prefix for listings.
+- Resolution is unambiguous: the legacy realm is checked first, so even a
+  deliberately crafted hash collision between the two realms resolves as
+  legacy (pinned by test).
+- Sessions created under an API-key principal are stored under that user's
+  ownership triple (`user_id`, `project_id`, `client_session_id`) — the
+  same client session string under two principals yields two distinct
+  session rows. Enforcement of isolation on every read path lands in
+  Phase 2.
+
+Note the open-if-unset behavior (step 3): on a dev box without a gateway
+key, anyone who can reach the port can use your provider credits. Set the
+key. Hosted mode retires fail-open entirely (Phase 8).
 
 ### `/mcp` — OAuth 2.1 + PKCE Bearer tokens
 
@@ -304,13 +320,18 @@ operator's own process.
 
 ## 5. The chat endpoint's security posture
 
-- **Auth**: `GATEWAY_API_KEY` (see above). Unset = open.
-- **Sessions**: `session_id` (from `X-Session-Id`) is a **partition key, not
-  a credential**. Anyone authenticated to the endpoint can read/write any
-  session id. History is stored as **plaintext JSON in PostgreSQL**
-  (`INVINCIBLE_DB_URL`) — the database credentials are the security
-  boundary, and `invincible doctor` always prints the DSN password-masked
-  so it never leaks into terminal output or CI logs.
+- **Auth**: dual-realm (legacy gateway key vs per-user API keys — see
+  [§1.1](#v1--dual-realm-auth-platform-phase-1)). Unset gateway key with no
+  matching API key = fail-open local identity.
+- **Sessions**: the client session string (`X-Session-Id`) is a
+  **partition key, not a credential**. Since Phase 1 every session row
+  carries an ownership triple, and different principals using the same
+  string get distinct rows — but ownership *predicates* on reads are
+  Phase 2: until then any authenticated caller can address any session
+  bucket through the admin/graph surface. History is stored as **plaintext
+  JSON in PostgreSQL** (`INVINCIBLE_DB_URL`) — the database credentials are
+  the security boundary, and `invincible doctor` always prints the DSN
+  password-masked so it never leaks into terminal output or CI logs.
 - **Upstream keys**: API keys are read from the environment by *name*
   (`api_key_env`), never stored in `providers.yaml`.
 - **Failure data**: a provider's `401/403` response body is never forwarded
@@ -378,8 +399,10 @@ sandbox:
    `/oauth/register` can create a client, but the consent page still gates
    every grant — an unregistered or mismatched redirect is never followed.
    The exposure is spam/annoyance, not access.
-7. **`/v1/*` is unauthenticated if `GATEWAY_API_KEY` is unset.** Forgetting
-   the key opens your provider credits to anyone who can reach the port.
+7. **`/v1/*` fails open to the local identity if `GATEWAY_API_KEY` is
+   unset.** Forgetting the key opens your provider credits to anyone who
+   can reach the port (API keys, when minted, still authenticate as their
+   own users — but the anonymous fallback also remains open).
 8. **Sessions and grants persist plaintext (except tokens, which are
    hashed).** The PostgreSQL database holds full conversation history
    unencrypted and the OAuth client/code/refresh rows — protect it with

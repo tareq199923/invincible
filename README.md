@@ -126,7 +126,7 @@ Everything is environment variables plus one YAML file — no other config.
 
 | Variable | Required by | Purpose |
 |---|---|---|
-| `GATEWAY_API_KEY` | `/v1/*` | Bearer token for the chat endpoint. **If unset, the endpoint is open (no auth).** |
+| `GATEWAY_API_KEY` | `/v1/*` | Bearer token for the chat endpoint (the *legacy local-mode* realm — maps to the system *local* owner). **If unset, the endpoint fails open to the same identity (no auth).** Per-user API keys (`inv_…`, minted via `invincible api-key create`) are accepted on the same endpoints and keep history under their own user. |
 | `INVINCIBLE_OWNER_SECRET` | `/oauth/authorize` | One-time **browser login** to approve MCP connections (kept in a 30-day signed session cookie). **Not** sent on `/mcp` — requests use short-lived OAuth Bearer tokens. **If unset, no new MCP grants can be approved.** The legacy `MCP_SHARED_SECRET` key is still read as a fallback. |
 | `NVIDIA_API_KEY` | provider tier 2 | NVIDIA NIM hosted: GLM-5.2 (Z.ai); strongest coding/agentic tier. |
 | `GROQ_API_KEY` | provider tier 3 | Groq Llama 70B. |
@@ -174,6 +174,9 @@ Two commands, both exposed as `invincible` and `inv`:
 | `invincible oauth list` | Show registered OAuth clients, their redirect URIs, and active/revoked grants. |
 | `invincible oauth revoke <client_id>` | Revoke every access/refresh token for a client immediately. |
 | `invincible oauth test-client` | Headless helper: registers a client, approves it, and prints a ready-to-use Bearer token + curl for `/mcp` (no browser needed). |
+| `invincible api-key create --label L` | Mint an API key (`inv_…`) under the local owner — raw key shown **once**, only its SHA-256 hash is stored. |
+| `invincible api-key list` | List API keys by visible prefix (never hashes or raw keys). |
+| `invincible api-key revoke <id-or-prefix>` | Revoke a key immediately. |
 
 ```bash
 invincible setup --force
@@ -196,8 +199,8 @@ Full CLI reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md) → *CLI refe
 | `HEAD` | `/` | none | 200 OK — Claude Code's base-URL probe |
 | `GET` | `/health` | none | Service detail → `{"service", "status", "version"}` |
 | `GET` | `/v1/models` | `Authorization: Bearer <GATEWAY_API_KEY>` | OpenAI-compatible model list from `providers.yaml` |
-| `POST` | `/v1/chat/completions` | `Authorization: Bearer <GATEWAY_API_KEY>` | OpenAI chat completion with tiered failover |
-| `POST` | `/v1/messages` | `Authorization: Bearer <GATEWAY_API_KEY>` | Anthropic Messages API with tiered failover |
+| `POST` | `/v1/chat/completions` | `Bearer <GATEWAY_API_KEY>` or `Bearer inv_…` API key | OpenAI chat completion with tiered failover |
+| `POST` | `/v1/messages` | same as above | Anthropic Messages API with tiered failover |
 
 ### Chat request
 
@@ -584,7 +587,9 @@ store, and trimming logic consume.
   terminal prompt and no separate human-authentication surface. Revoke the
   client with `invincible oauth revoke <client_id>` to cut that off.
 - Sessions are stored **plaintext** in PostgreSQL (protect the DSN);
-  cooldowns and provider disables are **in-memory only**.
+  cooldowns and provider disables are **in-memory only**. Since Phase 1,
+  sessions carry an ownership triple (user/project/client string) — but
+  read-path ownership enforcement is Phase 2.
 
 Full details: [docs/SECURITY.md](docs/SECURITY.md) → *Known limits*.
 

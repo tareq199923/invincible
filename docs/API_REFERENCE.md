@@ -13,17 +13,26 @@ provider behind either request is chosen by the Router, never by the client.
 | `GET` | `/` | none | Health check → `{"status": "healthy"}` |
 | `HEAD` | `/` | none | 200 OK (Claude Code base-URL probe) |
 | `GET` | `/health` | none | `{"service", "status", "version"}` |
-| `POST` | `/v1/chat/completions` | `Authorization: Bearer <GATEWAY_API_KEY>` | OpenAI chat completion with failover |
-| `POST` | `/v1/messages` | `Authorization: Bearer <GATEWAY_API_KEY>` | Anthropic Messages completion with failover |
+| `POST` | `/v1/chat/completions` | `Bearer <GATEWAY_API_KEY>` or `Bearer inv_…` API key | OpenAI chat completion with failover |
+| `POST` | `/v1/messages` | same as above | Anthropic Messages completion with failover |
 | `GET/POST/PATCH/DELETE` | `/api/v1/providers[...]` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Provider management: list, add, update, remove, enable/disable, test connectivity |
 | `GET/PUT` | `/api/v1/routing` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Routing mode: `auto` / `pinned` / `chain` |
 | `GET` | `/api/v1/sessions/{id}/graph` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Continuity-graph projection: runs chain, task states, checkpoints as nodes/edges/timeline |
 
-Auth details: if `GATEWAY_API_KEY` is **unset**, both chat endpoints are
-open (no auth enforced). Wrong/missing key with the key set → `401`.
+Auth details (dual-realm since Phase 1, resolved in this fixed order):
+
+1. A token matching `GATEWAY_API_KEY` (timing-safe compare) authenticates
+   as the system *local* owner — the single-tenant behavior.
+2. Otherwise a token matching an **API key** (`inv_…`, minted via
+   `invincible api-key create`) authenticates as that key's user; its
+   session history is stored under that user's project.
+3. If `GATEWAY_API_KEY` is **unset**, both chat endpoints are open — every
+   request maps to the local owner (documented fail-open local mode).
+4. Wrong/missing token with the key set → `401`.
+
 The management surface (`/api/v1/*`) uses a separate credential
 (`INVINCIBLE_ADMIN_KEY`); it answers **503 when that key is unset**
-(fail closed), and the gateway key is never accepted there.
+(fail closed), and neither chat credential is accepted there.
 
 ---
 

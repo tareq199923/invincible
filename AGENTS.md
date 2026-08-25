@@ -54,6 +54,9 @@ Fixture semantics (`tests/conftest.py`):
 | Path | Role |
 |---|---|
 | `invincible/main.py` | FastAPI app; lifespan wires engine + all stores; auth dependencies; `/health`, `HEAD /` |
+| `endpoints/auth.py` | Dual-realm Principal resolution for `/v1/*` (legacy gateway key vs API keys; fail-open local when unset) |
+| `core/principal.py` | Authenticated Principal model (`legacy` / `api_key` / `anonymous`) |
+| `core/identity.py` | argon2id primitives, API-key lifecycle (sha256 at rest, shown once), audit log |
 | `endpoints/openai_compat.py` | `POST /v1/chat/completions` (+ SSE streaming), `GET /v1/models` |
 | `endpoints/anthropic_compat.py` | `POST /v1/messages` (Anthropic protocol + canonical SSE) |
 | `endpoints/mcp.py` | `POST /mcp` JSON-RPC 2.0 tool server (OAuth-bearer protected) |
@@ -66,8 +69,8 @@ Fixture semantics (`tests/conftest.py`):
 | `core/selection.py` | Pure auto/pinned/chain routing decisions |
 | `core/config.py` | `providers.yaml` schema validation/loading; timeout resolution |
 | `core/settings.py` | Typed live-read accessors for every `INVINCIBLE_*` env var |
-| `core/db.py` | Engine factory + schema metadata (**single source of schema truth**) |
-| `core/session_store.py` | Normalized `sessions`/`turns`/`messages` persistence |
+| `core/db.py` | Engine factory + schema metadata (**single source of schema truth**) + system local-owner bootstrap |
+| `core/session_store.py` | Normalized `sessions`/`turns`/`messages` persistence (surrogate identity + ownership triple since Phase 1) |
 | `core/memory.py` | Deterministic fact extraction/injection (`facts` table) |
 | `core/continuity.py` | ContinuityEngine: versioned task states, checkpoints, continuation briefs |
 | `core/run_store.py` | One `runs` row per upstream provider attempt |
