@@ -17,7 +17,7 @@ provider behind either request is chosen by the Router, never by the client.
 | `POST` | `/v1/messages` | same as above | Anthropic Messages completion with failover |
 | `GET/POST/PATCH/DELETE` | `/api/v1/providers[...]` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Provider management: list, add, update, remove, enable/disable, test connectivity |
 | `GET/PUT` | `/api/v1/routing` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Routing mode: `auto` / `pinned` / `chain` |
-| `GET` | `/api/v1/sessions/{id}/graph` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Continuity-graph projection: runs chain, task states, checkpoints as nodes/edges/timeline |
+| `GET` | `/api/v1/sessions/{id}/graph` | Admin key (operator override) or user Principal (scoped) | Continuity-graph projection: runs chain, task states, checkpoints as nodes/edges/timeline |
 
 Auth details (dual-realm since Phase 1, resolved in this fixed order):
 
@@ -72,8 +72,10 @@ never from the client.
   never removes (system messages are always kept). System prompts still go
   upstream every request — only the stored history excludes them (same
   behavior as the Anthropic endpoint).
-- `session_id` is a **partition key, not a credential** — any authenticated
-  caller may read/write any session id.
+- `session_id` is a **partition key, not a credential** — since Phase 2,
+  every principal's history, task state, runs, and facts are scoped to
+  its own ownership triple; the same string under two principals yields
+  two independent sessions.
 - Trimming happens per-provider at send time; the stored history is
   untrimmed (the raw conversation accumulates in the DB).
 

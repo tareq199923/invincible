@@ -26,7 +26,6 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from invincible.core.principal import Principal
 from invincible.endpoints.admin_api import require_admin
 from invincible.endpoints.auth import require_auth
 
@@ -62,27 +61,20 @@ def _require(request: Request, attr: str):
 
 
 async def _session_and_turns(store, session_id: str,
-                             *, principal: Principal | None):
-    """(session_row|None, [turn dicts]) via SessionStore's public reads,
-    scoped to the principal's ownership triple when not the operator."""
-    if principal is None:
-        session_row = await store.session_meta(session_id)
-        turns = await store.turn_overview(session_id)
-    else:
-        session_row = await store.session_meta(
-            session_id,
-            user_id=principal.user_id,
-            project_id=principal.project_id,
-        )
-        if session_row is None:
-            # Not this principal's session: report exactly as if the
-            # session did not exist at all.
-            return None, []
-        turns = await store.turn_overview(
-            session_id,
-            user_id=principal.user_id,
-            project_id=principal.project_id,
-        )
+                             *, owner: tuple[int, int] | None):
+    """(session_row|None, [turn dicts]) via SessionStore's public reads.
+
+    ``owner`` scopes every read; ``None`` means the session does not exist
+    for the caller (indistinguishable from a foreign one)."""
+    if owner is None:
+        return None, []
+    uid, pid = owner
+    session_row = await store.session_meta(
+        session_id, user_id=uid, project_id=pid)
+    if session_row is None:
+        return None, []
+    turns = await store.turn_overview(
+        session_id, user_id=uid, project_id=pid)
     return session_row, turns
 
 
@@ -95,19 +87,33 @@ async def session_graph(session_id: str, request: Request,
     engine = _require(request, "continuity")
 
     limit = max(1, min(limit, 1000))
-    operator = access == "admin"
-    principal = None if operator else access
-    session_pk = None
 
-    if not operator:
-        session_pk = await sessions_store.lookup(
+    # Resolve the owning context: operator override looks across all
+    # owners (documented operator trust); a user principal is confined to
+    # its own ownership triple.
+    if access == "admin":
+        owner = await sessions_store.owner_context(session_id)
+    else:
+        principal = access
+        found = await sessions_store.lookup(
             session_id,
             user_id=principal.user_id,
             project_id=principal.project_id,
         )
+        owner = (
+            (principal.user_id, principal.project_id)
+            if found is not None
+            else None
+        )
+    session_pk = (
+        await sessions_store.lookup(session_id, user_id=owner[0],
+                                    project_id=owner[1])
+        if owner is not None
+        else None
+    )
 
     session_meta, turns = await _session_and_turns(
-        sessions_store, session_id, principal=principal)
+        sessions_store, session_id, owner=owner)
     known = bool(session_meta)
 
     nodes: list[dict] = []

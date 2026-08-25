@@ -151,8 +151,10 @@ Implications, stated plainly:
   is **memory-only** — a restart orphans every staged action and
   confirmations fail with *Unknown or expired*, the original clean-slate
   design. Persistence means staged shell commands sit in plaintext in the
-  database pre-approval, so it is deliberately off unless requested. There
-  is no audit log of who approved what.
+  database pre-approval, so it is deliberately off unless requested. Since
+  Phase 2, staged actions are bound to the staging subject and every
+  approval/denial writes an audit row (metadata only - never the raw
+  command/path, which could carry secrets).
 - The server still prints an informational visibility line for each pending
   action to its own stdout (`[MCP] Pending <token>: …`) — **informational
   only**, it is not a gate.
@@ -324,11 +326,13 @@ operator's own process.
   [§1.1](#v1--dual-realm-auth-platform-phase-1)). Unset gateway key with no
   matching API key = fail-open local identity.
 - **Sessions**: the client session string (`X-Session-Id`) is a
-  **partition key, not a credential**. Since Phase 1 every session row
-  carries an ownership triple, and different principals using the same
-  string get distinct rows — but ownership *predicates* on reads are
-  Phase 2: until then any authenticated caller can address any session
-  bucket through the admin/graph surface. History is stored as **plaintext
+  **partition key, not a credential**. Since Phase 2 every store read and
+  write is predicated on the caller's ownership triple: two principals
+  using the same string get fully independent sessions, task chains,
+  checkpoints, runs, and facts, and a foreign string reads exactly like a
+  nonexistent one (anti-enumeration). The one exception is the operator:
+  `INVINCIBLE_ADMIN_KEY` may resolve any session on the graph surface —
+  documented out-of-band operator trust. History is stored as **plaintext
   JSON in PostgreSQL** (`INVINCIBLE_DB_URL`) — the database credentials are
   the security boundary, and `invincible doctor` always prints the DSN
   password-masked so it never leaks into terminal output or CI logs.
@@ -363,30 +367,30 @@ sandbox:
    obvious, high-blast-radius cases without a token — **the approval step
    is the genuine safety boundary. Whatever approves a token decides what
    runs.**
-2. **Approval is remote, and "the operator" is whoever holds a live access
-   token.** There is no separate human-approval surface, no per-approver
-   identity, and no audit log. Pending actions are persisted to the
-   PostgreSQL database (`INVINCIBLE_DB_URL`) **only when
-   `INVINCIBLE_PERSIST_PENDING_ACTIONS` is set** — the default is
-   memory-only, so a restart orphans them — and there is no record of who
-   approved what. Revocation is the control:
-   `invincible oauth revoke`.
+2. **Approval is remote, and "the approver" is the subject behind a live
+   access token.** There is no separate human-approval surface. Since
+   Phase 2 a staged action can only be confirmed by its own staging
+   subject — another user's confirm attempt reads as an unknown token and
+   leaves the action intact — and every resolution writes an audit row.
+   Pending actions are persisted to the PostgreSQL database
+   (`INVINCIBLE_DB_URL`) **only when `INVINCIBLE_PERSIST_PENDING_ACTIONS`
+   is set** — the default is memory-only, so a restart orphans them.
+   Revocation is the control: `invincible oauth revoke`.
 3. **The bearer token is the secret in flight.** Leaking an access token
    gives `/mcp` access until it expires (~1h) or is revoked via
    `invincible oauth revoke <client_id>`. A leaked **refresh** token is
    useful only until the next rotation or revocation. Treat the output of
    client tooling that echoes tokens as sensitive. (Contrast with the old
    model: the shared secret never expired at all.)
-4. **Owner-login rate limiting is per-IP, in-memory, and restarts reset
-   it.** The `/oauth/authorize` login form compares the owner secret with a
+4. **Owner-login rate limiting is per-IP with a fixed window.** The
+   `/oauth/authorize` login form compares the owner secret with a
    timing-safe digest and, after `LOGIN_MAX_ATTEMPTS` (5) wrong guesses
    inside `LOGIN_WINDOW_SECONDS` (15 minutes), rejects further attempts
-   from that IP until the oldest of those failures ages out of the window.
-   That is brute-force friction, not an audit log: it is process-local (a
-   restart clears it), it can be bypassed by rotating IPs, and it does not
-   protect the consent page from other abuse. Use a high-entropy secret
-   (`invincible setup` generates one) and keep the service on
-   localhost/tunnel HTTPS.
+   from that IP until the window ages out. Since Phase 2 the counter is
+   persisted (`login_attempts`), so restarts no longer clear it; it can
+   still be bypassed by rotating IPs and does not protect the consent page
+   from other abuse. Use a high-entropy secret (`invincible setup`
+   generates one) and keep the service on localhost/tunnel HTTPS.
 5. **Owner-secret exposure.** If `INVINCIBLE_OWNER_SECRET` is ever
    accidentally pasted somewhere or otherwise exposed, rotate it immediately
    with `invincible secret rotate` — it regenerates the value inside `.env`

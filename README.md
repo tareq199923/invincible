@@ -587,9 +587,10 @@ store, and trimming logic consume.
   terminal prompt and no separate human-authentication surface. Revoke the
   client with `invincible oauth revoke <client_id>` to cut that off.
 - Sessions are stored **plaintext** in PostgreSQL (protect the DSN);
-  cooldowns and provider disables are **in-memory only**. Since Phase 1,
-  sessions carry an ownership triple (user/project/client string) — but
-  read-path ownership enforcement is Phase 2.
+  cooldowns and provider disables are **in-memory only**. Since Phase 2,
+  every store path is ownership-scoped per principal, and the graph
+  endpoint is dual-realm: the admin key remains an explicit operator
+  override for any session.
 
 Full details: [docs/SECURITY.md](docs/SECURITY.md) → *Known limits*.
 

@@ -63,6 +63,22 @@ class SessionStore:
         async with self.engine.begin() as conn:
             return await self._lookup_pk(conn, session_id, user_id, project_id)
 
+    async def owner_context(self, session_id: str) -> tuple[int, int] | None:
+        """The ``(user_id, project_id)`` owning ANY session with this
+        client string (oldest row wins).
+
+        Operator-only resolution for the graph override: a bare string is
+        ambiguous under multi-user identity, so this is deliberately NOT
+        part of any user-scoped path."""
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(sessions.c.user_id, sessions.c.project_id)
+                .where(sessions.c.client_session_id == session_id)
+                .order_by(sessions.c.id.asc())
+                .limit(1)
+            )).first()
+        return (int(row[0]), int(row[1])) if row else None
+
     async def resolve_or_create(
         self, session_id: str, *, user_id: int, project_id: int
     ) -> int:

@@ -317,22 +317,31 @@ class PendingActionStore:
     def take(self, token: str, *,
              requester_subject: int | None = None) -> dict | None:
         """Pop and return the pending record, or None if unknown/expired
-        or staged by a DIFFERENT subject."""
+        or staged by a DIFFERENT subject.
+
+        A subject mismatch does NOT consume the entry: the legitimate
+        owner can still confirm afterwards, while the mismatched caller
+        sees exactly an unknown-token answer.
+        """
         self._sweep()
-        record = self._pending.pop(token, None)
+        record = self._pending.get(token)
+        if record is None:
+            return None
+        if time.time() - record["created_at"] > self.TTL_SECONDS:
+            del self._pending[token]
+            self._persist(
+                lambda: delete(pending_actions).where(
+                    pending_actions.c.token == token)
+            )
+            return None
+        owner = record.get("owner_subject")
+        if owner is not None and requester_subject != owner:
+            return None
+        del self._pending[token]
         self._persist(
             lambda: delete(pending_actions).where(
                 pending_actions.c.token == token)
         )
-        if record is None:
-            return None
-        if time.time() - record["created_at"] > self.TTL_SECONDS:
-            return None
-        owner = record.get("owner_subject")
-        if owner is not None and requester_subject != owner:
-            # Not this subject's action - behave exactly like an unknown
-            # token so staged-action existence never leaks across users.
-            return None
         return record
 
     def __len__(self) -> int:
