@@ -155,6 +155,30 @@ class SessionStore:
             {"created_at": row[0], "updated_at": row[1]} if row else None
         )
 
+    async def list_for_user(
+        self, user_id: int, *, project_id: int | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Read-only session listing for one owner (Phase 3 account API).
+        Ownership predicate is mandatory - there is no fallback here."""
+        query = (
+            select(
+                sessions.c.id,
+                sessions.c.project_id,
+                sessions.c.client_session_id,
+                sessions.c.created_at,
+                sessions.c.updated_at,
+            )
+            .where(sessions.c.user_id == user_id)
+            .order_by(sessions.c.updated_at.desc())
+            .limit(limit)
+        )
+        if project_id is not None:
+            query = query.where(sessions.c.project_id == project_id)
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(query)).mappings().all()
+        return [dict(r) for r in rows]
+
     async def turn_overview(self, session_id: str, *,
                             user_id: int | None = None,
                             project_id: int | None = None) -> list[dict]:

@@ -68,10 +68,15 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
-def validate_registration(email: str, password: str) -> tuple[str, str]:
+def validate_email(email: str) -> str:
     email = normalize_email(email)
     if not _EMAIL_RE.fullmatch(email):
         raise AccountError("invalid_email", "Enter a valid email address.")
+    return email
+
+
+def validate_registration(email: str, password: str) -> tuple[str, str]:
+    email = validate_email(email)
     if len(password) < MIN_PASSWORD_LEN:
         raise AccountError(
             "weak_password",
@@ -87,15 +92,24 @@ class UserService:
         self.engine = engine
 
     async def register(self, email: str, password: str) -> dict:
-        """Create one account. A duplicate email is an explicit 409 -
-        enumeration-safety belongs to the LOGIN path only."""
+        """Create one password account. A duplicate email is an explicit
+        409 - enumeration-safety belongs to the LOGIN path only."""
         email, password = validate_registration(email, password)
+        return await self._insert(email, hash_password(password))
+
+    async def register_without_password(self, email: str) -> dict:
+        """External-identity accounts (GitHub-only): ``password_hash``
+        stays NULL - the users-table convention for "no password login" -
+        until a reset flow sets one."""
+        return await self._insert(validate_email(email), None)
+
+    async def _insert(self, email: str, password_hash: str | None) -> dict:
         now = time.time()
         try:
             async with self.engine.begin() as conn:
                 row = (await conn.execute(
                     users.insert()
-                    .values(email=email, password_hash=hash_password(password),
+                    .values(email=email, password_hash=password_hash,
                             created_at=now)
                     .returning(users.c.id)
                 )).one()
@@ -126,6 +140,14 @@ class UserService:
             row = (await conn.execute(
                 select(users.c.id, users.c.email, users.c.created_at)
                 .where(users.c.id == user_id)
+            )).mappings().first()
+        return dict(row) if row is not None else None
+
+    async def get_by_email(self, email: str) -> dict | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(users.c.id, users.c.email, users.c.created_at)
+                .where(users.c.email == normalize_email(email))
             )).mappings().first()
         return dict(row) if row is not None else None
 
@@ -190,6 +212,44 @@ class SessionManager:
             return int(uid_raw)
         except ValueError:
             return None
+
+
+def sign_value(value: str, *, ttl_seconds: int = 600) -> str | None:
+    """HMAC-sign an opaque value with expiry for single-purpose cookies
+    (GitHub OAuth state). None when no secret is configured."""
+    key = SessionManager._key()
+    if key is None:
+        return None
+    expiry = int(time.time()) + ttl_seconds
+    payload = f"{value}|{expiry}"
+    signature = hmac.new(key, payload.encode("utf-8"), hashlib.sha256
+                         ).hexdigest()
+    return f"{value}.{expiry}.{signature}"
+
+
+def verify_signed_value(signed: str | None, expected: str) -> bool:
+    """Timing-safe check that ``signed`` authenticates ``expected`` and is
+    still inside its TTL."""
+    if not signed or not expected:
+        return False
+    parts = signed.rsplit(".", 2)
+    if len(parts) != 3:
+        return False
+    value_raw, expiry_raw, signature = parts
+    if not hmac.compare_digest(value_raw, expected):
+        return False
+    try:
+        expiry = int(expiry_raw)
+    except ValueError:
+        return False
+    if time.time() >= expiry:
+        return False
+    key = SessionManager._key()
+    if key is None:
+        return False
+    payload = f"{value_raw}|{expiry_raw}"
+    digest = hmac.new(key, payload.encode("utf-8"), hashlib.sha256)
+    return hmac.compare_digest(digest.hexdigest(), signature)
 
 
 class ProjectService:
@@ -489,6 +549,19 @@ class IdentityStore:
                        == provider_account_id)
             )).first()
         return int(row[0]) if row is not None else None
+
+    async def account_ids_for(self, user_id: int,
+                              provider: str) -> list[str]:
+        """All provider_account_id values linked to this user under one
+        provider - lets the login path refuse a second GitHub identity
+        silently attaching to the same local account."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(user_identities.c.provider_account_id)
+                .where(user_identities.c.user_id == user_id,
+                       user_identities.c.provider == provider)
+            )).scalars().all()
+        return [str(r) for r in rows]
 
 
 class GitHubOAuth:

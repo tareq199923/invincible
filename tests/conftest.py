@@ -232,6 +232,24 @@ async def client(pg_engine, router_setter, monkeypatch):
     app.state.oauth_store = None
 
 
+# --- Phase 3 account helpers ----------------------------------------------------
+
+
+async def register_account(
+    client, email="user@example.com", password="longenough1"
+):
+    """Register through the HTTP surface; returns (response, email)."""
+    response = await client.post(
+        "/auth/register", json={"email": email, "password": password})
+    return response, email
+
+
+async def login_account(client, email="user@example.com",
+                        password="longenough1"):
+    return await client.post(
+        "/auth/login", json={"email": email, "password": password})
+
+
 def pkce_pair():
     """Generate a (code_verifier, code_challenge) pair."""
     verifier = secrets.token_urlsafe(32)

@@ -22,6 +22,7 @@ from invincible.core.run_store import RunStore
 from invincible.core.session_store import SessionStore
 from invincible.core.settings import settings
 from invincible.core.tool_executor import PendingActionStore
+from invincible.endpoints.accounts import router as accounts_router
 from invincible.endpoints.admin_api import router as admin_router
 from invincible.endpoints.anthropic_compat import router as anthropic_router
 from invincible.endpoints.auth import require_auth
@@ -122,6 +123,9 @@ app.include_router(openai_router, dependencies=[Depends(require_auth)])
 app.include_router(anthropic_router, dependencies=[Depends(require_auth)])
 app.include_router(oauth_router)
 app.include_router(mcp_router, dependencies=[Depends(require_mcp_auth)])
+# Account surface (browser sessions + per-user management) carries its own
+# realm: session cookies and inv_ keys only - never /v1/* or /mcp auth.
+app.include_router(accounts_router)
 # Management surface carries its own fail-closed authz (INVINCIBLE_ADMIN_KEY).
 app.include_router(admin_router)
 app.include_router(graph_router)
