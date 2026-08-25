@@ -494,14 +494,18 @@ async def test_forged_cookie_rejected_when_owner_secret_unset(client, monkeypatc
 # --- owner-login rate limiting ---
 
 
-def _clear_login_failures():
-    from invincible.endpoints import oauth as oauth_module
+async def _clear_login_failures(client):
+    """Phase 2: failure state lives in login_attempts - clear the table."""
+    from sqlalchemy import text
 
-    oauth_module._login_failures.clear()
+    from invincible.main import app
+
+    async with app.state.engine.begin() as conn:
+        await conn.execute(text("DELETE FROM login_attempts"))
 
 
 async def test_five_wrong_secrets_lock_out_the_ip(client):
-    _clear_login_failures()
+    await _clear_login_failures(client)
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
@@ -516,7 +520,7 @@ async def test_five_wrong_secrets_lock_out_the_ip(client):
 
 
 async def test_lockout_rejects_even_the_correct_secret(client):
-    _clear_login_failures()
+    await _clear_login_failures(client)
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
@@ -530,7 +534,7 @@ async def test_lockout_rejects_even_the_correct_secret(client):
 
 
 async def test_successful_login_resets_the_counter(client):
-    _clear_login_failures()
+    await _clear_login_failures(client)
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
@@ -547,61 +551,90 @@ async def test_successful_login_resets_the_counter(client):
         assert attempt.status_code == 401
 
 
-# --- login-failure map bounds (Phase 12) ---
+# --- persistent rate limiting (Phase 2) ---
 
 
-def _oauth_module():
-    from invincible.endpoints import oauth as oauth_module
+def _limiter(engine):
+    from invincible.core.identity import LoginRateLimiter
 
-    return oauth_module
-
-
-def test_prune_drops_stale_and_empty_entries():
-    module = _oauth_module()
-    try:
-        now = 1000.0
-        window = module.LOGIN_WINDOW_SECONDS
-        module._login_failures.update(
-            {
-                "stale-ip": [now - window - 10],
-                "empty-ip": [],
-                "fresh-ip": [now - 5],
-            }
-        )
-        module._prune_login_failures(now)
-        assert "stale-ip" not in module._login_failures
-        assert "empty-ip" not in module._login_failures
-        assert module._login_failures["fresh-ip"] == [now - 5]
-    finally:
-        module._login_failures.clear()
+    return LoginRateLimiter(engine)
 
 
-def test_lockout_check_pops_fully_expired_ip(monkeypatch):
-    module = _oauth_module()
-    try:
-        monkeypatch.setattr(module.time, "monotonic", lambda: 1000.0)
-        module._login_failures["gone"] = [
-            1000.0 - module.LOGIN_WINDOW_SECONDS - 1
-        ]
-        assert module._login_locked_out("gone") is None
-        assert "gone" not in module._login_failures
-    finally:
-        module._login_failures.clear()
+async def test_lockout_survives_a_new_limiter_instance(client, pg_engine):
+    """THE persistence property: a fresh limiter over the same database
+    (what a server restart produces) still sees the lockout."""
+    await _clear_login_failures(client)
+    limiter = _limiter(pg_engine)
+    for _ in range(5):
+        await limiter.record_failure("10.0.0.9")
+
+    restarted = _limiter(pg_engine)
+    assert await restarted.locked_out("10.0.0.9") is not None
 
 
-def test_record_failure_sweeps_when_map_exceeds_cap(monkeypatch):
-    module = _oauth_module()
-    try:
-        monkeypatch.setattr(module, "LOGIN_MAX_TRACKED_IPS", 3)
-        now = module.time.monotonic()
-        window = module.LOGIN_WINDOW_SECONDS
-        # One stale entry + fill the map to the (lowered) cap with fresh
-        # entries; the next failure record must sweep the stale one.
-        module._login_failures["stale"] = [now - window - 1]
-        for i in range(3):
-            module._login_failures[f"ip-{i}"] = [now - 1]
-        module._record_login_failure("brand-new")
-        assert "stale" not in module._login_failures
-        assert "brand-new" in module._login_failures
-    finally:
-        module._login_failures.clear()
+async def test_expired_window_unlocks_and_deletes(pg_engine):
+    from sqlalchemy import text
+
+    from invincible.core.identity import LoginRateLimiter
+
+    limiter = LoginRateLimiter(pg_engine)
+    # A fully aged-out window (window_start far behind).
+    async with pg_engine.begin() as conn:
+        await conn.execute(text(
+            "INSERT INTO login_attempts (ip, window_start, count,"
+            " updated_at) VALUES ('stale-ip', 1.0, 99, 1.0)"
+        ))
+
+    assert await limiter.locked_out("stale-ip") is None
+
+    n = (await _rows(pg_engine,
+                     "SELECT COUNT(*) FROM login_attempts"
+                     " WHERE ip = 'stale-ip'"))
+    assert n[0][0] == 0
+
+
+async def test_record_failure_after_expiry_starts_fresh_window(pg_engine):
+    from sqlalchemy import text
+
+    from invincible.core.identity import LoginRateLimiter
+
+    limiter = LoginRateLimiter(pg_engine)
+    async with pg_engine.begin() as conn:
+        await conn.execute(text(
+            "INSERT INTO login_attempts (ip, window_start, count,"
+            " updated_at) VALUES ('old-ip', 1.0, 5, 1.0)"
+        ))
+
+    await limiter.record_failure("old-ip")
+
+    rows = await _rows(pg_engine, (
+        "SELECT window_start, count FROM login_attempts"
+        " WHERE ip = 'old-ip'"
+    ))
+    assert len(rows) == 1
+    _, count = rows[0]
+    assert int(count) == 1  # fresh single-failure window, not 6
+
+
+async def test_reset_clears_the_ip(pg_engine):
+
+    from invincible.core.identity import LoginRateLimiter
+
+    limiter = LoginRateLimiter(pg_engine)
+    for _ in range(3):
+        await limiter.record_failure("reset-me")
+    await limiter.reset("reset-me")
+
+    assert await limiter.locked_out("reset-me") is None
+    rows = await _rows(
+        pg_engine, "SELECT COUNT(*) FROM login_attempts"
+    )
+    assert rows[0][0] == 0
+
+
+async def _rows(engine, sql: str) -> list[tuple]:
+    from sqlalchemy import text
+
+    async with engine.connect() as conn:
+        return (await conn.execute(text(sql))).all()
+

@@ -45,13 +45,26 @@ def app_state_runs(runs):
 
 
 async def seed_task(engine, session_id="default", payload=None):
+    # Phase 2: seed through ownership like MCP does - resolve-or-create
+    # the local-owner session row so scoped reads (session_pk) find it.
+    from invincible.core.db import ensure_local_owner
+
+    sessions = app_state_sessions()
+    uid, pid = await ensure_local_owner(engine.engine)
+    session_pk = await sessions.resolve_or_create(
+        session_id, user_id=uid, project_id=pid,
+    )
     await engine.set_state(
         session_id,
         payload or {"task": "count 1-100", "next_value": 6},
         actor="mcp:task_state_set",
+        session_pk=session_pk,
     )
-    await engine.create_checkpoint(session_id, note="through 5",
-                                   actor="mcp:checkpoint_create")
+    await engine.create_checkpoint(
+        session_id, note="through 5", actor="mcp:checkpoint_create",
+        session_pk=session_pk,
+    )
+    return session_pk
 
 
 def capture_handler(captured, status=200):

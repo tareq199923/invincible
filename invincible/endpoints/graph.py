@@ -11,21 +11,39 @@ STRICTLY A PROJECTION: every node is derived from authoritative stores
 checkpoints). The graph owns no state of its own and is never a source of
 truth (Rule 7). Reads go through the stores' public APIs only.
 
-Authz mirrors the rest of /api/v1/*: fail-closed INVINCIBLE_ADMIN_KEY -
-session content is sensitive, so the gateway/chat key is never accepted.
+Authz since Phase 2 - dual-realm:
+
+- ``INVINCIBLE_ADMIN_KEY`` = operator override: fail-closed, sees any
+  session (documented out-of-band operator trust).
+- Otherwise a user Principal resolves exactly like /v1/* (legacy key,
+  API key, OAuth/MCP token; fail-open local when no gateway key) and the
+  projection is scoped to that principal's owning session row. A session
+  string another principal owns is indistinguishable from one that does
+  not exist ("known": false), so enumeration leaks nothing.
 """
 import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from invincible.core.principal import Principal
 from invincible.endpoints.admin_api import require_admin
+from invincible.endpoints.auth import require_auth
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/sessions", dependencies=[Depends(require_admin)])
+router = APIRouter(prefix="/api/v1/sessions")
 
 _DEFAULT_LIMIT = 200
+
+
+async def require_graph_access(request: Request):
+    """Operator override first; otherwise an authenticated user Principal."""
+    try:
+        await require_admin(request)
+        return "admin"
+    except HTTPException:
+        return await require_auth(request)
 
 
 def _require(request: Request, attr: str):
@@ -43,22 +61,53 @@ def _require(request: Request, attr: str):
     return value
 
 
-async def _session_and_turns(store, session_id: str):
-    """(session_row|None, [turn dicts]) via SessionStore's public reads."""
-    session_row = await store.session_meta(session_id)
-    turns = await store.turn_overview(session_id)
+async def _session_and_turns(store, session_id: str,
+                             *, principal: Principal | None):
+    """(session_row|None, [turn dicts]) via SessionStore's public reads,
+    scoped to the principal's ownership triple when not the operator."""
+    if principal is None:
+        session_row = await store.session_meta(session_id)
+        turns = await store.turn_overview(session_id)
+    else:
+        session_row = await store.session_meta(
+            session_id,
+            user_id=principal.user_id,
+            project_id=principal.project_id,
+        )
+        if session_row is None:
+            # Not this principal's session: report exactly as if the
+            # session did not exist at all.
+            return None, []
+        turns = await store.turn_overview(
+            session_id,
+            user_id=principal.user_id,
+            project_id=principal.project_id,
+        )
     return session_row, turns
 
 
 @router.get("/{session_id}/graph")
 async def session_graph(session_id: str, request: Request,
-                        limit: int = _DEFAULT_LIMIT):
-    sessions = _require(request, "sessions")
+                        limit: int = _DEFAULT_LIMIT,
+                        access=Depends(require_graph_access)):
+    sessions_store = _require(request, "sessions")
     runs_store = _require(request, "runs")
     engine = _require(request, "continuity")
 
     limit = max(1, min(limit, 1000))
-    session_meta, turns = await _session_and_turns(sessions, session_id)
+    operator = access == "admin"
+    principal = None if operator else access
+    session_pk = None
+
+    if not operator:
+        session_pk = await sessions_store.lookup(
+            session_id,
+            user_id=principal.user_id,
+            project_id=principal.project_id,
+        )
+
+    session_meta, turns = await _session_and_turns(
+        sessions_store, session_id, principal=principal)
     known = bool(session_meta)
 
     nodes: list[dict] = []
@@ -73,7 +122,7 @@ async def session_graph(session_id: str, request: Request,
         })
 
     run_rows = list(reversed(await runs_store.recent(
-        session_id=session_id, limit=limit)))
+        session_id=session_id, limit=limit, session_pk=session_pk)))
     prev_run_id = None
     for run in run_rows:
         node_id = f"run:{run['id']}"
@@ -107,14 +156,17 @@ async def session_graph(session_id: str, request: Request,
             })
         prev_run_id = node_id
 
-    task_keys = await engine.active_task_keys(session_id, limit=10)
+    task_keys = await engine.active_task_keys(session_id, limit=10,
+                                              session_pk=session_pk)
     latest_states = {}
     for task_key in task_keys:
-        head = await engine.get_state(session_id, task_key)
+        head = await engine.get_state(session_id, task_key,
+                                      session_pk=session_pk)
         if head is None:
             continue
         latest_states[task_key] = head
-        history = await engine.history(session_id, task_key, limit=limit)
+        history = await engine.history(session_id, task_key, limit=limit,
+                                       session_pk=session_pk)
         prev_state_id = None
         for state in reversed(history):  # oldest first
             node_id = f"state:{task_key}:v{state['version']}"
@@ -139,7 +191,8 @@ async def session_graph(session_id: str, request: Request,
                               "kind": "canonical_for"})
             prev_state_id = node_id
 
-    for cp in await engine.checkpoints(session_id, limit=limit):
+    for cp in await engine.checkpoints(session_id, limit=limit,
+                                       session_pk=session_pk):
         node_id = f"checkpoint:{cp['id']}"
         nodes.append({
             "id": node_id,
@@ -174,7 +227,8 @@ async def session_graph(session_id: str, request: Request,
         edges.append({"source": "session", "target": node_id,
                       "kind": "contains"})
 
-    interruption = await engine.interruption_note(session_id)
+    interruption = await engine.interruption_note(session_id,
+                                                  session_pk=session_pk)
 
     timeline_ids = [
         n["id"] for n in sorted(

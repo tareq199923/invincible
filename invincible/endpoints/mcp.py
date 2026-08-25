@@ -19,15 +19,18 @@ stages a pending action and returns a token; only a confirm_action call
 with that token (approve=true) executes it. Whoever holds a valid Bearer
 token is the approver, not whoever happens to be sitting at the machine.
 """
+import contextlib
 import json
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from invincible import __version__
 from invincible.core import tool_executor
 from invincible.core.continuity import ContinuityConflictError
 from invincible.core.oauth_store import OAuthStore
+from invincible.core.principal import Principal
+from invincible.endpoints.auth import local_principal
 
 router = APIRouter()
 
@@ -185,8 +188,10 @@ def _auth_error(request: Request):
     )
 
 
-async def require_mcp_auth(request: Request):
-    """Validate the Bearer access token from the built-in OAuth server."""
+async def require_mcp_auth(request: Request) -> Principal:
+    """Validate the Bearer access token and resolve its user subject
+    (Phase 2): tokens act as the user who approved the grant, so MCP
+    writes land under that principal's sessions."""
     store: OAuthStore | None = getattr(request.app.state, "oauth_store", None)
     if store is None:
         raise HTTPException(
@@ -204,8 +209,25 @@ async def require_mcp_auth(request: Request):
     token = auth[len("Bearer "):].strip()
     if not token:
         raise _auth_error(request)
-    if await store.validate_access(token) is None:
+    access = await store.validate_access(token)
+    if access is None:
         raise _auth_error(request)
+
+    from invincible.core.identity import ensure_default_project
+
+    engine = getattr(request.app.state, "engine", None)
+    if engine is None or access.get("subject_user_id") is None:
+        # No subjects (pre-0003 database or missing engine): fall back to
+        # the system local owner rather than failing MCP entirely.
+        return await local_principal(request.app, kind="mcp")
+    project_id = await ensure_default_project(
+        engine, int(access["subject_user_id"])
+    )
+    return Principal(
+        user_id=int(access["subject_user_id"]),
+        project_id=project_id,
+        kind="mcp",
+    )
 
 
 def _result(id_, result):
@@ -216,11 +238,28 @@ def _error(id_, code, message):
     return {"jsonrpc": "2.0", "id": id_, "error": {"code": code, "message": message}}
 
 
+async def _audit_action(request: Request, tool: str, status,
+                        *, subject: int | None) -> None:
+    """Audit staged-action resolutions. Metadata only - never raw
+    commands/paths (those can carry secrets)."""
+    log = getattr(request.app.state, "audit_log", None)
+    if log is None:
+        return
+    with contextlib.suppress(Exception):
+        await log.record(
+            f"mcp.{tool}.{status}",
+            actor_user_id=subject,
+            actor_kind="mcp",
+            resource_type="pending_action",
+        )
+
+
 def _tool_content(text: str, is_error: bool = False) -> dict:
     return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
 
-async def _dispatch(method, rpc_id, params, request):
+async def _dispatch(method, rpc_id, params, request,
+                    principal: Principal | None = None):
     if method == "initialize":
         return _result(rpc_id, {
             "protocolVersion": "2025-06-18",
@@ -235,6 +274,9 @@ async def _dispatch(method, rpc_id, params, request):
         name = params.get("name")
         args = params.get("arguments") or {}
         pending_actions = request.app.state.pending_actions
+        # Phase 2: every staged action is bound to the caller's subject;
+        # only the same subject may later confirm it.
+        owner_subject = principal.user_id if principal else None
 
         try:
             if name == "read_file":
@@ -243,13 +285,15 @@ async def _dispatch(method, rpc_id, params, request):
 
             if name == "execute_bash":
                 result = tool_executor.execute_bash(
-                    args.get("command", ""), pending_actions
+                    args.get("command", ""), pending_actions,
+                    owner_subject=owner_subject,
                 )
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "write_file":
                 result = tool_executor.write_file(
-                    args.get("path", ""), args.get("content", ""), pending_actions
+                    args.get("path", ""), args.get("content", ""),
+                    pending_actions, owner_subject=owner_subject,
                 )
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
@@ -258,9 +302,12 @@ async def _dispatch(method, rpc_id, params, request):
                 # (absent, string, number) is treated as deny.
                 approve = args.get("approve") is True
                 result = await tool_executor.confirm_action(
-                    pending_actions, args.get("token", ""), approve
+                    pending_actions, args.get("token", ""), approve,
+                    requester_subject=owner_subject,
                 )
                 status = result.get("status")
+                await _audit_action(request, name, status,
+                                    subject=owner_subject)
                 if status == "not_found":
                     return _result(rpc_id, _tool_content(
                         "Unknown or expired confirmation token.", is_error=True
@@ -278,6 +325,41 @@ async def _dispatch(method, rpc_id, params, request):
                     ))
                 session_id = args.get("session_id") or "mcp"
                 task_key = args.get("task_key") or "default"
+                # Phase 2 isolation: resolve-or-create the owning session
+                # under the caller's subject, then scope every read/write
+                # to its surrogate id. Two principals sharing a client
+                # string never touch each other's task chains.
+                sessions = getattr(request.app.state, "sessions", None)
+                if principal is None or sessions is None:
+                    return _result(rpc_id, _tool_content(
+                        "Session identity is not available on this server.",
+                        is_error=True,
+                    ))
+                try:
+                    if name == "task_state_get":
+                        session_pk = await sessions.lookup(
+                            session_id,
+                            user_id=principal.user_id,
+                            project_id=principal.project_id,
+                        )
+                    else:
+                        session_pk = await sessions.resolve_or_create(
+                            session_id,
+                            user_id=principal.user_id,
+                            project_id=principal.project_id,
+                        )
+                except Exception:
+                    return _result(rpc_id, _tool_content(
+                        "Could not resolve the session for this subject.",
+                        is_error=True,
+                    ))
+                if name == "task_state_get" and session_pk is None:
+                    return _result(rpc_id, _tool_content(json.dumps({
+                        "note": f"no state tracked for task "
+                                f"'{task_key}' in this session",
+                        "payload": None,
+                        "version": 0,
+                    })))
                 try:
                     if name == "task_state_set":
                         try:
@@ -290,14 +372,16 @@ async def _dispatch(method, rpc_id, params, request):
                         head = await engine.set_state(
                             session_id,
                             payload,
-                            actor="mcp:task_state_set",
+                            actor=f"mcp:{principal.user_id}:task_state_set",
                             task_key=task_key,
                             status=args.get("status") or "active",
                             expected_version=args.get("expected_version"),
+                            session_pk=session_pk,
                         )
                         return _result(rpc_id, _tool_content(json.dumps(head)))
                     if name == "task_state_get":
-                        state = await engine.get_state(session_id, task_key)
+                        state = await engine.get_state(session_id, task_key,
+                                                       session_pk=session_pk)
                         if state is None:
                             return _result(rpc_id, _tool_content(json.dumps({
                                 "note": f"no state tracked for task "
@@ -310,7 +394,8 @@ async def _dispatch(method, rpc_id, params, request):
                         session_id,
                         task_key=task_key,
                         note=args.get("note") or "",
-                        actor="mcp:checkpoint_create",
+                        actor=f"mcp:{principal.user_id}:checkpoint_create",
+                        session_pk=session_pk,
                     )
                     return _result(rpc_id, _tool_content(json.dumps(cp)))
                 except ContinuityConflictError as e:
@@ -327,7 +412,8 @@ async def _dispatch(method, rpc_id, params, request):
 
 
 @router.post("/mcp")
-async def mcp_endpoint(request: Request):
+async def mcp_endpoint(request: Request,
+                       principal: Principal = Depends(require_mcp_auth)):
     raw = await request.body()
     try:
         body = json.loads(raw)
@@ -356,7 +442,8 @@ async def mcp_endpoint(request: Request):
             return Response(status_code=204)
         return JSONResponse(_error(rpc_id, -32602, "Invalid params"))
 
-    response = await _dispatch(method, rpc_id, params, request)
+    response = await _dispatch(method, rpc_id, params, request,
+                               principal=principal)
 
     if is_notification:
         # JSON-RPC 2.0: a request with no "id" is a notification - the

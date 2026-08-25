@@ -91,6 +91,25 @@ def _invalid(e: Exception) -> HTTPException:
     )
 
 
+async def _audit(request: Request, action: str,
+                 resource_id: str | None = None) -> None:
+    """Best-effort audit row for management mutations (Phase 2). The
+    actor is always the operator (admin realm carries no user ids)."""
+    log = getattr(request.app.state, "audit_log", None)
+    if log is None:
+        return
+    try:
+        await log.record(
+            action,
+            actor_kind="admin",
+            resource_type="provider" if action.startswith("provider.")
+            else "routing",
+            resource_id=resource_id,
+        )
+    except Exception:  # noqa: BLE001 - telemetry only
+        logger.warning("audit write failed for %s", action, exc_info=True)
+
+
 @router.get("/providers")
 async def list_providers(request: Request):
     return {"providers": _registry(request).list()}
@@ -102,6 +121,7 @@ async def add_provider(request: Request, entry: dict):
         added = await _registry(request).add(entry)
     except (ValueError, ProviderRegistryError) as e:
         raise _invalid(e) from e
+    await _audit(request, "provider.added", added.get("name"))
     return {"provider": added}
 
 
@@ -111,6 +131,7 @@ async def update_provider(name: str, request: Request, patch: dict):
         updated = await _registry(request).update(name, patch)
     except (ValueError, ProviderRegistryError) as e:
         raise _invalid(e) from e
+    await _audit(request, "provider.updated", name)
     return {"provider": updated}
 
 
@@ -120,6 +141,7 @@ async def remove_provider(name: str, request: Request):
         await _registry(request).remove(name)
     except ProviderRegistryError as e:
         raise _invalid(e) from e
+    await _audit(request, "provider.removed", name)
     return {"removed": name}
 
 
@@ -129,6 +151,7 @@ async def disable_provider(name: str, request: Request):
         provider = await _registry(request).disable(name)
     except ProviderRegistryError as e:
         raise _invalid(e) from e
+    await _audit(request, "provider.disabled", name)
     return {"provider": provider}
 
 
@@ -138,6 +161,7 @@ async def enable_provider(name: str, request: Request):
         provider = await _registry(request).enable(name)
     except ProviderRegistryError as e:
         raise _invalid(e) from e
+    await _audit(request, "provider.enabled", name)
     return {"provider": provider}
 
 

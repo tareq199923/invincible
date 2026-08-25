@@ -43,6 +43,7 @@ from invincible.core.db import (
 from invincible.core.db import metadata as db_metadata
 from invincible.core.db_import import import_legacy_sqlite
 from invincible.core.identity import ApiKeyStore
+from invincible.core.identity import AuditLog as _AuditLog
 from invincible.core.oauth_store import OAuthStore
 
 SUPPORTED_ENV_KEYS = (
@@ -1220,7 +1221,16 @@ def api_key_create(label):
     async def _run():
         try:
             user_id, _ = await ensure_local_owner(engine)
-            return await ApiKeyStore(engine).create(user_id, label=label)
+            record = await ApiKeyStore(engine).create(user_id, label=label)
+            await _AuditLog(engine).record(
+                "auth.api_key_created",
+                actor_user_id=user_id,
+                actor_kind="system",
+                resource_type="api_key",
+                resource_id=record["prefix"],
+                meta={"label": label},
+            )
+            return record
         finally:
             await engine.dispose()
 
@@ -1280,9 +1290,17 @@ def api_key_revoke(key_ref):
         except ValueError:
             ref = key_ref
         try:
-            return await ApiKeyStore(engine).revoke(ref)
+            revoked = await ApiKeyStore(engine).revoke(ref)
         finally:
             await engine.dispose()
+        if revoked:
+            await _AuditLog(make_engine(_resolve_db_url())).record(
+                "auth.api_key_revoked",
+                actor_kind="system",
+                resource_type="api_key",
+                resource_id=str(key_ref),
+            )
+        return revoked
 
     revoked = run_coro_sync(_run())
     if revoked:

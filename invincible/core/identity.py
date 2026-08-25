@@ -13,7 +13,7 @@ import hashlib
 import secrets
 import time
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from invincible.core.db import api_keys, audit_log, projects
@@ -213,3 +213,91 @@ class AuditLog:
                 .limit(limit)
             )).mappings().all()
         return [dict(r) for r in rows]
+
+
+class LoginRateLimiter:
+    """Persistent fixed-window lockout for owner-login failures (Phase 2).
+
+    Replaces the Phase-1-era in-memory dict: state lives in the
+    ``login_attempts`` table, so a restart no longer clears an attacker's
+    counter. Same semantics as before - ``max_attempts`` failures inside
+    ``window_seconds`` from one IP lock it out for the rest of the window.
+    Expired windows reset lazily on check/record; rows are deleted when a
+    window resets to keep the table bounded.
+    """
+
+    def __init__(self, engine, *, max_attempts: int = 5,
+                 window_seconds: float = 15 * 60):
+        self.engine = engine
+        self.max_attempts = max_attempts
+        self.window_seconds = window_seconds
+
+    def _expired(self, row, now: float) -> bool:
+        return now - row["window_start"] >= self.window_seconds
+
+    async def locked_out(self, ip: str) -> int | None:
+        """Seconds until the lockout lifts, or None when the IP may try."""
+        from invincible.core.db import login_attempts
+
+        now = time.time()
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(
+                select(login_attempts.c.count,
+                       login_attempts.c.window_start)
+                .where(login_attempts.c.ip == ip)
+            )).mappings().first()
+            if row is not None and self._expired(row, now):
+                await conn.execute(
+                    delete(login_attempts)
+                    .where(login_attempts.c.ip == ip)
+                )
+                return None
+            if row is None or row["count"] < self.max_attempts:
+                return None
+            return int(
+                self.window_seconds - (now - row["window_start"])
+            ) + 1
+
+    async def record_failure(self, ip: str) -> None:
+        """Count one failed attempt, starting a fresh window if needed."""
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        from invincible.core.db import login_attempts
+
+        now = time.time()
+
+        async with self.engine.begin() as conn:
+            existing = (await conn.execute(
+                select(login_attempts.c.window_start,
+                       login_attempts.c.count)
+                .where(login_attempts.c.ip == ip)
+            )).first()
+            expired = existing is not None and self._expired(
+                {"window_start": existing[0]}, now
+            )
+            if existing is None or expired:
+                await conn.execute(
+                    pg_insert(login_attempts)
+                    .values(ip=ip, window_start=now, count=1,
+                            updated_at=now)
+                    .on_conflict_do_update(
+                        index_elements=[login_attempts.c.ip],
+                        set_={"window_start": now, "count": 1,
+                              "updated_at": now},
+                    )
+                )
+            else:
+                await conn.execute(
+                    update(login_attempts)
+                    .where(login_attempts.c.ip == ip)
+                    .values(count=existing[1] + 1, updated_at=now)
+                )
+
+    async def reset(self, ip: str) -> None:
+        """Clear the IP's counter (successful login)."""
+        from invincible.core.db import login_attempts
+
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                delete(login_attempts).where(login_attempts.c.ip == ip)
+            )

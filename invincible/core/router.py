@@ -291,6 +291,7 @@ class Router:
         model: str | None = None,
         *,
         session_id: str | None = None,
+        session_pk: int | None = None,
     ) -> dict:
         """Non-streaming chat completion through the provider tiers.
 
@@ -307,6 +308,7 @@ class Router:
             tool_choice=tool_choice,
             model=model,
             session_id=session_id,
+            session_pk=session_pk,
         )
         return result
 
@@ -318,12 +320,14 @@ class Router:
         model: str | None = None,
         *,
         session_id: str | None = None,
+        session_pk: int | None = None,
     ) -> tuple[dict, dict]:
         """Like :meth:`route_request` but also returns route metadata:
         ``(parsed_body, {request_id, provider_name, model_id, attempts})``.
         """
         async for result, info in self._iter_attempts(
-            messages, tools, tool_choice, model, stream=False, session_id=session_id
+            messages, tools, tool_choice, model, stream=False,
+            session_id=session_id, session_pk=session_pk
         ):
             return result, info
         # Unreachable: _iter_attempts terminates by raising instead.
@@ -337,6 +341,7 @@ class Router:
         model: str | None = None,
         *,
         session_id: str | None = None,
+        session_pk: int | None = None,
     ) -> tuple[dict | None, AsyncIterator[dict]]:
         """Open a streaming chat-completions response through the providers.
 
@@ -357,6 +362,7 @@ class Router:
             tool_choice=tool_choice,
             model=model,
             session_id=session_id,
+            session_pk=session_pk,
         )
         return result
 
@@ -368,13 +374,15 @@ class Router:
         model: str | None = None,
         *,
         session_id: str | None = None,
+        session_pk: int | None = None,
     ) -> tuple[tuple[dict | None, AsyncIterator[dict]], dict]:
         """Like :meth:`stream_open` but also returns route metadata:
         ``((first_chunk, tail), {request_id, provider_name, model_id,
         attempts})``.
         """
         async for result, info in self._iter_attempts(
-            messages, tools, tool_choice, model, stream=True, session_id=session_id
+            messages, tools, tool_choice, model, stream=True,
+            session_id=session_id, session_pk=session_pk
         ):
             return result, info
         # Unreachable: _iter_attempts terminates by raising instead.
@@ -388,6 +396,7 @@ class Router:
         model: str | None,
         stream: bool,
         session_id: str | None = None,
+        session_pk: int | None = None,
     ) -> AsyncIterator[tuple[dict | tuple[dict | None, AsyncIterator[dict]], dict]]:
         """The single failover policy loop behind both public entry points
         (Phase 13): provider ordering, cooldown and missing-key skips,
@@ -460,6 +469,7 @@ class Router:
                         estimated_tokens,
                         attempt_started,
                         request_id=request_id,
+                        session_pk=session_pk,
                         session_id=session_id,
                         attempt_index=attempt_index,
                     )
@@ -479,6 +489,7 @@ class Router:
                         estimated_tokens,
                         attempt_started,
                         request_id=request_id,
+                        session_pk=session_pk,
                         session_id=session_id,
                         attempt_index=attempt_index,
                     )
@@ -504,6 +515,7 @@ class Router:
         attempt_started: float,
         request_id: str = "",
         session_id: str | None = None,
+        session_pk: int | None = None,
         attempt_index: int = 0,
     ) -> dict:
         """Non-streaming transport: POST, classify, parse.
@@ -532,6 +544,7 @@ class Router:
                     provider, attempt_index, time.time(), "failover",
                     error_class=str(resp.status_code),
                     request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
                     started_at=attempt_started,
                 )
                 raise _Failover
@@ -560,6 +573,7 @@ class Router:
                     provider, attempt_index, time.time(), "failover",
                     error_class="malformed_json",
                     request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
                     started_at=attempt_started,
                 )
                 raise _Failover from None
@@ -575,6 +589,7 @@ class Router:
             await self._record_run(
                 provider, attempt_index, time.time(), "ok",
                 request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
                 started_at=attempt_started,
             )
             return parsed
@@ -598,6 +613,7 @@ class Router:
                     provider, attempt_index, time.time(), "disabled",
                     error_class=str(status),
                     request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
                     started_at=attempt_started,
                 )
                 raise _Failover from None
@@ -619,6 +635,7 @@ class Router:
                 provider, attempt_index, time.time(), "error",
                 error_class=str(status),
                 request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
                 started_at=attempt_started,
             )
             raise UpstreamClientError(
@@ -634,6 +651,7 @@ class Router:
                 provider, attempt_index, time.time(), "failover",
                 error_class=details["error_kind"],
                 request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
                 started_at=attempt_started,
             )
             raise _Failover from None
@@ -649,6 +667,7 @@ class Router:
         attempt_started: float,
         request_id: str = "",
         session_id: str | None = None,
+        session_pk: int | None = None,
         attempt_index: int = 0,
     ) -> tuple[dict | None, AsyncIterator[dict]]:
         """Streaming transport: build/send, classify pre-read, open the SSE
@@ -680,6 +699,7 @@ class Router:
                     provider, attempt_index, time.time(), "failover",
                     error_class=str(resp.status_code),
                     request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
                     started_at=attempt_started,
                 )
                 raise _Failover
@@ -701,6 +721,7 @@ class Router:
                     provider, attempt_index, time.time(), "disabled",
                     error_class=str(resp.status_code),
                     request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
                     started_at=attempt_started,
                 )
                 raise _Failover
@@ -725,6 +746,7 @@ class Router:
                     provider, attempt_index, time.time(), "error",
                     error_class=str(resp.status_code),
                     request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
                     started_at=attempt_started,
                 )
                 raise UpstreamClientError(
@@ -748,6 +770,7 @@ class Router:
             await self._record_run(
                 provider, attempt_index, time.time(), "ok",
                 request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
                 started_at=attempt_started,
             )
             return first, tail
@@ -770,6 +793,7 @@ class Router:
                 provider, attempt_index, time.time(), "failover",
                 error_class="malformed_sse",
                 request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
                 started_at=attempt_started,
             )
             raise _Failover from None
@@ -783,6 +807,7 @@ class Router:
                 provider, attempt_index, time.time(), "failover",
                 error_class=details["error_kind"],
                 request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
                 started_at=attempt_started,
             )
             raise _Failover from None
@@ -851,12 +876,15 @@ class Router:
         error_class: str | None = None,
         request_id: str = "",
         session_id: str | None = None,
+        session_pk: int | None = None,
         started_at: float | None = None,
     ) -> None:
         """Best-effort provider-run recording via the injected recorder.
 
         Never raises into the attempt path: persistence problems are logged
         and swallowed so a run-record write can never fail a completion.
+        ``session_pk`` (Phase 2) scopes the row to the owning surrogate
+        session so graph/brief reads can predicate on it.
         """
         if self.run_recorder is None:
             return
@@ -870,6 +898,7 @@ class Router:
                 new_run_entry(
                     request_id=request_id,
                     session_id=session_id,
+                    session_pk=session_pk,
                     provider_name=provider["name"],
                     model_id=provider["model_id"],
                     attempt_index=attempt_index,

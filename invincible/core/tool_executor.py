@@ -164,6 +164,11 @@ class ToolBlocked(Exception):
         super().__init__(reason)
 
 
+# Reserved args key carrying the staging subject through pending_actions
+# persistence (Phase 2); stripped on load, never seen by tool execution.
+_OWNER_SUBJECT_KEY = "_owner_subject"
+
+
 class PendingActionStore:
     """In-process store of staged, not-yet-approved actions.
 
@@ -217,14 +222,17 @@ class PendingActionStore:
                     pending_actions.select()
                 )).all()
                 for token, action_type, args, created_at in rows:
+                    args = (
+                        args if isinstance(args, dict)
+                        else json.loads(args)
+                    )
+                    # Extract (and strip) the persisted staging subject.
+                    owner_subject = args.pop(_OWNER_SUBJECT_KEY, None)
                     self._pending[token] = {
                         "type": action_type,
-                        # JSONB column: SQLAlchemy already decoded to a dict.
-                        "args": (
-                            args if isinstance(args, dict)
-                            else json.loads(args)
-                        ),
+                        "args": args,
                         "created_at": created_at,
+                        "owner_subject": owner_subject,
                     }
                 self._sweep()
         except Exception as e:
@@ -273,8 +281,15 @@ class PendingActionStore:
                 pending_actions.c.token.in_(expired)
             ))
 
-    def put(self, action_type: str, args: dict) -> str:
-        """Stage an action and return its confirmation token."""
+    def put(self, action_type: str, args: dict,
+            owner_subject: int | None = None) -> str:
+        """Stage an action and return its confirmation token.
+
+        ``owner_subject`` (Phase 2): user id of the principal that staged
+        the action; confirmation requires the same subject (a mismatched
+        requester sees the token as unknown - indistinguishable from a
+        wrong guess).
+        """
         self._sweep()
         token = secrets.token_urlsafe(16)
         created = time.time()
@@ -282,20 +297,27 @@ class PendingActionStore:
             "type": action_type,
             "args": args,
             "created_at": created,
+            "owner_subject": owner_subject,
         }
+        # Persistence keeps the binding INSIDE the JSONB args blob under a
+        # reserved key (the pending_actions table predates subjects); it is
+        # stripped again on load and never reaches tool execution, which
+        # reads specific keys only.
         self._persist(
             lambda: pending_actions.insert().values(
                 token=token,
                 type=action_type,
                 # JSONB column: bind the dict; SQLAlchemy serializes once.
-                args=args,
+                args={**args, _OWNER_SUBJECT_KEY: owner_subject},
                 created_at=created,
             )
         )
         return token
 
-    def take(self, token: str) -> dict | None:
-        """Pop and return the pending record, or None if unknown/expired."""
+    def take(self, token: str, *,
+             requester_subject: int | None = None) -> dict | None:
+        """Pop and return the pending record, or None if unknown/expired
+        or staged by a DIFFERENT subject."""
         self._sweep()
         record = self._pending.pop(token, None)
         self._persist(
@@ -305,6 +327,11 @@ class PendingActionStore:
         if record is None:
             return None
         if time.time() - record["created_at"] > self.TTL_SECONDS:
+            return None
+        owner = record.get("owner_subject")
+        if owner is not None and requester_subject != owner:
+            # Not this subject's action - behave exactly like an unknown
+            # token so staged-action existence never leaks across users.
             return None
         return record
 
@@ -425,6 +452,7 @@ def execute_bash(
     command: str,
     store: PendingActionStore,
     timeout: float = 30.0,
+    owner_subject: int | None = None,
 ) -> dict:
     """Stage a shell command for approval; nothing runs until confirmed.
 
@@ -436,7 +464,11 @@ def execute_bash(
     """
     check_denylist(command)  # raises ToolBlocked; caller maps it to a response
 
-    token = store.put("execute_bash", {"command": command, "timeout": timeout})
+    token = store.put(
+        "execute_bash",
+        {"command": command, "timeout": timeout},
+        owner_subject=owner_subject,
+    )
     print(f'[MCP] Pending {token}: execute_bash "{command}"')
     return {
         "status": "pending_confirmation",
@@ -454,6 +486,7 @@ def write_file(
     path: str,
     content: str,
     store: PendingActionStore,
+    owner_subject: int | None = None,
 ) -> dict:
     """Stage a file write for approval; nothing is written until confirmed.
 
@@ -463,7 +496,11 @@ def write_file(
     """
     check_write_denylist(path)  # raises ToolBlocked; caller maps it to a response
 
-    token = store.put("write_file", {"path": path, "content": content})
+    token = store.put(
+        "write_file",
+        {"path": path, "content": content},
+        owner_subject=owner_subject,
+    )
     print(f"[MCP] Pending {token}: write_file {path} ({len(content)} bytes)")
     return {
         "status": "pending_confirmation",
@@ -482,8 +519,12 @@ async def confirm_action(
     store: PendingActionStore,
     token: str,
     approve: bool,
+    requester_subject: int | None = None,
 ) -> dict:
     """Resolve a staged action by token.
+
+    ``requester_subject`` (Phase 2): a token staged by another subject
+    resolves as not_found - existence never leaks across users.
 
     Returns a dict the endpoint maps to an MCP result:
     ``{"status": "not_found"}`` for an unknown/expired/already-used token,
@@ -492,7 +533,7 @@ async def confirm_action(
     return synchronously) when approved. The record is popped regardless,
     so a token can never resolve twice.
     """
-    record = store.take(token)
+    record = store.take(token, requester_subject=requester_subject)
     if record is None:
         return {"status": "not_found"}
     if not approve:

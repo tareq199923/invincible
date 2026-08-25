@@ -114,6 +114,62 @@ class OAuthStore:
             )).mappings().first()
         return dict(row) if row else None
 
+    async def attach_owner(self, client_id: str, user_id: int) -> None:
+        """Stamp the authorizing user onto a client at consent time
+        (Phase 2 subject binding). Idempotent."""
+        from sqlalchemy import update
+
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                update(oauth_clients)
+                .where(oauth_clients.c.client_id == client_id)
+                .values(owner_user_id=user_id)
+            )
+
+    async def consume_code_subject(
+        self, code: str, client_id: str, redirect_uri: str,
+        code_verifier: str,
+    ) -> int | None:
+        """Phase 2 variant of :meth:`consume_code` that also returns the
+        authorizing subject recorded at approval time (None on legacy
+        codes). The code is marked used exactly like the base path."""
+        await self._expire_lazy()
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(
+                    oauth_codes.c.code,
+                    oauth_codes.c.client_id,
+                    oauth_codes.c.redirect_uri,
+                    oauth_codes.c.code_challenge,
+                    oauth_codes.c.used,
+                    oauth_codes.c.subject_user_id,
+                ).where(oauth_codes.c.code == code)
+            )).first()
+        if row is None:
+            raise OAuthError(
+                "invalid_grant", "authorization code is invalid or expired"
+            )
+        _, stored_client, stored_redirect, challenge, used, subject = row
+        if used:
+            raise OAuthError(
+                "invalid_grant", "authorization code has already been used"
+            )
+        if stored_client != client_id or stored_redirect != redirect_uri:
+            raise OAuthError(
+                "invalid_grant",
+                "authorization code was not issued for this request",
+            )
+        verifier_challenge = _s256_challenge(code_verifier)
+        if not secrets.compare_digest(verifier_challenge, challenge):
+            raise OAuthError("invalid_grant", "PKCE verification failed")
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                update(oauth_codes)
+                .where(oauth_codes.c.code == code)
+                .values(used=True)
+            )
+        return subject
+
     # --- authorization codes ---
 
     async def create_code(

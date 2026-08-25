@@ -10,7 +10,11 @@ from pydantic import BaseModel
 
 from invincible.compat.common import route_headers
 from invincible.core.continuity import context_system_message
-from invincible.core.memory import memory_system_message, record_turns
+from invincible.core.memory import (
+    memory_system_message,
+    record_turns,
+    scope_for_principal,
+)
 from invincible.core.principal import Principal
 from invincible.core.router import AllProvidersFailedError, UpstreamClientError
 from invincible.endpoints.auth import require_auth
@@ -96,6 +100,7 @@ def _stream_assistant_message(content: str, states: dict) -> dict:
 async def _persist_new_turns(
     new_turns, store, session_id, memory, principal: Principal
 ):
+    scope_user = scope_for_principal(principal)
     try:
         await store.append(
             session_id,
@@ -106,7 +111,8 @@ async def _persist_new_turns(
     except Exception:
         logger.exception("Failed to persist session history for %s", session_id)
     try:
-        await record_turns(memory, session_id, new_turns)
+        await record_turns(memory, session_id, new_turns,
+                           scope_user=scope_user)
     except Exception:
         logger.exception("Failed to record session facts for %s", session_id)
 
@@ -194,6 +200,15 @@ async def chat_completions(
     store = request.app.state.sessions
     memory = getattr(request.app.state, "memory", None)
 
+    # Phase 2: resolve-or-create the owning session row up front so every
+    # run record, task read, and history write is scoped to this
+    # principal's surrogate session.
+    session_pk = await store.resolve_or_create(
+        session_id,
+        user_id=principal.user_id,
+        project_id=principal.project_id,
+    )
+
     history = await store.load(
         session_id,
         user_id=principal.user_id,
@@ -201,9 +216,13 @@ async def chat_completions(
     )
     # Injected after history as system messages: routed but never persisted
     # (system role is excluded below), so they never accumulate.
-    memory_msg = await memory_system_message(memory, session_id)
+    memory_msg = await memory_system_message(
+        memory, session_id, scope_user=scope_for_principal(principal)
+    )
     continuity = getattr(request.app.state, "continuity", None)
-    continuity_msg = await context_system_message(continuity, session_id)
+    continuity_msg = await context_system_message(
+        continuity, session_id, session_pk=session_pk
+    )
     full_messages = (
         history
         + ([memory_msg] if memory_msg else [])
@@ -218,7 +237,8 @@ async def chat_completions(
     if body.stream:
         try:
             (first, tail), info = await request.app.state.router.stream_open_detailed(
-                full_messages, model=body.model, session_id=session_id
+                full_messages, model=body.model, session_id=session_id,
+                session_pk=session_pk,
             )
         except UpstreamClientError as e:
             return JSONResponse(content=e.body, status_code=e.status_code)
@@ -240,7 +260,8 @@ async def chat_completions(
 
     try:
         result, info = await request.app.state.router.route_request_detailed(
-            full_messages, model=body.model, session_id=session_id
+            full_messages, model=body.model, session_id=session_id,
+            session_pk=session_pk,
         )
         choices = result.get("choices") or []
         if choices and "message" in choices[0]:

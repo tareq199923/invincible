@@ -26,7 +26,13 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.responses import RedirectResponse
 
-from invincible.core.oauth_store import ACCESS_TOKEN_TTL, OAuthError, OAuthStore
+from invincible.core.identity import LoginRateLimiter
+from invincible.core.oauth_store import (
+    ACCESS_TOKEN_TTL,
+    OAuthError,
+    OAuthStore,
+    token_hash,
+)
 
 logger = logging.getLogger("invincible.oauth")
 
@@ -44,65 +50,36 @@ _legacy_warned = False
 
 # --- owner-login rate limiting ---
 # The owner secret is the single password guarding the whole OAuth flow, so
-# the login form gets a small in-memory limiter: LOGIN_MAX_ATTEMPTS wrong
-# guesses inside LOGIN_WINDOW_SECONDS from one client IP locks that IP out
-# for the rest of the window. In-memory on purpose (process restart resets
-# it) - this is brute-force friction, not an audit log.
+# the login form gets a small lockout: LOGIN_MAX_ATTEMPTS wrong guesses
+# inside LOGIN_WINDOW_SECONDS from one client IP locks that IP out for the
+# rest of the window. Since Phase 2 the counter is PERSISTENT
+# (login_attempts table via core.identity.LoginRateLimiter) - restarting
+# the process no longer clears it. Audit rows accompany every event.
+
+def _limiter(request: Request) -> "LoginRateLimiter":
+    return LoginRateLimiter(
+        request.app.state.engine,
+        max_attempts=LOGIN_MAX_ATTEMPTS,
+        window_seconds=LOGIN_WINDOW_SECONDS,
+    )
+
+
+async def _audit(request: Request, action: str, **kwargs) -> None:
+    """Best-effort audit write; never blocks the OAuth flow."""
+    log = getattr(request.app.state, "audit_log", None)
+    if log is None:
+        return
+    try:
+        await log.record(action, actor_kind="owner", **kwargs)
+    except Exception:  # noqa: BLE001 - telemetry only
+        logger.warning("audit write failed for %s", action, exc_info=True)
+
 LOGIN_MAX_ATTEMPTS = 5
 LOGIN_WINDOW_SECONDS = 15 * 60
-# Safety valve for the in-memory failure map: once this many IPs are
-# tracked, entries whose failures have fully aged out of the window are
-# dropped on the next write. Without it, unique attacker IPs (or a
-# spoofed-IP flood) grow the dict without bound for the process lifetime.
-LOGIN_MAX_TRACKED_IPS = 10_000
-
-_login_failures: dict[str, list[float]] = {}  # client IP -> failure timestamps
 
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
-
-
-def _prune_login_failures(now: float) -> None:
-    """Drop expired per-IP entries and empty keys so the map stays bounded.
-
-    Called opportunistically: always for the IP being checked, and as a
-    full sweep whenever the map grows past LOGIN_MAX_TRACKED_IPS.
-    """
-    stale = [
-        ip
-        for ip, timestamps in _login_failures.items()
-        if not timestamps or now - timestamps[-1] >= LOGIN_WINDOW_SECONDS
-    ]
-    for ip in stale:
-        del _login_failures[ip]
-
-
-def _login_locked_out(ip: str) -> int | None:
-    """Seconds until the lockout lifts, or None when the IP may try again."""
-    now = time.monotonic()
-    if len(_login_failures) > LOGIN_MAX_TRACKED_IPS:
-        _prune_login_failures(now)
-    failures = [t for t in _login_failures.get(ip, [])
-                if now - t < LOGIN_WINDOW_SECONDS]
-    if failures:
-        _login_failures[ip] = failures
-    else:
-        _login_failures.pop(ip, None)
-    if len(failures) < LOGIN_MAX_ATTEMPTS:
-        return None
-    return int(LOGIN_WINDOW_SECONDS - (now - failures[0])) + 1
-
-
-def _record_login_failure(ip: str) -> None:
-    now = time.monotonic()
-    if len(_login_failures) > LOGIN_MAX_TRACKED_IPS:
-        _prune_login_failures(now)
-    _login_failures.setdefault(ip, []).append(now)
-
-
-def _reset_login_failures(ip: str) -> None:
-    _login_failures.pop(ip, None)
 
 LOGIN_FORM_HTML = """<!doctype html>
 <html lang="en">
@@ -464,10 +441,24 @@ async def oauth_authorize_login(request: Request):
         client = context["_client"]
         if action == "approve":
             store: OAuthStore = request.app.state.oauth_store
+            # Phase 2 subject binding: the approving owner (today always
+            # the system *local* owner) becomes the grant's user; tokens
+            # minted from this code act as that subject.
+            from invincible.core.db import ensure_local_owner
+
+            uid, _ = await ensure_local_owner(request.app.state.engine)
+            await store.attach_owner(client["client_id"], uid)
             code = await store.create_code(
                 client["client_id"],
                 context["redirect_uri"],
                 context["code_challenge"],
+                subject_user_id=uid,
+            )
+            await _audit(
+                request, "oauth.grant_approved",
+                actor_user_id=uid,
+                resource_type="oauth_client",
+                resource_id=client["client_id"],
             )
             return _redirect_with_params(
                 context["redirect_uri"], {"code": code, "state": context["state"]},
@@ -487,8 +478,11 @@ async def oauth_authorize_login(request: Request):
             status_code=503,
         )
     ip = _client_ip(request)
-    locked_for = _login_locked_out(ip)
+    limiter = _limiter(request)
+    locked_for = await limiter.locked_out(ip)
     if locked_for is not None:
+        await _audit(request, "oauth.login_locked_out",
+                     resource_type="client_ip", resource_id=ip)
         return _login_page(
             context,
             f"<p style='color:#900'>Too many failed attempts. "
@@ -499,12 +493,14 @@ async def oauth_authorize_login(request: Request):
         hashlib.sha256(attempted.encode("utf-8")).digest(),
         hashlib.sha256(expected.encode("utf-8")).digest(),
     ):
-        _record_login_failure(ip)
+        await limiter.record_failure(ip)
+        await _audit(request, "oauth.login_failed",
+                     resource_type="client_ip", resource_id=ip)
         return _login_page(
             context, "<p style='color:#900'>Incorrect owner secret.</p>",
             status_code=401,
         )
-    _reset_login_failures(ip)
+    await limiter.reset(ip)
     query = urlencode(
         {key: value for key, value in context.items()
          if key in AUTHORIZE_PARAMS and value}
@@ -554,10 +550,17 @@ async def oauth_token(request: Request):
                 "code, client_id, redirect_uri and code_verifier are required",
             )
         try:
-            await store.consume_code(code, client_id, redirect_uri, verifier)
+            subject = await store.consume_code_subject(
+                code, client_id, redirect_uri, verifier
+            )
         except OAuthError as exc:
             return _token_error(exc.error, exc.description or "")
-        pair = await store.issue_token_pair(client_id)
+        pair = await store.issue_token_pair(client_id, subject)
+        await _audit(request, "oauth.token_issued",
+                     actor_user_id=subject,
+                     resource_type="oauth_client",
+                     resource_id=client_id,
+                     meta={"grant_type": "authorization_code"})
         return _token_response(pair)
 
     if grant_type == "refresh_token":
@@ -584,5 +587,9 @@ async def oauth_revoke(request: Request):
     if not token:
         return _token_error("invalid_request", "token is required")
     store: OAuthStore = request.app.state.oauth_store
-    await store.revoke(token)
+    revoked = await store.revoke(token)
+    if revoked:
+        await _audit(request, "oauth.token_revoked",
+                     resource_type="oauth_token",
+                     resource_id=token_hash(token)[:12])
     return Response(status_code=200)

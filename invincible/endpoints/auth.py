@@ -40,9 +40,10 @@ def _auth_error(message: str) -> HTTPException:
     )
 
 
-async def local_principal(app: FastAPI) -> Principal:
+async def local_principal(app: FastAPI,
+                          kind: str = "legacy") -> Principal:
     user_id, project_id = await ensure_local_owner(app.state.engine)
-    return Principal(user_id=user_id, project_id=project_id, kind="legacy")
+    return Principal(user_id=user_id, project_id=project_id, kind=kind)
 
 
 async def require_auth(request: Request) -> Principal:

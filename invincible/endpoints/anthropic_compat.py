@@ -23,7 +23,11 @@ from invincible.compat.anthropic import (
 from invincible.compat.common import estimate_token_sum, route_headers
 from invincible.core.compression import compress_messages, compression_enabled
 from invincible.core.continuity import context_system_message
-from invincible.core.memory import memory_system_message, record_turns
+from invincible.core.memory import (
+    memory_system_message,
+    record_turns,
+    scope_for_principal,
+)
 from invincible.core.principal import Principal
 from invincible.core.router import AllProvidersFailedError, UpstreamClientError
 from invincible.endpoints.auth import require_auth
@@ -77,7 +81,12 @@ async def _persist(store, session_id, new_messages: list, assistant_message: dic
     except Exception:
         logger.exception("Failed to persist session history for %s", session_id)
     try:
-        await record_turns(memory, session_id, new_turns)
+        await record_turns(
+            memory,
+            session_id,
+            new_turns,
+            scope_user=scope_for_principal(principal),
+        )
     except Exception:
         logger.exception("Failed to record session facts for %s", session_id)
 
@@ -96,6 +105,13 @@ async def anthropic_messages(
     store = request.app.state.sessions
     memory = getattr(request.app.state, "memory", None)
 
+    # Phase 2: owning surrogate session for run records and task reads.
+    session_pk = await store.resolve_or_create(
+        session_id,
+        user_id=principal.user_id,
+        project_id=principal.project_id,
+    )
+
     try:
         internal_messages = anthropic_to_internal(body.messages, body.system)
     except ValueError as e:
@@ -107,9 +123,13 @@ async def anthropic_messages(
         project_id=principal.project_id,
     )
     # Injected memory/continuity are routed but never persisted (system role).
-    memory_msg = await memory_system_message(memory, session_id)
+    memory_msg = await memory_system_message(
+        memory, session_id, scope_user=scope_for_principal(principal)
+    )
     continuity = getattr(request.app.state, "continuity", None)
-    continuity_msg = await context_system_message(continuity, session_id)
+    continuity_msg = await context_system_message(
+        continuity, session_id, session_pk=session_pk
+    )
     full_messages = (
         history
         + ([memory_msg] if memory_msg else [])
@@ -135,6 +155,7 @@ async def anthropic_messages(
                 tool_choice=tool_choice,
                 model=body.model,
                 session_id=session_id,
+                session_pk=session_pk,
             )
         except UpstreamClientError as e:
             return _error_message(e.status_code, "Upstream request failed")
@@ -166,6 +187,7 @@ async def anthropic_messages(
             tool_choice=tool_choice,
             model=body.model,
             session_id=session_id,
+            session_pk=session_pk,
         )
     except UpstreamClientError as e:
         return _error_message(e.status_code, "Upstream request failed")

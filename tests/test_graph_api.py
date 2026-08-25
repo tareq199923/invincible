@@ -49,15 +49,30 @@ async def record_run(runs, request_id, outcome, provider="alpha",
     )
 
 
-async def test_graph_requires_admin_key(client, monkeypatch):
+async def test_graph_without_any_credential_is_401(client, monkeypatch):
+    """Phase 2 dual-realm: with the admin key unset the user realm decides
+    - and with the gateway key also unset, fail-open applies (anonymous
+    local principal, scoped view) rather than 503."""
     monkeypatch.delenv("INVINCIBLE_ADMIN_KEY", raising=False)
+    monkeypatch.setenv("GATEWAY_API_KEY", "test-gateway-key")
     resp = await client.get("/api/v1/sessions/default/graph")
-    assert resp.status_code == 503
-
-
-async def test_graph_rejects_gateway_key(client, graph_stack):
-    resp = await client.get("/api/v1/sessions/default/graph", headers=GATEWAY)
     assert resp.status_code == 401
+
+
+async def test_graph_accepts_gateway_key_as_scoped_user(client, graph_stack):
+    """Phase 2: a user principal gets the projection for ITS OWN session;
+    an unknown-to-it string is indistinguishable from a nonexistent one."""
+    resp = await client.get("/api/v1/sessions/ghost/graph", headers=GATEWAY)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["known"] is False
+    assert data["nodes"] == []
+
+
+async def test_graph_admin_still_sees_any_session(client, graph_stack):
+    resp = await client.get("/api/v1/sessions/ghost/graph", headers=ADMIN)
+    assert resp.status_code == 200
+    assert resp.json()["known"] is False
 
 
 async def test_empty_session_projection_shape(client, graph_stack):
