@@ -18,6 +18,7 @@ from invincible.core.db import (
 from invincible.core.db import (
     metadata as db_metadata,
 )
+from invincible.core.identity import ApiKeyStore
 from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore, _s256_challenge
 from invincible.core.router import Router
@@ -197,6 +198,7 @@ async def client(pg_engine, router_setter, monkeypatch):
     monkeypatch.setenv("INVINCIBLE_OWNER_SECRET", TEST_OWNER_SECRET)
     router_setter({})
     store = SessionStore(engine=pg_engine)
+    app.state.engine = pg_engine
     app.state.sessions = store
     memory = MemoryStore(engine=pg_engine)
     await memory.init()
@@ -209,6 +211,7 @@ async def client(pg_engine, router_setter, monkeypatch):
     oauth_store = OAuthStore(engine=pg_engine)
     await oauth_store.init()
     app.state.oauth_store = oauth_store
+    app.state.api_keys = ApiKeyStore(engine=pg_engine)
     runs_store = RunStore(engine=pg_engine)
     await runs_store.init()
     app.state.runs = runs_store

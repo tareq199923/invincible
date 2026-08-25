@@ -33,6 +33,7 @@ from sqlalchemy.exc import ArgumentError
 from invincible import __version__
 from invincible.core.config import load_providers_config
 from invincible.core.db import (
+    ensure_local_owner,
     make_engine,
     migration_heads,
     migrations_config,
@@ -41,6 +42,7 @@ from invincible.core.db import (
 )
 from invincible.core.db import metadata as db_metadata
 from invincible.core.db_import import import_legacy_sqlite
+from invincible.core.identity import ApiKeyStore
 from invincible.core.oauth_store import OAuthStore
 
 SUPPORTED_ENV_KEYS = (
@@ -1195,6 +1197,103 @@ async def _headless_approve(client, owner_secret_value, redirect_uri, challenge)
     return client_id, code
 
 
+# --- API keys (Platform Phase 1) -----------------------------------------------
+
+
+@click.group("api-key")
+def api_key():
+    """Manage gateway API keys (hashed at rest; raw shown once)."""
+
+
+@api_key.command("create")
+@click.option("--label", default="", show_default=True,
+              help="Free-form label shown by `api-key list`.")
+def api_key_create(label):
+    """Mint an API key under the system *local* owner.
+
+    The raw key is printed ONCE and never stored - only its SHA-256 hash
+    and a visible prefix are kept. Use it as
+    `Authorization: Bearer <key>` on the /v1/* endpoints.
+    """
+    engine = make_engine(_resolve_db_url())
+
+    async def _run():
+        try:
+            user_id, _ = await ensure_local_owner(engine)
+            return await ApiKeyStore(engine).create(user_id, label=label)
+        finally:
+            await engine.dispose()
+
+    record = run_coro_sync(_run())
+    click.echo(f"API key created (prefix {record['prefix']}).")
+    click.echo(record["raw"])
+    click.echo("Store it now - it is shown once and cannot be recovered.")
+
+
+@api_key.command("list")
+def api_key_list():
+    """List API keys. Hashes are never displayed; raw keys were shown once
+    at creation."""
+    engine = make_engine(_resolve_db_url())
+
+    async def _run():
+        try:
+            return await ApiKeyStore(engine).list()
+        finally:
+            await engine.dispose()
+
+    keys = run_coro_sync(_run())
+    if not keys:
+        click.echo("No API keys.")
+        return
+    for key in keys:
+        status = (
+            f"revoked {_format_ts(key['revoked_at'])}"
+            if key["revoked_at"]
+            else "active"
+        )
+        last_used = (
+            f"last used {_format_ts(key['last_used_at'])}"
+            if key["last_used_at"]
+            else "never used"
+        )
+        name = f"  {key['label']}" if key["label"] else ""
+        click.echo(
+            f"{key['prefix']}  #{key['id']}{name}\n"
+            f"  created {_format_ts(key['created_at'])}, "
+            f"{last_used}, {status}"
+        )
+
+
+@api_key.command("revoke")
+@click.argument("key_ref")
+def api_key_revoke(key_ref):
+    """Revoke a key by its numeric id or visible prefix.
+
+    Existing requests carrying the raw key stop working immediately.
+    """
+    engine = make_engine(_resolve_db_url())
+
+    async def _run():
+        try:
+            ref: int | str = int(key_ref)
+        except ValueError:
+            ref = key_ref
+        try:
+            return await ApiKeyStore(engine).revoke(ref)
+        finally:
+            await engine.dispose()
+
+    revoked = run_coro_sync(_run())
+    if revoked:
+        click.echo(f"Revoked {key_ref}.")
+    else:
+        raise click.ClickException(
+            f"No active API key matches {key_ref!r} "
+            "(already revoked, or unknown id/prefix)."
+        )
+
+
 # --- local dev database -------------------------------------------------------
 
 
@@ -1314,6 +1413,7 @@ cli.add_command(start)
 cli.add_command(doctor)
 cli.add_command(secret)
 cli.add_command(oauth)
+cli.add_command(api_key)
 cli.add_command(db)
 cli.add_command(dev_db)
 

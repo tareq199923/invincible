@@ -4,14 +4,16 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from invincible.compat.common import route_headers
 from invincible.core.continuity import context_system_message
 from invincible.core.memory import memory_system_message, record_turns
+from invincible.core.principal import Principal
 from invincible.core.router import AllProvidersFailedError, UpstreamClientError
+from invincible.endpoints.auth import require_auth
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +93,16 @@ def _stream_assistant_message(content: str, states: dict) -> dict:
     return message
 
 
-async def _persist_new_turns(new_turns, store, session_id, memory):
+async def _persist_new_turns(
+    new_turns, store, session_id, memory, principal: Principal
+):
     try:
-        await store.append(session_id, new_turns)
+        await store.append(
+            session_id,
+            new_turns,
+            user_id=principal.user_id,
+            project_id=principal.project_id,
+        )
     except Exception:
         logger.exception("Failed to persist session history for %s", session_id)
     try:
@@ -102,7 +111,10 @@ async def _persist_new_turns(new_turns, store, session_id, memory):
         logger.exception("Failed to record session facts for %s", session_id)
 
 
-async def _stream_body(first, tail, store, session_id, to_persist, memory=None):
+async def _stream_body(
+    first, tail, store, session_id, to_persist, memory=None, *,
+    principal: Principal,
+):
     content = ""
     tool_states = {}
 
@@ -126,9 +138,11 @@ async def _stream_body(first, tail, store, session_id, to_persist, memory=None):
                                     "type": "stream_error"}})
         # Persist what accumulated before the failure so history matches
         # what the client saw (mirrors the Anthropic path's on_complete).
-        await _persist_new_turns(new_turns(), store, session_id, memory)
+        await _persist_new_turns(new_turns(), store, session_id, memory,
+                                 principal)
         return
-    await _persist_new_turns(new_turns(), store, session_id, memory)
+    await _persist_new_turns(new_turns(), store, session_id, memory,
+                             principal)
     yield "data: [DONE]\n\n"
 
 
@@ -167,7 +181,11 @@ async def list_models(request: Request):
     return {"object": "list", "data": models_from_providers(router.providers)}
 
 @router.post("/v1/chat/completions")
-async def chat_completions(request: Request, body: ChatRequest):
+async def chat_completions(
+    request: Request,
+    body: ChatRequest,
+    principal: Principal = Depends(require_auth),
+):
     session_id = (
         request.headers.get("x-claude-code-session-id")
         or request.headers.get("X-Session-Id")
@@ -176,7 +194,11 @@ async def chat_completions(request: Request, body: ChatRequest):
     store = request.app.state.sessions
     memory = getattr(request.app.state, "memory", None)
 
-    history = await store.load(session_id)
+    history = await store.load(
+        session_id,
+        user_id=principal.user_id,
+        project_id=principal.project_id,
+    )
     # Injected after history as system messages: routed but never persisted
     # (system role is excluded below), so they never accumulate.
     memory_msg = await memory_system_message(memory, session_id)
@@ -206,7 +228,8 @@ async def chat_completions(request: Request, body: ChatRequest):
                 status_code=503,
             )
         return StreamingResponse(
-            _stream_body(first, tail, store, session_id, to_persist, memory),
+            _stream_body(first, tail, store, session_id, to_persist, memory,
+                         principal=principal),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -222,7 +245,12 @@ async def chat_completions(request: Request, body: ChatRequest):
         choices = result.get("choices") or []
         if choices and "message" in choices[0]:
             new_turns = to_persist + [choices[0]["message"]]
-            await store.append(session_id, new_turns)
+            await store.append(
+                session_id,
+                new_turns,
+                user_id=principal.user_id,
+                project_id=principal.project_id,
+            )
             try:
                 await record_turns(memory, session_id, new_turns)
             except Exception:

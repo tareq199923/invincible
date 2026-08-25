@@ -9,7 +9,7 @@ because both protocols persist the same internal message format.
 """
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from invincible.compat.anthropic import (
@@ -24,7 +24,9 @@ from invincible.compat.common import estimate_token_sum, route_headers
 from invincible.core.compression import compress_messages, compression_enabled
 from invincible.core.continuity import context_system_message
 from invincible.core.memory import memory_system_message, record_turns
+from invincible.core.principal import Principal
 from invincible.core.router import AllProvidersFailedError, UpstreamClientError
+from invincible.endpoints.auth import require_auth
 from invincible.models.anthropic import AnthropicMessagesRequest
 
 logger = logging.getLogger(__name__)
@@ -51,7 +53,7 @@ def _assistant_message_from_provider(provider_message: dict) -> dict:
 
 
 async def _persist(store, session_id, new_messages: list, assistant_message: dict,
-                   memory=None):
+                   memory=None, principal: Principal | None = None):
     """Append this request's new turns to the session under the store's lock.
 
     ``new_messages`` is the request's own messages (system role already
@@ -62,7 +64,16 @@ async def _persist(store, session_id, new_messages: list, assistant_message: dic
     saved = [m for m in new_messages if m.get("role") != "system"]
     new_turns = saved + [assistant_message]
     try:
-        await store.append(session_id, new_turns)
+        await store.append(
+            session_id,
+            new_turns,
+            **(
+                {}
+                if principal is None
+                else {"user_id": principal.user_id,
+                      "project_id": principal.project_id}
+            ),
+        )
     except Exception:
         logger.exception("Failed to persist session history for %s", session_id)
     try:
@@ -72,7 +83,11 @@ async def _persist(store, session_id, new_messages: list, assistant_message: dic
 
 
 @router.post("/v1/messages")
-async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
+async def anthropic_messages(
+    request: Request,
+    body: AnthropicMessagesRequest,
+    principal: Principal = Depends(require_auth),
+):
     session_id = (
         request.headers.get("x-claude-code-session-id")
         or request.headers.get("X-Session-Id")
@@ -86,7 +101,11 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
     except ValueError as e:
         return _error_message(400, str(e))
 
-    history = await store.load(session_id)
+    history = await store.load(
+        session_id,
+        user_id=principal.user_id,
+        project_id=principal.project_id,
+    )
     # Injected memory/continuity are routed but never persisted (system role).
     memory_msg = await memory_system_message(memory, session_id)
     continuity = getattr(request.app.state, "continuity", None)
@@ -123,7 +142,10 @@ async def anthropic_messages(request: Request, body: AnthropicMessagesRequest):
             return _error_message(503, "All providers failed or are in cooldown.")
 
         async def save_complete(accumulated: dict):
-            await _persist(store, session_id, internal_messages, accumulated, memory)
+            await _persist(
+                store, session_id, internal_messages, accumulated, memory,
+                principal,
+            )
 
         return StreamingResponse(
             build_stream_events(

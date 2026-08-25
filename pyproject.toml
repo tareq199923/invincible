@@ -18,6 +18,7 @@ dependencies = [
     "asyncpg",
     "greenlet",
     "alembic>=1.13",
+    "argon2-cffi",
 ]
 
 [project.optional-dependencies]
@@ -57,3 +58,8 @@ exclude = [
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "W"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependency injection calls are the sanctioned default-argument
+# idiom (Depends(require_auth) on route handlers).
+extend-immutable-calls = ["fastapi.Depends"]

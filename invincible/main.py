@@ -1,9 +1,8 @@
-import hmac
 import logging
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Response
 
 from invincible import __version__
 from invincible.core.config import load_providers_config
@@ -14,6 +13,7 @@ from invincible.core.db import (
     make_engine,
     warn_if_schema_stale,
 )
+from invincible.core.identity import ApiKeyStore, AuditLog
 from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore
 from invincible.core.provider_registry import ProviderRegistry
@@ -24,6 +24,7 @@ from invincible.core.settings import settings
 from invincible.core.tool_executor import PendingActionStore
 from invincible.endpoints.admin_api import router as admin_router
 from invincible.endpoints.anthropic_compat import router as anthropic_router
+from invincible.endpoints.auth import require_auth
 from invincible.endpoints.graph import router as graph_router
 from invincible.endpoints.mcp import require_mcp_auth
 from invincible.endpoints.mcp import router as mcp_router
@@ -98,6 +99,8 @@ async def lifespan(app: FastAPI):
 
     app.state.sessions = SessionStore(engine)
     await app.state.sessions.init()
+    app.state.api_keys = ApiKeyStore(engine)
+    app.state.audit_log = AuditLog(engine)
     app.state.router.run_recorder = runs.record
     yield
     await app.state.router.close()
@@ -111,37 +114,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Invincible", lifespan=lifespan)
 
-async def require_auth(request: Request):
-    gateway_key = settings.gateway_api_key()
-    if not gateway_key:
-        return
-    auth = request.headers.get("Authorization")
-    if auth and auth.startswith("Bearer "):
-        token = auth.removeprefix("Bearer ")
-    else:
-        token = request.headers.get("x-api-key")
-    if not token:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": {
-                    "message": "Missing authentication token",
-                    "type": "auth_error",
-                }
-            },
-        )
-    if not hmac.compare_digest(
-        token.encode("utf-8"), gateway_key.encode("utf-8")
-    ):
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": {
-                    "message": "Invalid authentication token",
-                    "type": "auth_error",
-                }
-            },
-        )
+# /v1/* resolves a Principal per request (dual-realm: legacy gateway key
+# vs per-user API keys; fail-open anonymous when no gateway key is set -
+# see endpoints/auth.py for the exact, tested resolution order).
 
 app.include_router(openai_router, dependencies=[Depends(require_auth)])
 app.include_router(anthropic_router, dependencies=[Depends(require_auth)])
