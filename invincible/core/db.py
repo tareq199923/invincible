@@ -10,13 +10,16 @@ Type decisions (recorded in the Phase 16 plan):
 - Timestamps stay epoch ``Float`` - TIMESTAMPTZ conversion is deferred.
 - JSON-shaped columns use PostgreSQL ``JSONB`` (messages payload, runs meta,
   task_states payload, oauth redirect_uris, pending args).
-- Surrogate PKs are ``BigInteger`` + ``Identity``; natural keys (session_id,
-  token_hash, code, client_id, token) stay ``Text`` primary keys.
+- Surrogate PKs are ``BigInteger`` + ``Identity``; natural keys
+  (token_hash, code, client_id, token) stay ``Text`` primary keys. Since
+  Platform Phase 1, ``sessions`` also carries a surrogate PK with an
+  ownership triple (user/project/client_session_id).
 """
 import asyncio
 import concurrent.futures
 import importlib
 import logging
+import time
 
 from sqlalchemy import (
     BigInteger,
@@ -71,6 +74,48 @@ async def create_all_from_metadata(engine) -> None:
 async def drop_all_from_metadata(engine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(metadata.drop_all)
+
+
+async def ensure_local_owner(engine) -> tuple[int, int]:
+    """Idempotently ensure the system *local* user + its default project
+    exist; returns ``(user_id, project_id)``.
+
+    Runtime bootstrap for the same rows Alembic revision 0002 seeds: fresh
+    ``create_all`` databases get the local owner on first use instead of
+    requiring a migration round-trip. Unique constraints make concurrent
+    callers safe; callers memoize (stores keep one resolved context).
+    """
+    async with engine.begin() as conn:
+        return await seed_local_owner_conn(conn)
+
+
+async def seed_local_owner_conn(conn) -> tuple[int, int]:
+    """Connection-scoped variant of :func:`ensure_local_owner` - runs
+    inside the caller's transaction (importer, batch bootstrap)."""
+    from sqlalchemy import select
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    now = time.time()
+    await conn.execute(
+        pg_insert(users)
+        .values(email=LOCAL_OWNER_EMAIL, is_system=True, created_at=now)
+        .on_conflict_do_nothing(index_elements=["email"])
+    )
+    user_id = (await conn.execute(
+        select(users.c.id).where(users.c.email == LOCAL_OWNER_EMAIL)
+    )).scalar_one()
+    await conn.execute(
+        pg_insert(projects)
+        .values(user_id=user_id, name=LOCAL_PROJECT_NAME,
+                is_default=True, created_at=now)
+        .on_conflict_do_nothing(index_elements=["user_id", "name"])
+    )
+    project_id = (await conn.execute(
+        select(projects.c.id)
+        .where(projects.c.user_id == user_id,
+               projects.c.name == LOCAL_PROJECT_NAME)
+    )).scalar_one()
+    return int(user_id), int(project_id)
 
 
 # ---------------------------------------------------------------------------
@@ -155,17 +200,126 @@ async def warn_if_schema_stale(engine) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sessions / turns / messages  (Phase 15a shapes, PG-typed)
+# Identity & ownership  (Platform Phase 1)
+
+# System *local* owner: every legacy/local-mode row backfills to this user
+# and its default project. Declared here (not in a store module) so the
+# packaged Alembic revisions and the runtime bootstrap share one constant.
+LOCAL_OWNER_EMAIL = "local@invincible.local"
+LOCAL_PROJECT_NAME = "local"
+
+users = Table(
+    "users",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    # Natural key; unique constraint backs the idempotent local-owner seed.
+    Column("email", Text, nullable=False, unique=True),
+    # argon2id hash (core.identity); NULL = no password login (system user).
+    Column("password_hash", Text),
+    Column("is_system", Boolean, nullable=False, server_default="false"),
+    Column("created_at", Float, nullable=False),
+)
+
+projects = Table(
+    "projects",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id"), nullable=False),
+    Column("name", Text, nullable=False),
+    Column("is_default", Boolean, nullable=False, server_default="false"),
+    Column("created_at", Float, nullable=False),
+    UniqueConstraint("user_id", "name", name="uq_projects_user_name"),
+)
+
+Index("idx_projects_user", projects.c.user_id)
+
+api_keys = Table(
+    "api_keys",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id"), nullable=False),
+    Column("label", Text, nullable=False, server_default=""),
+    # sha256 hex of the raw key - raw values are shown once at creation and
+    # never stored (same discipline as oauth_tokens.token_hash).
+    Column("key_hash", Text, nullable=False, unique=True),
+    # Visible identifier (first chars of the raw key incl. the inv_ prefix)
+    # so keys are recognizable in listings without revealing the secret.
+    Column("prefix", Text, nullable=False),
+    Column("created_at", Float, nullable=False),
+    Column("last_used_at", Float),
+    Column("revoked_at", Float),
+)
+
+Index("idx_api_keys_user", api_keys.c.user_id)
+
+audit_log = Table(
+    "audit_log",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("at", Float, nullable=False),
+    Column("actor_user_id", BigInteger, ForeignKey("users.id")),
+    Column("actor_kind", Text, nullable=False),
+    Column("action", Text, nullable=False),
+    Column("resource_type", Text),
+    Column("resource_id", Text),
+    Column("request_id", Text),
+    Column("meta", JSONB),
+)
+
+Index("idx_audit_log_at", audit_log.c.at.desc())
+Index("idx_audit_log_actor", audit_log.c.actor_user_id, audit_log.c.at.desc())
+
+# Scoped memory rows (schema lands in Phase 1; retrieval engine is Phase 4).
+memories = Table(
+    "memories",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id"), nullable=False),
+    Column("project_id", BigInteger, ForeignKey("projects.id")),
+    # scope: 'user' | 'project' (project requires project_id); layer:
+    # 'explicit' | 'auto'.
+    Column("scope", Text, nullable=False),
+    Column("layer", Text, nullable=False),
+    Column("kind", Text, nullable=False, server_default="fact"),
+    Column("content", Text, nullable=False),
+    Column("confidence", Float, nullable=False, server_default="1.0"),
+    Column("provenance", Text),
+    Column("created_at", Float, nullable=False),
+)
+
+Index(
+    "idx_memories_owner",
+    memories.c.user_id,
+    memories.c.project_id,
+    memories.c.created_at.desc(),
+)
+
+
+# ---------------------------------------------------------------------------
+# Sessions / turns / messages
+
+# Phase 1 rebuild: ``sessions`` lost its client-supplied string PK and now
+# carries surrogate identity plus an ownership triple. The legacy session
+# string survives as ``client_session_id`` under UNIQUE(user_id, project_id,
+# client_session_id); ``turns.session_id`` keeps its column name but is now
+# a BigInteger FK to ``sessions.id``.
 
 sessions = Table(
     "sessions",
     metadata,
-    # Renamed from sessions_v2 during Phase 16: PG is the only backend now,
-    # so the version suffix lost its meaning.
-    Column("session_id", String, primary_key=True),
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id"), nullable=False),
+    Column("project_id", BigInteger, ForeignKey("projects.id"), nullable=False),
+    Column("client_session_id", String, nullable=False),
     Column("created_at", Float, nullable=False),
     Column("updated_at", Float, nullable=False),
+    UniqueConstraint(
+        "user_id", "project_id", "client_session_id",
+        name="uq_sessions_owner_client",
+    ),
 )
+
+Index("idx_sessions_owner", sessions.c.user_id, sessions.c.project_id)
 
 turns = Table(
     "turns",
@@ -173,8 +327,8 @@ turns = Table(
     Column("id", BigInteger, Identity(), primary_key=True),
     Column(
         "session_id",
-        Text,
-        ForeignKey("sessions.session_id"),
+        BigInteger,
+        ForeignKey("sessions.id"),
         nullable=False,
     ),
     Column("seq", Integer, nullable=False),

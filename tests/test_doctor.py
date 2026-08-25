@@ -17,10 +17,23 @@ DB_URL_LABEL = "INVINCIBLE_DB_URL exists"
 REACHABLE_LABEL = "PostgreSQL reachable"
 REVISION_LABEL = "schema revision matches head"
 
+
+def _head_revision_label() -> str:
+    """Hermetic stand-in for doctor's live revision line; tracks whatever
+    the packaged migrations currently stamp at head."""
+    try:
+        from invincible.core.db import migration_heads
+
+        heads = migration_heads()
+        return f"revision {heads[0]}" if heads else "revision ?"
+    except Exception:  # noqa: BLE001 - hermetic fallback only
+        return "revision ?"
+
+
 HERMETIC_DB_OK = [
     (DB_URL_LABEL, True, ""),
     (REACHABLE_LABEL, True, "postgresql+asyncpg://invincible@***/db"),
-    (REVISION_LABEL, True, "revision 0001"),
+    (REVISION_LABEL, True, _head_revision_label()),
 ]
 
 
@@ -213,7 +226,11 @@ async def test_doctor_live_schema_mismatch_is_loud(
         ln for ln in result.output.splitlines() if REVISION_LABEL in ln
     )
     assert line.startswith("FAIL")
-    assert "database at 9999, expected 0001" in line
+    from invincible.core.db import migration_heads
+
+    assert (
+        f"database at 9999, expected {migration_heads()[0]}" in line
+    )
     assert "`invincible db upgrade`" in line
 
 

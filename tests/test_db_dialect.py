@@ -7,17 +7,21 @@ unique-constraint surfacing, and create/drop symmetry.
 """
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from invincible.core.db import (
+    LOCAL_OWNER_EMAIL,
+    LOCAL_PROJECT_NAME,
     messages,
     metadata,
+    projects,
     runs,
     sessions,
     task_states,
     turns,
+    users,
 )
 from tests.conftest import TEST_DB_URL
 
@@ -34,11 +38,45 @@ async def engine():
         await eng.dispose()
 
 
-async def seed_session(engine, session_id="s"):
+async def local_owner_ids(engine) -> tuple[int, int]:
+    """Seed and return the system *local* owner's (user_id, project_id)."""
     async with engine.begin() as conn:
-        await conn.execute(
-            sessions.insert().values(
-                session_id=session_id, created_at=1.0, updated_at=1.0))
+        uid = (await conn.execute(
+            users.insert()
+            .values(email=LOCAL_OWNER_EMAIL, is_system=True, created_at=1.0)
+            .returning(users.c.id)
+        )).scalar_one()
+        pid = (await conn.execute(
+            projects.insert()
+            .values(user_id=uid, name=LOCAL_PROJECT_NAME,
+                    is_default=True, created_at=1.0)
+            .returning(projects.c.id)
+        )).scalar_one()
+    return int(uid), int(pid)
+
+
+async def seed_session(engine, client_session_id="s") -> int:
+    """One session row under the system local owner; returns its pk."""
+    uid, pid = await local_owner_ids(engine)
+    async with engine.begin() as conn:
+        sid = (await conn.execute(
+            sessions.insert()
+            .values(user_id=uid, project_id=pid,
+                    client_session_id=client_session_id,
+                    created_at=1.0, updated_at=1.0)
+            .returning(sessions.c.id)
+        )).scalar_one()
+    return int(sid)
+
+
+async def seed_turn(engine, session_pk: int, seq: int = 0) -> int:
+    async with engine.begin() as conn:
+        tid = (await conn.execute(
+            turns.insert()
+            .values(session_id=session_pk, seq=seq)
+            .returning(turns.c.id)
+        )).scalar_one()
+    return int(tid)
 
 
 async def test_jsonb_roundtrip_unicode_and_nesting(engine):
@@ -52,18 +90,12 @@ async def test_jsonb_roundtrip_unicode_and_nesting(engine):
         ],
         "nested": {"list": [1, 2, {"x": None}], "flag": True},
     }
+    sid = await seed_session(engine)
+    tid = await seed_turn(engine, sid)
     async with engine.begin() as conn:
         await conn.execute(
-            sessions.insert().values(session_id="s", created_at=1.0,
-                                     updated_at=1.0))
-        await conn.execute(
-            turns.insert().values(session_id="s", seq=0))
-        row = await conn.execute(text("SELECT id FROM turns WHERE session_id='s'"))
-        turn_id = row.scalar()
-        await conn.execute(
             messages.insert().values(
-                turn_id=turn_id, seq=0, role="assistant",
-                payload=payload))
+                turn_id=tid, seq=0, role="assistant", payload=payload))
 
     async with engine.connect() as conn:
         stored = (await conn.execute(
@@ -77,8 +109,10 @@ async def test_jsonb_roundtrip_unicode_and_nesting(engine):
 async def test_identity_pks_populate_monotonically(engine):
     await seed_session(engine)
     async with engine.begin() as conn:
-        await conn.execute(
-            turns.insert().values(session_id="s", seq=0))
+        tid = (await conn.execute(
+            turns.insert().values(session_id=(await _only_session(conn)),
+                                  seq=0).returning(turns.c.id)
+        )).scalar_one()
         await conn.execute(
             task_states.insert().values(
                 session_id="s", task_key="k", status="active",
@@ -88,6 +122,11 @@ async def test_identity_pks_populate_monotonically(engine):
         t = (await conn.execute(turns.select())).first()
         ts = (await conn.execute(task_states.select())).first()
     assert isinstance(t.id, int) and isinstance(ts.id, int)
+    assert isinstance(tid, int)
+
+
+async def _only_session(conn) -> int:
+    return (await conn.execute(select(sessions.c.id))).scalar_one()
 
 
 async def test_fk_enforcement_blocks_orphan_messages(engine):
@@ -99,12 +138,37 @@ async def test_fk_enforcement_blocks_orphan_messages(engine):
 
 
 async def test_unique_constraints_surface(engine):
-    await seed_session(engine)
+    pk = await seed_session(engine)
     async with engine.begin() as conn:
-        await conn.execute(turns.insert().values(session_id="s", seq=0))
+        await conn.execute(turns.insert().values(session_id=pk, seq=0))
     with pytest.raises(IntegrityError):
         async with engine.begin() as conn:
-            await conn.execute(turns.insert().values(session_id="s", seq=0))
+            await conn.execute(turns.insert().values(session_id=pk, seq=0))
+
+
+async def test_sessions_ownership_triple_is_unique(engine):
+    """Phase 1: same (user, project, client string) twice must collide."""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    uid, pid = await local_owner_ids(engine)
+    values = {"user_id": uid, "project_id": pid,
+              "client_session_id": "dup", "created_at": 1.0,
+              "updated_at": 1.0}
+    async with engine.begin() as conn:
+        await conn.execute(sessions.insert().values(**values))
+    with pytest.raises(IntegrityError):
+        async with engine.begin() as conn:
+            await conn.execute(sessions.insert().values(**values))
+    # ...while the resolve-or-create idiom stays conflict-free.
+    async with engine.begin() as conn:
+        await conn.execute(
+            pg_insert(sessions).values(**values)
+            .on_conflict_do_nothing(index_elements=[
+                "user_id", "project_id", "client_session_id"]))
+    async with engine.connect() as conn:
+        n = (await conn.execute(text(
+            "SELECT COUNT(*) FROM sessions"))).scalar_one()
+    assert n == 1
 
 
 async def test_runs_indexes_and_nullability(engine):
@@ -141,6 +205,9 @@ async def test_create_drop_symmetry(engine):
 
 def test_metadata_covers_all_expected_tables():
     expected = {
+        # Phase 1 identity & ownership
+        "users", "projects", "api_keys", "audit_log", "memories",
+        # sessions / continuity / oauth / mcp
         "sessions", "turns", "messages", "facts", "runs", "task_states",
         "checkpoints", "oauth_clients", "oauth_codes", "oauth_tokens",
         "pending_actions",

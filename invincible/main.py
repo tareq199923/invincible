@@ -10,6 +10,7 @@ from invincible.core.config import load_providers_config
 from invincible.core.continuity import ContinuityEngine
 from invincible.core.db import (
     create_all_from_metadata,
+    ensure_local_owner,
     make_engine,
     warn_if_schema_stale,
 )
@@ -65,6 +66,9 @@ async def lifespan(app: FastAPI):
     # here - migrations run explicitly via `invincible db upgrade`, never
     # auto-run at startup; doctor fails loudly on mismatches instead.
     await create_all_from_metadata(engine)
+    # Phase 1: the system *local* owner must exist before any store write
+    # resolves a session (same rows Alembic revision 0002 seeds).
+    await ensure_local_owner(engine)
     await warn_if_schema_stale(engine)
     app.state.engine = engine
 

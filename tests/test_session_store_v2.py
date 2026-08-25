@@ -20,8 +20,25 @@ import random
 import pytest
 from sqlalchemy import func, select
 
-from invincible.core.db import messages as messages_table
-from invincible.core.db import turns as turns_table
+from invincible.core.db import (
+    LOCAL_OWNER_EMAIL,
+    LOCAL_PROJECT_NAME,
+)
+from invincible.core.db import (
+    messages as messages_table,
+)
+from invincible.core.db import (
+    projects as projects_table,
+)
+from invincible.core.db import (
+    sessions as sessions_table,
+)
+from invincible.core.db import (
+    turns as turns_table,
+)
+from invincible.core.db import (
+    users as users_table,
+)
 from invincible.core.memory import MemoryStore
 from invincible.core.run_store import RunStore
 from invincible.core.session_store import SessionStore
@@ -41,15 +58,39 @@ async def store(pg_engine):
     return SessionStore(engine=pg_engine)
 
 
+async def local_pk(store, session_id="s"):
+    """Surrogate session pk for ``session_id`` under the system *local*
+    owner - doubles as a behavior pin: owner-less writes must land under
+    the local owner."""
+    async with store.engine.connect() as conn:
+        row = (await conn.execute(
+            select(sessions_table.c.id)
+            .join(users_table, users_table.c.id == sessions_table.c.user_id)
+            .join(
+                projects_table,
+                projects_table.c.id == sessions_table.c.project_id,
+            )
+            .where(
+                users_table.c.email == LOCAL_OWNER_EMAIL,
+                projects_table.c.name == LOCAL_PROJECT_NAME,
+                sessions_table.c.client_session_id == session_id,
+            )
+        )).first()
+    assert row is not None, f"session {session_id!r} not found"
+    return int(row[0])
+
+
 async def turn_count(store, session_id="s"):
+    pk = await local_pk(store, session_id)
     async with store.engine.connect() as conn:
         return (await conn.execute(
             select(func.count()).select_from(turns_table)
-            .where(turns_table.c.session_id == session_id)
+            .where(turns_table.c.session_id == pk)
         )).scalar_one()
 
 
 async def turn_sizes(store, session_id="s"):
+    pk = await local_pk(store, session_id)
     msg_count = (
         select(func.count(messages_table.c.id))
         .where(messages_table.c.turn_id == turns_table.c.id)
@@ -59,7 +100,7 @@ async def turn_sizes(store, session_id="s"):
     async with store.engine.connect() as conn:
         rows = (await conn.execute(
             select(turns_table.c.seq, msg_count)
-            .where(turns_table.c.session_id == session_id)
+            .where(turns_table.c.session_id == pk)
             .order_by(turns_table.c.seq.asc())
         )).all()
     return [count for _, count in rows]

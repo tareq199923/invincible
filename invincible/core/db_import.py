@@ -1,14 +1,18 @@
 # invincible/core/db_import.py
-"""One-shot legacy SQLite -> PostgreSQL importer (Phase 16).
+"""One-shot legacy SQLite -> PostgreSQL importer.
 
 Reads a Phase <= 15 ``sessions.db`` (aiosqlite-era schema) with the stdlib
-``sqlite3`` module in read-only mode and copies every row into the Phase 16
-PostgreSQL tables, preserving primary keys so foreign keys stay intact:
+``sqlite3`` module in read-only mode and copies every row into the current
+PostgreSQL tables:
 
-- ``sessions_v2`` -> ``sessions`` (``turns``/``messages`` keep their names)
-- ``facts`` -> ``facts``
+- ``sessions_v2`` -> ``sessions``. Since Platform Phase 1 the target has
+  surrogate identity: legacy session strings become ``client_session_id``
+  rows under the system *local* owner (resolved-or-created inside the same
+  transaction), and turns are remapped to the new surrogate ids while
+  keeping their explicit legacy ids.
+- ``turns`` / ``messages`` / ``facts`` -> same names (ids preserved).
 - ``oauth_clients`` / ``oauth_codes`` / ``oauth_tokens`` -> same names
-  (redirect_uris JSON text becomes JSONB, used/revoked ints become bools)
+  (redirect_uris JSON text becomes JSONB, used/revoked ints become bools).
 
 Pending actions are deliberately NOT imported: staged actions expire after
 10 minutes by design, so importing them would only resurrect stale rows.
@@ -22,7 +26,7 @@ all.
 import json
 import sqlite3
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from invincible.core.db import (
@@ -31,6 +35,7 @@ from invincible.core.db import (
     oauth_clients,
     oauth_codes,
     oauth_tokens,
+    seed_local_owner_conn,
     sessions,
     turns,
 )
@@ -74,22 +79,61 @@ async def import_legacy_sqlite(engine, sqlite_path: str) -> dict[str, int]:
             has_turns = _table_exists(legacy, "turns")
             has_messages = _table_exists(legacy, "messages")
 
-            counts["sessions"] = await _insert(
-                sessions,
-                ("session_id", "created_at", "updated_at"),
+            # Sessions land under the system *local* owner: legacy strings
+            # become client_session_id rows (resolve-or-create on the
+            # ownership triple), and turns remap onto the new surrogate ids.
+            owner_user_id, owner_project_id = await seed_local_owner_conn(
+                conn
+            )
+            legacy_session_rows = (
                 _rows(
                     legacy,
                     "SELECT session_id, created_at, updated_at "
                     "FROM sessions_v2",
-                ) if has_sessions else [],
+                )
+                if has_sessions else []
             )
+            counts["sessions"] = 0
+            for session_id, created_at, updated_at in legacy_session_rows:
+                result = await conn.execute(
+                    pg_insert(sessions)
+                    .values(user_id=owner_user_id,
+                            project_id=owner_project_id,
+                            client_session_id=session_id,
+                            created_at=created_at,
+                            updated_at=updated_at)
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            "user_id", "project_id", "client_session_id"])
+                )
+                counts["sessions"] += result.rowcount or 0
+
+            pk_by_legacy_string: dict[str, int] = {
+                client_session_id: int(pk)
+                for pk, client_session_id in (await conn.execute(
+                    select(sessions.c.id, sessions.c.client_session_id)
+                    .where(sessions.c.user_id == owner_user_id,
+                           sessions.c.project_id == owner_project_id)
+                )).all()
+            }
 
             turn_rows = (
                 _rows(legacy, "SELECT id, session_id, seq FROM turns")
                 if has_turns else []
             )
+            mapped_turn_rows = []
+            for turn_id, session_id, seq in turn_rows:
+                if session_id not in pk_by_legacy_string:
+                    # Legacy FK integrity makes this impossible; fail loudly
+                    # rather than silently dropping history.
+                    raise RuntimeError(
+                        f"legacy turn {turn_id} references unknown session "
+                        f"{session_id!r}"
+                    )
+                mapped_turn_rows.append(
+                    (turn_id, pk_by_legacy_string[session_id], seq))
             counts["turns"] = await _insert(
-                turns, ("id", "session_id", "seq"), turn_rows
+                turns, ("id", "session_id", "seq"), mapped_turn_rows
             )
 
             message_rows = (
