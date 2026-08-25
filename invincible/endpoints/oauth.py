@@ -17,7 +17,6 @@ import hashlib
 import hmac
 import html
 import logging
-import os
 import re
 import time
 from urllib.parse import parse_qsl, urlencode, urlparse
@@ -33,6 +32,7 @@ from invincible.core.oauth_store import (
     OAuthStore,
     token_hash,
 )
+from invincible.core.settings import settings
 
 logger = logging.getLogger("invincible.oauth")
 
@@ -143,12 +143,12 @@ AUTHORIZE_PARAMS = (
 def owner_secret() -> str | None:
     """Return the owner-login secret, falling back to the legacy
     MCP_SHARED_SECRET alias (one-time deprecation notice) so existing .env
-    values keep working."""
+    values keep working. Env names live in core.settings."""
     global _legacy_warned
-    secret = os.environ.get(OWNER_SECRET_ENV)
+    secret = settings.owner_secret()
     if secret:
         return secret
-    secret = os.environ.get(LEGACY_OWNER_SECRET_ENV)
+    secret = settings.legacy_owner_secret()
     if secret and not _legacy_warned:
         _legacy_warned = True
         logger.warning(

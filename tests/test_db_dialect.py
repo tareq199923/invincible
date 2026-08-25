@@ -211,6 +211,8 @@ def test_metadata_covers_all_expected_tables():
         "sessions", "turns", "messages", "facts", "runs", "task_states",
         "checkpoints", "oauth_clients", "oauth_codes", "oauth_tokens",
         "pending_actions", "login_attempts",
+        # Phase 3 accounts
+        "user_identities", "device_codes",
     }
     assert set(metadata.tables) == expected
 

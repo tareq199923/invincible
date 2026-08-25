@@ -216,19 +216,23 @@ class AuditLog:
 
 
 class LoginRateLimiter:
-    """Persistent fixed-window lockout for owner-login failures (Phase 2).
+    """Persistent fixed-window lockout for login forms (Phase 2).
 
-    Replaces the Phase-1-era in-memory dict: state lives in the
-    ``login_attempts`` table, so a restart no longer clears an attacker's
-    counter. Same semantics as before - ``max_attempts`` failures inside
-    ``window_seconds`` from one IP lock it out for the rest of the window.
-    Expired windows reset lazily on check/record; rows are deleted when a
-    window resets to keep the table bounded.
+    State lives in the ``login_attempts`` table, so a restart no longer
+    clears an attacker's counter. Same semantics as before -
+    ``max_attempts`` failures inside ``window_seconds`` from one IP lock
+    it out for the rest of the window. Expired windows reset lazily on
+    check/record; rows are deleted when a window resets to keep the table
+    bounded. Since Phase 3 each instance targets one ``scope`` ("owner"
+    for OAuth-consent login, "auth-login" for /auth/login) so realms
+    never share counters.
     """
 
-    def __init__(self, engine, *, max_attempts: int = 5,
+    def __init__(self, engine, *, scope: str = "owner",
+                 max_attempts: int = 5,
                  window_seconds: float = 15 * 60):
         self.engine = engine
+        self.scope = scope
         self.max_attempts = max_attempts
         self.window_seconds = window_seconds
 
@@ -244,12 +248,14 @@ class LoginRateLimiter:
             row = (await conn.execute(
                 select(login_attempts.c.count,
                        login_attempts.c.window_start)
-                .where(login_attempts.c.ip == ip)
+                .where(login_attempts.c.ip == ip,
+                       login_attempts.c.scope == self.scope)
             )).mappings().first()
             if row is not None and self._expired(row, now):
                 await conn.execute(
                     delete(login_attempts)
-                    .where(login_attempts.c.ip == ip)
+                    .where(login_attempts.c.ip == ip,
+                           login_attempts.c.scope == self.scope)
                 )
                 return None
             if row is None or row["count"] < self.max_attempts:
@@ -270,7 +276,8 @@ class LoginRateLimiter:
             existing = (await conn.execute(
                 select(login_attempts.c.window_start,
                        login_attempts.c.count)
-                .where(login_attempts.c.ip == ip)
+                .where(login_attempts.c.ip == ip,
+                       login_attempts.c.scope == self.scope)
             )).first()
             expired = existing is not None and self._expired(
                 {"window_start": existing[0]}, now
@@ -278,10 +285,11 @@ class LoginRateLimiter:
             if existing is None or expired:
                 await conn.execute(
                     pg_insert(login_attempts)
-                    .values(ip=ip, window_start=now, count=1,
-                            updated_at=now)
+                    .values(ip=ip, scope=self.scope, window_start=now,
+                            count=1, updated_at=now)
                     .on_conflict_do_update(
-                        index_elements=[login_attempts.c.ip],
+                        index_elements=[login_attempts.c.ip,
+                                        login_attempts.c.scope],
                         set_={"window_start": now, "count": 1,
                               "updated_at": now},
                     )
@@ -289,7 +297,8 @@ class LoginRateLimiter:
             else:
                 await conn.execute(
                     update(login_attempts)
-                    .where(login_attempts.c.ip == ip)
+                    .where(login_attempts.c.ip == ip,
+                           login_attempts.c.scope == self.scope)
                     .values(count=existing[1] + 1, updated_at=now)
                 )
 
@@ -299,5 +308,8 @@ class LoginRateLimiter:
 
         async with self.engine.begin() as conn:
             await conn.execute(
-                delete(login_attempts).where(login_attempts.c.ip == ip)
+                delete(login_attempts).where(
+                    login_attempts.c.ip == ip,
+                    login_attempts.c.scope == self.scope,
+                )
             )

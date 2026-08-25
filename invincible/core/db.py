@@ -31,6 +31,7 @@ from sqlalchemy import (
     Index,
     Integer,
     MetaData,
+    PrimaryKeyConstraint,
     String,
     Table,
     Text,
@@ -227,6 +228,9 @@ projects = Table(
     Column("user_id", BigInteger, ForeignKey("users.id"), nullable=False),
     Column("name", Text, nullable=False),
     Column("is_default", Boolean, nullable=False, server_default="false"),
+    # Phase 3 soft archive: non-NULL hides the project from default
+    # listings; rows (and their sessions) are kept verbatim.
+    Column("archived_at", Float),
     Column("created_at", Float, nullable=False),
     UniqueConstraint("user_id", "name", name="uq_projects_user_name"),
 )
@@ -515,10 +519,16 @@ oauth_tokens = Table(
 login_attempts = Table(
     "login_attempts",
     metadata,
-    Column("ip", Text, primary_key=True),
+    Column("ip", Text),
+    # Phase 3: which lockout counter a row belongs to ("owner" = OAuth
+    # consent login, "auth-login" = /auth/login). Realms must not share
+    # counters - an attacker hammering one form would otherwise lock the
+    # other out too.
+    Column("scope", Text, nullable=False, server_default="owner"),
     Column("window_start", Float, nullable=False),
     Column("count", Integer, nullable=False),
     Column("updated_at", Float, nullable=False),
+    PrimaryKeyConstraint("ip", "scope", name="pk_login_attempts_ip_scope"),
 )
 
 
@@ -532,4 +542,51 @@ pending_actions = Table(
     Column("type", String, nullable=False),
     Column("args", JSONB, nullable=False),
     Column("created_at", Float, nullable=False),
+)
+
+
+# ---------------------------------------------------------------------------
+# Platform Phase 3: accounts
+
+# Browser sessions are stateless signed cookies (core.accounts.SessionManager),
+# so there is no session table - logout is client-side cookie clearing and
+# expiry is baked into the signature payload.
+
+# External identity links (GitHub today; provider column keeps the door
+# open for others). ``provider_account_id`` is the provider's stable user
+# id (GitHub numeric id, immune to username renames).
+user_identities = Table(
+    "user_identities",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id"), nullable=False),
+    Column("provider", Text, nullable=False),
+    Column("provider_account_id", Text, nullable=False),
+    Column("created_at", Float, nullable=False),
+    UniqueConstraint(
+        "provider", "provider_account_id",
+        name="uq_user_identities_provider_account",
+    ),
+)
+
+Index("idx_user_identities_user", user_identities.c.user_id)
+
+# RFC 8628-style device pairing. The primary key is the sha256 hex of the
+# raw device_code (same discipline as oauth_tokens/api_keys); the short
+# human-typed user_code is unique. Status lifecycle:
+# pending -> approved | denied -> complete (claimed by one token poll).
+device_codes = Table(
+    "device_codes",
+    metadata,
+    Column("device_code_hash", Text, primary_key=True),
+    Column("user_code", Text, nullable=False, unique=True),
+    # Set at approval time; the API key itself is minted only when the
+    # polling CLI successfully claims the approval (raw value shown once).
+    Column("subject_user_id", BigInteger, ForeignKey("users.id")),
+    Column("status", Text, nullable=False, server_default="pending"),
+    Column("interval_seconds", Float, nullable=False, server_default="5"),
+    Column("created_at", Float, nullable=False),
+    Column("expires_at", Float, nullable=False),
+    Column("last_poll_at", Float),
+    Column("resolved_at", Float),
 )
