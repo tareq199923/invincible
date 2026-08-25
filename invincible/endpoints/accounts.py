@@ -18,17 +18,19 @@ GitHub login is an OAuth App authorization-code flow. GitHub OAuth Apps
 have no PKCE, so CSRF is handled with a signed single-use state cookie;
 only VERIFIED GitHub emails may auto-link or auto-register.
 """
-import html
 import logging
 import secrets
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
 
 from invincible.core.accounts import (
     DEFAULT_POLL_INTERVAL,
     DEVICE_CODE_TTL,
     GITHUB_STATE_COOKIE,
+    MIN_PASSWORD_LEN,
     SESSION_COOKIE,
     SESSION_TTL,
     AccountError,
@@ -47,6 +49,7 @@ from invincible.core.identity import (
     ensure_default_project,
 )
 from invincible.core.principal import Principal
+from invincible.core.settings import settings
 from invincible.endpoints.auth import extract_token
 from invincible.endpoints.oauth import _client_ip, _parse_form
 
@@ -56,6 +59,11 @@ router = APIRouter()
 
 AUTH_LOGIN_MAX_ATTEMPTS = 5
 AUTH_LOGIN_WINDOW_SECONDS = 15 * 60
+
+# Jinja2 templates ship inside the package (no static pipeline; forms POST
+# to the same /auth/* endpoints the API uses).
+_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
 def _engine(request: Request):
@@ -100,6 +108,25 @@ async def _payload(request: Request) -> dict:
             return {}
         return body if isinstance(body, dict) else {}
     return await _parse_form(request)
+
+
+def _wants_html(request: Request) -> bool:
+    """Form-encoded posts come from the browser pages and get redirects /
+    rendered errors back; everything else keeps structured JSON."""
+    return "application/x-www-form-urlencoded" in (
+        request.headers.get("content-type", ""))
+
+
+def _safe_next(target: str) -> str | None:
+    """Only same-origin relative paths may drive a post-login bounce."""
+    if target.startswith("/") and not target.startswith("//"):
+        return target
+    return None
+
+
+def _page(template_name: str, request: Request, **context):
+    return templates.TemplateResponse(
+        request, template_name, context)
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +202,25 @@ def _set_session_cookie_for(request: Request, response, user_id: int) -> None:
 # Registration + password login
 
 
+@router.get("/login")
+async def login_page(request: Request):
+    if SessionManager.verify(request.cookies.get(SESSION_COOKIE)) is not None:
+        return RedirectResponse("/account", status_code=302)
+    github_error = "github_error" in request.query_params
+    return _page(
+        "login.html", request,
+        error="GitHub sign-in failed; try again or use your password."
+        if github_error else None,
+        github_enabled=settings.github_client_id() is not None,
+    )
+
+
+@router.get("/register")
+async def register_page(request: Request):
+    return _page("register.html", request,
+                 min_password_len=MIN_PASSWORD_LEN, error=None)
+
+
 @router.post("/auth/register")
 async def register(request: Request):
     if not SessionManager.available():
@@ -190,10 +236,19 @@ async def register(request: Request):
         user = await service.register(
             str(body.get("email", "")), str(body.get("password", "")))
     except AccountError as exc:
+        if _wants_html(request):
+            return _page(
+                "register.html", request, error=exc.message,
+                min_password_len=MIN_PASSWORD_LEN,
+            )
         return _error_response(exc)
     project_id = await ensure_default_project(_engine(request), user["id"])
     await _audit(request, "auth.registered", actor_user_id=user["id"],
                  resource_type="user", resource_id=str(user["id"]))
+    if _wants_html(request):
+        response = RedirectResponse("/account", status_code=303)
+        _set_session_cookie_for(request, response, user["id"])
+        return response
     response = JSONResponse(
         {"id": user["id"], "email": user["email"],
          "project_id": project_id},
@@ -218,10 +273,12 @@ async def login(request: Request):
     if locked_for is not None:
         await _audit(request, "auth.login_locked_out",
                      resource_type="client_ip", resource_id=ip)
+        message = (f"Too many failed attempts; retry in {locked_for}s.")
+        if _wants_html(request):
+            return _page("login.html", request, error=message,
+                         github_enabled=False)
         return JSONResponse(
-            {"error": {"code": "locked_out",
-                       "message": f"Too many failed attempts; "
-                                  f"retry in {locked_for}s."}},
+            {"error": {"code": "locked_out", "message": message}},
             status_code=429,
         )
     body = await _payload(request)
@@ -232,15 +289,25 @@ async def login(request: Request):
         # Enumeration-safe: unknown email and wrong password are identical.
         await _audit(request, "auth.login_failed",
                      resource_type="client_ip", resource_id=ip)
+        message = "Invalid email or password."
+        if _wants_html(request):
+            return _page("login.html", request, error=message,
+                         github_enabled=settings.github_client_id()
+                         is not None)
         return JSONResponse(
             {"error": {"code": "invalid_credentials",
-                       "message": "Invalid email or password."}},
+                       "message": message}},
             status_code=401,
         )
     await limiter.reset(ip)
     project_id = await ensure_default_project(_engine(request), user["id"])
     await _audit(request, "auth.logged_in", actor_user_id=user["id"],
                  resource_type="user", resource_id=str(user["id"]))
+    if _wants_html(request):
+        target = _safe_next(str(body.get("next", ""))) or "/account"
+        response = RedirectResponse(target, status_code=303)
+        _set_session_cookie_for(request, response, user["id"])
+        return response
     response = JSONResponse({"id": user["id"], "email": user["email"],
                              "project_id": project_id})
     _set_session_cookie_for(request, response, user["id"])
@@ -250,12 +317,33 @@ async def login(request: Request):
 @router.post("/auth/logout")
 async def logout(request: Request):
     uid = SessionManager.verify(request.cookies.get(SESSION_COOKIE))
-    response = JSONResponse({"ok": True})
+    if _wants_html(request):
+        response = RedirectResponse("/login", status_code=303)
+    else:
+        response = JSONResponse({"ok": True})
     response.delete_cookie(SESSION_COOKIE, path="/")
     if uid is not None:
         await _audit(request, "auth.logged_out", actor_user_id=uid,
                      resource_type="user", resource_id=str(uid))
     return response
+
+
+@router.get("/account")
+async def account_page(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    engine = _engine(request)
+    user = await UserService(engine).get(principal.user_id)
+    linked = await IdentityStore(engine).account_ids_for(
+        principal.user_id, "github")
+    return _page(
+        "account.html", request,
+        email=user["email"] if user else "unknown",
+        projects=await ProjectService(engine).list(principal.user_id),
+        api_keys=await ApiKeyStore(engine).list(principal.user_id),
+        github_linked=bool(linked),
+    )
 
 
 @router.get("/auth/me")
@@ -414,35 +502,6 @@ async def list_sessions(
 # Device-code pairing (RFC 8628-flavored)
 
 
-DEVICE_PAGE_HTML = """<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Invincible - Device pairing</title></head>
-<body>
-<h1>Device pairing request</h1>
-<p>A CLI at this machine wants an Invincible API key for
-<strong>{email}</strong>. Approve only if you initiated it.</p>
-<form method="post" action="/auth/devices/{user_code}/approve"
- style="display:inline">
-<button type="submit">Approve</button>
-</form>
-&nbsp;
-<form method="post" action="/auth/devices/{user_code}/deny"
- style="display:inline">
-<button type="submit">Deny</button>
-</form>
-{extra}
-</body>
-</html>
-"""
-
-DEVICE_RESULT_HTML = """<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Invincible - Device pairing</title></head>
-<body><h1>{title}</h1><p>{message}</p></body>
-</html>
-"""
-
-
 @router.post("/auth/device/code")
 async def device_code_start(request: Request):
     interval = DEFAULT_POLL_INTERVAL
@@ -459,10 +518,11 @@ async def device_code_start(request: Request):
     }
 
 
-def _device_result(title: str, message: str, status_code: int = 200):
-    return HTMLResponse(
-        DEVICE_RESULT_HTML.format(title=html.escape(title),
-                                  message=html.escape(message)),
+def _device_result(request: Request, title: str, message: str,
+                   status_code: int = 200):
+    return templates.TemplateResponse(
+        request, "device_result.html",
+        {"title": title, "message": message},
         status_code=status_code,
     )
 
@@ -476,15 +536,16 @@ async def device_page(
     pending = await DeviceCodeStore(_engine(request)).get_by_user_code(
         user_code)
     if pending is None:
-        return _device_result("Unknown or expired code",
+        return _device_result(request, "Unknown or expired code",
                               "Start the pairing flow again.", 404)
     user = await UserService(_engine(request)).get(principal.user_id)
     email = user["email"] if user else "unknown"
-    return HTMLResponse(DEVICE_PAGE_HTML.format(
-        email=html.escape(email),
-        user_code=html.escape(user_code.strip().upper()),
-        extra="",
-    ))
+    return _page(
+        "device.html", request,
+        email=email,
+        user_code=user_code.strip().upper(),
+        error=None,
+    )
 
 
 @router.post("/auth/devices/{user_code}/approve")
@@ -496,12 +557,12 @@ async def device_approve(
     approved = await DeviceCodeStore(_engine(request)).approve(
         user_code, principal.user_id)
     if not approved:
-        return _device_result("Unknown or expired code",
+        return _device_result(request, "Unknown or expired code",
                               "Start the pairing flow again.", 404)
     await _audit(request, "device.approved", actor_user_id=principal.user_id,
                  resource_type="device_code",
                  resource_id=user_code.strip().upper())
-    return _device_result("Device approved",
+    return _device_result(request, "Device approved",
                           "Return to your terminal - your key is being "
                           "issued.")
 
@@ -514,12 +575,13 @@ async def device_deny(
 ):
     denied = await DeviceCodeStore(_engine(request)).deny(user_code)
     if not denied:
-        return _device_result("Unknown or expired code",
+        return _device_result(request, "Unknown or expired code",
                               "Start the pairing flow again.", 404)
     await _audit(request, "device.denied", actor_user_id=principal.user_id,
                  resource_type="device_code",
                  resource_id=user_code.strip().upper())
-    return _device_result("Device denied", "The pairing request was rejected.")
+    return _device_result(request, "Device denied",
+                          "The pairing request was rejected.")
 
 
 @router.post("/auth/device/token")
@@ -568,14 +630,14 @@ async def github_login(request: Request):
     gh = GitHubOAuth.from_settings()
     if gh is None:
         return _device_result(
-            "GitHub login disabled",
+            request, "GitHub login disabled",
             "Set INVINCIBLE_GITHUB_CLIENT_ID and "
             "INVINCIBLE_GITHUB_CLIENT_SECRET to enable it.", 503)
     state = secrets.token_urlsafe(16)
     signed = sign_value(state, ttl_seconds=600)
     if signed is None:
         return _device_result(
-            "Sessions disabled",
+            request, "Sessions disabled",
             "Set INVINCIBLE_OWNER_SECRET before enabling logins.", 503)
     try:
         url = gh.build_authorize_url(state, _github_callback_url(request))
@@ -593,7 +655,7 @@ async def github_login(request: Request):
 async def github_callback(request: Request):
     gh = GitHubOAuth.from_settings()
     if gh is None:
-        return _device_result("GitHub login disabled",
+        return _device_result(request, "GitHub login disabled",
                               "Client credentials are not configured.", 503)
 
     def _error(_reason: str) -> RedirectResponse:

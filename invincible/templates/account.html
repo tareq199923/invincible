@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Account - Invincible{% endblock %}
+{% block content %}
+<h2>Account</h2>
+<p>Signed in as <strong>{{ email }}</strong>
+{% if github_linked %}<span class="muted">(GitHub linked)</span>{% endif %}</p>
+
+<h3>Projects</h3>
+<ul class="plain">
+  {% for project in projects %}
+  <li>{{ project.name }}{% if project.is_default %}
+      <span class="muted">(default)</span>{% endif %}
+      {% if project.archived_at %}<span class="muted">(archived)</span>{% endif %}
+  </li>
+  {% else %}
+  <li class="muted">No projects yet.</li>
+  {% endfor %}
+</ul>
+
+<h3>API keys</h3>
+<table>
+  <tr><th>Prefix</th><th>Label</th><th>Created</th><th>Status</th></tr>
+  {% for key in api_keys %}
+  <tr>
+    <td><code>{{ key.prefix }}</code></td>
+    <td>{{ key.label }}</td>
+    <td class="muted">{{ key.created_at | int }}</td>
+    <td>{% if key.revoked_at %}revoked{% else %}active{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4" class="muted">No API keys yet - create one with
+      <code>invincible login</code> or the HTTP API.</td></tr>
+  {% endfor %}
+</table>
+
+<form method="post" action="/auth/logout">
+  <button type="submit">Sign out</button>
+</form>
+{% endblock content %}

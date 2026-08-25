@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Register - Invincible{% endblock %}
+{% block content %}
+<h2>Create account</h2>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" action="/auth/register">
+  <label for="email">Email</label>
+  <input type="email" id="email" name="email" autofocus required>
+  <label for="password">Password ({{ min_password_len }}+ characters)</label>
+  <input type="password" id="password" name="password" minlength="8"
+         required>
+  <button type="submit">Create account</button>
+</form>
+<p class="muted">Already registered? <a href="/login">Sign in</a></p>
+{% endblock content %}

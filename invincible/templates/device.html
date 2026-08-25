@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Device pairing - Invincible{% endblock %}
+{% block content %}
+<h2>Device pairing request</h2>
+<p>A CLI is requesting an Invincible API key for
+<strong>{{ email }}</strong>. Approve only if you initiated this.</p>
+<p>Code: <code class="user-code">{{ user_code }}</code></p>
+<form method="post" action="/auth/devices/{{ user_code }}/approve"
+      style="display:inline">
+  <button type="submit">Approve</button>
+</form>
+&nbsp;
+<form method="post" action="/auth/devices/{{ user_code }}/deny"
+      style="display:inline">
+  <button type="submit">Deny</button>
+</form>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% endblock content %}

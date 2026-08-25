@@ -1315,6 +1315,126 @@ def api_key_revoke(key_ref):
 # --- local dev database -------------------------------------------------------
 
 
+@click.command("login")
+@click.option("--server", default="http://127.0.0.1:8000",
+              show_default=True, envvar="INVINCIBLE_SERVER")
+@click.option("--config", "config_path",
+              type=click.Path(dir_okay=False, path_type=str), default=None,
+              help="Where to store the paired credentials "
+                   "(default ~/.invincible/config.json).")
+def login(server: str, config_path: str | None):
+    """Pair this machine with an Invincible server (device flow).
+
+    Prints a URL + short code; approve the request in a browser where you
+    are signed in, and this command stores the minted API key locally.
+    """
+    server = server.rstrip("/")
+
+    async def _run():
+        async def _on_code(url: str, code: str) -> None:
+            click.echo(f"1. Open:  {url}")
+            click.echo(f"2. Code:  {code}  (approve within 10 minutes)")
+
+        return await _pair_device(server, on_code=_on_code)
+
+    try:
+        token = run_coro_sync(_run())
+    except _DevicePairError as exc:
+        raise click.ClickException(f"Device pairing failed: {exc}") from exc
+    path = _save_client_config(
+        server=server, api_key=token["access_token"], path=config_path)
+    click.echo(f"Paired. API key {token['prefix']} saved to {path}")
+
+
+# --- device pairing plumbing (shared by tests via ASGI transport) ------------
+
+CLIENT_CONFIG_DIRNAME = ".invincible"
+CLIENT_CONFIG_FILENAME = "config.json"
+
+
+class _DevicePairError(Exception):
+    """The pairing request failed, was denied, or expired."""
+
+
+async def _pair_device(base_url: str, *, client=None,
+                       sleep=None,
+                       on_code=None) -> dict:
+    """RFC 8628-style client loop against ``POST /auth/device/code`` and
+    ``/auth/device/token``. ``sleep`` and ``client`` are injectable so
+    tests run this hermetically against the ASGI app."""
+    import httpx
+
+    owns_client = client is None
+    http = client or httpx.AsyncClient(base_url=base_url, timeout=30)
+    tick = sleep or asyncio.sleep
+    try:
+        started = await http.post(f"{base_url}/auth/device/code")
+        started.raise_for_status()
+        payload = started.json()
+        device_code = payload["device_code"]
+        interval = float(payload.get("interval", 5))
+        expires_in = float(payload.get("expires_in", 600))
+        verification_uri = payload.get("verification_uri",
+                                       f"{base_url}/login")
+        user_code = payload["user_code"]
+        if on_code is not None:
+            result = on_code(verification_uri, user_code)
+            if hasattr(result, "__await__"):
+                await result
+
+        deadline = time.monotonic() + expires_in
+        form = {"grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                "device_code": device_code}
+        while True:
+            if time.monotonic() >= deadline:
+                raise _DevicePairError("the code expired before approval")
+            polled = await http.post(f"{base_url}/auth/device/token",
+                                     data=form)
+            data = polled.json()
+            error = data.get("error")
+            if polled.status_code == 200 and not error:
+                return data
+            if error == "authorization_pending":
+                await tick(interval)
+                continue
+            if error == "slow_down":
+                interval = max(interval,
+                               float(data.get("interval", interval)))
+                await tick(interval)
+                continue
+            raise _DevicePairError(
+                data.get("error_description") or error or
+                f"HTTP {polled.status_code}")
+    finally:
+        if owns_client:
+            await http.aclose()
+
+
+def _client_config_path(explicit: str | None = None) -> str:
+    if explicit:
+        return explicit
+    home = os.path.expanduser("~")
+    return os.path.join(home, CLIENT_CONFIG_DIRNAME,
+                        CLIENT_CONFIG_FILENAME)
+
+
+def _save_client_config(*, server: str, api_key: str,
+                        path: str | None = None) -> str:
+    """Persist pairing credentials for later CLI/API use. The raw key sits
+    in a user-owned file - same trust level as any local credential."""
+    import json
+
+    target = _client_config_path(path)
+    directory = os.path.dirname(target)
+    os.makedirs(directory, exist_ok=True)
+    with open(target, "w", encoding="utf-8") as handle:
+        json.dump({"server": server, "api_key": api_key}, handle)
+    # best effort on platforms without mode bits (Windows)
+    with contextlib.suppress(OSError):
+        os.chmod(target, 0o600)
+    return target
+
+
 @click.command("dev-db")
 @click.option("--port", default=DEV_DB_PORT, show_default=True, type=int,
               help="Local Postgres port to probe (and to publish when "
@@ -1428,6 +1548,7 @@ def cli():
 
 cli.add_command(setup)
 cli.add_command(start)
+cli.add_command(login)
 cli.add_command(doctor)
 cli.add_command(secret)
 cli.add_command(oauth)

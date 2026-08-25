@@ -10,11 +10,14 @@ non-obvious algorithms (context trimming, cooldowns, config resolution).
 ```
 invincible/
 ├── main.py                     FastAPI app, lifespan, auth wiring, /health, HEAD /
-├── cli.py                      Click CLI (setup / start / doctor / dev-db / db / oauth / secret / api-key)
+├── cli.py                      Click CLI (setup / start / login / doctor / dev-db / db / oauth / secret / api-key)
 ├── providers.yaml              Canonical provider config (packaged)
-├── migrations/                 Packaged Alembic environment (0001 baseline, 0002 identity)
+├── templates/                  Jinja2 account UI (login/register/account/device pages)
+├── migrations/                 Packaged Alembic environment (0001 baseline … 0004 accounts)
 ├── endpoints/
 │   ├── auth.py                 require_auth: dual-realm Principal resolution for /v1/* (Phase 1)
+│   ├── accounts.py             Phase 3: /auth/*, /projects, /api-keys, /sessions,
+│   │                           device pairing, GitHub login (session-cookie realm)
 │   ├── openai_compat.py        POST /v1/chat/completions, GET /v1/models
 │   ├── anthropic_compat.py     POST /v1/messages (Anthropic protocol)
 │   ├── mcp.py                  POST /mcp (JSON-RPC 2.0 dispatch, Bearer resource server)
@@ -31,8 +34,10 @@ invincible/
     ├── router.py               Provider loading, failover, trimming, timeouts
     ├── provider_health.py      Per-provider failure counts + cooldowns
     ├── settings.py             Typed live-read accessors for every INVINCIBLE_* variable
-    ├── principal.py            Authenticated Principal model (legacy | api_key | anonymous)
+    ├── principal.py            Authenticated Principal model (legacy | api_key | anonymous | session)
     ├── identity.py             Phase 1: argon2id primitives, API-key lifecycle, audit log
+    ├── accounts.py             Phase 3: UserService/SessionManager/ProjectService/
+    │                           DeviceCodeStore/IdentityStore/GitHubOAuth
     ├── db.py                   Engine factory + schema metadata + local-owner bootstrap
     ├── session_store.py        Conversation memory on PostgreSQL (sessions/turns/messages)
     ├── oauth_store.py          OAuth store on PostgreSQL (clients, codes, hashed tokens)

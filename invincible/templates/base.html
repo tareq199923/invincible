@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Invincible{% endblock %}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem;
+           margin: 3rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 a { text-decoration: none; color: inherit; }
+    label { display: block; margin-top: 0.9rem; font-weight: 600; }
+    input[type=email], input[type=password], input[type=text] {
+      width: 100%; padding: 0.5rem; margin-top: 0.25rem;
+      border: 1px solid #bbb; border-radius: 4px; box-sizing: border-box; }
+    button { margin-top: 1rem; padding: 0.5rem 1.2rem; cursor: pointer; }
+    .error { color: #900; margin-top: 0.75rem; }
+    .muted { color: #666; font-size: 0.9rem; }
+    code.user-code { font-size: 1.4rem; letter-spacing: 0.15em; }
+    table { border-collapse: collapse; width: 100%; }
+    td, th { text-align: left; padding: 0.35rem 0.5rem;
+             border-bottom: 1px solid #eee; }
+    ul.plain { list-style: none; padding: 0; }
+  </style>
+</head>
+<body>
+<h1><a href="/">Invincible</a></h1>
+{% block content %}{% endblock %}
+</body>
+</html>

@@ -67,6 +67,36 @@ browser-based owner-login and per-client consent.
 Implemented in `invincible/endpoints/mcp.py::require_mcp_auth` (resource
 server) and `invincible/endpoints/oauth.py` (authorization server).
 
+### Accounts — browser sessions + per-user management (Platform Phase 3)
+
+| Property | Value |
+|---|---|
+| Surface | `/auth/*`, `/projects*`, `/api-keys*`, `/sessions` (Phase 3) |
+| Auth | `invincible_session` cookie: `v1.<uid>.<expiry>.<HMAC-SHA256>`, HttpOnly, SameSite=Lax; key derived from `INVINCIBLE_OWNER_SECRET` |
+| Failure mode | **Fail closed** — with no owner secret configured the HMAC key would be publicly computable, so no session is ever issued or accepted (503) |
+| Management alt-realm | A user's own `inv_` API key also works on `/api-keys`; MCP bearer tokens and `GATEWAY_API_KEY` are rejected by construction (`ApiKeyStore.resolve` matches only `inv_` hashes) |
+
+Properties of this realm:
+
+- Passwords are argon2id-hashed. Login failures are enumeration-safe
+  (unknown email ≡ wrong password) and feed a persistent per-IP lockout in
+  its own `login_attempts` scope (`auth-login`) so hammering one form never
+  locks the other.
+- Registration is an explicit duplicate-email 409; only the login path
+  stays silent about account existence.
+- **GitHub login** uses an OAuth App authorization-code flow. GitHub OAuth
+  Apps have no PKCE, so CSRF is handled with a signed single-use state
+  cookie. Only *verified* primary emails may auto-link to an existing local
+  account or auto-register a new one (GitHub-only accounts keep
+  `password_hash` NULL). Once an account owns a GitHub identity, a second,
+  different GitHub identity claiming the same verified email is refused
+  instead of silently attached.
+- Device pairing (`/auth/device/*`, used by `invincible login`) stores only
+  the SHA-256 hash of the device code; the short human-typed user_code must
+  be approved by a logged-in browser session via POST forms; approval is
+  single-winner and the minted API key raw value appears exactly once, in
+  the successful token poll.
+
 ### The layering principle
 
 `tool_executor.py` (the code that actually runs commands and writes files)
@@ -425,6 +455,18 @@ sandbox:
    prompts in their own session. Payloads are size-capped and never
    treated as instructions by Invincible itself.
 11. **Graph API shows raw snippets.** `/api/v1/sessions/{id}/graph`
-   includes first-message JSON snippets per turn — admin-realm only
-   (`INVINCIBLE_ADMIN_KEY`), same exposure class as reading the session
-   via other management endpoints.
+    includes first-message JSON snippets per turn — admin-realm only
+    (`INVINCIBLE_ADMIN_KEY`), same exposure class as reading the session
+    via other management endpoints.
+12. **Account sessions inherit the owner-secret key.** The Phase 3 cookie
+    realm is signed with a key derived from `INVINCIBLE_OWNER_SECRET`, so
+    rotating that secret (deliberately) logs every browser out — including
+    account sessions, not just OAuth-consent sessions. GitHub login is off
+    until `INVINCIBLE_GITHUB_CLIENT_ID`/`_SECRET` are set; the redirect URI
+    to register on the GitHub app is `<public base URL>/auth/github/callback`.
+13. **GitHub auto-link trusts GitHub's verified-email assertion.** Linking
+    an incoming identity to an existing local account requires GitHub to
+    report that email as verified AND primary. A second GitHub identity
+    reusing the same verified email is rejected (`identity_conflict`) rather
+    than attached. Password-less accounts created through GitHub cannot log
+    in with a password until a reset flow sets one.

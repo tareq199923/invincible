@@ -19,6 +19,7 @@ dependencies = [
     "greenlet",
     "alembic>=1.13",
     "argon2-cffi",
+    "jinja2",
 ]
 
 [project.optional-dependencies]
@@ -41,7 +42,11 @@ version = { attr = "invincible.__version__" }
 include = ["invincible*"]
 
 [tool.setuptools.package-data]
-invincible = ["providers.yaml", "migrations/script.py.mako"]
+invincible = [
+    "providers.yaml",
+    "migrations/script.py.mako",
+    "templates/*.html",
+]
 
 [tool.ruff]
 target-version = "py310"

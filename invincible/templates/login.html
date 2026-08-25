@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Sign in - Invincible{% endblock %}
+{% block content %}
+<h2>Sign in</h2>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" action="/auth/login">
+  <label for="email">Email</label>
+  <input type="email" id="email" name="email" autofocus required>
+  <label for="password">Password</label>
+  <input type="password" id="password" name="password" required>
+  <button type="submit">Sign in</button>
+</form>
+<p class="muted">No account? <a href="/register">Register</a></p>
+{% if github_enabled %}
+<form method="get" action="/auth/github/login">
+  <button type="submit">Sign in with GitHub</button>
+</form>
+{% endif %}
+{% endblock content %}

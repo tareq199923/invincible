@@ -100,19 +100,20 @@ Verified snapshot of shipped capability (file pointers in
 | Continuity | ContinuityEngine: versioned `task_states` per `(session, task_key)` with optimistic CAS (UNIQUE constraint + advisory locks), immutable checkpoints pinning versions, size-bounded continuation-brief injection, interruption detection from runs; MCP tools `task_state_set/get/checkpoint_create`. |
 | Memory | Deterministic `(entity, relation, target)` fact extraction at persist time; idempotent; bounded latest-N system-message injection; `INVINCIBLE_MEMORY*` toggles. |
 | MCP | `POST /mcp` JSON-RPC 2.0: `read_file`, `execute_bash`, `write_file`, `confirm_action`; text-pattern denylists; single-use token approvals bound to the staging subject (same-subject confirmation, audit-written); opt-in PG persistence of staged actions. |
-| Auth | Three separate realms: `/v1/*` resolves a **Principal** dual-realm (Phase 1) — legacy `GATEWAY_API_KEY` bearer/x-api-key timing-safe compare mapping to the system *local* owner, or per-user `inv_*` API keys (SHA-256 hashed at rest, shown once, revocable via CLI); FAILS OPEN to the local identity when the gateway key is unset (loud startup warning); `INVINCIBLE_ADMIN_KEY` on `/api/v1/*` (fail-closed operator override); OAuth 2.1 + PKCE authorization server on `/oauth/*` (dynamic registration, owner-secret browser consent, hashed tokens, refresh rotation, revocation) with consent-stamped user subjects on every client/code/token and persistent owner-login lockouts (`login_attempts`). |
+| Auth | Four separate realms: `/v1/*` resolves a **Principal** dual-realm (Phase 1) — legacy `GATEWAY_API_KEY` bearer/x-api-key timing-safe compare mapping to the system *local* owner, or per-user `inv_*` API keys (SHA-256 hashed at rest, shown once, revocable via CLI); FAILS OPEN to the local identity when the gateway key is unset (loud startup warning); browser sessions on `/auth/*` + `/projects` + `/api-keys` (Phase 3: HMAC-signed HttpOnly cookies, fail-closed without the owner secret); `INVINCIBLE_ADMIN_KEY` on `/api/v1/*` (fail-closed operator override); OAuth 2.1 + PKCE authorization server on `/oauth/*` (dynamic registration, owner-secret browser consent, hashed tokens, refresh rotation, revocation) with consent-stamped user subjects and persistent lockouts (`login_attempts`, scoped per realm since 0004); GitHub login (OAuth App, verified-email auto-link). |
 | Control plane | File-backed ProviderRegistry (CRUD/enable/disable/connectivity-test), `auto`/`pinned`/`chain` routing modes, `GET /api/v1/sessions/{id}/graph` projection. |
-| CLI | `setup` (.env wizard incl. DB URL), `start` (uvicorn + Cloudflare tunnel with an orphan-free lifecycle), `doctor`, `dev-db`, `db upgrade`, `db import` (legacy SQLite), `secret rotate`, `oauth list/revoke/test-client`, `api-key create/list/revoke`. Both `invincible` and `inv`. |
-| Packaging/deploy | pyproject (name `invincible-ai`), packaged `providers.yaml` + migrations, Dockerfile, docker-compose app+postgres pair. |
-| Quality gates | pytest + pytest-asyncio against real Postgres (32 test files); CI runs ruff check + pytest × Python 3.10–3.14 with a postgres:17 service; coverage artifact (~92% at last measurement). |
+| CLI | `setup` (.env wizard incl. DB URL), `start` (uvicorn + Cloudflare tunnel with an orphan-free lifecycle), `login` (device-flow pairing, Phase 3), `doctor`, `dev-db`, `db upgrade`, `db import` (legacy SQLite), `secret rotate`, `oauth list/revoke/test-client`, `api-key create/list/revoke`. Both `invincible` and `inv`. |
+| Packaging/deploy | pyproject (name `invincible-ai`), packaged `providers.yaml` + migrations + Jinja2 templates, Dockerfile, docker-compose app+postgres pair. |
+| Quality gates | pytest + pytest-asyncio against real Postgres; CI runs ruff check + pytest × Python 3.10–3.14 with a postgres:17 service; coverage artifact (~92% at last measurement). |
 
-Honest limitations remaining after Phase 2 (the reason the platform phases
+Honest limitations remaining after Phase 3 (the reason the platform phases
 exist):
 
-- There is no signup/login surface yet (Phase 3); users/API keys are
-  created via CLI or direct DB access, and only API keys under the system
-  *local* owner are mintable today. OAuth consent always authorizes the
-  *local* owner as subject (per-user consent arrives with accounts).
+- GitHub-only accounts cannot set or reset a password yet (a reset flow is
+  future work); password login for them stays unavailable by design
+  (`password_hash` NULL).
+- Device pairing stores one pending request per CLI start; there is no
+  admin view of device history beyond audit rows.
 - `facts` scoping is namespace-string based (`default` for local
   principals, `user:<id>` otherwise) — the table itself is superseded by
   scoped `memories` retrieval in Phase 4.
@@ -167,14 +168,23 @@ same-subject approvals) and scratch-DB migration tests proving two owners
 sharing one client string maintain independent version chains.
 
 ### Phase 3 — Account and Project API
-**Scope:** UserService/ProjectService/ApiKeyService;
-`/auth/register|login|logout|me`, `/projects` CRUD+archive,
-`/api-keys` lifecycle, read-only `/sessions`; device-code pairing backend
-for the CLI; signed HttpOnly cookie browser sessions; minimal
-signup/login UI (Jinja2 + HTMX scaffold).
+**Status: Implemented.** Scope landed: `UserService`/`ProjectService`/
+`DeviceCodeStore` (+`IdentityStore`, `GitHubOAuth`) in `core/accounts.py`;
+`/auth/register|login|logout|me`, `/projects` CRUD+archive, `/api-keys`
+lifecycle (raw shown once), read-only `/sessions`; RFC 8628-style
+device-code pairing backend with browser approval pages and the
+`invincible login` CLI; stateless HMAC-signed HttpOnly cookie sessions
+(owner-secret-derived key, fail-closed when unset); minimal signup/login/
+account UI (Jinja2 templates + form posts). Plus **GitHub login**: OAuth App
+authorization-code flow with a signed single-use state cookie, auto-link by
+VERIFIED primary email only, identity-conflict refusal, and GitHub-only
+accounts (`password_hash` NULL).
 **Acceptance:** register → login → create project → create key → use key
 on chat → revoke works end-to-end; the pairing flow issues working
-credentials.
+credentials (tested against the real router); cookies never authorize
+`/v1/*`; MCP bearers and the gateway key cannot touch account management;
+GitHub flows covered for registration, linking, unverified rejection,
+state mismatch, and identity conflict.
 
 ### Phase 4 — Memory, Continuity, and Context Intelligence
 **Scope:** `memories` with scopes (`user`/`project`) and layers

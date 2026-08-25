@@ -67,6 +67,7 @@ serves two roles in one process:
 | **Context trimming** | Per-provider `max_context`; system messages always kept; everything else dropped as atomic *turns* (an assistant `tool_calls` is never separated from its tool results); the most recent turn is always sent. |
 | **Per-provider timeouts** | Split connect/read/write/pool with sane defaults and per-provider overrides (NIM, Gemini, and the OpenRouter fallback get 90s reads; Groq 45s). |
 | **MCP tool server** | `read_file` (no approval), `execute_bash` and `write_file` (staged, then approved via a token round-trip through the `confirm_action` tool), guarded by denylists and an **OAuth 2.1 + PKCE bearer-token** auth layer (browser owner-login + per-client consent, tokens don't survive on requests like a shared header does). |
+| **Accounts & projects** (Phase 3) | Sign up / sign in in a browser (email + argon2id passwords, or **GitHub login**), manage your own projects and `inv_` API keys over HTTP, list your sessions — all under ownership predicates so users never see each other's data. Pair a CLI with `invincible login` via device-code approval. |
 | **Protocol-agnostic** | Native **OpenAI** and **Anthropic** protocols, both translated into one internal message model. Claude Code works with `ANTHROPIC_BASE_URL` pointing at the gateway. |
 
 ---

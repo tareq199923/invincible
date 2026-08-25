@@ -18,6 +18,8 @@ provider behind either request is chosen by the Router, never by the client.
 | `GET/POST/PATCH/DELETE` | `/api/v1/providers[...]` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Provider management: list, add, update, remove, enable/disable, test connectivity |
 | `GET/PUT` | `/api/v1/routing` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Routing mode: `auto` / `pinned` / `chain` |
 | `GET` | `/api/v1/sessions/{id}/graph` | Admin key (operator override) or user Principal (scoped) | Continuity-graph projection: runs chain, task states, checkpoints as nodes/edges/timeline |
+| `POST` | `/auth/register` `/auth/login` `/auth/logout`, `GET /auth/me` | session cookie realm | Account auth (Phase 3) — see §10 |
+| `/projects`, `/api-keys`, `/sessions`, `/auth/device/*`, GitHub login | cookie or own `inv_` key | Account management + pairing (Phase 3) — see §10 |
 
 Auth details (dual-realm since Phase 1, resolved in this fixed order):
 
@@ -316,3 +318,44 @@ Response shape:
 
 Query: `?limit=N` caps how many runs/state versions are projected
 (default 200, max 1000).
+
+---
+
+## 10. Account surface (`/auth/*`, `/projects`, `/api-keys`, `/sessions`)
+
+Phase 3. Browser realm: HMAC-signed HttpOnly session cookies; JSON bodies
+for scripts, urlencoded form posts for the built-in pages (form posts get
+redirects / rendered errors). Management endpoints also accept the caller's
+own `inv_` API key — MCP bearers and `GATEWAY_API_KEY` never work here.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `POST` | `/auth/register` | none | `{email, password}` → 201 + session cookie (409 duplicate email, 400 validation) |
+| `POST` | `/auth/login` | none | Enumeration-safe login; persistent per-IP lockout (429, scope `auth-login`) |
+| `POST` | `/auth/logout` | cookie | Clears the session cookie |
+| `GET` | `/auth/me` | cookie | `{id, email, kind, project_id}` |
+| `GET/POST` | `/projects` | cookie | List (archived hidden unless `?include_archived=true`) / create |
+| `PATCH` | `/projects/{id}` | cookie (owner) | Rename |
+| `POST` | `/projects/{id}/archive` | cookie (owner) | Soft archive (default project refused) |
+| `GET/POST` | `/api-keys` | cookie or own `inv_` key | List (prefix only) / create (raw shown once) |
+| `DELETE` | `/api-keys/{id}` | cookie or own `inv_` key | Revoke (owner-scoped, idempotent) |
+| `GET` | `/sessions` | cookie | Read-only listing of the caller's sessions |
+| `GET` | `/login`, `/register`, `/account` | page | Jinja2 UI pages |
+
+Device pairing (RFC 8628-flavored):
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `POST` | `/auth/device/code` | none | → `{device_code, user_code, verification_uri, expires_in, interval}` |
+| `GET` | `/auth/devices/{user_code}` | cookie | Approval page (Approve/Deny forms) |
+| `POST` | `/auth/devices/{user_code}/approve\|deny` | cookie | Bind/deny the request |
+| `POST` | `/auth/device/token` | none | Poll: `authorization_pending` / `slow_down` / `access_denied` / `expired_token`; on success returns the minted API key **once** |
+
+GitHub login (enabled when `INVINCIBLE_GITHUB_CLIENT_ID` +
+`INVINCIBLE_GITHUB_CLIENT_SECRET` are set):
+
+- `GET /auth/github/login` → 302 to GitHub with a signed single-use
+  `state`; callback at `GET /auth/github/callback` verifies state,
+  exchanges the code, resolves the VERIFIED primary email, then logs in /
+  auto-links / auto-registers and sets the session cookie. Failures bounce
+  to `/login?github_error=1`.

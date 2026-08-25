@@ -28,6 +28,8 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 
 | `INVINCIBLE_PROVIDERS_FILE` | management | **Opt-in**: writable provider-registry file. When set, it becomes the authoritative provider configuration (seeded from the packaged config on first use) and the management API can mutate it. When unset, providers load read-only and mutations refuse. |
 | `INVINCIBLE_ADMIN_KEY` | `/api/v1/*` | Bearer token for the management API (provider CRUD, routing modes). Deliberately independent of `GATEWAY_API_KEY`: chat clients must never manage providers. **If unset, the whole management surface answers 503 (fail closed).** |
+| `INVINCIBLE_GITHUB_CLIENT_ID` | `/auth/github/*` | GitHub OAuth App client ID. **Unset = GitHub login is hidden entirely** (the rest of the account surface is unaffected). Register `<public base URL>/auth/github/callback` as the app's callback URL. |
+| `INVINCIBLE_GITHUB_CLIENT_SECRET` | `/auth/github/*` | GitHub OAuth App client secret — resolved at request time, never logged or returned. Both values must be set for the feature to enable. |
 
 The two secrets are **independent**: a leaked tunnel URL alone is not enough
 to reach tool execution, and rotating one secret never affects the other.
@@ -241,6 +243,7 @@ invincible start [--host 127.0.0.1] [--port 8000] [--reload]
                 [--config PATH]
 invincible dev-db [--port 5433] [--env-file .env] [--write-env]
 invincible db upgrade | import <legacy-sessions.db> [--env-file .env]
+invincible login [--server URL] [--config PATH]
 invincible oauth list | revoke <client_id> | test-client
 invincible api-key create [--label TEXT] | list | revoke <id-or-prefix>
 invincible --version | --help
@@ -298,10 +301,22 @@ Notes on `api-key` (Platform Phase 1):
   hash plus a visible prefix. Use the key as
   `Authorization: Bearer inv_…` on `/v1/*`.
 - Keys are minted under the system *local* owner; per-user key management
-  surfaces with the Phase 3 account API.
+  lives at `/api-keys` over HTTP (Phase 3).
 - `list` shows prefixes, labels, and status — never hashes or raw keys.
 - `revoke` accepts either the numeric id or the visible prefix; revoking
   an already-revoked key is reported as an error, so scripts can rely on
   exit codes.
 - Both commands read `INVINCIBLE_DB_URL` from the environment or `.env`,
   like `oauth`/`db`.
+
+Notes on `login` (Platform Phase 3):
+
+- Runs the device pairing flow against a running server: it prints a URL
+  and short code, waits for you to approve in a browser where you are
+  signed in, then stores the minted API key.
+- `--server` defaults to `http://127.0.0.1:8000` (also via the
+  `INVINCIBLE_SERVER` env var); `--config` overrides where credentials are
+  saved — default `~/.invincible/config.json` (`{"server", "api_key"}`,
+  mode 600 where supported).
+- Polling respects the server's interval and backs off on `slow_down`; a
+  denied or expired request fails with a clear error and writes nothing.

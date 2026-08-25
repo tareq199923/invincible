@@ -56,11 +56,13 @@ Fixture semantics (`tests/conftest.py`):
 | `invincible/main.py` | FastAPI app; lifespan wires engine + all stores; auth dependencies; `/health`, `HEAD /` |
 | `endpoints/auth.py` | Dual-realm Principal resolution for `/v1/*` (legacy gateway key vs API keys; fail-open local when unset) |
 | `core/principal.py` | Authenticated Principal model (`legacy` / `api_key` / `anonymous`) |
-| `core/identity.py` | argon2id primitives, API-key lifecycle (sha256 at rest, shown once), audit log |
+| `core/identity.py` | argon2id primitives, API-key lifecycle (sha256 at rest, shown once), audit log, scoped login lockouts |
+| `core/accounts.py` | Phase 3 services: UserService, SessionManager (signed cookies), ProjectService, DeviceCodeStore, IdentityStore, GitHubOAuth |
 | `endpoints/openai_compat.py` | `POST /v1/chat/completions` (+ SSE streaming), `GET /v1/models` |
 | `endpoints/anthropic_compat.py` | `POST /v1/messages` (Anthropic protocol + canonical SSE) |
 | `endpoints/mcp.py` | `POST /mcp` JSON-RPC 2.0 tool server (OAuth-bearer protected) |
 | `endpoints/oauth.py` | Built-in OAuth 2.1 + PKCE authorization server (owner-consent browser flow) |
+| `endpoints/accounts.py` | `/auth/*`, `/projects`, `/api-keys`, `/sessions`, device pairing, GitHub login (session realm) |
 | `endpoints/admin_api.py` | `/api/v1/*` management surface (fail-closed `INVINCIBLE_ADMIN_KEY`) |
 | `endpoints/graph.py` | `GET /api/v1/sessions/{id}/graph` continuity projection |
 | `core/router.py` | THE single tiered-failover loop (`_iter_attempts`); run recording |
@@ -79,7 +81,7 @@ Fixture semantics (`tests/conftest.py`):
 | `core/trimming.py` | Token estimation, turn grouping, per-provider context trimming |
 | `core/compression.py` | Send-time-only request compression (stored history stays verbatim) |
 | `core/db_import.py` | One-shot legacy SQLite → PostgreSQL importer |
-| `cli.py` | Click CLI: setup/start(+tunnel)/doctor/dev-db/db/secret/oauth |
+| `cli.py` | Click CLI: setup/start(+tunnel)/login(device flow)/doctor/dev-db/db/secret/oauth |
 | `compat/common.py`, `compat/anthropic.py` | Protocol-neutral internal message model; Anthropic translators/SSE |
 | `models/anthropic.py` | Lenient Anthropic request model (unknown fields ignored) |
 | `migrations/` | Packaged Alembic environment (baseline revision `0001`) |
