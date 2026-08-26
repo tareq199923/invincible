@@ -234,7 +234,12 @@ async def client(pg_engine, router_setter, monkeypatch):
     await retrieval.close()
     await memory.close()
     await oauth_store.close()
+    # app.state is module-global: anything a test attaches (registry)
+    # otherwise leaks into every later file - the demonstrated
+    # order-dependent settings-page failure. Mirror the oauth_store
+    # reset for every attribute tests assign directly.
     app.state.oauth_store = None
+    app.state.registry = None
 
 
 # --- Phase 3 account helpers ----------------------------------------------------

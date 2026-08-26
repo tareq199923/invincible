@@ -170,14 +170,16 @@ async def test_html_form_paths_redirect_with_bounded_errors(client):
 # --- System panel ------------------------------------------------------------
 
 
-async def test_system_panel_renders_readonly(client):
-    # Note: app.state.registry may or may not be attached here - earlier
-    # admin-API tests leave one on the shared app.state. The panel must
-    # render correctly either way.
+async def test_system_panel_renders_readonly_without_registry(client):
+    # The client-fixture teardown resets app.state.registry, so the
+    # panel deterministically sees "no registry attached" here (the
+    # lifespan-less test app never wires one) - the strict assertion
+    # the pre-fix order-dependence used to break.
     await github_only_session(client, "panel@example.com")
     page = await client.get("/dashboard/settings")
     assert page.status_code == 200
     assert "Providers configured" in page.text
+    assert "Routing mode" not in page.text
     assert "Browser sessions" in page.text
     assert ">yes<" in page.text  # owner secret + gateway key are set here
     assert page.text.count('href="/dashboard/settings">Settings</a>') == 1

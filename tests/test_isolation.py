@@ -272,7 +272,6 @@ async def test_runs_carry_ownership_and_stay_scoped(client, alpha_handler):
 
     # Wire run recording the way the lifespan does (the client fixture
     # builds routers without it).
-    app.state.runs_store = app.state.runs
     app.state.router.run_recorder = app.state.runs.record
 
     await _chat(client, auth_for(a["raw"]), "run-sess", "hello")
