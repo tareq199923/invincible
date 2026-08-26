@@ -340,6 +340,7 @@ async def account_page(
     return _page(
         "account.html", request,
         email=user["email"] if user else "unknown",
+        user_email=user["email"] if user else None,
         projects=await ProjectService(engine).list(principal.user_id),
         api_keys=await ApiKeyStore(engine).list(principal.user_id),
         github_linked=bool(linked),

@@ -1,8 +1,10 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Response
+from fastapi.staticfiles import StaticFiles
 
 from invincible import __version__
 from invincible.core.config import load_providers_config
@@ -27,6 +29,7 @@ from invincible.endpoints.accounts import router as accounts_router
 from invincible.endpoints.admin_api import router as admin_router
 from invincible.endpoints.anthropic_compat import router as anthropic_router
 from invincible.endpoints.auth import require_auth
+from invincible.endpoints.dashboard import router as dashboard_router
 from invincible.endpoints.graph import router as graph_router
 from invincible.endpoints.mcp import require_mcp_auth
 from invincible.endpoints.mcp import router as mcp_router
@@ -135,6 +138,16 @@ app.include_router(mcp_router, dependencies=[Depends(require_mcp_auth)])
 # Account surface (browser sessions + per-user management) carries its own
 # realm: session cookies and inv_ keys only - never /v1/* or /mcp auth.
 app.include_router(accounts_router)
+# Phase 5 dashboard pages: cookie-realm only (require_user_session inside).
+app.include_router(dashboard_router)
+# Vendored browser assets for the dashboard (templates/static ships in the
+# wheel via package-data; the minified file is never edited in place).
+app.mount(
+    "/static",
+    StaticFiles(directory=Path(__file__).resolve().parent
+                / "templates" / "static"),
+    name="static",
+)
 # Management surface carries its own fail-closed authz (INVINCIBLE_ADMIN_KEY).
 app.include_router(admin_router)
 app.include_router(graph_router)

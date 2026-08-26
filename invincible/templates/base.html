@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Invincible{% endblock %}</title>
+  <script src="/static/htmx.min.js" defer></script>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 40rem;
            margin: 3rem auto; padding: 0 1rem; color: #1a1a1a; }
@@ -20,10 +21,33 @@
     td, th { text-align: left; padding: 0.35rem 0.5rem;
              border-bottom: 1px solid #eee; }
     ul.plain { list-style: none; padding: 0; }
+    .site-nav { display: flex; gap: 1rem; align-items: center;
+                margin: 0.5rem 0 1.5rem; }
+    .site-nav a { color: #0366d6; text-decoration: none; }
+    .inline-form { display: inline; margin: 0; }
+    button.linklike { background: none; border: none; padding: 0;
+                      margin: 0; color: #0366d6; cursor: pointer;
+                      font: inherit; text-decoration: underline; }
+    .cards { display: grid;
+             grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+             gap: 0.75rem; margin: 1rem 0; }
+    .card { border: 1px solid #ddd; border-radius: 6px;
+            padding: 0.75rem 0.9rem; }
+    .card .num { display: block; font-size: 1.6rem; font-weight: 700; }
+    .card .label { color: #666; font-size: 0.85rem; }
   </style>
 </head>
 <body>
 <h1><a href="/">Invincible</a></h1>
+{% if user_email %}
+<nav class="site-nav">
+  <a href="/dashboard">Dashboard</a>
+  <a href="/account">Account</a>
+  <form method="post" action="/auth/logout" class="inline-form">
+    <button type="submit" class="linklike">Sign out</button>
+  </form>
+</nav>
+{% endif %}
 {% block content %}{% endblock %}
 </body>
 </html>

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Invincible{% endblock %}
+{% block content %}
+<h2>Dashboard</h2>
+<p class="muted">Overview for <strong>{{ user_email }}</strong></p>
+
+<div class="cards">
+  <div class="card" data-card="projects"><span class="num">{{ counts.projects }}</span><span class="label">Projects</span></div>
+  <div class="card" data-card="sessions"><span class="num">{{ counts.sessions }}</span><span class="label">Sessions</span></div>
+  <div class="card" data-card="api-keys"><span class="num">{{ counts.api_keys }}</span><span class="label">Active API keys</span></div>
+</div>
+
+<h3>Recent sessions</h3>
+<table>
+  <tr><th>Session</th><th>Project</th><th>Updated</th></tr>
+  {% for s in recent_sessions %}
+  <tr class="client-session-row">
+    <td><code>{{ s.client_session_id }}</code></td>
+    <td>{{ s.project_id }}</td>
+    <td class="muted">{{ s.updated_at | int }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="3" class="muted">No sessions yet.</td></tr>
+  {% endfor %}
+</table>
+{% endblock content %}

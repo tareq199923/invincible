@@ -46,6 +46,7 @@ invincible = [
     "providers.yaml",
     "migrations/script.py.mako",
     "templates/*.html",
+    "templates/static/*",
 ]
 
 [tool.ruff]

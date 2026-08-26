@@ -216,7 +216,10 @@ checkpoint when a task_state exists and none otherwise.
 
 ### Phase 5 — Full Dashboard
 Projects, sessions, tasks, memory, API keys, usage, and settings views on
-Jinja2 + HTMX. *(Planned)*
+Jinja2 + HTMX. **Status: In progress.** PR-5A landed: `/dashboard`
+overview (cookie-realm count cards + recent sessions), vendored HTMX,
+site nav on authed pages; tasks/memory/usage/settings views follow in
+their own slices.
 
 ### Phase 6 — CLI Client Experience
 `inv setup` device-code pairing through the browser; `inv start` client

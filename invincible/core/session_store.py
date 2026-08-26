@@ -179,6 +179,21 @@ class SessionStore:
             rows = (await conn.execute(query)).mappings().all()
         return [dict(r) for r in rows]
 
+    async def count_for_user(
+        self, user_id: int, *, project_id: int | None = None,
+    ) -> int:
+        """Exact session count for one owner (dashboard overview card).
+        Ownership predicate is mandatory - no local-owner fallback."""
+        query = (
+            select(func.count())
+            .select_from(sessions)
+            .where(sessions.c.user_id == user_id)
+        )
+        if project_id is not None:
+            query = query.where(sessions.c.project_id == project_id)
+        async with self.engine.connect() as conn:
+            return int((await conn.execute(query)).scalar_one())
+
     async def turn_overview(self, session_id: str, *,
                             user_id: int | None = None,
                             project_id: int | None = None) -> list[dict]:
