@@ -130,8 +130,11 @@ class RunStore:
         """
         since = time.time() - max(1, min(days, 90)) * 86400
         sql = text(
-            "SELECT to_char(to_timestamp(started_at), 'YYYY-MM-DD')"
-            "         AS day,"
+            # AT TIME ZONE 'UTC' pins the calendar bucket to UTC -
+            # to_char on a bare timestamptz would render in the
+            # session's TimeZone instead.
+            "SELECT to_char(to_timestamp(started_at) AT TIME ZONE 'UTC',"
+            "                 'YYYY-MM-DD') AS day,"
             "       provider_name, model_id,"
             "       count(*) AS attempts,"
             "       count(*) FILTER (WHERE outcome <> 'ok') AS failovers,"

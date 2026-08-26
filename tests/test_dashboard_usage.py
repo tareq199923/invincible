@@ -23,6 +23,25 @@ def utc_day(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
+async def test_day_buckets_are_utc_regardless_of_session_timezone(pg_engine):
+    """Regression: to_char on a bare timestamptz renders in the session
+    TimeZone, which made day labels (and the page built from them) flip
+    to the local calendar date between local and UTC midnight."""
+    from sqlalchemy import text
+
+    # 2026-01-01 18:00 UTC: Jan 2 under a UTC+6 session, Jan 1 in New
+    # York - only an explicit UTC pin renders every zone as Jan 1.
+    fixed = 1767292800.0
+    async with pg_engine.connect() as conn:
+        for tz in ("UTC", "Asia/Dhaka", "America/New_York"):
+            await conn.execute(text(f"SET TIME ZONE '{tz}'"))
+            day = (await conn.execute(text(
+                "SELECT to_char(to_timestamp(:t) AT TIME ZONE 'UTC', "
+                "'YYYY-MM-DD')"
+            ), {"t": fixed})).scalar()
+            assert day == "2026-01-01", (tz, day)
+
+
 async def make_session_pk(client, email, client_id="usage-1"):
     made, _ = await register_account(client, email)
     body = made.json()
