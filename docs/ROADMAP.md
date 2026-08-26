@@ -227,8 +227,23 @@ mode; PostgreSQL/Alembic/tunnel/OAuth details hidden from ordinary users.
 *(Planned)*
 
 ### Phase 7 — Deployment
-Neon PostgreSQL + Railway hosting, production secrets discipline, health
-checks, connection-pooler handling; domain invincible-ai.me. *(Planned)*
+Neon PostgreSQL + Railway hosting, health checks, connection-pooler
+handling; domain invincible-ai.me. *(Planned)*
+
+Deployment acceptance criteria (explicit; permission model detailed in
+[SECURITY.md](SECURITY.md) §8):
+
+- (a) **Persistent managed Postgres** (Neon or equivalent) with a backup
+  story — never a temp-directory or otherwise ephemeral cluster.
+- (b) **Non-superuser app role**: runtime connects with
+  SELECT/INSERT/UPDATE/DELETE + sequence usage only; migrations run
+  under a separate schema-owner role (the role split and reference
+  grants ship in `docker-compose.yml` / `docker/db-init/01-roles.sh`).
+- (c) **Enforced password auth** (`scram-sha-256`) on every connection —
+  `trust` never leaves an isolated dev loopback.
+- (d) **Fresh secrets for the target environment** — DB credentials and
+  all `INVINCIBLE_*`/gateway secrets generated per environment, never
+  carried over from dev.
 
 ### Phase 8 — Cleanup
 Remove hosted-mode fail-open paths; retire superseded local-era pieces

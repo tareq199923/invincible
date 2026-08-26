@@ -507,3 +507,34 @@ sandbox:
     sweep. A hijacked session therefore survives its victim changing their
     password; rotate the owner secret (which invalidates every browser
     session at once) and treat cookie theft as key theft.
+
+---
+
+## 8. Production database permission model
+
+Required for any deployment beyond an isolated dev loopback. The shipped
+compose pair enforces all four points; hosted-mode acceptance is
+[Phase 7](ROADMAP.md):
+
+1. **Least-privilege roles — never a superuser app connection.** Two
+   non-superuser roles: a schema owner for migrations
+   (`invincible_migrate`, the only role that may run
+   `invincible db upgrade`) and a runtime role (`invincible_app`) holding
+   SELECT/INSERT/UPDATE/DELETE plus sequence USAGE and nothing else —
+   DDL is denied. Reference grants ship in
+   `docker/db-init/01-roles.sh`; the bootstrap `postgres` superuser is
+   used once at init and never again.
+2. **Password auth enforced.** `scram-sha-256` on every TCP connection.
+   `trust` is acceptable only on an isolated dev loopback: under `trust`
+   a wrong password AND an empty password both connect, which makes the
+   DSN password decorative — it was verified empirically on a dev
+   cluster and must never reach a shared host.
+3. **Durable storage.** A managed/persistent database with a backup
+   story — not a temp-directory cluster that vanishes on reboot or
+   cleanup.
+4. **Fresh per-environment secrets.** The compose passwords
+   (`*-dev-change-me`) are localhost conveniences; every target
+   environment generates its own credentials and `INVINCIBLE_*` secrets.
+
+`invincible dev-db` intentionally relaxes 1–2 for loopback dev
+ergonomics; it is a development provisioner, not a production path.

@@ -21,7 +21,7 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 | `GEMINI_API_KEY` | provider tier 5 | Gemini Flash — last resort. |
 | `TOKENROUTER_API_KEY` | provider tier 1 | TokenRouter: deepseek/deepseek-v4-pro-0813-free. |
 | `INVINCIBLE_CONFIG_PATH` | startup | Path to a custom `providers.yaml` (set by CLI `--config`). |
-| `INVINCIBLE_DB_URL` | startup (**required since Phase 16**) | PostgreSQL DSN for **all** persistent state — conversations, OAuth grants, facts, task state, staged approvals. Example: `postgresql+asyncpg://invincible@localhost:5433/invincible`. Run `invincible dev-db` to provision a local instance, or use the bundled `docker compose up` pair. The DSN embeds credentials — treat it like a secret; `doctor` always prints it masked. |
+| `INVINCIBLE_DB_URL` | startup (**required since Phase 16**) | PostgreSQL DSN for **all** persistent state — conversations, OAuth grants, facts, task state, staged approvals. Example: `postgresql+asyncpg://invincible_app:***@db:5432/invincible`. Run `invincible dev-db` to provision a local instance, or use the bundled `docker compose up` pair (which provisions non-superuser roles — see the compose role model under Database). The DSN embeds credentials — treat it like a secret; `doctor` always prints it masked. |
 | `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the PostgreSQL database (`pending_actions` table) and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
 | `INVINCIBLE_CONTINUITY` | per-request | **On by default**: injects the continuation brief (canonical task state + latest checkpoint + interruption notice) from the Continuity Engine into outgoing chat prompts. Set `0`/`false`/`off` to disable rendering; state writes (MCP tools) are unaffected. |
 | `INVINCIBLE_MEMORY` | per-request | **On by default** (Phase 4): scoped memory writes at persist time and lexical retrieval on read. Set `0`/`false`/`off` to silence both. The legacy `facts` table is no longer written or read by service code. |
@@ -221,6 +221,21 @@ turns as nodes/edges/timeline - is available to operators at
 - Local options: `invincible dev-db` (provisions or verifies a local
   Postgres and prints/writes a working URL) or the bundled
   `docker compose up` pair (publishes `127.0.0.1:5433`).
+- **Compose role model (least privilege).** The compose pair provisions
+  two non-superuser roles via `docker/db-init/01-roles.sh`:
+  `invincible_migrate` owns the database and schema and is the only role
+  that may run `invincible db upgrade` (the app container uses it for
+  exactly that one command); `invincible_app` is the runtime role with
+  SELECT/INSERT/UPDATE/DELETE and sequence usage only — DDL is denied,
+  and nothing connects as the bootstrap `postgres` superuser after
+  init. TCP auth is pinned to `scram-sha-256`; the compose passwords
+  are DEV-ONLY localhost defaults and must be overridden for any other
+  environment.
+- `invincible dev-db` is a **development** provisioner: loopback-only,
+  happy to talk to a local trust-auth server, dev-credential roles. It
+  is not a production provisioning path — the required production
+  permission model is specified in
+  [docs/SECURITY.md](SECURITY.md).
 - Schema: created by `invincible db upgrade` (packaged Alembic migrations;
   writes `alembic_version`). Tables: `sessions`, `turns`, `messages`,
   `facts`, `runs`, `task_states`, `checkpoints`, `oauth_clients`,
