@@ -39,6 +39,14 @@
     .banner { border-left: 4px solid #b58900; background: #fdf6e3;
               padding: 0.6rem 0.8rem; margin: 1rem 0; }
     code.payload { font-size: 0.8rem; word-break: break-all; }
+    .bars { display: flex; align-items: flex-end; gap: 0.5rem;
+            height: 8rem; margin: 1rem 0; }
+    .bar-col { display: flex; flex-direction: column; justify-content:
+               flex-end; align-items: center; width: 2.4rem; height: 100%; }
+    .bar { width: 100%; min-height: 1px; background: #0366d6;
+           border-radius: 3px 3px 0 0; }
+    .bar-day { font-size: 0.7rem; color: #666; margin-top: 0.25rem; }
+    .bar-num { font-size: 0.65rem; }
   </style>
 </head>
 <body>
@@ -49,6 +57,7 @@
   <a href="/dashboard/sessions">Sessions</a>
   <a href="/dashboard/tasks">Tasks</a>
   <a href="/dashboard/memory">Memory</a>
+  <a href="/dashboard/usage">Usage</a>
   <a href="/account">Account</a>
   <form method="post" action="/auth/logout" class="inline-form">
     <button type="submit" class="linklike">Sign out</button>

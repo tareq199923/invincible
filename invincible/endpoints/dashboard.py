@@ -105,6 +105,9 @@ async def overview_page(
         principal.user_id)
     memories_total = await _state(request, "memory").count_for_user(
         principal.user_id)
+    usage = _usage_totals(
+        await _state(request, "runs").usage_summary(principal.user_id,
+                                                    days=7))
     return _page(
         "dashboard.html", request,
         user_email=email,
@@ -115,6 +118,7 @@ async def overview_page(
             "api_keys": sum(1 for k in keys if k["revoked_at"] is None),
             "tasks": len(task_heads),
             "memories": memories_total,
+            "usage_7d": usage["input_tokens"] + usage["output_tokens"],
         },
         recent_sessions=recent_sessions,
     )
@@ -348,3 +352,80 @@ async def delete_memory(
         # HTMX row removal: empty 204 lets hx-swap="delete" drop the row.
         return Response(status_code=204)
     return {"deleted": True}
+
+
+# ---------------------------------------------------------------------------
+# Usage (Phase 5 PR-5D, cookie realm per locked decision)
+
+
+def _usage_totals(rows: list[dict]) -> dict:
+    """Fold summary rows into whole-window totals (single source)."""
+    return {
+        "attempts": sum(r["attempts"] for r in rows),
+        "failovers": sum(r["failovers"] for r in rows),
+        "input_tokens": sum(r["input_tokens"] for r in rows),
+        "output_tokens": sum(r["output_tokens"] for r in rows),
+    }
+
+
+@router.get("/usage")
+async def usage_json(
+    request: Request,
+    days: int = 7,
+    principal: Principal = Depends(require_user_session),
+):
+    runs_store = _state(request, "runs")
+    rows = await runs_store.usage_summary(principal.user_id, days=days)
+    return {
+        "days": max(1, min(days, 90)),
+        "totals": _usage_totals(rows),
+        "rows": rows,
+    }
+
+
+@router.get("/dashboard/usage")
+async def usage_page(
+    request: Request,
+    days: int = 7,
+    principal: Principal = Depends(require_user_session),
+):
+    runs_store = _state(request, "runs")
+    window = max(1, min(days, 90))
+    rows = await runs_store.usage_summary(principal.user_id, days=window)
+    totals = _usage_totals(rows)
+
+    by_day: dict[str, dict] = {}
+    by_provider: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        day = by_day.setdefault(
+            row["day"], {"day": row["day"], "attempts": 0, "tokens": 0})
+        day["attempts"] += row["attempts"]
+        day["tokens"] += row["input_tokens"] + row["output_tokens"]
+        key = (row["provider_name"], row["model_id"])
+        provider = by_provider.setdefault(key, {
+            "provider_name": row["provider_name"],
+            "model_id": row["model_id"],
+            "attempts": 0, "failovers": 0,
+            "input_tokens": 0, "output_tokens": 0,
+        })
+        provider["attempts"] += row["attempts"]
+        provider["failovers"] += row["failovers"]
+        provider["input_tokens"] += row["input_tokens"]
+        provider["output_tokens"] += row["output_tokens"]
+
+    days_list = sorted(by_day.values(), key=lambda d: d["day"])
+    peak = max((d["tokens"] for d in days_list), default=0) or 1
+    for d in days_list:
+        d["pct"] = int(round(100 * d["tokens"] / peak))
+
+    return _page(
+        "usage.html", request,
+        user_email=await _email(_engine(request), principal),
+        window=window,
+        totals=totals,
+        days_rows=days_list,
+        provider_rows=sorted(
+            by_provider.values(),
+            key=lambda p: (-(p["input_tokens"] + p["output_tokens"]),
+                           p["provider_name"], p["model_id"])),
+    )

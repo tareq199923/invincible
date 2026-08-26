@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Usage - Invincible{% endblock %}
+{% block content %}
+<h2>Usage</h2>
+<p class="muted">Last {{ window }} day{{ 's' if window != 1 }} ·
+day buckets are UTC ·
+<a href="/dashboard/usage?days=7">7d</a> ·
+<a href="/dashboard/usage?days=14">14d</a> ·
+<a href="/dashboard/usage?days=30">30d</a></p>
+
+<div class="cards">
+  <div class="card"><span class="num">{{ totals.attempts }}</span><span class="label">Attempts</span></div>
+  <div class="card"><span class="num">{{ totals.failovers }}</span><span class="label">Failovers</span></div>
+  <div class="card"><span class="num">{{ totals.input_tokens }}</span><span class="label">Input tokens</span></div>
+  <div class="card"><span class="num">{{ totals.output_tokens }}</span><span class="label">Output tokens</span></div>
+</div>
+
+<h3>Tokens per day</h3>
+<div class="bars">
+  {% for d in days_rows %}
+  <div class="bar-col" data-day="{{ d.day }}">
+    <div class="bar" style="height: {{ d.pct }}%"></div>
+    <span class="bar-day">{{ d.day[5:] }}</span>
+    <span class="bar-num muted">{{ d.tokens }}</span>
+  </div>
+  {% else %}
+  <p class="muted">No provider runs in this window.</p>
+  {% endfor %}
+</div>
+
+<h3>By provider / model</h3>
+<table>
+  <tr><th>Provider</th><th>Model</th><th>Attempts</th><th>Failovers</th><th>In</th><th>Out</th></tr>
+  {% for p in provider_rows %}
+  <tr class="provider-row">
+    <td>{{ p.provider_name }}</td>
+    <td><code>{{ p.model_id }}</code></td>
+    <td>{{ p.attempts }}</td>
+    <td>{{ p.failovers }}</td>
+    <td>{{ p.input_tokens }}</td>
+    <td>{{ p.output_tokens }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">Nothing recorded yet - usage lands as
+      chat requests run through the gateway.</td></tr>
+  {% endfor %}
+</table>
+{% endblock content %}

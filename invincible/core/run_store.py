@@ -10,6 +10,8 @@ real upstream usage where the provider reported it; estimates are flagged
 via ``meta["usage_estimated"]`` (see :meth:`RunStore.attach_output`).
 """
 
+import time
+
 from sqlalchemy import text
 
 from invincible.core.db import runs
@@ -111,6 +113,40 @@ class RunStore:
             )
         async with self.engine.connect() as conn:
             rows = (await conn.execute(query)).mappings().all()
+        return [dict(r) for r in rows]
+
+    async def usage_summary(
+        self, user_id: int, *, days: int = 7,
+    ) -> list[dict]:
+        """Day x provider x model aggregation over ONE owner's runs
+        (Phase 5 dashboard usage view).
+
+        Ownership flows entirely through the sessions join - ``runs``
+        carry no user column, so ``session_pk IN (owner's sessions)`` IS
+        the isolation predicate and pre-Phase-2 rows (``session_pk``
+        NULL) can never match. Day buckets are UTC calendar dates of
+        ``started_at``; the window covers the last ``days`` days ending
+        now (clamped 1..90). Failovers count every non-'ok' attempt.
+        """
+        since = time.time() - max(1, min(days, 90)) * 86400
+        sql = text(
+            "SELECT to_char(to_timestamp(started_at), 'YYYY-MM-DD')"
+            "         AS day,"
+            "       provider_name, model_id,"
+            "       count(*) AS attempts,"
+            "       count(*) FILTER (WHERE outcome <> 'ok') AS failovers,"
+            "       COALESCE(sum(input_tokens), 0)  AS input_tokens,"
+            "       COALESCE(sum(output_tokens), 0) AS output_tokens"
+            "   FROM runs"
+            "   WHERE session_pk IN"
+            "           (SELECT id FROM sessions WHERE user_id = :uid)"
+            "     AND started_at >= :since"
+            "   GROUP BY day, provider_name, model_id"
+            "   ORDER BY day DESC, provider_name, model_id"
+        )
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                sql, {"uid": user_id, "since": since})).mappings().all()
         return [dict(r) for r in rows]
 
 
