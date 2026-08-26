@@ -2,14 +2,11 @@ import json
 
 import httpx
 import pytest
-from sqlalchemy import select
 
-from invincible.core.db import facts as facts_table
 from invincible.core.memory import (
     MemoryStore,
+    extract_explicit,
     extract_facts,
-    memory_system_message,
-    render_facts_message,
 )
 from invincible.core.session_store import SessionStore
 from invincible.main import app
@@ -33,11 +30,10 @@ async def memory(pg_engine):
 
 def test_extracts_explicit_facts():
     facts = extract_facts([
-        user("Hi, my name is Sark. Remember that the deploy window is Friday."),
+        user("Hi, my name is Sark."),
         assistant("Got it — we decided to ship after the freeze."),
     ])
     assert ("user", "name", "Sark") in facts
-    assert ("user", "note", "the deploy window is Friday") in facts
     assert ("project", "decision", "ship after the freeze") in facts
 
 
@@ -61,72 +57,18 @@ def test_extraction_is_batch_deduplicated():
 
 
 def test_targets_are_capped_and_single_line():
-    facts = extract_facts([user("remember that " + "x" * 500 + "\nignore this")])
+    facts = extract_facts([user("I prefer " + "x" * 500 + "\nignore this")])
     assert len(facts) == 1
     assert len(facts[0][2]) <= 160
     assert "ignore this" not in facts[0][2]
 
 
-# --- storage / idempotency -----------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_record_is_idempotent(memory):
-    msgs = [user("my name is Sark")]
-    assert await memory.record("s1", msgs) == 1
-    assert await memory.record("s1", msgs) == 0
-    assert await memory.facts_for("s1") == [("user", "name", "Sark")]
-
-
-@pytest.mark.asyncio
-async def test_facts_are_scoped_per_session(memory):
-    await memory.record("s1", [user("my name is Sark")])
-    await memory.record("s2", [user("my name is Other")])
-    assert await memory.facts_for("s1") == [("user", "name", "Sark")]
-    assert await memory.facts_for("s2") == [("user", "name", "Other")]
-
-
-@pytest.mark.asyncio
-async def test_facts_use_sentinel_user_key(memory, pg_engine):
-    rows = await memory.facts_for("s1")
-    assert rows == []
-    await memory.record("s1", [user("remember that the sky is blue")])
-    async with pg_engine.connect() as conn:
-        user_id = (await conn.execute(
-            select(facts_table.c.user_id)
-            .where(facts_table.c.session_id == "s1")
-        )).scalar_one()
-    assert user_id == "default"
-
-
-@pytest.mark.asyncio
-async def test_facts_for_respects_limit_most_recent(memory):
-    for i in range(5):
-        await memory.record("s1", [user(f"remember that fact number {i} holds")])
-    facts = await memory.facts_for("s1", limit=2)
-    assert len(facts) == 2
-    assert "number 3" in facts[0][2] and "number 4" in facts[1][2]
-
-
-# --- injection ----------------------------------------------------------------
-
-
-def test_render_empty_facts_returns_none():
-    assert render_facts_message([]) is None
-
-
-def test_rendered_message_is_marked_system():
-    msg = render_facts_message([("user", "name", "Sark")])
-    assert msg["role"] == "system"
-    assert "Session memory" in msg["content"]
-    assert "user name: Sark" in msg["content"]
-
-
-@pytest.mark.asyncio
-async def test_memory_system_message_disabled_by_env(memory, monkeypatch):
-    monkeypatch.setenv("INVINCIBLE_MEMORY", "0")
-    await memory.record("s1", [user("my name is Sark")])
-    assert await memory_system_message(memory, "s1") is None
+def test_explicit_triggers_are_user_only():
+    msgs = [
+        assistant("remember that I said this"),
+        user("save this: the answer"),
+    ]
+    assert extract_explicit(msgs) == ["the answer"]
 
 
 # --- retention -----------------------------------------------------------------
@@ -156,11 +98,13 @@ async def test_retention_disabled_when_off(monkeypatch, pg_engine):
 
 
 @pytest.mark.asyncio
-async def test_facts_injected_on_next_request(client, pg_engine, monkeypatch):
+async def test_retrieved_memory_injected_on_next_request(
+    client, pg_engine, monkeypatch
+):
+    """A saved fact reaches a LATER request's provider payload through
+    lexical retrieval - matched by the new question's own terms."""
     monkeypatch.delenv("INVINCIBLE_MEMORY", raising=False)
     store = app.state.sessions
-    memory = MemoryStore(engine=pg_engine)
-    app.state.memory = memory
 
     received = {}
 
@@ -178,28 +122,70 @@ async def test_facts_injected_on_next_request(client, pg_engine, monkeypatch):
         "X-Session-Id": "mem-e2e",
         "Authorization": "Bearer test-gateway-key",
     }
+    # Turn 1 plants an explicit memory.
     await client.post(
         "/v1/chat/completions",
-        json={"messages": [user("my name is Sark and I'm working on Phase 10")]},
+        json={"messages": [
+            user("Remember that postgres connection pooling matters here")
+        ]},
         headers=headers,
     )
-    # Second request: the injected memory must reach the provider payload.
+    # Turn 2's QUESTION shares terms with it, so retrieval must inject.
     await client.post(
         "/v1/chat/completions",
-        json={"messages": [user("what was I doing?")]},
+        json={"messages": [
+            user("how should I configure postgres pooling?")
+        ]},
         headers=headers,
     )
     sent = received["payload"]["messages"]
     mem_msgs = [
         m for m in sent
-        if m["role"] == "system" and "Session memory" in m["content"]
+        if m["role"] == "system" and "[Relevant memory" in m["content"]
     ]
     assert len(mem_msgs) == 1
-    assert "user name: Sark" in mem_msgs[0]["content"]
-    assert "current_task" in mem_msgs[0]["content"]
+    assert "postgres connection pooling matters here" in mem_msgs[0]["content"]
 
     # Injected memory must never be persisted into stored history.
     stored = await store.load("mem-e2e")
-    assert all("Session memory" not in (m.get("content") or "") for m in stored)
+    assert all("[Relevant memory" not in (m.get("content") or "") for m in stored)
 
-    app.state.memory = None
+
+@pytest.mark.asyncio
+async def test_memory_disabled_means_no_injection(
+    client, pg_engine, monkeypatch
+):
+    """Master toggle off: nothing recorded, nothing retrieved, nothing
+    injected - but the request still succeeds."""
+    monkeypatch.setenv("INVINCIBLE_MEMORY", "0")
+    received = {}
+
+    def handler(request: httpx.Request):
+        received["payload"] = json.loads(request.read())
+        return httpx.Response(
+            200, json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+        )
+
+    app.state.router.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)
+    )
+    headers = {
+        "X-Session-Id": "mem-off",
+        "Authorization": "Bearer test-gateway-key",
+    }
+    response = await client.post(
+        "/v1/chat/completions",
+        json={"messages": [user("Remember that the sky is green")]},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    sent = received["payload"]["messages"]
+    assert all("[Relevant memory" not in (m.get("content") or "") for m in sent)
+
+    from sqlalchemy import select
+
+    from invincible.core.db import memories
+
+    async with pg_engine.connect() as conn:
+        rows = (await conn.execute(select(memories.c.id))).all()
+    assert rows == []

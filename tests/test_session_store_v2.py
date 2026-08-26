@@ -295,8 +295,18 @@ async def test_memory_and_run_stores_coexist_on_shared_engine(pg_engine):
     runs = RunStore(engine=pg_engine)
 
     await store.append("sess", [user("remember that x is 9"), assistant("ok")])
-    assert await memory.record("sess", await store.load("sess")) >= 0
-    assert await memory.facts_for("sess")  # fact extracted from the turn
+    from invincible.core.db import ensure_local_owner, memories
+
+    uid, _pid = await ensure_local_owner(pg_engine)
+    assert await memory.record_memories(
+        user_id=uid,
+        client_session_id="sess",
+        messages_list=await store.load("sess"),
+    ) == 1
+    async with pg_engine.connect() as conn:
+        assert (await conn.execute(
+            memories.select()
+        )).first() is not None  # memory extracted from the turn
     await runs.record(
         {
             "request_id": "r1",

@@ -17,6 +17,7 @@ from invincible.core.identity import ApiKeyStore, AuditLog
 from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore
 from invincible.core.provider_registry import ProviderRegistry
+from invincible.core.retrieval import RetrievalService
 from invincible.core.router import Router
 from invincible.core.run_store import RunStore
 from invincible.core.session_store import SessionStore
@@ -84,17 +85,19 @@ async def lifespan(app: FastAPI):
     await oauth_store.init()
     memory = MemoryStore(engine)
     await memory.init()
+    retrieval = RetrievalService(engine)
+    await retrieval.init()
     runs = RunStore(engine)
     await runs.init()
     continuity = ContinuityEngine(engine=engine, runs=runs)
     await continuity.init()
-
     pending = PendingActionStore()
     if settings.persist_pending_actions():
         pending.attach_engine(engine)
     app.state.pending_actions = pending
     app.state.oauth_store = oauth_store
     app.state.memory = memory
+    app.state.retrieval = retrieval
     app.state.runs = runs
     app.state.continuity = continuity
 
@@ -107,6 +110,7 @@ async def lifespan(app: FastAPI):
     await app.state.router.close()
     await continuity.close()
     await runs.close()
+    await retrieval.close()
     await memory.close()
     await oauth_store.close()
     # Drain fire-and-forget staged-action writes before the engine goes.

@@ -21,6 +21,7 @@ from invincible.core.db import (
 from invincible.core.identity import ApiKeyStore, AuditLog
 from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore, _s256_challenge
+from invincible.core.retrieval import RetrievalService
 from invincible.core.router import Router
 from invincible.core.run_store import RunStore
 from invincible.core.session_store import SessionStore
@@ -203,6 +204,9 @@ async def client(pg_engine, router_setter, monkeypatch):
     memory = MemoryStore(engine=pg_engine)
     await memory.init()
     app.state.memory = memory
+    retrieval = RetrievalService(engine=pg_engine)
+    await retrieval.init()
+    app.state.retrieval = retrieval
     pending = PendingActionStore()
     if os.getenv("INVINCIBLE_PERSIST_PENDING_ACTIONS"):
         pending.attach_engine(pg_engine)
@@ -227,6 +231,7 @@ async def client(pg_engine, router_setter, monkeypatch):
         await router.close()
     await continuity.close()
     await runs_store.close()
+    await retrieval.close()
     await memory.close()
     await oauth_store.close()
     app.state.oauth_store = None

@@ -9,12 +9,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from invincible.compat.common import route_headers
-from invincible.core.continuity import context_system_message
-from invincible.core.memory import (
-    memory_system_message,
-    record_turns,
-    scope_for_principal,
-)
+from invincible.core.context_builder import build_context_messages
+from invincible.core.memory import MemoryStore
 from invincible.core.principal import Principal
 from invincible.core.router import AllProvidersFailedError, UpstreamClientError
 from invincible.endpoints.auth import require_auth
@@ -98,9 +94,9 @@ def _stream_assistant_message(content: str, states: dict) -> dict:
 
 
 async def _persist_new_turns(
-    new_turns, store, session_id, memory, principal: Principal
+    new_turns, store, session_id, memory: MemoryStore | None,
+    principal: Principal
 ):
-    scope_user = scope_for_principal(principal)
     try:
         await store.append(
             session_id,
@@ -110,16 +106,21 @@ async def _persist_new_turns(
         )
     except Exception:
         logger.exception("Failed to persist session history for %s", session_id)
-    try:
-        await record_turns(memory, session_id, new_turns,
-                           scope_user=scope_user)
-    except Exception:
-        logger.exception("Failed to record session facts for %s", session_id)
+    if memory is not None:
+        try:
+            await memory.record_memories(
+                user_id=principal.user_id,
+                client_session_id=session_id,
+                messages_list=new_turns,
+            )
+        except Exception:
+            logger.exception("Failed to record memories for %s", session_id)
+
 
 
 async def _stream_body(
-    first, tail, store, session_id, to_persist, memory=None, *,
-    principal: Principal,
+    first, tail, store, session_id, to_persist, memory: MemoryStore | None,
+    *, principal: Principal,
 ):
     content = ""
     tool_states = {}
@@ -214,21 +215,19 @@ async def chat_completions(
         user_id=principal.user_id,
         project_id=principal.project_id,
     )
-    # Injected after history as system messages: routed but never persisted
-    # (system role is excluded below), so they never accumulate.
-    memory_msg = await memory_system_message(
-        memory, session_id, scope_user=scope_for_principal(principal)
+    # Phase 4: memory + continuity injections share one budget via the
+    # ContextBuilder. Injected system messages are routed but never
+    # persisted (system role is excluded below), so they never accumulate.
+    injections = await build_context_messages(
+        retrieval=getattr(request.app.state, "retrieval", None),
+        continuity_engine=getattr(request.app.state, "continuity", None),
+        user_id=principal.user_id,
+        project_id=principal.project_id,
+        session_id=session_id,
+        session_pk=session_pk,
+        new_messages=body.messages,
     )
-    continuity = getattr(request.app.state, "continuity", None)
-    continuity_msg = await context_system_message(
-        continuity, session_id, session_pk=session_pk
-    )
-    full_messages = (
-        history
-        + ([memory_msg] if memory_msg else [])
-        + ([continuity_msg] if continuity_msg else [])
-        + body.messages
-    )
+    full_messages = history + injections + body.messages
     # Clients resend the system prompt on every request; persisting it would
     # accumulate duplicates that trimming never removes (system messages are
     # always kept). Route with it, but only persist the new turns.
@@ -273,9 +272,14 @@ async def chat_completions(
                 project_id=principal.project_id,
             )
             try:
-                await record_turns(memory, session_id, new_turns)
+                if memory is not None:
+                    await memory.record_memories(
+                        user_id=principal.user_id,
+                        client_session_id=session_id,
+                        messages_list=new_turns,
+                    )
             except Exception:
-                logger.exception("Failed to record session facts for %s", session_id)
+                logger.exception("Failed to record memories for %s", session_id)
         return JSONResponse(content=result, headers=route_headers(info))
     except UpstreamClientError as e:
         return JSONResponse(

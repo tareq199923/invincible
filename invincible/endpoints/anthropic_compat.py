@@ -22,12 +22,8 @@ from invincible.compat.anthropic import (
 )
 from invincible.compat.common import estimate_token_sum, route_headers
 from invincible.core.compression import compress_messages, compression_enabled
-from invincible.core.continuity import context_system_message
-from invincible.core.memory import (
-    memory_system_message,
-    record_turns,
-    scope_for_principal,
-)
+from invincible.core.context_builder import build_context_messages
+from invincible.core.memory import MemoryStore
 from invincible.core.principal import Principal
 from invincible.core.router import AllProvidersFailedError, UpstreamClientError
 from invincible.endpoints.auth import require_auth
@@ -57,13 +53,14 @@ def _assistant_message_from_provider(provider_message: dict) -> dict:
 
 
 async def _persist(store, session_id, new_messages: list, assistant_message: dict,
-                   memory=None, principal: Principal | None = None):
+                   memory: MemoryStore | None = None,
+                   principal: Principal | None = None):
     """Append this request's new turns to the session under the store's lock.
 
     ``new_messages`` is the request's own messages (system role already
     excluded here so repeated system prompts never accumulate in history);
-    the assistant reply is appended after them. Facts are extracted from
-    the persisted turns (Phase 10) on a best-effort basis.
+    the assistant reply is appended after them. Memories are extracted from
+    the persisted turns (Phase 4) on a best-effort basis.
     """
     saved = [m for m in new_messages if m.get("role") != "system"]
     new_turns = saved + [assistant_message]
@@ -80,15 +77,16 @@ async def _persist(store, session_id, new_messages: list, assistant_message: dic
         )
     except Exception:
         logger.exception("Failed to persist session history for %s", session_id)
+    if memory is None or principal is None:
+        return
     try:
-        await record_turns(
-            memory,
-            session_id,
-            new_turns,
-            scope_user=scope_for_principal(principal),
+        await memory.record_memories(
+            user_id=principal.user_id,
+            client_session_id=session_id,
+            messages_list=new_turns,
         )
     except Exception:
-        logger.exception("Failed to record session facts for %s", session_id)
+        logger.exception("Failed to record memories for %s", session_id)
 
 
 @router.post("/v1/messages")
@@ -122,20 +120,19 @@ async def anthropic_messages(
         user_id=principal.user_id,
         project_id=principal.project_id,
     )
-    # Injected memory/continuity are routed but never persisted (system role).
-    memory_msg = await memory_system_message(
-        memory, session_id, scope_user=scope_for_principal(principal)
+    # Phase 4: memory + continuity injections share one budget via the
+    # ContextBuilder. Injected system messages are routed but never
+    # persisted (system role).
+    injections = await build_context_messages(
+        retrieval=getattr(request.app.state, "retrieval", None),
+        continuity_engine=getattr(request.app.state, "continuity", None),
+        user_id=principal.user_id,
+        project_id=principal.project_id,
+        session_id=session_id,
+        session_pk=session_pk,
+        new_messages=internal_messages,
     )
-    continuity = getattr(request.app.state, "continuity", None)
-    continuity_msg = await context_system_message(
-        continuity, session_id, session_pk=session_pk
-    )
-    full_messages = (
-        history
-        + ([memory_msg] if memory_msg else [])
-        + ([continuity_msg] if continuity_msg else [])
-        + internal_messages
-    )
+    full_messages = history + injections + internal_messages
     # Estimate on the compressed messages so reported usage tracks what is
     # actually sent (Phase 9). Per-provider trimming still makes this an
     # upper bound when a small-context provider wins the route — that drift
@@ -167,6 +164,7 @@ async def anthropic_messages(
                 store, session_id, internal_messages, accumulated, memory,
                 principal,
             )
+
 
         return StreamingResponse(
             build_stream_events(

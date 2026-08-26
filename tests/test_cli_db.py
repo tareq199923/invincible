@@ -323,7 +323,6 @@ async def test_db_import_round_trips_legacy_file(
     legacy sessions.db - ids preserved, JSONB decoded, bools converted."""
 
     from invincible.core.db import turns
-    from invincible.core.memory import MemoryStore
     from invincible.core.oauth_store import OAuthStore
     from invincible.core.session_store import SessionStore
 
@@ -340,9 +339,15 @@ async def test_db_import_round_trips_legacy_file(
     assert loaded == [
         {"role": "user", "content": "imported ünïcode ✅ history"}
     ]
-    assert await MemoryStore(engine=pg_engine).facts_for("imp-s") == [
-        ("user", "name", "Sark")
-    ]
+    # Legacy fact triples land verbatim in the (now inert) facts table.
+    from invincible.core.db import facts as facts_t
+
+    async with pg_engine.connect() as conn:
+        triple = (await conn.execute(
+            select(facts_t.c.entity, facts_t.c.relation, facts_t.c.target)
+            .where(facts_t.c.session_id == "imp-s")
+        )).first()
+    assert tuple(triple) == ("user", "name", "Sark")
 
     oauth = OAuthStore(engine=pg_engine)
     client = await oauth.get_client("imp-client")

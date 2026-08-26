@@ -38,6 +38,11 @@ DEFAULT_MEMORY_MAX_FACTS = 40
 DEFAULT_MEMORY_TOP_N = 8
 DEFAULT_MEMORY_MIN_SCORE = 0.01
 
+# Shared injection budget (core/context_builder.py, Phase 4): total tokens
+# for memory + continuity injections combined. Conservative enough that a
+# provider with a ~4k-token context still has room for history.
+DEFAULT_INJECTION_BUDGET_TOKENS = 1200
+
 # Stored-history turn cap when INVINCIBLE_HISTORY_MAX_TURNS is unset.
 DEFAULT_HISTORY_MAX_TURNS = 200
 
@@ -160,6 +165,15 @@ class Settings:
             return max(0.0, float(os.getenv("INVINCIBLE_MEMORY_MIN_SCORE", "")))
         except ValueError:
             return DEFAULT_MEMORY_MIN_SCORE
+
+    def injection_budget_tokens(self) -> int:
+        """Unified token budget for memory + continuity injections."""
+        try:
+            return max(
+                0, int(os.getenv("INVINCIBLE_INJECTION_BUDGET_TOKENS", ""))
+            )
+        except ValueError:
+            return DEFAULT_INJECTION_BUDGET_TOKENS
 
     def history_max_turns(self) -> int | None:
         """Stored-history turn cap; ``0``/``off`` disables the cap."""
