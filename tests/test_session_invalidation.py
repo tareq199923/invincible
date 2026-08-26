@@ -24,9 +24,14 @@ def stash_cookie(client) -> str:
 
 
 def swap_cookie(client, value: str | None) -> None:
-    if value is None:
-        client.cookies.delete(SESSION_COOKIE)
-    else:
+    # Response cookies live under the request host's domain while a plain
+    # cookies.set() lands domainless - keeping both sends TWO
+    # invincible_session header values and "which one wins" depends on
+    # parse order (observed flipping between environments). Clearing the
+    # jar first leaves exactly one cookie; only the session cookie exists
+    # in these flows.
+    client.cookies.clear()
+    if value is not None:
         client.cookies.set(SESSION_COOKIE, value)
 
 
