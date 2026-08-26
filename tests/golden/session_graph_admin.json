@@ -1,0 +1,224 @@
+{
+  "session_id": "default",
+  "known": true,
+  "generated_at": "<float>",
+  "nodes": [
+    {
+      "id": "session",
+      "kind": "session",
+      "label": "default",
+      "created_at": "<float>",
+      "updated_at": "<float>"
+    },
+    {
+      "id": "run:1",
+      "kind": "run",
+      "label": "attempt #1 → alpha/alpha-model [failover]",
+      "provider_name": "alpha",
+      "model_id": "alpha-model",
+      "outcome": "failover",
+      "error_class": "429",
+      "attempt_index": 1,
+      "request_id": "req-1",
+      "started_at": "<float>",
+      "finished_at": "<float>",
+      "ts": "<float>"
+    },
+    {
+      "id": "run:2",
+      "kind": "run",
+      "label": "attempt #2 → beta/beta-model [failover]",
+      "provider_name": "beta",
+      "model_id": "beta-model",
+      "outcome": "failover",
+      "error_class": "500",
+      "attempt_index": 2,
+      "request_id": "req-1",
+      "started_at": "<float>",
+      "finished_at": "<float>",
+      "ts": "<float>"
+    },
+    {
+      "id": "run:3",
+      "kind": "run",
+      "label": "attempt #3 → gamma/gamma-model [ok]",
+      "provider_name": "gamma",
+      "model_id": "gamma-model",
+      "outcome": "ok",
+      "error_class": null,
+      "attempt_index": 3,
+      "request_id": "req-1",
+      "started_at": "<float>",
+      "finished_at": "<float>",
+      "ts": "<float>"
+    },
+    {
+      "id": "run:4",
+      "kind": "run",
+      "label": "attempt #1 → gamma/gamma-model [ok]",
+      "provider_name": "gamma",
+      "model_id": "gamma-model",
+      "outcome": "ok",
+      "error_class": null,
+      "attempt_index": 1,
+      "request_id": "req-2",
+      "started_at": "<float>",
+      "finished_at": "<float>",
+      "ts": "<float>"
+    },
+    {
+      "id": "run:5",
+      "kind": "run",
+      "label": "attempt #1 → delta/delta-model [error]",
+      "provider_name": "delta",
+      "model_id": "delta-model",
+      "outcome": "error",
+      "error_class": "timeout",
+      "attempt_index": 1,
+      "request_id": "req-3",
+      "started_at": "<float>",
+      "finished_at": "<float>",
+      "ts": "<float>"
+    },
+    {
+      "id": "state:default:v1",
+      "kind": "task_state",
+      "label": "default v1 (active) by mcp:tss",
+      "task_key": "default",
+      "version": 1,
+      "status": "active",
+      "payload": {
+        "through": 5
+      },
+      "updated_by": "mcp:tss",
+      "ts": "<float>"
+    },
+    {
+      "id": "state:default:v2",
+      "kind": "task_state",
+      "label": "default v2 (active) by mcp:tss",
+      "task_key": "default",
+      "version": 2,
+      "status": "active",
+      "payload": {
+        "through": 9
+      },
+      "updated_by": "mcp:tss",
+      "ts": "<float>"
+    },
+    {
+      "id": "checkpoint:1",
+      "kind": "checkpoint",
+      "label": "checkpoint #1 (default @ v2): through 9",
+      "task_key": "default",
+      "state_version": 2,
+      "note": "through 9",
+      "ts": "<float>"
+    },
+    {
+      "id": "turn:0",
+      "kind": "turn",
+      "label": "turn 0 (2 msg): {\"role\": \"user\", \"content\": \"count please\"}",
+      "message_count": 2,
+      "first_payload_snippet": "{\"role\": \"user\", \"content\": \"count please\"}"
+    }
+  ],
+  "edges": [
+    {
+      "source": "session",
+      "target": "run:1",
+      "kind": "attempted_for"
+    },
+    {
+      "source": "session",
+      "target": "run:2",
+      "kind": "attempted_for"
+    },
+    {
+      "source": "run:1",
+      "target": "run:2",
+      "kind": "failover_from"
+    },
+    {
+      "source": "session",
+      "target": "run:3",
+      "kind": "attempted_for"
+    },
+    {
+      "source": "run:2",
+      "target": "run:3",
+      "kind": "failover_from"
+    },
+    {
+      "source": "session",
+      "target": "run:4",
+      "kind": "attempted_for"
+    },
+    {
+      "source": "run:3",
+      "target": "run:4",
+      "kind": "followed_by"
+    },
+    {
+      "source": "session",
+      "target": "run:5",
+      "kind": "attempted_for"
+    },
+    {
+      "source": "run:4",
+      "target": "run:5",
+      "kind": "followed_by"
+    },
+    {
+      "source": "session",
+      "target": "state:default:v1",
+      "kind": "canonical_for"
+    },
+    {
+      "source": "state:default:v1",
+      "target": "state:default:v2",
+      "kind": "supersedes"
+    },
+    {
+      "source": "checkpoint:1",
+      "target": "state:default:v2",
+      "kind": "pins"
+    },
+    {
+      "source": "session",
+      "target": "turn:0",
+      "kind": "contains"
+    }
+  ],
+  "timeline": [
+    "state:default:v1",
+    "state:default:v2",
+    "checkpoint:1",
+    "run:1",
+    "run:2",
+    "run:3",
+    "run:4",
+    "run:5"
+  ],
+  "summary": {
+    "providers_used": [
+      "alpha",
+      "beta",
+      "delta",
+      "gamma"
+    ],
+    "attempts": 5,
+    "failovers": 3,
+    "tasks": {
+      "default": {
+        "version": 2,
+        "status": "active",
+        "payload": {
+          "through": 9
+        }
+      }
+    },
+    "interruption_note": "The previous attempt ended unexpectedly on provider 'delta' (timeout). Continue from the trusted state below instead of restarting.",
+    "turns": 1
+  }
+}

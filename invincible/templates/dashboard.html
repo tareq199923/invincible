@@ -8,6 +8,7 @@
   <div class="card" data-card="projects"><span class="num">{{ counts.projects }}</span><span class="label">Projects</span></div>
   <div class="card" data-card="sessions"><span class="num">{{ counts.sessions }}</span><span class="label">Sessions</span></div>
   <div class="card" data-card="api-keys"><span class="num">{{ counts.api_keys }}</span><span class="label">Active API keys</span></div>
+  <div class="card" data-card="tasks"><span class="num">{{ counts.tasks }}</span><span class="label">Active tasks</span></div>
 </div>
 
 <h3>Recent sessions</h3>
@@ -15,7 +16,7 @@
   <tr><th>Session</th><th>Project</th><th>Updated</th></tr>
   {% for s in recent_sessions %}
   <tr class="client-session-row">
-    <td><code>{{ s.client_session_id }}</code></td>
+    <td><a href="/dashboard/sessions/{{ s.id }}"><code>{{ s.client_session_id }}</code></a></td>
     <td>{{ s.project_id }}</td>
     <td class="muted">{{ s.updated_at | int }}</td>
   </tr>

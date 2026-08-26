@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Sessions - Invincible{% endblock %}
+{% block content %}
+<h2>Sessions</h2>
+<table>
+  <tr><th>Session</th><th>Project</th><th>Updated</th></tr>
+  {% for s in sessions_rows %}
+  <tr class="session-row">
+    <td><a href="/dashboard/sessions/{{ s.id }}"><code>{{ s.client_session_id }}</code></a></td>
+    <td>{{ s.project_id }}</td>
+    <td class="muted">{{ s.updated_at | int }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="3" class="muted">No sessions yet.</td></tr>
+  {% endfor %}
+</table>
+{% endblock content %}

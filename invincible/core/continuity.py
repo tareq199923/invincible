@@ -15,9 +15,9 @@ import json
 import logging
 import time
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 
-from invincible.core.db import checkpoints, task_states
+from invincible.core.db import checkpoints, sessions, task_states
 
 logger = logging.getLogger("invincible.continuity")
 
@@ -226,6 +226,54 @@ class ContinuityEngine:
                 .limit(limit)
             )).scalars().all()
         return list(rows)
+
+    async def list_for_user(
+        self, user_id: int, *, status: str = "active", limit: int = 100,
+    ) -> list[dict]:
+        """Task heads across ALL of one user's sessions, newest activity
+        first (dashboard cross-session task list).
+
+        Ownership flows entirely through the ``sessions`` join - task
+        rows carry no user column, so the surrogate-session join IS the
+        isolation predicate. Pre-isolation rows (``session_pk`` NULL) can
+        never match and stay inert history.
+        """
+        head = (
+            select(
+                task_states.c.session_pk,
+                task_states.c.task_key,
+                func.max(task_states.c.version).label("head_version"),
+            )
+            .where(task_states.c.session_pk.isnot(None))
+            .group_by(task_states.c.session_pk, task_states.c.task_key)
+            .subquery()
+        )
+        query = (
+            select(
+                task_states.c.session_pk,
+                task_states.c.task_key,
+                task_states.c.status,
+                task_states.c.payload,
+                task_states.c.version,
+                task_states.c.updated_by,
+                task_states.c.updated_at,
+                sessions.c.client_session_id,
+                sessions.c.project_id,
+            )
+            .join(head, and_(
+                head.c.session_pk == task_states.c.session_pk,
+                head.c.task_key == task_states.c.task_key,
+                head.c.head_version == task_states.c.version,
+            ))
+            .join(sessions, sessions.c.id == task_states.c.session_pk)
+            .where(sessions.c.user_id == user_id,
+                   task_states.c.status == status)
+            .order_by(task_states.c.updated_at.desc())
+            .limit(limit)
+        )
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(query)).mappings().all()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Checkpoints

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Tasks - Invincible{% endblock %}
+{% block content %}
+<h2>Tasks</h2>
+<p class="muted">Active task heads across all of your sessions.</p>
+<table>
+  <tr><th>Session</th><th>Task</th><th>Status</th><th>Head</th><th>Updated by</th><th>When</th></tr>
+  {% for t in task_heads %}
+  <tr class="task-head-row">
+    <td><a href="/dashboard/sessions/{{ t.session_pk }}"><code>{{ t.client_session_id }}</code></a></td>
+    <td>{{ t.task_key }}</td>
+    <td>{{ t.status }}</td>
+    <td>v{{ t.version }}</td>
+    <td>{{ t.updated_by }}</td>
+    <td class="muted">{{ t.updated_at | int }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">No active tasks right now.</td></tr>
+  {% endfor %}
+</table>
+{% endblock content %}

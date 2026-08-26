@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Session {{ client_session_id }} - Invincible{% endblock %}
+{% block content %}
+<h2>Session <code>{{ client_session_id }}</code></h2>
+<p class="muted">created {{ created_at | int }} · updated {{ updated_at | int }}</p>
+
+{% if summary.interruption_note %}
+<div class="banner">{{ summary.interruption_note }}</div>
+{% endif %}
+
+<div class="cards">
+  <div class="card"><span class="num">{{ summary.attempts }}</span><span class="label">Attempts</span></div>
+  <div class="card"><span class="num">{{ summary.failovers }}</span><span class="label">Failovers</span></div>
+  <div class="card"><span class="num">{{ summary.turns }}</span><span class="label">Turns</span></div>
+  <div class="card"><span class="num">{{ summary.providers_used | length }}</span><span class="label">Providers</span></div>
+</div>
+
+<h3>Tasks</h3>
+<table>
+  <tr><th>Task</th><th>Status</th><th>Head</th><th>Payload</th></tr>
+  {% for key, st in tasks.items() %}
+  <tr class="task-row">
+    <td>{{ key }}</td>
+    <td>{{ st.status }}</td>
+    <td>v{{ st.version }}</td>
+    <td><code class="payload">{{ st.payload | tojson }}</code></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4" class="muted">No task state tracked for this session.</td></tr>
+  {% endfor %}
+</table>
+
+{% if checkpoints %}
+<h3>Checkpoints</h3>
+<ul class="plain">
+  {% for cp in checkpoints %}
+  <li class="checkpoint-row"><code>#{{ cp.state_version }}</code>
+      {{ cp.note }} <span class="muted">({{ cp.ts | int }})</span></li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if failovers %}
+<h3>Failover chain</h3>
+<ul class="plain">
+  {% for f in failovers %}
+  <li class="failover-row">{{ f.from }} → {{ f.to }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+<h3>Activity</h3>
+<table>
+  <tr><th>When</th><th>What</th></tr>
+  {% for n in activity %}
+  <tr class="activity-row activity-{{ n.kind }}">
+    <td class="muted">{% if n.ts %}{{ n.ts | int }}{% else %}-{% endif %}</td>
+    <td>{{ n.label }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="2" class="muted">No provider attempts or state changes recorded yet.</td></tr>
+  {% endfor %}
+</table>
+{% endblock content %}

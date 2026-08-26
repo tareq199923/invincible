@@ -194,6 +194,27 @@ class SessionStore:
         async with self.engine.connect() as conn:
             return int((await conn.execute(query)).scalar_one())
 
+    async def lookup_by_pk(
+        self, session_pk: int, *, user_id: int, project_id: int,
+    ) -> tuple[str, tuple[int, int]] | None:
+        """``(client_session_id, owner_context)`` for this principal's
+        surrogate row, or None - a foreign pk is indistinguishable from
+        an unknown one (dashboard detail anti-enumeration)."""
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(
+                    sessions.c.client_session_id,
+                    sessions.c.user_id,
+                    sessions.c.project_id,
+                )
+                .where(sessions.c.id == session_pk,
+                       sessions.c.user_id == user_id,
+                       sessions.c.project_id == project_id)
+            )).first()
+        if row is None:
+            return None
+        return str(row[0]), (int(row[1]), int(row[2]))
+
     async def turn_overview(self, session_id: str, *,
                             user_id: int | None = None,
                             project_id: int | None = None) -> list[dict]:
