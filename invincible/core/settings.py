@@ -124,6 +124,12 @@ class Settings:
         """Fact extraction/injection (default on)."""
         return _env_flag("INVINCIBLE_MEMORY")
 
+    def memory_explicit_enabled(self) -> bool:
+        """Explicit \"remember this\" / \"save this\" capture into scoped
+        memories (Phase 4, default on). Independent of INVINCIBLE_MEMORY so
+        auto-extraction can be silenced while deliberate saves still land."""
+        return _env_flag("INVINCIBLE_MEMORY_EXPLICIT")
+
     def continuity_enabled(self) -> bool:
         """Continuation-brief injection from the ContinuityEngine (15b,
         default on). State WRITES are unaffected by this toggle - it only
