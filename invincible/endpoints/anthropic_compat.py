@@ -7,6 +7,7 @@ Anthropic format. The Router is never modified and never becomes aware that
 the client spoke Anthropic; sessions are shared with the OpenAI endpoint
 because both protocols persist the same internal message format.
 """
+import json
 import logging
 
 from fastapi import APIRouter, Depends, Request
@@ -159,12 +160,25 @@ async def anthropic_messages(
         except AllProvidersFailedError:
             return _error_message(503, "All providers failed or are in cooldown.")
 
+        runs_store = getattr(request.app.state, "runs", None)
+        request_id = info["request_id"]
+
         async def save_complete(accumulated: dict):
             await _persist(
                 store, session_id, internal_messages, accumulated, memory,
                 principal,
             )
-
+            if runs_store is not None:
+                try:
+                    await runs_store.attach_output(
+                        # chars/4 estimate of what actually streamed,
+                        # flagged in the run row's meta (no wire change).
+                        request_id=request_id,
+                        output_tokens=len(json.dumps(accumulated)) // 4,
+                        estimated=True,
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to attach stream usage: %s", exc)
 
         return StreamingResponse(
             build_stream_events(

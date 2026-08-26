@@ -185,7 +185,36 @@ class _Failover(Exception):
     """Internal control-flow signal raised by a transport attempt after the
     failover decision was made, logged, and recorded in the health tracker.
     ``_iter_attempts`` catches it and moves on to the next provider; it
-    never escapes the Router."""
+    never escapes the Router. Carries the failing attempt's identity so
+    post-failover actions (reactive checkpoints) can describe what broke."""
+
+    def __init__(self, provider_name: str | None = None,
+                 error_class: str | None = None):
+        self.provider_name = provider_name
+        self.error_class = error_class
+        super().__init__(f"failover from {provider_name} ({error_class})")
+
+
+def _extract_usage(body: dict) -> tuple[int | None, int | None]:
+    """Pull ``(input_tokens, output_tokens)`` from an upstream success body
+    when it carries real usage counts. Accepts both OpenAI
+    (prompt_tokens/completion_tokens) and Anthropic-style
+    (input_tokens/output_tokens) key names; anything non-integer is None.
+    """
+    usage = body.get("usage") if isinstance(body, dict) else None
+    if not isinstance(usage, dict):
+        return None, None
+
+    def _int(*keys: str) -> int | None:
+        for key in keys:
+            value = usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+        return None
+
+    return _int("prompt_tokens", "input_tokens"), _int(
+        "completion_tokens", "output_tokens"
+    )
 
 
 def _status_wants_failover(provider: dict, status_code: int) -> bool:
@@ -234,6 +263,11 @@ class Router:
         # Optional async callable receiving one run-entry dict per upstream
         # attempt (success, failover, or error). None = no recording.
         self.run_recorder = run_recorder
+        # Optional async callable invoked ONCE per request when a provider
+        # fails over (Phase 4 reactive checkpoints). Receives keyword args:
+        # request_id, session_id, session_pk, failed_provider, error_class.
+        # Wired by the lifespan to the ContinuityEngine; never imported here.
+        self.failover_hook = None
         if registry is not None:
             self.providers = []
         else:
@@ -413,6 +447,7 @@ class Router:
         """
         request_id = uuid.uuid4().hex
         attempt_index = 0
+        checkpoint_fired = False
         for provider in self._candidates(model):
             name = provider["name"]
 
@@ -499,7 +534,29 @@ class Router:
                         "model_id": provider["model_id"],
                         "attempts": attempt_index,
                     }
-            except _Failover:
+            except _Failover as f:
+                # Reactive failover checkpoint (Phase 4): snapshot task
+                # state BEFORE the next provider attempt, once per request
+                # - the "why did work move" story stays recoverable. The
+                # hook is injected (never imported) and best-effort.
+                if (
+                    self.failover_hook is not None
+                    and not checkpoint_fired
+                    and (session_pk is not None or session_id is not None)
+                ):
+                    checkpoint_fired = True
+                    try:
+                        await self.failover_hook(
+                            request_id=request_id,
+                            session_id=session_id,
+                            session_pk=session_pk,
+                            failed_provider=f.provider_name,
+                            error_class=f.error_class,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Reactive failover checkpoint failed: %s", exc
+                        )
                 continue
 
         raise _all_providers_failed()
@@ -547,7 +604,10 @@ class Router:
                     session_pk=session_pk,
                     started_at=attempt_started,
                 )
-                raise _Failover
+                raise _Failover(
+                    provider_name=name,
+                    error_class=str(resp.status_code),
+                )
 
             resp.raise_for_status()
             body = await resp.aread()
@@ -576,7 +636,9 @@ class Router:
                     session_pk=session_pk,
                     started_at=attempt_started,
                 )
-                raise _Failover from None
+                raise _Failover(
+                    provider_name=name, error_class="malformed_json"
+                ) from None
             self.health_tracker.record_success(name)
             _log_attempt(
                 name,
@@ -586,11 +648,19 @@ class Router:
                 resp.status_code,
                 False,
             )
+            # Phase 4 usage accounting: real upstream counts when present,
+            # otherwise a flagged chars/4 estimate of the response body.
+            input_tokens, output_tokens = _extract_usage(parsed)
+            estimated = output_tokens is None
+            if estimated:
+                output_tokens = len(body) // 4
             await self._record_run(
                 provider, attempt_index, time.time(), "ok",
                 request_id=request_id, session_id=session_id,
                     session_pk=session_pk,
                 started_at=attempt_started,
+                input_tokens=input_tokens, output_tokens=output_tokens,
+                usage_estimated=estimated,
             )
             return parsed
 
@@ -616,7 +686,9 @@ class Router:
                     session_pk=session_pk,
                     started_at=attempt_started,
                 )
-                raise _Failover from None
+                raise _Failover(
+                    provider_name=name, error_class=str(status)
+                ) from None
             _log_attempt(
                 name,
                 provider["model_id"],
@@ -654,7 +726,9 @@ class Router:
                     session_pk=session_pk,
                 started_at=attempt_started,
             )
-            raise _Failover from None
+            raise _Failover(
+                provider_name=name, error_class=details["error_kind"]
+            ) from None
 
     async def _attempt_streaming(
         self,
@@ -702,7 +776,10 @@ class Router:
                     session_pk=session_pk,
                     started_at=attempt_started,
                 )
-                raise _Failover
+                raise _Failover(
+                    provider_name=name,
+                    error_class=str(resp.status_code),
+                )
 
             if resp.status_code in (401, 403):
                 _log_attempt(
@@ -724,7 +801,9 @@ class Router:
                     session_pk=session_pk,
                     started_at=attempt_started,
                 )
-                raise _Failover
+                raise _Failover(
+                    provider_name=name, error_class=str(resp.status_code)
+                )
 
             if resp.status_code >= 400:
                 _log_attempt(
@@ -772,6 +851,12 @@ class Router:
                 request_id=request_id, session_id=session_id,
                     session_pk=session_pk,
                 started_at=attempt_started,
+                # Streaming never sees real upstream usage without a wire
+                # change (stream_options.include_usage): record the input
+                # estimate now; the endpoint attaches the output estimate
+                # via RunStore.attach_output once accumulation finishes.
+                input_tokens=estimated_tokens,
+                usage_estimated=True,
             )
             return first, tail
 
@@ -796,7 +881,9 @@ class Router:
                     session_pk=session_pk,
                 started_at=attempt_started,
             )
-            raise _Failover from None
+            raise _Failover(
+                provider_name=name, error_class="malformed_sse"
+            ) from None
 
         except httpx.RequestError as e:
             self._handle_network_error(
@@ -810,7 +897,9 @@ class Router:
                     session_pk=session_pk,
                 started_at=attempt_started,
             )
-            raise _Failover from None
+            raise _Failover(
+                provider_name=name, error_class=details["error_kind"]
+            ) from None
 
     async def _handle_failover_status(
         self,
@@ -878,13 +967,18 @@ class Router:
         session_id: str | None = None,
         session_pk: int | None = None,
         started_at: float | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        usage_estimated: bool = False,
     ) -> None:
         """Best-effort provider-run recording via the injected recorder.
 
         Never raises into the attempt path: persistence problems are logged
         and swallowed so a run-record write can never fail a completion.
         ``session_pk`` (Phase 2) scopes the row to the owning surrogate
-        session so graph/brief reads can predicate on it.
+        session so graph/brief reads can predicate on it. Token counts
+        (Phase 4) land on success rows; ``usage_estimated`` flags counts
+        derived from payload/response sizes instead of upstream reporting.
         """
         if self.run_recorder is None:
             return
@@ -892,6 +986,9 @@ class Router:
             time.time() - (time.monotonic() - started_at)
             if started_at is not None
             else finished_at
+        )
+        meta = (
+            {"usage_estimated": True} if usage_estimated else None
         )
         try:
             await self.run_recorder(
@@ -905,6 +1002,9 @@ class Router:
                     started_at=wall_started,
                     outcome=outcome,
                     error_class=error_class,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    meta=meta,
                 )
             )
         except Exception as e:

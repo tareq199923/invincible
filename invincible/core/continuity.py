@@ -294,6 +294,48 @@ class ContinuityEngine:
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
+    # Reactive failover checkpointing (Platform Phase 4)
+
+    async def reactive_checkpoint(
+        self, session_id: str, *, session_pk: int | None = None,
+        note: str = "",
+    ) -> list[dict]:
+        """Snapshot every tracked task's current head BEFORE work moves to
+        another provider. Deliberately silent when the session tracks no
+        task state - a checkpoint row per failed request would be noise,
+        and there would be nothing meaningful to pin anyway.
+        """
+        task_keys = await self.active_task_keys(
+            session_id, limit=_MAX_TASK_KEYS_RENDERED, session_pk=session_pk
+        )
+        created = []
+        for task_key in task_keys:
+            created.append(await self.create_checkpoint(
+                session_id, task_key, note=note, actor="system-failover",
+                session_pk=session_pk,
+            ))
+        return created
+
+    def failover_hook(self):
+        """Build the callable wired into ``Router.failover_hook`` by the
+        lifespan - the Router stays continuity-agnostic (layering rule)."""
+
+        async def _hook(*, request_id: str, session_id: str,
+                        session_pk: int | None, failed_provider: str | None,
+                        error_class: str | None) -> None:
+            await self.reactive_checkpoint(
+                session_id,
+                session_pk=session_pk,
+                note=(
+                    "auto: pre-failover snapshot "
+                    f"({failed_provider or '?'} failed: "
+                    f"{error_class or '?'})"
+                ),
+            )
+
+        return _hook
+
+    # ------------------------------------------------------------------
     # Continuation brief
 
     async def interruption_note(self, session_id: str,

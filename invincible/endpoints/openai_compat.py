@@ -95,7 +95,7 @@ def _stream_assistant_message(content: str, states: dict) -> dict:
 
 async def _persist_new_turns(
     new_turns, store, session_id, memory: MemoryStore | None,
-    principal: Principal
+    principal: Principal, *, runs_store=None, request_id: str | None = None,
 ):
     try:
         await store.append(
@@ -115,12 +115,22 @@ async def _persist_new_turns(
             )
         except Exception:
             logger.exception("Failed to record memories for %s", session_id)
-
+    if runs_store is not None and request_id:
+        try:
+            await runs_store.attach_output(
+                # Streaming never sees real upstream counts without a wire
+                # change: chars/4 over what actually accumulated, flagged.
+                request_id=request_id,
+                output_tokens=len(json.dumps(new_turns)) // 4,
+                estimated=True,
+            )
+        except Exception as exc:
+            logger.warning("Failed to attach stream usage: %s", exc)
 
 
 async def _stream_body(
     first, tail, store, session_id, to_persist, memory: MemoryStore | None,
-    *, principal: Principal,
+    *, principal: Principal, runs_store=None, request_id: str | None = None,
 ):
     content = ""
     tool_states = {}
@@ -145,11 +155,15 @@ async def _stream_body(
                                     "type": "stream_error"}})
         # Persist what accumulated before the failure so history matches
         # what the client saw (mirrors the Anthropic path's on_complete).
-        await _persist_new_turns(new_turns(), store, session_id, memory,
-                                 principal)
+        await _persist_new_turns(
+            new_turns(), store, session_id, memory, principal,
+            runs_store=runs_store, request_id=request_id,
+        )
         return
-    await _persist_new_turns(new_turns(), store, session_id, memory,
-                             principal)
+    await _persist_new_turns(
+        new_turns(), store, session_id, memory, principal,
+        runs_store=runs_store, request_id=request_id,
+    )
     yield "data: [DONE]\n\n"
 
 
@@ -248,7 +262,9 @@ async def chat_completions(
             )
         return StreamingResponse(
             _stream_body(first, tail, store, session_id, to_persist, memory,
-                         principal=principal),
+                         principal=principal,
+                         runs_store=getattr(request.app.state, "runs", None),
+                         request_id=info["request_id"]),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",

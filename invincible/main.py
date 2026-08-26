@@ -91,6 +91,11 @@ async def lifespan(app: FastAPI):
     await runs.init()
     continuity = ContinuityEngine(engine=engine, runs=runs)
     await continuity.init()
+    # Phase 4: reactive failover checkpoints fire inside the router's
+    # single failover loop via this injected hook (best-effort; the engine
+    # itself no-ops when no task state exists).
+    app.state.router.failover_hook = continuity.failover_hook()
+
     pending = PendingActionStore()
     if settings.persist_pending_actions():
         pending.attach_engine(engine)

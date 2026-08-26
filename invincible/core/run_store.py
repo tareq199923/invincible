@@ -4,7 +4,13 @@
 One row per upstream attempt - successes, failovers, errors. Queryable
 execution history feeding the continuity brief, the graph API, and the
 future dashboard. Shape carried over from Phase 13.5; ``meta`` is JSONB.
+
+Phase 4 adds token accounting: ``input_tokens`` / ``output_tokens`` carry
+real upstream usage where the provider reported it; estimates are flagged
+via ``meta["usage_estimated"]`` (see :meth:`RunStore.attach_output`).
 """
+
+from sqlalchemy import text
 
 from invincible.core.db import runs
 
@@ -25,6 +31,7 @@ class RunStore:
         Required keys: request_id, provider_name, model_id, attempt_index,
         outcome, started_at. Optional: session_id, session_pk (Phase 2
         owning surrogate session), error_class, finished_at,
+        input_tokens / output_tokens (Phase 4),
         meta (JSON-serializable mapping).
         """
         meta = entry.get("meta")
@@ -39,6 +46,8 @@ class RunStore:
                     attempt_index=entry["attempt_index"],
                     outcome=entry["outcome"],
                     error_class=entry.get("error_class"),
+                    input_tokens=entry.get("input_tokens"),
+                    output_tokens=entry.get("output_tokens"),
                     started_at=entry["started_at"],
                     finished_at=entry.get("finished_at"),
                     # JSONB column: bind the object; SQLAlchemy serializes.
@@ -46,6 +55,34 @@ class RunStore:
                 )
             )
             return result.inserted_primary_key[0]
+
+    async def attach_output(
+        self, *, request_id: str, output_tokens: int, estimated: bool = True,
+    ) -> bool:
+        """Stamp the streamed-response token estimate onto the winning run
+        row (Phase 4). Streaming never sees upstream usage counts without a
+        wire change, so the endpoint attaches a chars/4 estimate of what it
+        actually accumulated; ``meta.usage_estimated`` records provenance.
+
+        Returns True when a winning 'ok' row was found and updated.
+        """
+        sql = text(
+            "UPDATE runs SET"
+            " output_tokens = :out,"
+            " meta = jsonb_set(COALESCE(meta, '{}'::jsonb),"
+            "                  '{usage_estimated}',"
+            "                  to_jsonb(CAST(:est AS BOOLEAN)), true)"
+            " WHERE id = (SELECT id FROM runs"
+            "             WHERE request_id = :rid AND outcome = 'ok'"
+            "             ORDER BY id DESC LIMIT 1)"
+        )
+        async with self.engine.begin() as conn:
+            result = await conn.execute(sql, {
+                "out": int(output_tokens),
+                "est": bool(estimated),
+                "rid": request_id,
+            })
+            return result.rowcount > 0
 
     async def recent(
         self, session_id: str | None = None, limit: int = 50,
@@ -88,6 +125,8 @@ def new_run_entry(
     session_id: str | None = None,
     session_pk: int | None = None,
     error_class: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
     meta: dict | None = None,
 ) -> dict:
     """Assemble one record with finished_at stamped now."""
@@ -102,6 +141,8 @@ def new_run_entry(
         "attempt_index": attempt_index,
         "outcome": outcome,
         "error_class": error_class,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
         "started_at": started_at,
         "finished_at": time.time(),
         "meta": meta,
