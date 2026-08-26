@@ -25,6 +25,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Computed,
     Float,
     ForeignKey,
     Identity,
@@ -37,7 +38,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.ext.asyncio import create_async_engine
 
 logger = logging.getLogger("invincible.db")
@@ -274,6 +275,12 @@ Index("idx_audit_log_at", audit_log.c.at.desc())
 Index("idx_audit_log_actor", audit_log.c.actor_user_id, audit_log.c.at.desc())
 
 # Scoped memory rows (schema lands in Phase 1; retrieval engine is Phase 4).
+
+# Lexical-retrieval regconfig shared by the generated column below, the
+# packaged migration, and RetrievalService queries. All three must spell
+# it identically or the GIN index is silently bypassed at query time.
+MEMORY_FTS_CONFIG = "english"
+
 memories = Table(
     "memories",
     metadata,
@@ -289,6 +296,17 @@ memories = Table(
     Column("confidence", Float, nullable=False, server_default="1.0"),
     Column("provenance", Text),
     Column("created_at", Float, nullable=False),
+    # Stored generated tsvector over content (Phase 4 lexical retrieval).
+    # The two-arg to_tsvector form is IMMUTABLE, which a stored generation
+    # expression requires; the single-arg form is only STABLE.
+    Column(
+        "search_vector",
+        TSVECTOR,
+        Computed(
+            f"to_tsvector('{MEMORY_FTS_CONFIG}', content)",
+            persisted=True,
+        ),
+    ),
 )
 
 Index(
@@ -297,6 +315,7 @@ Index(
     memories.c.project_id,
     memories.c.created_at.desc(),
 )
+Index("idx_memories_search", memories.c.search_vector, postgresql_using="gin")
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +413,11 @@ runs = Table(
     Column("attempt_index", Integer, nullable=False),
     Column("outcome", Text, nullable=False),
     Column("error_class", Text),
+    # Phase 4: tokens consumed by this attempt. Real provider usage where
+    # the upstream reported it; estimates flagged via meta["usage_estimated"]
+    # otherwise (streaming never sees real counts without a wire change).
+    Column("input_tokens", Integer),
+    Column("output_tokens", Integer),
     Column("started_at", Float, nullable=False),
     Column("finished_at", Float),
     Column("meta", JSONB),
