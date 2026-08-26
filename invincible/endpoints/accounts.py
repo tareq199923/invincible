@@ -134,18 +134,27 @@ def _page(template_name: str, request: Request, **context):
 
 
 async def require_user_session(request: Request) -> Principal:
-    uid = SessionManager.verify(request.cookies.get(SESSION_COOKIE))
-    if uid is None:
+    resolved = SessionManager.verify(request.cookies.get(SESSION_COOKIE))
+    if resolved is None:
         raise HTTPException(
             status_code=401,
             detail={"error": {"message": "Sign in required.",
                               "type": "auth_error"}},
         )
+    uid, token_version = resolved
     user = await UserService(_engine(request)).get(uid)
     if user is None:
         raise HTTPException(
             status_code=401,
             detail={"error": {"message": "Account no longer exists.",
+                              "type": "auth_error"}},
+        )
+    if user["session_version"] != token_version:
+        # Signature-valid but minted before a password set/change: the
+        # same invalid-cookie path as a forged or expired token.
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"message": "Sign in required.",
                               "type": "auth_error"}},
         )
     project_id = await ensure_default_project(_engine(request), uid)
@@ -156,18 +165,18 @@ async def require_account_admin(request: Request) -> Principal:
     """Browser session OR the user's own ``inv_`` API key. MCP bearers and
     the legacy gateway key never pass (resolve() matches inv_ hashes only)."""
     principal: Principal | None = None
-    uid = SessionManager.verify(request.cookies.get(SESSION_COOKIE))
-    if uid is not None:
-        principal = await _session_principal(request, uid)
+    resolved = SessionManager.verify(request.cookies.get(SESSION_COOKIE))
+    if resolved is not None:
+        principal = await _session_principal(request, *resolved)
     token = extract_token(request)
     if principal is None and token:
-        resolved = await ApiKeyStore(_engine(request)).resolve(token)
-        if resolved is not None:
+        resolved_key = await ApiKeyStore(_engine(request)).resolve(token)
+        if resolved_key is not None:
             project_id = await ensure_default_project(
-                _engine(request), resolved["user_id"])
+                _engine(request), resolved_key["user_id"])
             principal = Principal(
-                user_id=resolved["user_id"], project_id=project_id,
-                kind="api_key", api_key_id=resolved["id"],
+                user_id=resolved_key["user_id"], project_id=project_id,
+                kind="api_key", api_key_id=resolved_key["id"],
             )
     if principal is None:
         raise HTTPException(
@@ -178,18 +187,24 @@ async def require_account_admin(request: Request) -> Principal:
     return principal
 
 
-async def _session_principal(request: Request, uid: int) -> Principal | None:
+async def _session_principal(request: Request, uid: int,
+                             token_version: int) -> Principal | None:
     user = await UserService(_engine(request)).get(uid)
-    if user is None:
+    if user is None or user["session_version"] != token_version:
         return None
     project_id = await ensure_default_project(_engine(request), uid)
     return Principal(user_id=uid, project_id=project_id, kind="session")
 
 
-def _set_session_cookie_for(request: Request, response, user_id: int) -> None:
+async def _set_session_cookie_for(request: Request, response,
+                                  user_id: int) -> None:
+    # Embed the user's CURRENT session_version so any later password
+    # change (which bumps it) immediately orphans this cookie.
+    user = await UserService(_engine(request)).get(user_id)
+    version = user["session_version"] if user else 0
     response.set_cookie(
         SESSION_COOKIE,
-        SessionManager.create(user_id),
+        SessionManager.create(user_id, version),
         max_age=SESSION_TTL,
         httponly=True,
         samesite="lax",
@@ -247,14 +262,14 @@ async def register(request: Request):
                  resource_type="user", resource_id=str(user["id"]))
     if _wants_html(request):
         response = RedirectResponse("/account", status_code=303)
-        _set_session_cookie_for(request, response, user["id"])
+        await _set_session_cookie_for(request, response, user["id"])
         return response
     response = JSONResponse(
         {"id": user["id"], "email": user["email"],
          "project_id": project_id},
         status_code=201,
     )
-    _set_session_cookie_for(request, response, user["id"])
+    await _set_session_cookie_for(request, response, user["id"])
     return response
 
 
@@ -306,17 +321,18 @@ async def login(request: Request):
     if _wants_html(request):
         target = _safe_next(str(body.get("next", ""))) or "/account"
         response = RedirectResponse(target, status_code=303)
-        _set_session_cookie_for(request, response, user["id"])
+        await _set_session_cookie_for(request, response, user["id"])
         return response
     response = JSONResponse({"id": user["id"], "email": user["email"],
                              "project_id": project_id})
-    _set_session_cookie_for(request, response, user["id"])
+    await _set_session_cookie_for(request, response, user["id"])
     return response
 
 
 @router.post("/auth/logout")
 async def logout(request: Request):
-    uid = SessionManager.verify(request.cookies.get(SESSION_COOKIE))
+    resolved = SessionManager.verify(request.cookies.get(SESSION_COOKIE))
+    uid = resolved[0] if resolved else None
     if _wants_html(request):
         response = RedirectResponse("/login", status_code=303)
     else:
@@ -364,11 +380,18 @@ async def auth_password(
         return _error_response(exc)
     await _audit(request, action, actor_user_id=uid,
                  resource_type="user", resource_id=str(uid))
+    # The acting browser keeps its login: a fresh cookie carrying the
+    # NEW session_version is issued here. Every OTHER cookie for this
+    # user - minted before the bump - now fails resolution.
     if _wants_html(request):
-        return RedirectResponse("/dashboard/settings?pw_saved=1",
-                                status_code=303)
-    return {"ok": True,
-            "action": "set" if action == "password.set" else "changed"}
+        response = RedirectResponse(
+            "/dashboard/settings?pw_saved=1", status_code=303)
+    else:
+        response = JSONResponse(
+            {"ok": True,
+             "action": "set" if action == "password.set" else "changed"})
+    await _set_session_cookie_for(request, response, uid)
+    return response
 
 
 @router.get("/account")
@@ -771,5 +794,5 @@ async def github_callback(request: Request):
     await ensure_default_project(_engine(request), user_id)
     response = RedirectResponse("/", status_code=302)
     response.delete_cookie(GITHUB_STATE_COOKIE, path="/")
-    _set_session_cookie_for(request, response, user_id)
+    await _set_session_cookie_for(request, response, user_id)
     return response

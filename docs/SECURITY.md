@@ -115,8 +115,13 @@ Properties of this realm:
   failures collapse into one bounded `wrong_password` shape. Both flows
   share registration's minimum length, surface HTML errors as fixed
   `pw_error` codes (attacker-controlled text is never echoed), and write
-  `password.set` / `password.changed` audit rows. Changing a password
-  does NOT revoke existing signed cookies — see limit 14 below.
+  `password.set` / `password.changed` audit rows. Both flows bump
+  `users.session_version` **inside the same UPDATE** as the hash; `v2`
+  session cookies carry the version they were minted against and
+  Principal resolution rejects mismatches — so every OTHER device's
+  session dies with the password, while the acting browser is re-issued
+  a live cookie on success. `inv_*` API keys are deliberately untouched
+  (see limit 14).
 
 ### The layering principle
 
@@ -500,13 +505,22 @@ sandbox:
     than attached. Password-less accounts created through GitHub can adopt
     a first password from Dashboard settings (Phase 5); a forgotten-password
     RESET flow still does not exist.
-14. **Password change is not a logout-everywhere control.** `/auth/password`
-    swaps the argon2id hash, but signed browser cookies stay valid until
-    natural expiry or `INVINCIBLE_OWNER_SECRET` rotation — sessions are
-    stateless HMAC values, so there is no server-side session table to
-    sweep. A hijacked session therefore survives its victim changing their
-    password; rotate the owner secret (which invalidates every browser
-    session at once) and treat cookie theft as key theft.
+14. **Password change invalidates browser sessions — and only browser
+    sessions.** `/auth/password` bumps `users.session_version` in the
+    same UPDATE as the argon2id hash, `v2` session cookies embed the
+    version they were minted against, and resolution rejects
+    signature-valid-but-version-mismatched cookies exactly like forged
+    ones (`require_user_session` / `_session_principal`). The acting
+    browser is re-issued a live cookie on success; every other device
+    must log back in. Deliberately NOT affected by a password change:
+    `inv_*` API keys (minted as random tokens, SHA-256-hashed at rest,
+    never derived from the password — that independence is the point of
+    a separate realm), OAuth/MCP bearer tokens, and device-pairing keys.
+    Those follow their own levers: `invincible api-key revoke`,
+    `invincible oauth revoke`, and owner-secret rotation (which still
+    invalidates ALL browser sessions at once). Deploy note: pre-0006
+    `v1` cookies are rejected outright, so browsers logged in before
+    this change re-login exactly once at rollout.
 
 ---
 

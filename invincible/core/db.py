@@ -218,6 +218,11 @@ users = Table(
     Column("email", Text, nullable=False, unique=True),
     # argon2id hash (core.identity); NULL = no password login (system user).
     Column("password_hash", Text),
+    # Bumped inside the SAME UPDATE as any password set/change; session
+    # cookies embed the version they were minted against and Principal
+    # resolution rejects mismatches - a stolen cookie dies with the
+    # password instead of surviving the full TTL.
+    Column("session_version", Integer, nullable=False, server_default="0"),
     Column("is_system", Boolean, nullable=False, server_default="false"),
     Column("created_at", Float, nullable=False),
 )

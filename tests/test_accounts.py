@@ -85,38 +85,43 @@ async def test_authenticate_is_indistinguishable_on_failure(user_service):
 
 def test_session_cookie_roundtrip(monkeypatch):
     monkeypatch.setenv("INVINCIBLE_OWNER_SECRET", "k1")
-    cookie = SessionManager.create(42)
-    assert cookie.startswith("v1.42.")
-    assert SessionManager.verify(cookie) == 42
+    cookie = SessionManager.create(42, 3)
+    assert cookie.startswith("v2.42.3.")
+    assert SessionManager.verify(cookie) == (42, 3)
 
 
 def test_session_cookie_tamper_and_garbage(monkeypatch):
     monkeypatch.setenv("INVINCIBLE_OWNER_SECRET", "k1")
-    cookie = SessionManager.create(42)
+    cookie = SessionManager.create(42, 0)
     # flipping one signature hex char invalidates it
     last = cookie[-1]
     tampered = cookie[:-1] + ("0" if last != "0" else "1")
     assert SessionManager.verify(tampered) is None
     assert SessionManager.verify(None) is None
     assert SessionManager.verify("") is None
+    # v1 cookies (pre session_version) are no longer honored; prefix,
+    # arity and non-numeric uid garbage all land in the same None path.
     assert SessionManager.verify("v1.abc.def.ghi") is None
+    assert SessionManager.verify("v1.42.9999999999.deadbeef") is None
+    assert SessionManager.verify("v9.42.0.9999999999.deadbeef") is None
+    assert SessionManager.verify("v2.abc.0.9999999999.deadbeef") is None
 
 
 def test_session_cookie_expiry(monkeypatch):
     monkeypatch.setenv("INVINCIBLE_OWNER_SECRET", "k1")
-    stale = _sign_with(f"v1.7.{int(time.time()) - 10}")
+    stale = _sign_with(f"v2.7.0.{int(time.time()) - 10}")
     assert SessionManager.verify(stale) is None
-    fresh = _sign_with(f"v1.7.{int(time.time()) + SESSION_TTL - 10}")
-    assert SessionManager.verify(fresh) == 7
+    fresh = _sign_with(f"v2.7.4.{int(time.time()) + SESSION_TTL - 10}")
+    assert SessionManager.verify(fresh) == (7, 4)
 
 
 def test_session_fail_closed_without_secret(monkeypatch):
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
     monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     assert SessionManager.available() is False
-    assert SessionManager.verify("v1.1.9999999999.deadbeef") is None
+    assert SessionManager.verify("v2.1.0.9999999999.deadbeef") is None
     with pytest.raises(AccountError) as excinfo:
-        SessionManager.create(1)
+        SessionManager.create(1, 0)
     assert excinfo.value.status_code == 503
 
 

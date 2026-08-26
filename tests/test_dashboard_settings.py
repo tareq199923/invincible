@@ -24,7 +24,8 @@ async def github_only_session(client, email):
     made = await UserService(
         app.state.engine).register_without_password(email)
     await ensure_default_project(app.state.engine, made["id"])
-    client.cookies.set(SESSION_COOKIE, SessionManager.create(made["id"]))
+    client.cookies.set(
+        SESSION_COOKIE, SessionManager.create(made["id"], 0))
     return made["id"]
 
 

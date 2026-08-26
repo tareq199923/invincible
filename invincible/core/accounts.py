@@ -141,7 +141,8 @@ class UserService:
     async def get(self, user_id: int) -> dict | None:
         async with self.engine.connect() as conn:
             row = (await conn.execute(
-                select(users.c.id, users.c.email, users.c.created_at)
+                select(users.c.id, users.c.email, users.c.created_at,
+                       users.c.session_version)
                 .where(users.c.id == user_id)
             )).mappings().first()
         return dict(row) if row is not None else None
@@ -166,14 +167,16 @@ class UserService:
         """First password for an account that has none (GitHub-only
         today). The NULL-hash predicate is the atomic guard - two racing
         requests cannot both set, and an existing password is never
-        overwritten through this path."""
+        overwritten through this path. The session_version bump rides in
+        this same statement, so pre-set cookies die with the password."""
         new_password = validate_password(new_password)
         async with self.engine.begin() as conn:
             result = await conn.execute(
                 update(users)
                 .where(users.c.id == user_id,
                        users.c.password_hash.is_(None))
-                .values(password_hash=hash_password(new_password))
+                .values(password_hash=hash_password(new_password),
+                        session_version=users.c.session_version + 1)
             )
         if not result.rowcount:
             raise AccountError(
@@ -187,7 +190,9 @@ class UserService:
                               new_password: str) -> dict:
         """Verify-then-replace for accounts holding a password. Unknown
         account and unverifiable current raise the same error shape -
-        the caller already owns this session."""
+        the caller already owns this session. The version bump is part of
+        the replacement UPDATE itself: there is no window where a new
+        hash coexists with old-version sessions."""
         new_password = validate_password(new_password)
         async with self.engine.connect() as conn:
             row = (await conn.execute(
@@ -205,7 +210,8 @@ class UserService:
             await conn.execute(
                 update(users)
                 .where(users.c.id == user_id)
-                .values(password_hash=hash_password(new_password))
+                .values(password_hash=hash_password(new_password),
+                        session_version=users.c.session_version + 1)
             )
         return {"id": user_id}
 
@@ -213,9 +219,15 @@ class UserService:
 class SessionManager:
     """Stateless signed-cookie browser sessions.
 
-    Payload ``v1.<uid>.<expiry>`` + HMAC-SHA256; verification is timing-
-    safe and fails closed when no owner secret is configured (the key
-    would otherwise be publicly computable).
+    Payload ``v2.<uid>.<session_version>.<expiry>`` + HMAC-SHA256.
+    ``session_version`` pins the cookie to the ``users`` row state when
+    minted; Principal resolution compares it against the live value and
+    rejects mismatches, so a password change invalidates every cookie
+    minted before it (this class itself stays engine-free and only
+    checks signature + expiry). Verification is timing-safe and fails
+    closed when no owner secret is configured (the key would otherwise
+    be publicly computable). v1 cookies are not honored: deploying this
+    change logs pre-existing browsers out once, and they re-login.
     """
 
     @staticmethod
@@ -230,7 +242,7 @@ class SessionManager:
         return cls._key() is not None
 
     @classmethod
-    def create(cls, user_id: int) -> str:
+    def create(cls, user_id: int, session_version: int) -> str:
         key = cls._key()
         if key is None:
             raise AccountError(
@@ -239,22 +251,23 @@ class SessionManager:
                 status_code=503,
             )
         expiry = int(time.time()) + SESSION_TTL
-        payload = f"v1.{user_id}.{expiry}"
+        payload = f"v2.{user_id}.{int(session_version)}.{expiry}"
         signature = hmac.new(key, payload.encode("ascii"), hashlib.sha256
                              ).hexdigest()
         return f"{payload}.{signature}"
 
     @classmethod
-    def verify(cls, value: str | None) -> int | None:
-        """The user id for a live, authentic cookie; else None."""
+    def verify(cls, value: str | None) -> tuple[int, int] | None:
+        """``(user_id, session_version)`` for a live, authentic cookie;
+        else None."""
         key = cls._key()
         if key is None or not value:
             return None
         parts = value.split(".")
-        if len(parts) != 4 or parts[0] != "v1":
+        if len(parts) != 5 or parts[0] != "v2":
             return None
-        _, uid_raw, expiry_raw, signature = parts
-        payload = f"v1.{uid_raw}.{expiry_raw}"
+        _, uid_raw, version_raw, expiry_raw, signature = parts
+        payload = f"v2.{uid_raw}.{version_raw}.{expiry_raw}"
         expected = hmac.new(
             key, payload.encode("ascii"), hashlib.sha256
         ).hexdigest()
@@ -267,7 +280,7 @@ class SessionManager:
         if time.time() >= expiry:
             return None
         try:
-            return int(uid_raw)
+            return int(uid_raw), int(version_raw)
         except ValueError:
             return None
 
