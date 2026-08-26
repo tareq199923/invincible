@@ -10,9 +10,10 @@
            margin: 3rem auto; padding: 0 1rem; color: #1a1a1a; }
     h1 a { text-decoration: none; color: inherit; }
     label { display: block; margin-top: 0.9rem; font-weight: 600; }
-    input[type=email], input[type=password], input[type=text] {
+    input[type=email], input[type=password], input[type=text], textarea {
       width: 100%; padding: 0.5rem; margin-top: 0.25rem;
       border: 1px solid #bbb; border-radius: 4px; box-sizing: border-box; }
+    textarea { resize: vertical; font: inherit; }
     button { margin-top: 1rem; padding: 0.5rem 1.2rem; cursor: pointer; }
     .error { color: #900; margin-top: 0.75rem; }
     .muted { color: #666; font-size: 0.9rem; }
@@ -47,6 +48,7 @@
   <a href="/dashboard">Dashboard</a>
   <a href="/dashboard/sessions">Sessions</a>
   <a href="/dashboard/tasks">Tasks</a>
+  <a href="/dashboard/memory">Memory</a>
   <a href="/account">Account</a>
   <form method="post" action="/auth/logout" class="inline-form">
     <button type="submit" class="linklike">Sign out</button>

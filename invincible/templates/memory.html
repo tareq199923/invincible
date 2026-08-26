@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Memory - Invincible{% endblock %}
+{% block content %}
+<h2>Memory</h2>
+<p class="muted">{{ total }} memor{{ 'y' if total == 1 else 'ies' }}
+{% if q %} matching <strong>{{ q }}</strong>{% endif %}</p>
+
+<h3>Save a memory</h3>
+<form method="post" action="/memories" class="memory-add">
+  <textarea name="content" rows="2" maxlength="2000"
+            placeholder="e.g. prefers concise answers" required></textarea>
+  <select name="kind">
+    {% for k in kinds %}<option value="{{ k }}">{{ k }}</option>{% endfor %}
+  </select>
+  <button type="submit">Save</button>
+</form>
+
+<h3>Browse</h3>
+<form method="get" action="/dashboard/memory" class="memory-filters">
+  <input type="text" name="q" value="{{ q }}" placeholder="Search memories">
+  <select name="layer">
+    <option value="">any layer</option>
+    <option value="explicit" {% if layer == 'explicit' %}selected{% endif %}>explicit</option>
+    <option value="auto" {% if layer == 'auto' %}selected{% endif %}>auto</option>
+  </select>
+  <select name="kind">
+    <option value="">any kind</option>
+    {% for k in kinds %}<option value="{{ k }}" {% if kind == k %}selected{% endif %}>{{ k }}</option>{% endfor %}
+  </select>
+  <button type="submit">Filter</button>
+</form>
+
+<table>
+  <tr><th>Content</th><th>Kind</th><th>Layer</th><th>Saved</th><th></th></tr>
+  {% for m in memories %}
+  <tr class="memory-row" data-memory-id="{{ m.id }}">
+    <td>{{ m.content }}</td>
+    <td>{{ m.kind }}</td>
+    <td class="muted">{{ m.layer }}</td>
+    <td class="muted">{{ m.created_at | int }}</td>
+    <td><button class="linklike delete-memory"
+                hx-delete="/memories/{{ m.id }}"
+                hx-target="closest tr" hx-swap="delete"
+                hx-confirm="Delete this memory?">Delete</button></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">No memories
+      {%- if q %} matching your search{% endif %}.</td></tr>
+  {% endfor %}
+</table>
+
+{% if not q and total > page_size %}
+<p class="muted pagination">
+  Showing {{ offset + 1 }}&ndash;{{ [offset + page_size, total] | min }} of {{ total }}
+  {% if offset > 0 %}
+  &middot; <a href="/dashboard/memory?offset={{ offset - page_size }}{% if layer %}&layer={{ layer }}{% endif %}{% if kind %}&kind={{ kind }}{% endif %}">Previous</a>
+  {% endif %}
+  {% if offset + page_size < total %}
+  &middot; <a href="/dashboard/memory?offset={{ offset + page_size }}{% if layer %}&layer={{ layer }}{% endif %}{% if kind %}&kind={{ kind }}{% endif %}">Next</a>
+  {% endif %}
+</p>
+{% elif q %}
+<p class="muted">Search shows a single ranked page; refine terms to narrow further.</p>
+{% endif %}
+{% endblock content %}

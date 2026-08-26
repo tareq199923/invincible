@@ -96,6 +96,16 @@ Properties of this realm:
   be approved by a logged-in browser session via POST forms; approval is
   single-winner and the minted API key raw value appears exactly once, in
   the successful token poll.
+- **Dashboard memory management** (`/dashboard/memory`, `/memories*`;
+  Phase 5) lives in this same cookie realm. Every path takes a mandatory
+  ownership predicate (`user_id` on the row - there is no local-owner
+  fallback), deletes are id-addressed with foreign and unknown ids
+  returning byte-identical 404 bodies (existence never leaks across
+  users), and both creation and deletion are written to the audit log.
+  The `INVINCIBLE_MEMORY` kill-switch gates only *creation*: browse and
+  delete stay available so toggling off can never trap already-saved
+  data. Search reuses the retrieval tsvector path scoped to the single
+  owner; the AND→OR fallback therefore cannot widen scope, only recall.
 
 ### The layering principle
 

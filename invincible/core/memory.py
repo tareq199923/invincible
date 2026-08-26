@@ -13,10 +13,10 @@ or writes it in service code (only the legacy importer fills it).
 import re
 import time
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from invincible.core.db import memories
+from invincible.core.db import MEMORY_FTS_CONFIG, memories
 from invincible.core.settings import settings
 
 _TARGET_MAX_CHARS = 160
@@ -258,3 +258,134 @@ class MemoryStore:
                 existing.add(key)
                 added += 1
         return added
+
+    # ------------------------------------------------------------------
+    # User-facing management reads/writes (Phase 5 dashboard). Every
+    # method takes a MANDATORY user_id - no local-owner fallback exists
+    # on any of these paths.
+
+    @staticmethod
+    def _owner_filter(user_id: int, *, layer: str | None, kind: str | None):
+        """Shared WHERE clauses for browse/count paths."""
+        clauses = [memories.c.user_id == user_id]
+        if layer is not None:
+            if layer not in ("explicit", "auto"):
+                raise ValueError("layer must be 'explicit' or 'auto'")
+            clauses.append(memories.c.layer == layer)
+        if kind is not None:
+            clauses.append(memories.c.kind == kind)
+        return clauses
+
+    async def list_for_user(
+        self, user_id: int, *, layer: str | None = None,
+        kind: str | None = None, limit: int = 50, offset: int = 0,
+    ) -> list[dict]:
+        """Newest-first memory rows for one owner (dashboard browse)."""
+        query = (
+            select(
+                memories.c.id,
+                memories.c.scope,
+                memories.c.layer,
+                memories.c.kind,
+                memories.c.content,
+                memories.c.confidence,
+                memories.c.provenance,
+                memories.c.created_at,
+            )
+            .where(*self._owner_filter(user_id, layer=layer, kind=kind))
+            .order_by(memories.c.created_at.desc(), memories.c.id.desc())
+            .limit(max(0, limit))
+            .offset(max(0, offset))
+        )
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(query)).mappings().all()
+        return [dict(r) for r in rows]
+
+    async def count_for_user(
+        self, user_id: int, *, layer: str | None = None,
+        kind: str | None = None,
+    ) -> int:
+        """Exact row count for one owner, honoring the same filters."""
+        query = (
+            select(func.count())
+            .select_from(memories)
+            .where(*self._owner_filter(user_id, layer=layer, kind=kind))
+        )
+        async with self.engine.connect() as conn:
+            return int((await conn.execute(query)).scalar_one())
+
+    async def search_for_user(
+        self, user_id: int, query: str, *, layer: str | None = None,
+        kind: str | None = None, limit: int = 50,
+    ) -> list[dict]:
+        """Lexical search scoped to ONE owner (dashboard search box).
+
+        Same query-shape strategy as RetrievalService: strict-AND via
+        ``websearch_to_tsquery`` first; when nothing matches, OR of the
+        sanitized tokens via ``to_tsquery``. Rank-ordered newest-first on
+        ties; each row carries its ts_rank under ``"rank"``.
+        """
+        if not query.strip():
+            return []
+        filter_sql = ""
+        params: dict = {
+            "cfg": MEMORY_FTS_CONFIG,
+            "q": query,
+            "uid": user_id,
+            "limit": max(1, limit),
+        }
+        if layer is not None:
+            if layer not in ("explicit", "auto"):
+                raise ValueError("layer must be 'explicit' or 'auto'")
+            filter_sql += " AND layer = :layer"
+            params["layer"] = layer
+        if kind is not None:
+            filter_sql += " AND kind = :kind"
+            params["kind"] = kind
+
+        and_sql = text(
+            "SELECT id, scope, layer, kind, content, confidence,"
+            " provenance, created_at,"
+            " ts_rank(search_vector,"
+            "         websearch_to_tsquery(CAST(:cfg AS regconfig), :q))"
+            "   AS rank"
+            " FROM memories"
+            " WHERE user_id = :uid"
+            "   AND search_vector @@"
+            "       websearch_to_tsquery(CAST(:cfg AS regconfig), :q)"
+            + filter_sql +
+            " ORDER BY rank DESC, created_at DESC, id DESC"
+            " LIMIT :limit"
+        )
+        tokens = re.findall(r"[A-Za-z0-9]{3,40}", query)
+        or_expr = " | ".join(f"'{tok}'" for tok in tokens) or None
+        or_sql = text(
+            "SELECT id, scope, layer, kind, content, confidence,"
+            " provenance, created_at,"
+            " ts_rank(search_vector,"
+            "         to_tsquery(CAST(:cfg AS regconfig), :q)) AS rank"
+            " FROM memories"
+            " WHERE user_id = :uid"
+            "   AND search_vector @@ to_tsquery(CAST(:cfg AS regconfig), :q)"
+            + filter_sql +
+            " ORDER BY rank DESC, created_at DESC, id DESC"
+            " LIMIT :limit"
+        )
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(and_sql, params)).mappings().all()
+            if not rows and or_expr is not None:
+                rows = (await conn.execute(
+                    or_sql, {**params, "q": or_expr})).mappings().all()
+        return [dict(r) for r in rows]
+
+    async def delete(self, memory_id: int, *, user_id: int) -> bool:
+        """Delete THIS owner's row by id. False when unknown OR foreign -
+        callers cannot distinguish the two (anti-enumeration)."""
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                delete(memories).where(
+                    memories.c.id == memory_id,
+                    memories.c.user_id == user_id,
+                )
+            )
+        return bool(result.rowcount)
