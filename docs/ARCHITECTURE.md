@@ -41,9 +41,15 @@ invincible/
     ├── db.py                   Engine factory + schema metadata + local-owner bootstrap
     ├── session_store.py        Conversation memory on PostgreSQL (sessions/turns/messages)
     ├── oauth_store.py          OAuth store on PostgreSQL (clients, codes, hashed tokens)
-    ├── memory.py               Fact extraction/injection (facts table)
-    ├── run_store.py            Provider-run records (runs table)
+    ├── memory.py               Scoped memory writes (memories table; explicit
+    │                           "remember this" triggers + deterministic extractor)
+    ├── retrieval.py            Lexical memory retrieval (FTS x recency x kind
+    │                           x confidence; AND→OR query fallback)
+    ├── context_builder.py      One unified token budget for memory + continuity
+    │                           injections (Phase 4)
+    ├── run_store.py            Provider-run records incl. token accounting (runs table)
     ├── continuity.py           Task-state/checkpoint engine + continuation brief
+    │                           + reactive failover checkpoints (Phase 4)
     └── tool_executor.py        MCP tool execution + denylists + approval
 ```
 
@@ -74,9 +80,11 @@ import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
                                             `invincible db upgrade` is explicit)
         ProviderRegistry(seed=packaged providers.yaml, file=
                          INVINCIBLE_PROVIDERS_FILE)   (Phase 13.5)
-        Router(registry=...)  + runs recorder (bound after construction)
-        OAuthStore(engine)  MemoryStore(engine)  RunStore(engine)
-        SessionStore(engine)
+        Router(registry=...)  + runs recorder + failover_hook
+                              (both bound after construction; the hook points
+                               at ContinuityEngine.reactive_checkpoint)
+        OAuthStore(engine)  MemoryStore(engine)  RetrievalService(engine)
+        RunStore(engine)    SessionStore(engine)
         ContinuityEngine(engine, runs=RunStore)
         PendingActionStore(); attach_engine(engine) only when
                 INVINCIBLE_PERSIST_PENDING_ACTIONS is set (opt-in persistence)
@@ -88,9 +96,10 @@ import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
                               app.include_router(oauth_router)      (no dep — own auth)
                               app.include_router(graph_router)      (admin realm)
                      │
-        shutdown (lifespan)   await router.close()  (httpx client)
-                              await continuity.close() / runs.close() / memory.close()
-                              await oauth_store.close()
+         shutdown (lifespan)   await router.close()  (httpx client)
+                               await continuity.close() / runs.close()
+                               await retrieval.close() / memory.close()
+                               await oauth_store.close()
                               await pending.flush_persisted()  (drain staged-action writes)
                               await engine.dispose()           (lifespan owns the engine)
 ```
@@ -119,10 +128,12 @@ client
 main.py::require_auth           401 if key set and header wrong/missing
   ▼
 openai_compat::chat_completions
-  │  1. stream:true → 400
-  │  2. session_id = X-Session-Id or "default"
-  │  3. history = session_store.load(session_id)
-  │  4. full = history + body.messages
+   │  1. stream:true → 400
+   │  2. session_id = X-Session-Id or "default"
+   │  3. history = session_store.load(session_id)
+   │  4. injections = context_builder.build_context_messages(...)
+   │     (retrieved memories + continuity brief under one budget — §4a)
+   │  5. full = history + injections + body.messages
   ▼
 router.route_request(full, model=body.model)   # model = soft alias hint (Phase 6)
   │  for provider in providers (sorted by tier, ascending):
@@ -248,6 +259,47 @@ Note the asymmetry: `budget` is computed once per provider, and older turns
 are only skipped when they push `used` over `budget` — a single oversized
 older turn can therefore "shadow" everything before it.
 
+Because rule 1 keeps system messages unconditionally, anything injected as
+a system message is invisible to trimming — which is exactly why Phase 4
+routes all injections through one explicit budget (next section).
+
+---
+
+## 4a. Injected context & the unified budget (`context_builder.py`, Phase 4)
+
+Two kinds of content are injected above the stored history, both rendered
+as `system` messages and **never persisted**:
+
+1. **Continuation brief** (`continuity.py::context_message`) — canonical
+   task state; already self-bounded at 4096 chars.
+2. **Retrieved memories** (`retrieval.py`) — lexical matches from the
+   scoped `memories` table against the newest user message.
+
+```
+memories row written at persist time:
+    auto:     regex triples -> "relation: target", confidence 0.6
+    explicit: "remember this|that …" / "save this|that …"
+              (user messages ONLY), verbatim-ish, confidence 1.0
+
+retrieval on the next request:
+    scope:   user_id + (project_id OR NULL)   — never another user/owner
+    match:   generated tsvector @@ websearch_to_tsquery(query)
+             AND-first; empty result retries with an OR of sanitized
+             tokens (questions carry words the memory lacks)
+    rank:    ts_rank x recency(14-day half-life) x kind weight x confidence
+    cut:     top INVINCIBLE_MEMORY_TOP_N above INVINCIBLE_MEMORY_MIN_SCORE
+
+budget (context_builder.assemble):
+    continuity brief first (canonical beats fuzzy);
+    memory block fills the remainder;
+    either may be truncated to fit — total never exceeds budget.
+```
+
+The budget exists because trimming keeps system messages unconditionally:
+without a shared cap, oversized injections would blow small providers'
+contexts in the one way `trim_messages` cannot prevent. Default budget:
+1200 tokens (~4.8k chars), `INVINCIBLE_INJECTION_BUDGET_TOKENS`.
+
 ---
 
 ## 5. Failover & health state machine (`provider_health.py`)
@@ -272,6 +324,18 @@ is_available(n):    False if disabled
 
 All in-memory: process restart resets cooldowns and disables. There is no
 shared state between processes and no persistence.
+
+### Reactive failover checkpoints (Phase 4)
+
+Inside the single failover loop (`router.py::_iter_attempts`), a provider
+failure fires one injected `failover_hook` per request — before the next
+provider is attempted. The lifespan wires it to
+`ContinuityEngine.failover_hook()`; the Router never imports continuity.
+The engine snapshots every tracked task's head version as an immutable
+checkpoint (`note: "auto: pre-failover snapshot (alpha failed: 429)"`) and
+**no-ops when the session tracks no task state** — a checkpoint row per
+failed request would be noise, and there would be nothing meaningful to
+pin. Hook failures are logged and swallowed; routing never breaks.
 
 ---
 

@@ -93,12 +93,12 @@ Verified snapshot of shipped capability (file pointers in
 | Area | State |
 |---|---|
 | Gateway | OpenAI `POST /v1/chat/completions` + Anthropic `POST /v1/messages`, SSE streaming on both, translated through one internal message model (`invincible/compat/`). |
-| Failover | Single loop (`core/router.py::_iter_attempts`): tier order, soft alias preference, 429/5xx/network → exponential cooldown (30s→300s cap), 401/403 permanent disable, opt-in `failover_on_400`; per-provider context trimming + send-time compression; `x-invincible-provider/model/attempts/request-id` response headers; one `runs` row per upstream attempt. |
+| Failover | Single loop (`core/router.py::_iter_attempts`): tier order, soft alias preference, 429/5xx/network → exponential cooldown (30s→300s cap), 401/403 permanent disable, opt-in `failover_on_400`; per-provider context trimming + send-time compression; `x-invincible-provider/model/attempts/request-id` response headers; one `runs` row per upstream attempt **with token accounting since Phase 4** (real usage or flagged estimates; streaming output attached post-completion); **reactive failover checkpoints** — one injected pre-switch task-state snapshot per request, only when a task_state exists. |
 | Storage | PostgreSQL-only (SQLAlchemy 2.0 async Core / asyncpg); packaged Alembic environment; `core/db.py` metadata is the schema source of truth; explicit `invincible db upgrade`; `doctor` verifies connectivity + revision loudly. |
 | Identity | Phase 1: `users`/`projects`/`api_keys`/`audit_log`/`memories` tables; system *local* owner (user + default project) seeded at startup and by migration `0002`; sessions on surrogate identity with UNIQUE(user_id, project_id, client_session_id); argon2id primitives; API-key lifecycle in CLI. Phase 2: ownership predicates on every store path (task chains/checkpoints/runs scoped by owning surrogate session), OAuth user subjects, same-subject approval binding, persistent login rate limiting, audit writers on sensitive actions, dual-realm graph. |
 | Sessions | Normalized `sessions`/`turns`/`messages`; whole-turn retention cap; per-session `SELECT … FOR UPDATE` serialization; streamed replies reconstructed and persisted; store API keeps client session strings with optional ownership context falling back to the local owner. |
 | Continuity | ContinuityEngine: versioned `task_states` per `(session, task_key)` with optimistic CAS (UNIQUE constraint + advisory locks), immutable checkpoints pinning versions, size-bounded continuation-brief injection, interruption detection from runs; MCP tools `task_state_set/get/checkpoint_create`. |
-| Memory | Deterministic `(entity, relation, target)` fact extraction at persist time; idempotent; bounded latest-N system-message injection; `INVINCIBLE_MEMORY*` toggles. |
+| Memory | Phase 4: scoped `memories` (user/project scope, explicit/auto layers, kind, confidence, provenance) written at persist time by the deterministic extractor **and** explicit "remember this"/"save this" triggers; lexical retrieval (`RetrievalService`: generated-tsvector FTS × recency half-life × kind weight × confidence, AND→OR query fallback, relevance floor, top-N); unified-budget injection via `ContextBuilder` (memory + continuity brief under one token cap); the legacy per-session `facts` table is inert history. |
 | MCP | `POST /mcp` JSON-RPC 2.0: `read_file`, `execute_bash`, `write_file`, `confirm_action`; text-pattern denylists; single-use token approvals bound to the staging subject (same-subject confirmation, audit-written); opt-in PG persistence of staged actions. |
 | Auth | Four separate realms: `/v1/*` resolves a **Principal** dual-realm (Phase 1) — legacy `GATEWAY_API_KEY` bearer/x-api-key timing-safe compare mapping to the system *local* owner, or per-user `inv_*` API keys (SHA-256 hashed at rest, shown once, revocable via CLI); FAILS OPEN to the local identity when the gateway key is unset (loud startup warning); browser sessions on `/auth/*` + `/projects` + `/api-keys` (Phase 3: HMAC-signed HttpOnly cookies, fail-closed without the owner secret); `INVINCIBLE_ADMIN_KEY` on `/api/v1/*` (fail-closed operator override); OAuth 2.1 + PKCE authorization server on `/oauth/*` (dynamic registration, owner-secret browser consent, hashed tokens, refresh rotation, revocation) with consent-stamped user subjects and persistent lockouts (`login_attempts`, scoped per realm since 0004); GitHub login (OAuth App, verified-email auto-link). |
 | Control plane | File-backed ProviderRegistry (CRUD/enable/disable/connectivity-test), `auto`/`pinned`/`chain` routing modes, `GET /api/v1/sessions/{id}/graph` projection. |
@@ -106,7 +106,7 @@ Verified snapshot of shipped capability (file pointers in
 | Packaging/deploy | pyproject (name `invincible-ai`), packaged `providers.yaml` + migrations + Jinja2 templates, Dockerfile, docker-compose app+postgres pair. |
 | Quality gates | pytest + pytest-asyncio against real Postgres; CI runs ruff check + pytest × Python 3.10–3.14 with a postgres:17 service; coverage artifact (~92% at last measurement). |
 
-Honest limitations remaining after Phase 3 (the reason the platform phases
+Honest limitations remaining after Phase 4 (the reason the platform phases
 exist):
 
 - GitHub-only accounts cannot set or reset a password yet (a reset flow is
@@ -114,11 +114,14 @@ exist):
   (`password_hash` NULL).
 - Device pairing stores one pending request per CLI start; there is no
   admin view of device history beyond audit rows.
-- `facts` scoping is namespace-string based (`default` for local
-  principals, `user:<id>` otherwise) — the table itself is superseded by
-  scoped `memories` retrieval in Phase 4.
-- Usage is computed (`compat/common.py::build_usage`) but never persisted;
-  provider cooldowns remain in-memory by design.
+- `facts` is inert history: service code neither reads nor writes it (only
+  the legacy importer fills it). No backfill into `memories` was performed.
+- Retrieval is lexical only; semantic/vector retrieval remains a designed
+  seam behind `RetrievalService`.
+- Streaming usage on `runs` rows is estimated and flagged
+  (`meta.usage_estimated`); real in-stream counts would require a wire
+  change (`stream_options.include_usage`) that some compatible providers
+  reject. Provider cooldowns remain in-memory by design.
 - Audit coverage covers auth/grant/approval/admin-mutation events; chat
   completions themselves are not audited.
 
@@ -187,17 +190,29 @@ GitHub flows covered for registration, linking, unverified rejection,
 state mismatch, and identity conflict.
 
 ### Phase 4 — Memory, Continuity, and Context Intelligence
-**Scope:** `memories` with scopes (`user`/`project`) and layers
-(`explicit`/`auto`); explicit-save triggers ("remember this", "save
-this"); deterministic extractor seam (cheap-model extractor later);
-lexical retrieval (PG FTS × recency × kind × confidence) behind
-`RetrievalService`; a unified-budget ContextBuilder replacing independent
-memory/continuity injections; reactive failover checkpoints fired inside
-the router path **before** the next provider attempt; usage-token
-persistence on runs.
-**Acceptance:** relevant memories demonstrably outrank irrelevant ones;
-total injected context stays within budget even against the smallest
-configured provider; a provider failover produces a pre-switch checkpoint.
+**Status: Implemented.** Scope landed: migration `0005` (nullable
+`runs.input_tokens`/`output_tokens`; stored generated `tsvector` + GIN
+index on `memories`, regconfig shared with the query layer); `MemoryStore`
+rewritten onto scoped `memories` (auto-extracted rows at confidence 0.6;
+explicit "remember this"/"save this" chat triggers at confidence 1.0,
+user-scope, user-messages-only, no explicit/auto double-capture; the
+per-session `facts` pipeline retired — injection path removed, table left
+inert with **no backfill**); `RetrievalService` (lexical match × recency
+half-life × kind weight × confidence; AND-first query shape with OR
+fallback for conversational questions; relevance floor + top-N knobs);
+`ContextBuilder` giving memory + continuity injections one shared token
+budget (continuity priority, truncation markers, default 1200 tokens);
+reactive failover checkpoints fired once per request inside
+`_iter_attempts` through an injected hook (router stays continuity-agnostic;
+engine no-ops without task state); usage persistence on runs (real counts
+where upstream reports them, flagged estimates otherwise, streaming output
+attached post-completion).
+**Acceptance:** relevant memories demonstrably outrank irrelevant ones
+(same-terms pairs separated by confidence × recency, weak rows dropped by
+the floor); total injected context stays within budget even against the
+smallest configured provider (`assemble` pinned hermetically against the
+Router's own estimator); a provider failover produces exactly one pre-switch
+checkpoint when a task_state exists and none otherwise.
 
 ### Phase 5 — Full Dashboard
 Projects, sessions, tasks, memory, API keys, usage, and settings views on
@@ -240,7 +255,7 @@ Design seams exist; implementation deliberately postponed:
 |---|---|---|
 | `GATEWAY_API_KEY` fail-open + single shared secret | Per-user API keys; fail-closed hosted mode | Phase 8 |
 | Owner-secret-only MCP consent (`INVINCIBLE_OWNER_SECRET` as sole identity) | User-bound OAuth subjects | Phase 2+ |
-| `facts` triple store | `memories` table (scopes/layers/provenance) | After Phase 4's migration |
+| `facts` triple store | `memories` table (scopes/layers/provenance) | Phase 4 (injection retired; table inert) |
 | Legacy SQLite importer (`db import`) | Direct hosted signup/onboarding | After hosted launch stabilizes |
 | Client-supplied `session_id` as storage identity | Relational session identity | Phase 1 (transitional helper retained briefly) |
 

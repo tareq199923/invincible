@@ -359,13 +359,21 @@ operator's own process.
   **partition key, not a credential**. Since Phase 2 every store read and
   write is predicated on the caller's ownership triple: two principals
   using the same string get fully independent sessions, task chains,
-  checkpoints, runs, and facts, and a foreign string reads exactly like a
+  checkpoints, and runs, and a foreign string reads exactly like a
   nonexistent one (anti-enumeration). The one exception is the operator:
   `INVINCIBLE_ADMIN_KEY` may resolve any session on the graph surface —
   documented out-of-band operator trust. History is stored as **plaintext
   JSON in PostgreSQL** (`INVINCIBLE_DB_URL`) — the database credentials are
   the security boundary, and `invincible doctor` always prints the DSN
   password-masked so it never leaks into terminal output or CI logs.
+- **Scoped memories are user-partitioned (Phase 4).** Memory rows carry a
+  real `user_id` FK; retrieval predicates on it server-side, plus an
+  owner-scoped project filter — a query can only ever surface rows the
+  principal already owns, so memory cannot leak across users even when two
+  clients send identical text. Explicit "remember this" saves land in the
+  saver's own user scope; provenance records the originating session.
+  Injection is budget-capped and rendered as system messages that are
+  never persisted into history.
 - **Upstream keys**: API keys are read from the environment by *name*
   (`api_key_env`), never stored in `providers.yaml`.
 - **Failure data**: a provider's `401/403` response body is never forwarded
@@ -451,7 +459,7 @@ sandbox:
 10. **Continuity payloads render into prompts.** Content written through
    the MCP continuity tools is stored verbatim and injected as a system
    message for later requests. It carries exactly the trust level of the
-   facts-memory injection: whoever holds an MCP token can shape future
+   scoped-memory injection: whoever holds an MCP token can shape future
    prompts in their own session. Payloads are size-capped and never
    treated as instructions by Invincible itself.
 11. **Graph API shows raw snippets.** `/api/v1/sessions/{id}/graph`

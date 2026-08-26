@@ -75,11 +75,16 @@ never from the client.
   upstream every request — only the stored history excludes them (same
   behavior as the Anthropic endpoint).
 - `session_id` is a **partition key, not a credential** — since Phase 2,
-  every principal's history, task state, runs, and facts are scoped to
+  every principal's history, task state, runs, and memories are scoped to
   its own ownership triple; the same string under two principals yields
   two independent sessions.
 - Trimming happens per-provider at send time; the stored history is
   untrimmed (the raw conversation accumulates in the DB).
+- **Injected context (Phase 4)**: retrieved memories + the continuity
+  brief are rendered as system messages under one token budget and are
+  routed upstream but never persisted. Explicit "remember this…" /
+  "save this…" phrases in your messages persist scoped memories for later
+  retrieval; set `INVINCIBLE_MEMORY=0` to disable all of it.
 
 ---
 

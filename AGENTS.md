@@ -73,8 +73,10 @@ Fixture semantics (`tests/conftest.py`):
 | `core/settings.py` | Typed live-read accessors for every `INVINCIBLE_*` env var |
 | `core/db.py` | Engine factory + schema metadata (**single source of schema truth**) + system local-owner bootstrap |
 | `core/session_store.py` | Normalized `sessions`/`turns`/`messages` persistence (surrogate identity + ownership triple since Phase 1) |
-| `core/memory.py` | Deterministic fact extraction/injection (`facts` table) |
-| `core/continuity.py` | ContinuityEngine: versioned task states, checkpoints, continuation briefs |
+| `core/memory.py` | Scoped memory writes (`memories` table): deterministic extractor + explicit "remember this"/"save this" triggers |
+| `core/retrieval.py` | Lexical memory retrieval: FTS × recency × kind × confidence, AND→OR fallback, floor + top-N |
+| `core/context_builder.py` | One unified token budget for memory + continuity injections |
+| `core/continuity.py` | ContinuityEngine: versioned task states, checkpoints, continuation briefs, reactive failover checkpoints |
 | `core/run_store.py` | One `runs` row per upstream provider attempt |
 | `core/oauth_store.py` | OAuth clients/codes/hashed tokens on PostgreSQL |
 | `core/tool_executor.py` | MCP tool execution, denylists, staged token approvals |
