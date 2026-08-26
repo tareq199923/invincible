@@ -34,6 +34,10 @@ PENDING_ACTION_TTL_SECONDS = 600
 # unset or unparseable.
 DEFAULT_MEMORY_MAX_FACTS = 40
 
+# Lexical retrieval caps (core/retrieval.py, Phase 4).
+DEFAULT_MEMORY_TOP_N = 8
+DEFAULT_MEMORY_MIN_SCORE = 0.01
+
 # Stored-history turn cap when INVINCIBLE_HISTORY_MAX_TURNS is unset.
 DEFAULT_HISTORY_MAX_TURNS = 200
 
@@ -142,6 +146,20 @@ class Settings:
             return max(1, int(os.getenv("INVINCIBLE_MEMORY_MAX_FACTS", "")))
         except ValueError:
             return DEFAULT_MEMORY_MAX_FACTS
+
+    def memory_top_n(self) -> int:
+        """Max memories injected per request by RetrievalService."""
+        try:
+            return max(0, int(os.getenv("INVINCIBLE_MEMORY_TOP_N", "")))
+        except ValueError:
+            return DEFAULT_MEMORY_TOP_N
+
+    def memory_min_score(self) -> float:
+        """Relevance floor: scored memories below this are not injected."""
+        try:
+            return max(0.0, float(os.getenv("INVINCIBLE_MEMORY_MIN_SCORE", "")))
+        except ValueError:
+            return DEFAULT_MEMORY_MIN_SCORE
 
     def history_max_turns(self) -> int | None:
         """Stored-history turn cap; ``0``/``off`` disables the cap."""
