@@ -106,6 +106,17 @@ Properties of this realm:
   delete stay available so toggling off can never trap already-saved
   data. Search reuses the retrieval tsvector path scoped to the single
   owner; the AND→OR fallback therefore cannot widen scope, only recall.
+- **Password set/change** (`POST /auth/password`; Phase 5) follows the
+  STORED account state, never caller-chosen fields. An account whose
+  `password_hash` is NULL (GitHub-only today) may set a FIRST password
+  with no current required — and nothing else can be overwritten through
+  that path (`set_password` guards on the NULL hash inside the UPDATE).
+  Every other account must present its correct current password;
+  failures collapse into one bounded `wrong_password` shape. Both flows
+  share registration's minimum length, surface HTML errors as fixed
+  `pw_error` codes (attacker-controlled text is never echoed), and write
+  `password.set` / `password.changed` audit rows. Changing a password
+  does NOT revoke existing signed cookies — see limit 14 below.
 
 ### The layering principle
 
@@ -486,5 +497,13 @@ sandbox:
     an incoming identity to an existing local account requires GitHub to
     report that email as verified AND primary. A second GitHub identity
     reusing the same verified email is rejected (`identity_conflict`) rather
-    than attached. Password-less accounts created through GitHub cannot log
-    in with a password until a reset flow sets one.
+    than attached. Password-less accounts created through GitHub can adopt
+    a first password from Dashboard settings (Phase 5); a forgotten-password
+    RESET flow still does not exist.
+14. **Password change is not a logout-everywhere control.** `/auth/password`
+    swaps the argon2id hash, but signed browser cookies stay valid until
+    natural expiry or `INVINCIBLE_OWNER_SECRET` rotation — sessions are
+    stateless HMAC values, so there is no server-side session table to
+    sweep. A hijacked session therefore survives its victim changing their
+    password; rotate the owner secret (which invalidates every browser
+    session at once) and treat cookie theft as key theft.

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Settings - Invincible{% endblock %}
+{% block content %}
+<h2>Settings</h2>
+
+<h3>Password</h3>
+{% if pw_saved %}<p class="muted">Password updated.</p>{% endif %}
+{% if pw_error %}<p class="error">{{ pw_error }}</p>{% endif %}
+<div data-pw-mode="{{ 'change' if has_password else 'set' }}">
+{% if has_password %}
+<form method="post" action="/auth/password">
+  <label>Current password<input type="password" name="current_password"></label>
+  <label>New password<input type="password" name="new_password"></label>
+  <button type="submit">Change password</button>
+</form>
+{% else %}
+<div class="banner">
+  This account signs in with GitHub only and has no password yet. Set one
+  below to enable password sign-in too.
+</div>
+<form method="post" action="/auth/password">
+  <label>New password<input type="password" name="new_password"></label>
+  <button type="submit">Set password</button>
+</form>
+{% endif %}
+<p class="muted">Minimum {{ min_password_len }} characters.</p>
+</div>
+
+<h3>System <span class="muted">(read-only)</span></h3>
+<table>
+  <tr><th>Providers configured</th><td>{{ provider_rows | length }}</td></tr>
+  {% for p in provider_rows %}
+  <tr><td class="muted">{{ p.name }} - tier {{ p.tier }}</td>
+      <td>{{ "enabled" if p.enabled else "disabled" }}</td></tr>
+  {% endfor %}
+  {% if routing_mode %}
+  <tr><th>Routing mode</th><td>{{ routing_mode }}</td></tr>
+  {% endif %}
+  {% for label, on in flags %}
+  <tr><th>{{ label }}</th><td>{{ "yes" if on else "no" }}</td></tr>
+  {% endfor %}
+</table>
+<p class="muted">Secret values are never shown here - only whether each
+one is configured.</p>
+{% endblock content %}

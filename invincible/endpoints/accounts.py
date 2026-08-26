@@ -328,6 +328,49 @@ async def logout(request: Request):
     return response
 
 
+# ---------------------------------------------------------------------------
+# Password set / change (Phase 5 PR-5E)
+
+
+@router.post("/auth/password")
+async def auth_password(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    """Set a first password or change an existing one. Which flow applies
+    follows the STORED account state (``password_hash`` NULL vs set),
+    never caller-chosen fields: omitting ``current_password`` cannot flip
+    the semantics."""
+    body = await _payload(request)
+    uid = principal.user_id
+    service = UserService(_engine(request))
+    try:
+        if await service.has_password(uid):
+            await service.change_password(
+                uid,
+                str(body.get("current_password", "")),
+                str(body.get("new_password", "")),
+            )
+            action = "password.changed"
+        else:
+            await service.set_password(
+                uid, str(body.get("new_password", "")))
+            action = "password.set"
+    except AccountError as exc:
+        if _wants_html(request):
+            # Bounded code; the settings page renders it from a fixed map.
+            return RedirectResponse(
+                f"/dashboard/settings?pw_error={exc.code}", status_code=303)
+        return _error_response(exc)
+    await _audit(request, action, actor_user_id=uid,
+                 resource_type="user", resource_id=str(uid))
+    if _wants_html(request):
+        return RedirectResponse("/dashboard/settings?pw_saved=1",
+                                status_code=303)
+    return {"ok": True,
+            "action": "set" if action == "password.set" else "changed"}
+
+
 @router.get("/account")
 async def account_page(
     request: Request,

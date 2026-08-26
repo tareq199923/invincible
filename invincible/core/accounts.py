@@ -75,14 +75,17 @@ def validate_email(email: str) -> str:
     return email
 
 
-def validate_registration(email: str, password: str) -> tuple[str, str]:
-    email = validate_email(email)
+def validate_password(password: str) -> str:
     if len(password) < MIN_PASSWORD_LEN:
         raise AccountError(
             "weak_password",
             f"Password must be at least {MIN_PASSWORD_LEN} characters.",
         )
-    return email, password
+    return password
+
+
+def validate_registration(email: str, password: str) -> tuple[str, str]:
+    return validate_email(email), validate_password(password)
 
 
 class UserService:
@@ -150,6 +153,61 @@ class UserService:
                 .where(users.c.email == normalize_email(email))
             )).mappings().first()
         return dict(row) if row is not None else None
+
+    async def has_password(self, user_id: int) -> bool:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(users.c.password_hash)
+                .where(users.c.id == user_id)
+            )).first()
+        return row is not None and row[0] is not None
+
+    async def set_password(self, user_id: int, new_password: str) -> dict:
+        """First password for an account that has none (GitHub-only
+        today). The NULL-hash predicate is the atomic guard - two racing
+        requests cannot both set, and an existing password is never
+        overwritten through this path."""
+        new_password = validate_password(new_password)
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(users)
+                .where(users.c.id == user_id,
+                       users.c.password_hash.is_(None))
+                .values(password_hash=hash_password(new_password))
+            )
+        if not result.rowcount:
+            raise AccountError(
+                "password_exists",
+                "This account already has a password.",
+                status_code=409,
+            )
+        return {"id": user_id}
+
+    async def change_password(self, user_id: int, current_password: str,
+                              new_password: str) -> dict:
+        """Verify-then-replace for accounts holding a password. Unknown
+        account and unverifiable current raise the same error shape -
+        the caller already owns this session."""
+        new_password = validate_password(new_password)
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(users.c.password_hash)
+                .where(users.c.id == user_id)
+            )).first()
+        if row is None or row[0] is None \
+                or not verify_password(row[0], current_password):
+            raise AccountError(
+                "wrong_password",
+                "Current password is incorrect.",
+                status_code=403,
+            )
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                update(users)
+                .where(users.c.id == user_id)
+                .values(password_hash=hash_password(new_password))
+            )
+        return {"id": user_id}
 
 
 class SessionManager:

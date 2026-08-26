@@ -17,7 +17,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from invincible.core.accounts import ProjectService, UserService
+from invincible.core.accounts import (
+    MIN_PASSWORD_LEN,
+    ProjectService,
+    SessionManager,
+    UserService,
+)
 from invincible.core.identity import ApiKeyStore
 from invincible.core.principal import Principal
 from invincible.core.projection import (
@@ -428,4 +433,61 @@ async def usage_page(
             by_provider.values(),
             key=lambda p: (-(p["input_tokens"] + p["output_tokens"]),
                            p["provider_name"], p["model_id"])),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Settings (Phase 5 PR-5E)
+
+
+def _pw_error_text(code: str | None) -> str | None:
+    """Fixed messages for the bounded pw_error codes POST /auth/password
+    redirects back with - query strings are never rendered verbatim."""
+    if code == "weak_password":
+        return f"Password must be at least {MIN_PASSWORD_LEN} characters."
+    if code == "wrong_password":
+        return "Current password is incorrect."
+    if code == "password_exists":
+        return "This account already has a password; use the change form."
+    return None
+
+
+@router.get("/dashboard/settings")
+async def settings_page(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    engine = _engine(request)
+    # The test client builds app.state by hand and may not carry a
+    # registry; a missing one renders as an empty panel, never a 503.
+    registry = getattr(request.app.state, "registry", None)
+    provider_rows = []
+    routing_mode = ""
+    if registry is not None:
+        provider_rows = [
+            {"name": p.get("name", ""), "tier": p.get("tier"),
+             "enabled": bool(p.get("enabled", True))}
+            for p in registry.list()
+        ]
+        routing_mode = str((registry.routing() or {}).get("mode") or "")
+    flags = [
+        ("Gateway key set", bool(settings.gateway_api_key())),
+        ("Admin key set", bool(settings.admin_key())),
+        ("Browser sessions", SessionManager.available()),
+        ("GitHub login", bool(settings.github_client_id())),
+        ("Memory writes", settings.memory_enabled()),
+        ("Continuity engine", settings.continuity_enabled()),
+        ("Send-time compression", settings.compression_enabled()),
+    ]
+    return _page(
+        "settings.html", request,
+        user_email=await _email(engine, principal),
+        has_password=await UserService(engine).has_password(
+            principal.user_id),
+        min_password_len=MIN_PASSWORD_LEN,
+        pw_error=_pw_error_text(request.query_params.get("pw_error")),
+        pw_saved=request.query_params.get("pw_saved") == "1",
+        provider_rows=provider_rows,
+        routing_mode=routing_mode,
+        flags=flags,
     )

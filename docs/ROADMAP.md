@@ -109,9 +109,9 @@ Verified snapshot of shipped capability (file pointers in
 Honest limitations remaining after Phase 4 (the reason the platform phases
 exist):
 
-- GitHub-only accounts cannot set or reset a password yet (a reset flow is
-  future work); password login for them stays unavailable by design
-  (`password_hash` NULL).
+- Password RESET for forgotten passwords remains future work;
+  GitHub-only accounts CAN now adopt a first password from Dashboard
+  settings (Phase 5), which puts them on normal password login.
 - Device pairing stores one pending request per CLI start; there is no
   admin view of device history beyond audit rows.
 - `facts` is inert history: service code neither reads nor writes it (only
