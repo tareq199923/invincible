@@ -100,18 +100,16 @@ Verified snapshot of shipped capability (file pointers in
 | Continuity | ContinuityEngine: versioned `task_states` per `(session, task_key)` with optimistic CAS (UNIQUE constraint + advisory locks), immutable checkpoints pinning versions, size-bounded continuation-brief injection, interruption detection from runs; MCP tools `task_state_set/get/checkpoint_create`. |
 | Memory | Phase 4: scoped `memories` (user/project scope, explicit/auto layers, kind, confidence, provenance) written at persist time by the deterministic extractor **and** explicit "remember this"/"save this" triggers; lexical retrieval (`RetrievalService`: generated-tsvector FTS × recency half-life × kind weight × confidence, AND→OR query fallback, relevance floor, top-N); unified-budget injection via `ContextBuilder` (memory + continuity brief under one token cap); the legacy per-session `facts` table is inert history. |
 | MCP | `POST /mcp` JSON-RPC 2.0: `read_file`, `execute_bash`, `write_file`, `confirm_action`; text-pattern denylists; single-use token approvals bound to the staging subject (same-subject confirmation, audit-written); opt-in PG persistence of staged actions. |
-| Auth | Four separate realms: `/v1/*` resolves a **Principal** dual-realm (Phase 1) — legacy `GATEWAY_API_KEY` bearer/x-api-key timing-safe compare mapping to the system *local* owner, or per-user `inv_*` API keys (SHA-256 hashed at rest, shown once, revocable via CLI); FAILS OPEN to the local identity when the gateway key is unset (loud startup warning); browser sessions on `/auth/*` + `/projects` + `/api-keys` (Phase 3: HMAC-signed HttpOnly cookies, fail-closed without the owner secret); `INVINCIBLE_ADMIN_KEY` on `/api/v1/*` (fail-closed operator override); OAuth 2.1 + PKCE authorization server on `/oauth/*` (dynamic registration, owner-secret browser consent, hashed tokens, refresh rotation, revocation) with consent-stamped user subjects and persistent lockouts (`login_attempts`, scoped per realm since 0004); GitHub login (OAuth App, verified-email auto-link). |
+| Auth | Four separate realms: `/v1/*` resolves a **Principal** dual-realm (Phase 1) — legacy `GATEWAY_API_KEY` bearer/x-api-key timing-safe compare mapping to the system *local* owner, or per-user `inv_*` API keys (SHA-256 hashed at rest, shown once, revocable via CLI); FAILS OPEN to the local identity when the gateway key is unset (loud startup warning); browser sessions on `/auth/*` + `/projects` + `/api-keys` (Phase 3: HMAC-signed HttpOnly cookies, fail-closed without the owner secret); `INVINCIBLE_ADMIN_KEY` on `/api/v1/*` (fail-closed operator override); OAuth 2.1 + PKCE authorization server on `/oauth/*` (dynamic registration, owner-secret browser consent, hashed tokens, refresh rotation, revocation) with consent-stamped user subjects and persistent lockouts (`login_attempts`, scoped per realm since 0004); GitHub login (OAuth App, verified-email auto-link); GitHub-only accounts adopt a first password via `POST /auth/password` (Phase 5), and every password write bumps the per-user `session_version` (migration `0006`) so browser cookies minted before the change stop resolving immediately. |
+| Dashboard | Phase 5 (Jinja2 + HTMX; script vendored at `/static/htmx.min.js`): `/dashboard` overview (owned count cards + 10 recent sessions), sessions index + per-session detail rendering the shared projection (`core/projection.py`, also backing the graph endpoint), cross-session task board, memory management (browse/filter/search, explicit create, audited owner-scoped delete — `INVINCIBLE_MEMORY=0` blocks creation only), usage view with UTC day buckets (JSON sibling `GET /usage`, window clamped 1–90 days), settings page (system flags, read-only provider/routing panel, password forms). The whole surface resolves **session cookies only** (`require_user_session`) — foreign resources are byte-identical to unknown ones. |
 | Control plane | File-backed ProviderRegistry (CRUD/enable/disable/connectivity-test), `auto`/`pinned`/`chain` routing modes, `GET /api/v1/sessions/{id}/graph` projection. |
 | CLI | `setup` (.env wizard incl. DB URL), `start` (uvicorn + Cloudflare tunnel with an orphan-free lifecycle), `login` (device-flow pairing, Phase 3), `doctor`, `dev-db`, `db upgrade`, `db import` (legacy SQLite), `secret rotate`, `oauth list/revoke/test-client`, `api-key create/list/revoke`. Both `invincible` and `inv`. |
 | Packaging/deploy | pyproject (name `invincible-ai`), packaged `providers.yaml` + migrations + Jinja2 templates, Dockerfile, docker-compose app+postgres pair. |
 | Quality gates | pytest + pytest-asyncio against real Postgres; CI runs ruff check + pytest × Python 3.10–3.14 with a postgres:17 service; coverage artifact (~92% at last measurement). |
 
-Honest limitations remaining after Phase 4 (the reason the platform phases
-exist):
+Honest limitations remaining:
 
-- Password RESET for forgotten passwords remains future work;
-  GitHub-only accounts CAN now adopt a first password from Dashboard
-  settings (Phase 5), which puts them on normal password login.
+- Password RESET for forgotten passwords remains future work.
 - Device pairing stores one pending request per CLI start; there is no
   admin view of device history beyond audit rows.
 - `facts` is inert history: service code neither reads nor writes it (only
@@ -215,11 +213,33 @@ Router's own estimator); a provider failover produces exactly one pre-switch
 checkpoint when a task_state exists and none otherwise.
 
 ### Phase 5 — Full Dashboard
-Projects, sessions, tasks, memory, API keys, usage, and settings views on
-Jinja2 + HTMX. **Status: In progress.** PR-5A landed: `/dashboard`
-overview (cookie-realm count cards + recent sessions), vendored HTMX,
-site nav on authed pages; tasks/memory/usage/settings views follow in
-their own slices.
+Projects, sessions, tasks, memory, usage, and settings views on
+Jinja2 + HTMX (API-key lifecycle remains on the Phase 3 `/account`
+page; the dashboard overview carries the live count). **Status:
+Implemented.** Scope landed across six slices
+plus a hardening remediation arc: `/dashboard` overview — count cards +
+recent sessions on the browser-session realm, vendored HTMX, site nav on
+authed pages (PR-A); projection extraction into `core/projection.py`
+shared by the graph endpoint, a sessions index, per-session detail
+(runs chain, failovers, checkpoints, activity) and a cross-session task
+board (PR-B); memory management — browse/filter/paginate, lexical
+search, explicit create, audited owner-predicated deletes, with
+`INVINCIBLE_MEMORY=0` gating creation only (PR-C); usage aggregation +
+cookie-realm usage view over UTC-pinned day buckets (PR-D); settings
+page + password set/change via `POST /auth/password`, where the STORED
+account state decides set-vs-change (PR-E); per-user
+`users.session_version` bumped atomically inside every password write
+(migration `0006`) so previously issued browser cookies stop resolving
+immediately, plus the UTC-bucket regression pin (remediation).
+**Acceptance:** every view requires a live session cookie and is
+ownership-predicated — foreign ids render the identical unknown/404
+body everywhere (pinned across the dashboard suites); `inv_*` API keys
+never authorize the new surface (pinned on the settings password flow),
+and no other realm reaches it by construction; changing a password
+invalidates every other browser session while the acting client keeps
+its login and API keys keep working; memory deletes and both password
+actions are audit-written; usage day buckets stay identical under three
+different session timezones (UTC regression test).
 
 ### Phase 6 — CLI Client Experience
 `inv setup` device-code pairing through the browser; `inv start` client

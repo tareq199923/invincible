@@ -18,8 +18,9 @@ provider behind either request is chosen by the Router, never by the client.
 | `GET/POST/PATCH/DELETE` | `/api/v1/providers[...]` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Provider management: list, add, update, remove, enable/disable, test connectivity |
 | `GET/PUT` | `/api/v1/routing` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Routing mode: `auto` / `pinned` / `chain` |
 | `GET` | `/api/v1/sessions/{id}/graph` | Admin key (operator override) or user Principal (scoped) | Continuity-graph projection: runs chain, task states, checkpoints as nodes/edges/timeline |
-| `POST` | `/auth/register` `/auth/login` `/auth/logout`, `GET /auth/me` | session cookie realm | Account auth (Phase 3) — see §10 |
-| `/projects`, `/api-keys`, `/sessions`, `/auth/device/*`, GitHub login | cookie or own `inv_` key | Account management + pairing (Phase 3) — see §10 |
+| `POST` | `/auth/register`, `/auth/login`, `/auth/logout`, `/auth/password` · `GET` `/auth/me` | session cookie realm | Account auth + password set/change (Phases 3/5) — see §10 |
+| Mixed | `/projects`, `/api-keys`, `/sessions`, `/auth/device/*`, GitHub login | cookie (own `inv_` key accepted on some) | Account management + pairing (Phase 3) — see §10 |
+| `GET` | `/dashboard`, `/dashboard/sessions[/{pk}]`, `/dashboard/tasks`, `/dashboard/memory`, `/dashboard/usage`, `/dashboard/settings` | session cookie realm | Full-dashboard pages (Phase 5) — see §10 |
 
 Auth details (dual-realm since Phase 1, resolved in this fixed order):
 
@@ -339,6 +340,7 @@ own `inv_` API key — MCP bearers and `GATEWAY_API_KEY` never work here.
 | `POST` | `/auth/login` | none | Enumeration-safe login; persistent per-IP lockout (429, scope `auth-login`) |
 | `POST` | `/auth/logout` | cookie | Clears the session cookie |
 | `GET` | `/auth/me` | cookie | `{id, email, kind, project_id}` |
+| `POST` | `/auth/password` | cookie | Set first password or change existing (min 8 chars); bumps `session_version` so all other browser cookies stop working — details below |
 | `GET/POST` | `/projects` | cookie | List (archived hidden unless `?include_archived=true`) / create |
 | `PATCH` | `/projects/{id}` | cookie (owner) | Rename |
 | `POST` | `/projects/{id}/archive` | cookie (owner) | Soft archive (default project refused) |
@@ -364,3 +366,59 @@ GitHub login (enabled when `INVINCIBLE_GITHUB_CLIENT_ID` +
   exchanges the code, resolves the VERIFIED primary email, then logs in /
   auto-links / auto-registers and sets the session cookie. Failures bounce
   to `/login?github_error=1`.
+
+### Password set/change (`POST /auth/password`, Phase 5)
+
+Cookie realm only — a valid `inv_*` API key does NOT authorize this
+endpoint (`require_user_session` reads the signed session cookie alone).
+Body `{"new_password": …, "current_password": …}`, accepted as JSON or a
+urlencoded form post (JSON gets status codes + bodies; forms get 303
+redirects). Which flow applies follows the **stored** account state,
+never caller-chosen fields — omitting `current_password` cannot flip
+semantics:
+
+- No stored password (GitHub-only account) → **set**: only
+  `new_password` is required (minimum 8 characters). The NULL-hash
+  predicate is the atomic guard: two racing setters resolve to one
+  winner; the loser gets `password_exists` (409) and never overwrites.
+- Stored password → **change**: `current_password` must verify
+  (`wrong_password`, otherwise indistinguishable semantics); weak
+  replacement → `weak_password`.
+
+Both paths execute the hash replacement and the per-user
+`users.session_version + 1` bump **inside one UPDATE** — there is no
+window where a fresh hash coexists with old-version sessions. Cookies
+are payloads `v2.<uid>.<session_version>.<expiry>` (HMAC-SHA256), and
+resolution rejects any cookie whose embedded version differs from the
+live column value exactly like a forged or expired token. Net effect:
+every browser session minted before the change dies immediately instead
+of surviving its 30-day TTL; the acting client receives a fresh cookie
+in the response and keeps its login. `inv_*` API keys and other users'
+sessions are unaffected. Both actions are audit-written
+(`password.set` / `password.changed`); the column ships in migration
+`0006`. HTML errors bounce to `/dashboard/settings?pw_error=<code>`,
+rendered from a fixed message map — query strings are never echoed
+verbatim.
+
+### Dashboard views (Phase 5)
+
+Server-rendered Jinja2 + HTMX pages on the same cookie realm:
+
+| Path | Purpose |
+|---|---|
+| `/dashboard` | Overview: owned count cards (projects, sessions, active keys, task heads, memories, 7-day tokens) + 10 recent sessions |
+| `/dashboard/sessions` | Owned sessions index |
+| `/dashboard/sessions/{session_pk}` | Continuity-projection detail: runs chain, failover pairs, checkpoints, task states, activity |
+| `/dashboard/tasks` | Cross-session active task heads |
+| `/dashboard/memory` | Browse/filter/paginate/search owned memories, explicit create, audited delete buttons |
+| `/dashboard/usage?days=N` | Day bars + per-provider totals; buckets pinned to UTC, window clamped to 1–90 days |
+| `/dashboard/settings` | System flags, read-only provider/routing panel, password forms |
+
+HTMX interactions drive three JSON siblings on the same realm:
+`GET /memories`, `POST /memories` (explicit layer, confidence 1.0,
+content ≤2000 chars — refused entirely while `INVINCIBLE_MEMORY=0`,
+though browse/delete stay available so the toggle never traps data),
+`DELETE /memories/{id}` (audited owner-scoped; HTMX requests get an
+empty 204 so `hx-swap="delete"` drops the row), and `GET /usage?days=`.
+Foreign ids are indistinguishable from unknown ones on every dashboard
+surface — identical 404 bodies/pages, no existence leak.

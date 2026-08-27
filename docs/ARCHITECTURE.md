@@ -12,12 +12,18 @@ invincible/
 ├── main.py                     FastAPI app, lifespan, auth wiring, /health, HEAD /
 ├── cli.py                      Click CLI (setup / start / login / doctor / dev-db / db / oauth / secret / api-key)
 ├── providers.yaml              Canonical provider config (packaged)
-├── templates/                  Jinja2 account UI (login/register/account/device pages)
-├── migrations/                 Packaged Alembic environment (0001 baseline … 0004 accounts)
+├── templates/                  Jinja2 UI (login/register/account/device pages + dashboard)
+├── migrations/                 Packaged Alembic environment (0001 baseline … 0006 session_version)
 ├── endpoints/
 │   ├── auth.py                 require_auth: dual-realm Principal resolution for /v1/* (Phase 1)
 │   ├── accounts.py             Phase 3: /auth/*, /projects, /api-keys, /sessions,
-│   │                           device pairing, GitHub login (session-cookie realm)
+│   │                           device pairing, GitHub login, password set/change
+│   │                           via /auth/password (session-cookie realm)
+│   ├── dashboard.py            Phase 5: /dashboard* views (overview, sessions,
+│   │                           detail, tasks, memory, usage, settings) plus the
+│   │                           /memories and /usage JSON siblings — all behind
+│   │                           require_user_session (cookies only; inv_* keys,
+│   │                           admin key, MCP bearers excluded by construction)
 │   ├── openai_compat.py        POST /v1/chat/completions, GET /v1/models
 │   ├── anthropic_compat.py     POST /v1/messages (Anthropic protocol)
 │   ├── mcp.py                  POST /mcp (JSON-RPC 2.0 dispatch, Bearer resource server)
@@ -37,7 +43,8 @@ invincible/
     ├── principal.py            Authenticated Principal model (legacy | api_key | anonymous | session)
     ├── identity.py             Phase 1: argon2id primitives, API-key lifecycle, audit log
     ├── accounts.py             Phase 3: UserService/SessionManager/ProjectService/
-    │                           DeviceCodeStore/IdentityStore/GitHubOAuth
+    │                           DeviceCodeStore/IdentityStore/GitHubOAuth;
+    │                           password set/change carries the session_version bump
     ├── db.py                   Engine factory + schema metadata + local-owner bootstrap
     ├── session_store.py        Conversation memory on PostgreSQL (sessions/turns/messages)
     ├── oauth_store.py          OAuth store on PostgreSQL (clients, codes, hashed tokens)
@@ -48,6 +55,9 @@ invincible/
     ├── context_builder.py      One unified token budget for memory + continuity
     │                           injections (Phase 4)
     ├── run_store.py            Provider-run records incl. token accounting (runs table)
+    ├── projection.py           Shared session/run/task-state projection builder —
+    │                           one engine under the graph endpoint AND the
+    │                           dashboard session-detail view (Phase 5B extraction)
     ├── continuity.py           Task-state/checkpoint engine + continuation brief
     │                           + reactive failover checkpoints (Phase 4)
     └── tool_executor.py        MCP tool execution + denylists + approval
@@ -93,6 +103,8 @@ import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
                               app.include_router(anthropic_router, deps=[require_auth])
                               app.include_router(admin_router)  (own INVINCIBLE_ADMIN_KEY)
                               app.include_router(mcp_router, deps=[require_mcp_auth])
+                              app.include_router(accounts_router)   (cookie realm)
+                              app.include_router(dashboard_router)  (cookie realm, Phase 5)
                               app.include_router(oauth_router)      (no dep — own auth)
                               app.include_router(graph_router)      (admin realm)
                      │
@@ -116,6 +128,18 @@ continuity engine renders a continuation brief (canonical task state +
 checkpoints + interruption notice from runs) into every outgoing chat
 prompt, and exposes the same state to MCP tools (`task_state_set/get`,
 `checkpoint_create`) — one canonical store for LLMs and tools alike.
+
+The browser realm (`/auth/*`, `/projects`, `/api-keys`, the full Phase 5
+dashboard) resolves its own Principal kind (`session`): an HMAC-signed
+cookie payload `v2.<uid>.<session_version>.<expiry>` whose signature and
+expiry the engine-free `SessionManager` checks, then reconciled against
+the live `users` row — including the per-user `session_version` column
+added by migration `0006`. Every password write (`set_password` /
+`change_password`) bumps that version inside its own UPDATE statement,
+so any cookie minted earlier fails resolution exactly like a forged or
+expired token: credential rotation retires other browsers immediately,
+while the acting client is re-issued a fresh cookie by the endpoint.
+No window exists where a new hash coexists with old-version sessions.
 
 ---
 
