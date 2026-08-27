@@ -213,6 +213,8 @@ def test_metadata_covers_all_expected_tables():
         "pending_actions", "login_attempts",
         # Phase 3 accounts
         "user_identities", "device_codes",
+        # Phase 9 BYOK provider connections
+        "user_provider_credentials",
     }
     assert set(metadata.tables) == expected
 
