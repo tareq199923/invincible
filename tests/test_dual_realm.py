@@ -12,11 +12,19 @@ Pins the exact resolution order documented in endpoints/auth.py:
 Session placement is the observable: history must land under the owning
 user's ownership triple, which is exactly what Phase 2's predicates will
 enforce.
+
+Phase 9 update: api_key-realm principals route ONLY through their own
+connected credentials (never the operator pool). The keyed-principal
+tests below connect one credential on the same mocked host so the
+resolution/threading behavior they pin is still observable.
 """
 import hashlib
 
+import pytest
+from cryptography.fernet import Fernet
 from sqlalchemy import text
 
+from invincible.core.credential_store import ByokCredentialStore
 from invincible.core.db import (
     LOCAL_OWNER_EMAIL,
     LOCAL_PROJECT_NAME,
@@ -27,6 +35,18 @@ from invincible.main import app
 GATEWAY_KEY = "test-gateway-key"
 AUTH = {"Authorization": f"Bearer {GATEWAY_KEY}"}
 CHAT_BODY = {"messages": [{"role": "user", "content": "hi"}]}
+
+
+@pytest.fixture(autouse=True)
+def _byok_env(monkeypatch):
+    """Keyed principals need a usable BYOK environment: a master
+    credential key and hermetic DNS for the per-attempt URL re-check."""
+    import invincible.core.url_safety as url_safety
+
+    monkeypatch.setenv(
+        "INVINCIBLE_CREDENTIAL_KEY", Fernet.generate_key().decode("ascii"))
+    monkeypatch.setattr(
+        url_safety, "_default_resolve", lambda host: ["93.184.216.34"])
 
 
 def provider_body():
@@ -54,8 +74,10 @@ async def _session_owner(client, session_string: str) -> tuple | None:
 
 
 async def _mint_key_for_new_user(client, email: str) -> str:
-    """Insert a real user + default project, mint one API key; returns the
-    raw token."""
+    """Insert a real user + default project, mint one API key, and
+    connect one BYOK credential on the standard mock host (Phase 9:
+    keyed principals chat only through their own connected providers);
+    returns the raw token."""
     engine = app.state.engine
     async with engine.begin() as conn:
         uid = (await conn.execute(text(
@@ -66,6 +88,12 @@ async def _mint_key_for_new_user(client, email: str) -> str:
             "INSERT INTO projects (user_id, name, is_default, created_at)"
             " VALUES (:u, 'personal', TRUE, 1.0)"
         ), {"u": uid})
+    await ByokCredentialStore(engine).create(
+        user_id=int(uid), provider_name="Test Pool",
+        model_id="alpha-model",
+        base_url="https://alpha.example.com/v1",
+        api_key="user-key",
+    )
     record = await app.state.api_keys.create(int(uid), label="test")
     return record["raw"]
 

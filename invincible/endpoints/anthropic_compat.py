@@ -26,8 +26,14 @@ from invincible.core.compression import compress_messages, compression_enabled
 from invincible.core.context_builder import build_context_messages
 from invincible.core.memory import MemoryStore
 from invincible.core.principal import Principal
-from invincible.core.router import AllProvidersFailedError, UpstreamClientError
+from invincible.core.router import (
+    NO_CREDENTIALS_MESSAGE,
+    AllProvidersFailedError,
+    NoCredentialsConfiguredError,
+    UpstreamClientError,
+)
 from invincible.endpoints.auth import require_auth
+from invincible.endpoints.byok import byok_attempt_source
 from invincible.models.anthropic import AnthropicMessagesRequest
 
 logger = logging.getLogger(__name__)
@@ -145,6 +151,17 @@ async def anthropic_messages(
     tools = anthropic_tools_to_openai(body.tools)
     tool_choice = translate_tool_choice(body.tool_choice)
 
+    # Phase 9 BYOK: api_key-realm principals route ONLY through their own
+    # connected credentials (never the operator's shared pool); legacy/
+    # anonymous keep the operator pool as-is.
+    byok = await byok_attempt_source(request, principal)
+    if byok is not None and not byok[0]:
+        return _error_message(400, NO_CREDENTIALS_MESSAGE)
+    byok_kwargs = (
+        {} if byok is None
+        else {"byok_candidates": byok[0], "byok_key_resolver": byok[1]}
+    )
+
     if body.stream:
         try:
             (first, tail), info = await request.app.state.router.stream_open_detailed(
@@ -154,7 +171,11 @@ async def anthropic_messages(
                 model=body.model,
                 session_id=session_id,
                 session_pk=session_pk,
+                **byok_kwargs,
             )
+        except NoCredentialsConfiguredError:
+            # Defensive: the pre-router check above normally catches this.
+            return _error_message(400, NO_CREDENTIALS_MESSAGE)
         except UpstreamClientError as e:
             return _error_message(e.status_code, "Upstream request failed")
         except AllProvidersFailedError:
@@ -200,7 +221,10 @@ async def anthropic_messages(
             model=body.model,
             session_id=session_id,
             session_pk=session_pk,
+            **byok_kwargs,
         )
+    except NoCredentialsConfiguredError:
+        return _error_message(400, NO_CREDENTIALS_MESSAGE)
     except UpstreamClientError as e:
         return _error_message(e.status_code, "Upstream request failed")
     except AllProvidersFailedError:

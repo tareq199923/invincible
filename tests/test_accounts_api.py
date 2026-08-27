@@ -12,8 +12,11 @@ import secrets
 
 import httpx
 import pytest
+from cryptography.fernet import Fernet
+from sqlalchemy import text
 
 from invincible.core.accounts import GitHubOAuth
+from invincible.core.credential_store import ByokCredentialStore
 from invincible.main import app
 from tests.conftest import (
     login_account,
@@ -22,6 +25,35 @@ from tests.conftest import (
 )
 
 PASSWORD = "longenough1"
+
+
+@pytest.fixture(autouse=True)
+def _byok_env(monkeypatch):
+    """Phase 9: keyed principals chat only through their own connected
+    credentials. Provide a usable master key and hermetic DNS for the
+    per-attempt URL re-check."""
+    import invincible.core.url_safety as url_safety
+
+    monkeypatch.setenv(
+        "INVINCIBLE_CREDENTIAL_KEY", Fernet.generate_key().decode("ascii"))
+    monkeypatch.setattr(
+        url_safety, "_default_resolve", lambda host: ["93.184.216.34"])
+
+
+async def _connect_byok_for(email: str) -> None:
+    """Connect one BYOK credential on the standard mock host for an
+    existing account, so its keyed principal can chat (Phase 9)."""
+    engine = app.state.engine
+    async with engine.connect() as conn:
+        uid = (await conn.execute(text(
+            "SELECT id FROM users WHERE email = :e"
+        ), {"e": email})).scalar_one()
+    await ByokCredentialStore(engine).create(
+        user_id=int(uid), provider_name="Test Pool",
+        model_id="alpha-model",
+        base_url="https://alpha.example.com/v1",
+        api_key="user-key",
+    )
 
 
 def _fresh_client():
@@ -117,6 +149,9 @@ async def test_full_acceptance_walk(client, router_setter):
         raw_key = created_key.json()["raw"]
 
         # 5. chat with the key through the tiered failover router
+        # (Phase 9: keyed principals route through their own connected
+        # credential on the same mock host)
+        await _connect_byok_for("walk@example.com")
         router_setter({
             "alpha.example.com": httpx.Response(
                 200, json=provider_body("alpha", "hi from alpha")),
@@ -318,6 +353,7 @@ async def test_device_flow_issues_working_credentials(
 ):
     monkeypatch.setattr("invincible.endpoints.accounts.DEFAULT_POLL_INTERVAL", 0)
     await register_account(client, "dev@device.example")
+    await _connect_byok_for("dev@device.example")
 
     started = await client.post("/auth/device/code")
     assert started.status_code == 200, started.text

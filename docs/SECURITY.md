@@ -139,6 +139,15 @@ Properties of this realm:
   keys shorter than 12 chars are fully masked).
 - Deleting/testing is ownership-predicated: foreign and unknown
   credential ids return byte-identical 404 bodies (no enumeration).
+- **Routing split (PR-C):** `api_key`-realm chat requests build their
+  attempt list ENTIRELY from that user's connected credentials — with
+  zero credentials the request fails fast with a clear 400 — and never
+  fall back to the operator's shared `ProviderRegistry` pool in either
+  direction. Legacy/anonymous (local mode) keep the operator pool
+  unchanged. Health cooldowns are keyed per-credential (`byok:<id>`),
+  so users can never poison each other's or the operator pool's
+  cooldown state, and the per-attempt key resolver re-runs the SSRF
+  guard and decrypts lazily, one credential at a time.
 - `base_url` for non-catalog (user-typed) providers must be `https://`
   and resolve to a public address; the SSRF guard re-checks on EVERY
   later test use, not just at create (details: §9). Catalog base URLs

@@ -25,11 +25,26 @@ import json
 
 import httpx
 import pytest
+from cryptography.fernet import Fernet
 from sqlalchemy import text
 
+from invincible.core.credential_store import ByokCredentialStore
 from invincible.main import app
 
 GATEWAY = {"Authorization": "Bearer test-gateway-key"}
+
+
+@pytest.fixture(autouse=True)
+def _byok_env(monkeypatch):
+    """Phase 9: keyed principals chat only through their own connected
+    credentials. Provide a usable master key and hermetic DNS for the
+    per-attempt URL re-check."""
+    import invincible.core.url_safety as url_safety
+
+    monkeypatch.setenv(
+        "INVINCIBLE_CREDENTIAL_KEY", Fernet.generate_key().decode("ascii"))
+    monkeypatch.setattr(
+        url_safety, "_default_resolve", lambda host: ["93.184.216.34"])
 
 
 def provider_body(content="ok"):
@@ -41,8 +56,10 @@ def provider_body(content="ok"):
 
 
 async def _mint_user_and_key(client, email: str) -> dict:
-    """Real user row + default project + one API key. Returns the key
-    record plus the resolved ids."""
+    """Real user row + default project + one API key + one connected BYOK
+    credential on the standard mock host (Phase 9: keyed principals chat
+    only through their own connected providers). Returns the key record
+    plus the resolved ids."""
     engine = app.state.engine
     async with engine.begin() as conn:
         uid = (await conn.execute(text(
@@ -53,6 +70,12 @@ async def _mint_user_and_key(client, email: str) -> dict:
             "INSERT INTO projects (user_id, name, is_default, created_at)"
             " VALUES (:u, 'personal', TRUE, 1.0) RETURNING id"
         ), {"u": uid})).scalar_one()
+    await ByokCredentialStore(engine).create(
+        user_id=int(uid), provider_name="Test Pool",
+        model_id="alpha-model",
+        base_url="https://alpha.example.com/v1",
+        api_key="user-key",
+    )
     record = await app.state.api_keys.create(int(uid))
     return {"user_id": int(uid), "project_id": int(pid),
             "raw": record["raw"]}

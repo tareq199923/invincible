@@ -12,8 +12,14 @@ from invincible.compat.common import route_headers
 from invincible.core.context_builder import build_context_messages
 from invincible.core.memory import MemoryStore
 from invincible.core.principal import Principal
-from invincible.core.router import AllProvidersFailedError, UpstreamClientError
+from invincible.core.router import (
+    NO_CREDENTIALS_MESSAGE,
+    AllProvidersFailedError,
+    NoCredentialsConfiguredError,
+    UpstreamClientError,
+)
 from invincible.endpoints.auth import require_auth
+from invincible.endpoints.byok import byok_attempt_source
 
 logger = logging.getLogger(__name__)
 
@@ -247,11 +253,33 @@ async def chat_completions(
     # always kept). Route with it, but only persist the new turns.
     to_persist = [m for m in body.messages if m.get("role") != "system"]
 
+    # Phase 9 BYOK: api_key-realm principals route ONLY through their own
+    # connected credentials (never the operator's shared pool - the product
+    # decision pins this); legacy/anonymous keep the operator pool as-is.
+    byok = await byok_attempt_source(request, principal)
+    if byok is not None and not byok[0]:
+        return JSONResponse(
+            content={"error": {"message": NO_CREDENTIALS_MESSAGE,
+                               "type": "invalid_request_error"}},
+            status_code=400,
+        )
+    byok_kwargs = (
+        {} if byok is None
+        else {"byok_candidates": byok[0], "byok_key_resolver": byok[1]}
+    )
+
     if body.stream:
         try:
             (first, tail), info = await request.app.state.router.stream_open_detailed(
                 full_messages, model=body.model, session_id=session_id,
-                session_pk=session_pk,
+                session_pk=session_pk, **byok_kwargs,
+            )
+        except NoCredentialsConfiguredError:
+            # Defensive: the pre-router check above normally catches this.
+            return JSONResponse(
+                content={"error": {"message": NO_CREDENTIALS_MESSAGE,
+                                   "type": "invalid_request_error"}},
+                status_code=400,
             )
         except UpstreamClientError as e:
             return JSONResponse(content=e.body, status_code=e.status_code)
@@ -276,7 +304,7 @@ async def chat_completions(
     try:
         result, info = await request.app.state.router.route_request_detailed(
             full_messages, model=body.model, session_id=session_id,
-            session_pk=session_pk,
+            session_pk=session_pk, **byok_kwargs,
         )
         choices = result.get("choices") or []
         if choices and "message" in choices[0]:
@@ -297,6 +325,12 @@ async def chat_completions(
             except Exception:
                 logger.exception("Failed to record memories for %s", session_id)
         return JSONResponse(content=result, headers=route_headers(info))
+    except NoCredentialsConfiguredError:
+        return JSONResponse(
+            content={"error": {"message": NO_CREDENTIALS_MESSAGE,
+                               "type": "invalid_request_error"}},
+            status_code=400,
+        )
     except UpstreamClientError as e:
         return JSONResponse(
             content=e.body,

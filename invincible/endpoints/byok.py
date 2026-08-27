@@ -26,6 +26,7 @@ from invincible.core.credential_store import (
 )
 from invincible.core.principal import Principal
 from invincible.core.provider_catalog import catalog_entry
+from invincible.core.trimming import DEFAULT_MAX_CONTEXT
 from invincible.core.url_safety import UnsafeUrlError, validate_public_https_url
 from invincible.endpoints.accounts import _audit, _page, _payload, require_user_session
 from invincible.endpoints.dashboard import _email
@@ -78,6 +79,70 @@ def _audit_meta(row: dict) -> dict:
     if row.get("catalog_key"):
         meta["catalog_key"] = row["catalog_key"]
     return meta
+
+
+async def byok_attempt_source(request: Request, principal: Principal):
+    """Candidate pool + key resolver for a BYOK-scoped chat request
+    (Platform Phase 9, PR-C).
+
+    Returns ``None`` when the principal rides the operator pool unchanged
+    (legacy gateway key / anonymous local identity). Otherwise returns
+    ``(candidates, key_resolver)`` built entirely from this user's
+    ``user_provider_credentials`` rows - an EMPTY candidate list means the
+    user has connected nothing, and callers must fail fast with a clear
+    400-class response. There is no fallback to the operator's shared
+    ProviderRegistry in either direction.
+
+    ``key_resolver(provider)`` is awaited once per attempt by the Router
+    (lazy decryption - never eagerly for the whole list): it re-fetches
+    the row, re-runs the SSRF guard on the stored URL (a DNS rebind
+    between connect and use must not bypass it), and decrypts. Any
+    unusable credential (vanished row, unsafe URL, undecryptable
+    ciphertext) logs a warning and returns None, which the Router treats
+    exactly like a missing env key - skip to the next attempt.
+    """
+    if principal.kind != "api_key":
+        return None
+    store = ByokCredentialStore(request.app.state.engine)
+    rows = await store.routing_rows(principal.user_id)
+    user_id = principal.user_id
+
+    async def resolve_key(provider: dict) -> str | None:
+        row = await store.get_for_user(
+            provider.get("byok_credential_id"), user_id)
+        if row is None:
+            logger.warning("BYOK credential vanished mid-request; skipping")
+            return None
+        entry = catalog_entry(row.get("catalog_key"))
+        if not (entry and row["base_url"] == entry["base_url"]):
+            try:
+                validate_public_https_url(row["base_url"])
+            except UnsafeUrlError as e:
+                logger.warning(
+                    "BYOK base URL no longer safe (%s); skipping", e)
+                return None
+        try:
+            return credential_crypto.decrypt(row["encrypted_api_key"])
+        except (credential_crypto.CredentialKeyError,
+                credential_crypto.CredentialDecryptError) as e:
+            logger.warning("BYOK credential unusable: %s", e)
+            return None
+
+    candidates = []
+    for index, row in enumerate(rows):
+        entry = catalog_entry(row.get("catalog_key"))
+        candidates.append({
+            "name": row["provider_name"],
+            "tier": index + 1,
+            "base_url": row["base_url"],
+            "model_id": row["model_id"],
+            "max_context": (
+                entry["max_context"] if entry else DEFAULT_MAX_CONTEXT),
+            "enabled": True,
+            "health_id": f"byok:{row['id']}",
+            "byok_credential_id": row["id"],
+        })
+    return candidates, resolve_key
 
 
 async def _probe(request: Request, base_url: str, api_key: str) -> dict:

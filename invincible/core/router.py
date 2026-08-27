@@ -81,6 +81,24 @@ def _log_attempt(
 class AllProvidersFailedError(Exception):
     """Every provider failed, was disabled, or is in cooldown; nothing left to try."""
 
+
+NO_CREDENTIALS_MESSAGE = (
+    "No AI provider is connected for this account. Connect one at "
+    "/dashboard/providers - chat requests route only through providers "
+    "you connect yourself, never the operator's shared pool."
+)
+
+
+class NoCredentialsConfiguredError(AllProvidersFailedError):
+    """A BYOK principal made a chat request with ZERO connected
+    credentials. Expected/normal for a user who has not connected a
+    provider yet - endpoints map this to a clear 400-class response, not
+    a 5xx alarm. Subclassing AllProvidersFailedError keeps call sites
+    that do not know about BYOK on the safe exhaustion path."""
+
+    def __init__(self):
+        super().__init__(NO_CREDENTIALS_MESSAGE)
+
 _TIMEOUT_KIND_BY_CLASS = {
     "ConnectTimeout": "connect_timeout",
     "ReadTimeout": "read_timeout",
@@ -247,6 +265,14 @@ def _all_providers_failed() -> AllProvidersFailedError:
     return AllProvidersFailedError("All providers failed or are in cooldown.")
 
 
+def _health_key(provider: dict) -> str:
+    """Cooldown/isolation key for the health tracker. BYOK candidates
+    carry a per-credential ``health_id`` so same-labeled providers of
+    different users never share cooldown state (and can never poison the
+    operator pool's); operator providers keep their name."""
+    return provider.get("health_id") or provider["name"]
+
+
 class Router:
     def __init__(
         self,
@@ -304,6 +330,17 @@ class Router:
         except PinnedUnavailableError as e:
             raise AllProvidersFailedError(str(e)) from None
 
+    async def _resolve_attempt_key(
+        self, provider: dict, byok_key_resolver
+    ) -> str | None:
+        """One attempt's API key, resolved lazily. Registry-mode providers
+        resolve their env var by name; BYOK providers go through the
+        injected resolver (decrypt on demand) - a None result skips the
+        attempt exactly like a missing env key."""
+        if byok_key_resolver is None:
+            return settings.provider_api_key(provider["api_key_env"])
+        return await byok_key_resolver(provider)
+
     def _request_url(self, provider: dict) -> str:
         """Chat-completions URL for a provider (``chat_path`` override)."""
         return f"{provider['base_url']}{provider.get('chat_path', '/chat/completions')}"
@@ -326,6 +363,8 @@ class Router:
         *,
         session_id: str | None = None,
         session_pk: int | None = None,
+        byok_candidates: list[dict] | None = None,
+        byok_key_resolver=None,
     ) -> dict:
         """Non-streaming chat completion through the provider tiers.
 
@@ -335,6 +374,11 @@ class Router:
         JSON body. Raises :class:`UpstreamClientError` for non-failover
         client errors and :class:`AllProvidersFailedError` when every
         provider failed, was disabled, or is in cooldown.
+
+        BYOK (Platform Phase 9): when ``byok_candidates`` is not None, the
+        attempt list comes ENTIRELY from that list (the caller's per-user
+        credential rows) and ``byok_key_resolver(provider)`` resolves each
+        attempt's key lazily - never the operator registry.
         """
         result, _info = await self.route_request_detailed(
             messages,
@@ -343,6 +387,8 @@ class Router:
             model=model,
             session_id=session_id,
             session_pk=session_pk,
+            byok_candidates=byok_candidates,
+            byok_key_resolver=byok_key_resolver,
         )
         return result
 
@@ -355,13 +401,17 @@ class Router:
         *,
         session_id: str | None = None,
         session_pk: int | None = None,
+        byok_candidates: list[dict] | None = None,
+        byok_key_resolver=None,
     ) -> tuple[dict, dict]:
         """Like :meth:`route_request` but also returns route metadata:
         ``(parsed_body, {request_id, provider_name, model_id, attempts})``.
         """
         async for result, info in self._iter_attempts(
             messages, tools, tool_choice, model, stream=False,
-            session_id=session_id, session_pk=session_pk
+            session_id=session_id, session_pk=session_pk,
+            byok_candidates=byok_candidates,
+            byok_key_resolver=byok_key_resolver,
         ):
             return result, info
         # Unreachable: _iter_attempts terminates by raising instead.
@@ -376,6 +426,8 @@ class Router:
         *,
         session_id: str | None = None,
         session_pk: int | None = None,
+        byok_candidates: list[dict] | None = None,
+        byok_key_resolver=None,
     ) -> tuple[dict | None, AsyncIterator[dict]]:
         """Open a streaming chat-completions response through the providers.
 
@@ -397,6 +449,8 @@ class Router:
             model=model,
             session_id=session_id,
             session_pk=session_pk,
+            byok_candidates=byok_candidates,
+            byok_key_resolver=byok_key_resolver,
         )
         return result
 
@@ -409,6 +463,8 @@ class Router:
         *,
         session_id: str | None = None,
         session_pk: int | None = None,
+        byok_candidates: list[dict] | None = None,
+        byok_key_resolver=None,
     ) -> tuple[tuple[dict | None, AsyncIterator[dict]], dict]:
         """Like :meth:`stream_open` but also returns route metadata:
         ``((first_chunk, tail), {request_id, provider_name, model_id,
@@ -416,7 +472,9 @@ class Router:
         """
         async for result, info in self._iter_attempts(
             messages, tools, tool_choice, model, stream=True,
-            session_id=session_id, session_pk=session_pk
+            session_id=session_id, session_pk=session_pk,
+            byok_candidates=byok_candidates,
+            byok_key_resolver=byok_key_resolver,
         ):
             return result, info
         # Unreachable: _iter_attempts terminates by raising instead.
@@ -431,6 +489,8 @@ class Router:
         stream: bool,
         session_id: str | None = None,
         session_pk: int | None = None,
+        byok_candidates: list[dict] | None = None,
+        byok_key_resolver=None,
     ) -> AsyncIterator[tuple[dict | tuple[dict | None, AsyncIterator[dict]], dict]]:
         """The single failover policy loop behind both public entry points
         (Phase 13): provider ordering, cooldown and missing-key skips,
@@ -438,6 +498,15 @@ class Router:
         classification, health tracking, and logging exist exactly once
         here. Transport mechanics live in :meth:`_attempt_nonstreaming` and
         :meth:`_attempt_streaming`.
+
+        BYOK (Platform Phase 9): ``byok_candidates is not None`` switches
+        the candidate source to that list - the requesting user's own
+        connected credentials, never the operator registry, with no
+        fallback in either direction. ``byok_key_resolver(provider)`` must
+        return the attempt's API key or None (skip); it is awaited once per
+        attempt so decryption is lazy and per-credential. An empty BYOK
+        list raises :class:`NoCredentialsConfiguredError` - connecting a
+        provider is expected of the user, not an operator emergency.
 
         Yields ``(result, route_info)`` where ``result`` is the parsed JSON
         body (``stream=False``) or ``(first_chunk, tail)`` (``stream=True``)
@@ -448,19 +517,34 @@ class Router:
         request_id = uuid.uuid4().hex
         attempt_index = 0
         checkpoint_fired = False
-        for provider in self._candidates(model):
+        if byok_candidates is not None:
+            if not byok_candidates:
+                raise NoCredentialsConfiguredError()
+            try:
+                candidates = attempt_order(
+                    byok_candidates, self.health_tracker, AUTO_ROUTING, model)
+            except PinnedUnavailableError as e:
+                raise AllProvidersFailedError(str(e)) from None
+        else:
+            candidates = self._candidates(model)
+        for provider in candidates:
             name = provider["name"]
 
-            if not self.health_tracker.is_available(name):
+            if not self.health_tracker.is_available(_health_key(provider)):
                 logger.info(f"Provider {name} in cooldown. Skipping.")
                 continue
 
-            api_key = settings.provider_api_key(provider["api_key_env"])
+            api_key = await self._resolve_attempt_key(
+                provider, byok_key_resolver)
             if not api_key:
-                logger.warning(
-                    f"No API key found for {name} "
-                    f"({provider['api_key_env']}). Skipping."
-                )
+                if byok_key_resolver is not None:
+                    logger.warning(
+                        f"Unusable credential for {name}. Skipping.")
+                else:
+                    logger.warning(
+                        f"No API key found for {name} "
+                        f"({provider['api_key_env']}). Skipping."
+                    )
                 continue
 
             headers = self._request_headers(provider, api_key)
@@ -627,7 +711,7 @@ class Router:
                     True,
                     level=logging.WARNING,
                 )
-                self.health_tracker.record_failure(name)
+                self.health_tracker.record_failure(_health_key(provider))
                 await resp.aclose()
                 await self._record_run(
                     provider, attempt_index, time.time(), "failover",
@@ -639,7 +723,7 @@ class Router:
                 raise _Failover(
                     provider_name=name, error_class="malformed_json"
                 ) from None
-            self.health_tracker.record_success(name)
+            self.health_tracker.record_success(_health_key(provider))
             _log_attempt(
                 name,
                 provider["model_id"],
@@ -677,7 +761,7 @@ class Router:
                     level=logging.WARNING,
                     disabled=True,
                 )
-                self.health_tracker.disable(name)
+                self.health_tracker.disable(_health_key(provider))
                 await e.response.aclose()
                 await self._record_run(
                     provider, attempt_index, time.time(), "disabled",
@@ -792,7 +876,7 @@ class Router:
                     level=logging.WARNING,
                     disabled=True,
                 )
-                self.health_tracker.disable(name)
+                self.health_tracker.disable(_health_key(provider))
                 await resp.aclose()
                 await self._record_run(
                     provider, attempt_index, time.time(), "disabled",
@@ -837,7 +921,7 @@ class Router:
                 first = await anext(tail)
             except StopAsyncIteration:
                 first = None
-            self.health_tracker.record_success(name)
+            self.health_tracker.record_success(_health_key(provider))
             _log_attempt(
                 name,
                 provider["model_id"],
@@ -873,7 +957,7 @@ class Router:
                 True,
                 level=logging.WARNING,
             )
-            self.health_tracker.record_failure(name)
+            self.health_tracker.record_failure(_health_key(provider))
             await self._record_run(
                 provider, attempt_index, time.time(), "failover",
                 error_class="malformed_sse",
@@ -920,7 +1004,7 @@ class Router:
             True,
             level=logging.WARNING,
         )
-        self.health_tracker.record_failure(name)
+        self.health_tracker.record_failure(_health_key(provider))
         await resp.aclose()
 
     def _handle_network_error(
@@ -954,7 +1038,7 @@ class Router:
             read_timeout_s=resolve_timeout(provider).read,
             **details,
         )
-        self.health_tracker.record_failure(name)
+        self.health_tracker.record_failure(_health_key(provider))
 
     async def _record_run(
         self,

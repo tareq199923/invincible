@@ -12,6 +12,8 @@ import json
 import httpx
 import pytest
 from click.testing import CliRunner
+from cryptography.fernet import Fernet
+from sqlalchemy import text
 
 from invincible.cli import (
     _client_config_path,
@@ -20,8 +22,38 @@ from invincible.cli import (
     _save_client_config,
     login,
 )
+from invincible.core.credential_store import ByokCredentialStore
 from invincible.main import app
 from tests.conftest import register_account
+
+
+@pytest.fixture(autouse=True)
+def _byok_env(monkeypatch):
+    """Phase 9: keyed principals chat only through their own connected
+    credentials. Provide a usable master key and hermetic DNS for the
+    per-attempt URL re-check."""
+    import invincible.core.url_safety as url_safety
+
+    monkeypatch.setenv(
+        "INVINCIBLE_CREDENTIAL_KEY", Fernet.generate_key().decode("ascii"))
+    monkeypatch.setattr(
+        url_safety, "_default_resolve", lambda host: ["93.184.216.34"])
+
+
+async def _connect_byok_for(email: str) -> None:
+    """Connect one BYOK credential on the standard mock host for an
+    existing account, so its keyed principal can chat (Phase 9)."""
+    engine = app.state.engine
+    async with engine.connect() as conn:
+        uid = (await conn.execute(text(
+            "SELECT id FROM users WHERE email = :e"
+        ), {"e": email})).scalar_one()
+    await ByokCredentialStore(engine).create(
+        user_id=int(uid), provider_name="Test Pool",
+        model_id="alpha-model",
+        base_url="https://alpha.example.com/v1",
+        api_key="user-key",
+    )
 
 
 def _anon_client():
@@ -35,6 +67,7 @@ async def _noop_sleep(_seconds: float) -> None:
 
 async def test_pair_device_happy_path(client, router_setter):
     await register_account(client, "cli@pair.example")
+    await _connect_byok_for("cli@pair.example")
     anon = _anon_client()
     try:
         seen_codes: list[str] = []
