@@ -968,6 +968,53 @@ def secret_rotate(env_file, show):
         click.echo(f"INVINCIBLE_OWNER_SECRET={new_secret}")
 
 
+
+
+@secret.command("credential-key")
+@click.option("--env-file", default=".env", show_default=True,
+              help="Path of the .env file to write the credential key into.")
+@click.option("--show", is_flag=True,
+              help="Print the new key to the terminal (off by default).")
+def secret_credential_key(env_file, show):
+    """Generate a Fernet key for INVINCIBLE_CREDENTIAL_KEY and write it to .env.
+
+    Required before BYOK provider connections can store encrypted user API
+    keys. Missing or malformed values make every /providers/mine surface
+    fail closed. The new value is never echoed unless --show is passed.
+    Restart Invincible after writing so the running process picks it up.
+    """
+    from cryptography.fernet import Fernet
+
+    env_path = os.path.abspath(env_file)
+
+    if not os.path.isfile(env_path):
+        raise click.ClickException(
+            f"No env file found at {env_path}. Run `invincible setup` "
+            "first to create one."
+        )
+    try:
+        with open(env_path, encoding="utf-8") as f:
+            content = f.read()
+    except OSError as exc:
+        msg = f"Could not read env file {env_path}: {exc}"
+        raise click.ClickException(msg) from exc
+    lines = content.splitlines(keepends=True)
+
+    new_key = Fernet.generate_key().decode("ascii")
+    _apply_env_updates(
+        env_path, lines, {"INVINCIBLE_CREDENTIAL_KEY": new_key},
+    )
+
+    click.echo("INVINCIBLE_CREDENTIAL_KEY generated and saved to .env")
+    click.echo("Restart Invincible for the new key to take effect")
+    click.echo(
+        "Existing BYOK credentials encrypted under a previous key will "
+        "not decrypt until re-connected."
+    )
+    if show:
+        click.echo(f"INVINCIBLE_CREDENTIAL_KEY={new_key}")
+
+
 # --- oauth administration ---
 
 

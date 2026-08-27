@@ -31,6 +31,7 @@ from sqlalchemy import (
     Identity,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     PrimaryKeyConstraint,
     String,
@@ -599,6 +600,45 @@ user_identities = Table(
 )
 
 Index("idx_user_identities_user", user_identities.c.user_id)
+
+# ---------------------------------------------------------------------------
+# Platform Phase 9: per-user BYOK provider connections
+
+# One row per user-connected provider (catalog entry or fully custom).
+# ``encrypted_api_key`` is Fernet ciphertext produced by
+# core.credential_crypto over INVINCIBLE_CREDENTIAL_KEY - plaintext keys
+# are never stored, logged, or echoed. ``key_masked`` is the only derived
+# display hint kept (first chars + last 4, computed once at create) so
+# listings can show a recognizable form after the plaintext is gone.
+# ``catalog_key`` names a core.provider_catalog entry when the row came
+# from the operator-supplied catalog; NULL = user-typed custom provider.
+user_provider_credentials = Table(
+    "user_provider_credentials",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id"), nullable=False),
+    Column("provider_name", Text, nullable=False),
+    Column("catalog_key", Text),
+    Column("model_id", Text, nullable=False),
+    Column("base_url", Text, nullable=False),
+    Column("encrypted_api_key", LargeBinary, nullable=False),
+    Column("key_masked", Text, nullable=False, server_default=""),
+    # untested | ok | failed (updated by the connectivity probe)
+    Column("status", Text, nullable=False, server_default="untested"),
+    Column("last_tested_at", Float),
+    Column("created_at", Float, nullable=False),
+    Column("updated_at", Float, nullable=False),
+    UniqueConstraint(
+        "user_id", "provider_name",
+        name="uq_user_provider_credentials_user_name",
+    ),
+)
+
+Index(
+    "idx_user_provider_credentials_user",
+    user_provider_credentials.c.user_id,
+)
+
 
 # RFC 8628-style device pairing. The primary key is the sha256 hex of the
 # raw device_code (same discipline as oauth_tokens/api_keys); the short

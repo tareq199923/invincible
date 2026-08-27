@@ -270,6 +270,18 @@ Remove hosted-mode fail-open paths; retire superseded local-era pieces
 (see Deprecated) once the hosted flow is stable. Local mode itself stays.
 *(Planned)*
 
+
+### Phase 9 — BYOK Provider Connections
+Per-user Bring-Your-Own-Key provider connections: encrypted credential
+storage, connect/list/test/remove API, per-user router candidate pool,
+and a dashboard Providers page. **Status: In progress.** PR-A (storage
+& encryption primitive) lands the Fernet credential crypto,
+``user_provider_credentials`` schema + migration ``0007``,
+``INVINCIBLE_CREDENTIAL_KEY`` settings accessor, CLI
+``secret credential-key``, and the startup fail-closed warning.
+Remaining: connect/list/test/remove API (PR-B), router per-user
+candidate pool (PR-C), dashboard UI (PR-D).
+
 ---
 
 ## Deferred
@@ -278,8 +290,6 @@ Design seams exist; implementation deliberately postponed:
 
 - Vector/semantic retrieval (behind `RetrievalService` /
   `EmbeddingProvider`).
-- Per-user/per-project provider credentials (BYOK) beyond the
-  config-source abstraction.
 - Teams/workspaces/collaboration.
 - Predictive quota/context-limit saving (token accounting groundwork
   lands in Phase 4; prediction does not).

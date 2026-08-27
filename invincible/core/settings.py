@@ -86,6 +86,14 @@ class Settings:
         """
         return os.getenv("INVINCIBLE_ADMIN_KEY")
 
+    def credential_key(self) -> str | None:
+        """Master key encrypting user BYOK provider credentials at rest
+        (INVINCIBLE_CREDENTIAL_KEY). Unset (or malformed) refuses every
+        /providers/mine surface - fail closed, same posture as
+        INVINCIBLE_ADMIN_KEY: stored user keys are never plaintext.
+        """
+        return os.getenv("INVINCIBLE_CREDENTIAL_KEY")
+
     def owner_secret(self) -> str | None:
         """Owner-login secret signing browser sessions (OAuth consent +
         Phase 3 account cookies). Unset disables those flows (fail closed).

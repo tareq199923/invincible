@@ -56,9 +56,22 @@ def _warn_if_gateway_open() -> None:
         )
 
 
+def _warn_if_credential_key_unset() -> None:
+    """BYOK provider connections refuse to run without INVINCIBLE_CREDENTIAL_KEY
+    (fail closed, same posture as INVINCIBLE_ADMIN_KEY). Surface that at
+    startup so operators notice before a user hits a 503 on /providers/mine."""
+    if not settings.credential_key():
+        logger.warning(
+            "INVINCIBLE_CREDENTIAL_KEY is not set - BYOK provider connections "
+            "are DISABLED. Generate one with `invincible secret credential-key` "
+            "before users can connect their own AI providers."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _warn_if_gateway_open()
+    _warn_if_credential_key_unset()
     url = settings.db_url()
     if not url:
         raise RuntimeError(
