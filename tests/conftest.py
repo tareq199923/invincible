@@ -240,6 +240,7 @@ async def client(pg_engine, router_setter, monkeypatch):
     # reset for every attribute tests assign directly.
     app.state.oauth_store = None
     app.state.registry = None
+    app.state.byok_http_client = None
 
 
 # --- Phase 3 account helpers ----------------------------------------------------

@@ -51,6 +51,16 @@ def _cipher() -> Fernet:
         ) from exc
 
 
+def usable() -> bool:
+    """True when a master key is present and parseable - the cheap gate
+    BYOK endpoints check on every request (fail closed otherwise)."""
+    try:
+        _cipher()
+    except CredentialKeyError:
+        return False
+    return True
+
+
 def encrypt(plaintext: str) -> bytes:
     """Encrypt one user API key for storage. Raises CredentialKeyError
     when the master key is missing/malformed (fail closed)."""

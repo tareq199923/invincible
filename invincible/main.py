@@ -29,6 +29,7 @@ from invincible.endpoints.accounts import router as accounts_router
 from invincible.endpoints.admin_api import router as admin_router
 from invincible.endpoints.anthropic_compat import router as anthropic_router
 from invincible.endpoints.auth import require_auth
+from invincible.endpoints.byok import router as byok_router
 from invincible.endpoints.dashboard import router as dashboard_router
 from invincible.endpoints.graph import router as graph_router
 from invincible.endpoints.mcp import require_mcp_auth
@@ -153,6 +154,9 @@ app.include_router(mcp_router, dependencies=[Depends(require_mcp_auth)])
 app.include_router(accounts_router)
 # Phase 5 dashboard pages: cookie-realm only (require_user_session inside).
 app.include_router(dashboard_router)
+# Phase 9 BYOK surface: same cookie realm as the dashboard (its own
+# fail-closed INVINCIBLE_CREDENTIAL_KEY gate lives in the router).
+app.include_router(byok_router)
 # Vendored browser assets for the dashboard (templates/static ships in the
 # wheel via package-data; the minified file is never edited in place).
 app.mount(

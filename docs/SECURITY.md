@@ -123,6 +123,31 @@ Properties of this realm:
   a live cookie on success. `inv_*` API keys are deliberately untouched
   (see limit 14).
 
+### BYOK provider connections — cookie realm (Platform Phase 9)
+
+| Property | Value |
+|---|---|
+| Surface | `/dashboard/providers` (HTML), `/providers/mine*` (JSON API) |
+| Auth | `invincible_session` cookie ONLY — `inv_*` API keys are rejected (401), mirroring the settings surface |
+| Failure mode | **Fail closed twice**: no session → 401; no usable `INVINCIBLE_CREDENTIAL_KEY` → 503 on every route, before any credential is read or written |
+
+- Stored API keys are Fernet-encrypted at rest under
+  `INVINCIBLE_CREDENTIAL_KEY` (encryption model and limits: §9). The
+  plaintext exists only in the create-request body and, transiently, in
+  the per-attempt decrypt path (§9). Responses, templates, audit rows,
+  and logs carry only the one-way `key_masked` hint (first 3 + last 4;
+  keys shorter than 12 chars are fully masked).
+- Deleting/testing is ownership-predicated: foreign and unknown
+  credential ids return byte-identical 404 bodies (no enumeration).
+- `base_url` for non-catalog (user-typed) providers must be `https://`
+  and resolve to a public address; the SSRF guard re-checks on EVERY
+  later test use, not just at create (details: §9). Catalog base URLs
+  are operator-supplied constants and skip the check only while
+  unedited.
+- Audit rows (`byok.credential.created/tested/deleted`) carry
+  `provider_name` + `catalog_key` + id only — never the key, and never
+  the base URL (a URL may embed auth parameters).
+
 ### The layering principle
 
 `tool_executor.py` (the code that actually runs commands and writes files)
@@ -522,6 +547,20 @@ sandbox:
     `v1` cookies are rejected outright, so browsers logged in before
     this change re-login exactly once at rollout.
 
+15. **BYOK credential encryption is env-key, not HSM; rotation is not
+    built yet.** User-connected API keys are Fernet-encrypted under
+    `INVINCIBLE_CREDENTIAL_KEY` (§9). A compromise of the database
+    ALONE yields only ciphertext; a compromise of BOTH the database and
+    the environment (the `.env` file or process env) decrypts
+    everything, same honest framing as every other env-held secret
+    above. There is NO re-encryption/rotation flow in Phase 9: rotating
+    the master key strands previously stored credentials (they fail
+    decryption with a caught, user-visible "re-connect the provider"
+    error — never plaintext, never a crash). Recovery is manual:
+    re-connect each provider under the new key. See also the dashboard
+    Providers page and limit 13's framing of the (also absent) password
+    reset flow.
+
 ---
 
 ## 8. Production database permission model
@@ -552,3 +591,60 @@ compose pair enforces all four points; hosted-mode acceptance is
 
 `invincible dev-db` intentionally relaxes 1–2 for loopback dev
 ergonomics; it is a development provisioner, not a production path.
+---
+
+## 9. BYOK credential encryption model (Platform Phase 9)
+
+What user-connected provider API keys are, and are not, protected from.
+
+**Primitive.** `cryptography.fernet.Fernet` — AES-128-CBC with an
+HMAC-SHA256 authenticator (encrypt-then-MAC), chosen over raw AES-GCM
+for fewer sharp edges (nonce/AD handling is internal and cannot be
+misused by call sites). One master key (`INVINCIBLE_CREDENTIAL_KEY`, a
+Fernet key; `invincible secret credential-key` generates it into
+`.env`) encrypts every stored credential. Ciphertext lives in the
+`user_provider_credentials.encrypted_api_key` BYTEA column; plaintext
+is never stored, logged, audited, or returned after the create request.
+
+**What is protected.**
+
+- Database-only compromise (SQL injection, stolen backup, leaked DSN)
+  yields Fernet ciphertext that is inert without the master key — an
+  attacker must ALSO exfiltrate the environment to decrypt.
+- Tampering is authenticated: any ciphertext modified or encrypted
+  under a different key fails HMAC verification and surfaces as a
+  caught `CredentialDecryptError` (user-visible "re-connect" guidance),
+  never as decrypted garbage.
+- Missing/malformed master key disables the entire BYOK surface (503,
+  fail closed) — credentials are never written or read as plaintext.
+
+**What is NOT protected (stated plainly).**
+
+- Compromise of DB **and** environment decrypts everything: the master
+  key sits in the same `.env`/process env as every other Invincible
+  secret. This is the same trust ceiling as `INVINCIBLE_OWNER_SECRET`.
+- The master key has no hardware/KMS backing; it is a static Fernet
+  key in env.
+- **No rotation flow exists in Phase 9** (limit 15): key rotation
+  strands stored credentials until each is re-connected by its owner.
+- The plaintext key necessarily transits request memory (create body,
+  decrypt-at-attempt path, the probe's `Authorization` header). It is
+  never included in logs — the router's attempt logging carries sizes
+  and outcomes only — but a memory dump of the process sees keys, as
+  it would for the operator's own env-resolved provider keys.
+
+**The SSRF guard (`core/url_safety.py`).** User-typed `base_url`s are
+the one new server-side fetch surface in Phase 9, so every non-catalog
+URL must be `https://`, must not embed credentials, and must resolve
+(literal or via every DNS answer) to a public address — RFC1918,
+loopback, CGNAT, link-local (incl. the 169.254.169.254 cloud-metadata
+address), unspecified, multicast, IPv6 ULA/link-local, and
+IPv4-mapped forms are all rejected; `localhost` and dotless names are
+rejected outright. The check runs at create AND before every later
+test/chat use, so a DNS rebind after "add" cannot bypass it. Catalog
+base URLs are operator constants and skip the check only while
+unedited. Known residual: the probe/streaming client follows only the
+validated URL's host; it does not pin the resolved IP for the
+connection itself, so a same-request rebind (TOCTOU between check and
+connect) remains theoretically possible — the standard mitigation is
+egress filtering at the network layer for hosted deployments.

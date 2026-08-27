@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Providers - Invincible{% endblock %}
+{% block content %}
+<h2>Provider connections</h2>
+<p class="muted">{{ rows|length }} connected provider{{ '' if rows|length == 1 else 's' }}.
+Chat requests route only through providers you connect here.</p>
+
+{% if rows %}
+<table>
+  <tr><th>Name</th><th>Model</th><th>Base URL</th><th>Key</th><th>Status</th></tr>
+  {% for r in rows %}
+  <tr>
+    <td>{{ r.provider_name }}</td>
+    <td>{{ r.model_id }}</td>
+    <td class="muted">{{ r.base_url }}</td>
+    <td class="muted">{{ r.key_masked }}</td>
+    <td>{{ r.status }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">No providers connected yet. Connect one to start chatting.</p>
+{% endif %}
+{% endblock %}
