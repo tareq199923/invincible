@@ -120,7 +120,7 @@ async def providers_page(
     request: Request,
     principal: Principal = Depends(require_user_session),
 ):
-    rows = await _store(request).list(principal.user_id)
+    rows = await _store(request).list_for_user(principal.user_id)
     return _page(
         "providers.html", request,
         user_email=await _email(request.app.state.engine, principal),
@@ -133,7 +133,7 @@ async def list_mine(
     request: Request,
     principal: Principal = Depends(require_user_session),
 ):
-    rows = await _store(request).list(principal.user_id)
+    rows = await _store(request).list_for_user(principal.user_id)
     return {"providers": rows, "count": len(rows)}
 
 

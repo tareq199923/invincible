@@ -86,7 +86,7 @@ class ByokCredentialStore:
             ) from exc
         return dict(row)
 
-    async def list(self, user_id: int) -> list[dict]:
+    async def list_for_user(self, user_id: int) -> list[dict]:
         """Public rows for one user, oldest first (routing order)."""
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
