@@ -29,3 +29,6 @@ debug_last_400_payload.json
 
 # test-run output logs (verification passes) never belong in the tree
 pytest_out*.log
+
+# AI session artifacts (planning notes) - never project material
+.zcode/
