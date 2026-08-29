@@ -22,7 +22,7 @@ _AUTH_TYPES = ("bearer", "query")
 # Extra keys a provider entry may carry (all optional).
 _OPTIONAL_PROVIDER_FIELDS = {
     "max_context", "timeout", "aliases", "auth_type", "auth_param", "chat_path",
-    "failover_on_400", "enabled",
+    "failover_on_400", "enabled", "extra_headers",
 }
 
 _ROUTING_MODES = ("auto", "pinned", "chain")
@@ -151,6 +151,18 @@ def validate_providers_config(config: dict) -> None:
         enabled = provider.get("enabled")
         if enabled is not None and not isinstance(enabled, bool):
             raise ValueError(f"Provider '{name}': 'enabled' must be a boolean")
+
+        extra_headers = provider.get("extra_headers")
+        if extra_headers is not None and (
+            not isinstance(extra_headers, dict) or not all(
+                isinstance(k, str) and k.strip() and isinstance(v, str)
+                for k, v in extra_headers.items()
+            )
+        ):
+            raise ValueError(
+                f"Provider '{name}': 'extra_headers' must be a mapping of "
+                "string header names to string values"
+            )
 
         unknown_fields = set(provider) - (
             _REQUIRED_PROVIDER_FIELDS | _OPTIONAL_PROVIDER_FIELDS
@@ -281,13 +293,19 @@ def auth_headers(provider: dict, api_key: str) -> dict:
     in a query parameter instead (``auth_param``, default ``key``) - for
     providers that do not accept a header. A key in the URL is visible to
     any proxy on the request path; never logged anywhere in Invincible.
+
+    ``extra_headers`` (optional, per-provider) are merged in last - used for
+    providers that gate access behind client-fingerprint headers.
     """
     if provider.get("auth_type") == "query":
-        return {"Content-Type": "application/json"}
-    return {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+        headers = {"Content-Type": "application/json"}
+    else:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+    headers.update(provider.get("extra_headers") or {})
+    return headers
 
 
 def auth_params(provider: dict, api_key: str) -> dict | None:

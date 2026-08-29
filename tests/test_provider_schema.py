@@ -167,21 +167,28 @@ def test_shipped_providers_yaml_validates():
     providers = router.providers
     by_env = {p["api_key_env"]: p for p in providers}
 
-    assert len(providers) == 5
-    assert [p["tier"] for p in providers] == [1, 2, 3, 4, 5]
+    assert len(providers) == 6
+    assert [p["tier"] for p in providers] == [1, 2, 3, 4, 5, 6]
     for env in (
-        "TOKENROUTER_API_KEY", "NVIDIA_API_KEY", "GROQ_API_KEY",
-        "OPENROUTER_API_KEY", "GEMINI_API_KEY",
+        "AGENTROUTER_API_KEY", "TOKENROUTER_API_KEY", "NVIDIA_API_KEY",
+        "GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY",
     ):
         assert env in by_env, f"shipped config lost provider key {env}"
 
+    agentrouter = by_env["AGENTROUTER_API_KEY"]
+    assert agentrouter["tier"] == 1
+    assert agentrouter["base_url"] == "https://agentrouter.org/v1"
+
     tokenrouter = by_env["TOKENROUTER_API_KEY"]
-    assert tokenrouter["tier"] == 1
+    assert tokenrouter["tier"] == 2
     assert tokenrouter["base_url"] == "https://api.tokenrouter.com/v1"
     assert "aliases" not in tokenrouter
 
-    # Alias vocabulary stays bound to its tier: strong=2 fast=3 free=4 backup=5.
+    # Alias vocabulary stays bound to its tier:
+    # agentrouter=1 strong=3 fast=4 free=5 backup=6.
     alias_tiers = {
         p["aliases"][0]: p["tier"] for p in providers if p.get("aliases")
     }
-    assert alias_tiers == {"strong": 2, "fast": 3, "free": 4, "backup": 5}
+    assert alias_tiers == {
+        "agentrouter": 1, "strong": 3, "fast": 4, "free": 5, "backup": 6,
+    }

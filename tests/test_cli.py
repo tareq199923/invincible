@@ -66,7 +66,7 @@ def test_setup_creates_env_file(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
         cli, ["setup", "--env-file", str(target)],
-        input="nim-key\ngroq-key\nor-key\ngem-key\ntok-key\nskip\n",
+        input="nim-key\ngroq-key\nor-key\ngem-key\ntok-key\nagent-key\nskip\n",
     )
     assert result.exit_code == 0
     assert str(target) in result.output
@@ -74,19 +74,20 @@ def test_setup_creates_env_file(tmp_path):
     assert set(values) == {
         "GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET", "NVIDIA_API_KEY",
         "GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY",
-        "TOKENROUTER_API_KEY",
+        "TOKENROUTER_API_KEY", "AGENTROUTER_API_KEY",
     }
     assert values["NVIDIA_API_KEY"] == "nim-key"
     assert values["GROQ_API_KEY"] == "groq-key"
     assert values["OPENROUTER_API_KEY"] == "or-key"
     assert values["GEMINI_API_KEY"] == "gem-key"
     assert values["TOKENROUTER_API_KEY"] == "tok-key"
+    assert values["AGENTROUTER_API_KEY"] == "agent-key"
 
 
 def test_setup_generates_gateway_and_owner_secrets_without_printing(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n\n\n\n\nskip\n"
+        cli, ["setup", "--env-file", str(target)], input="\n" * 6 + "skip\n"
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -96,6 +97,7 @@ def test_setup_generates_gateway_and_owner_secrets_without_printing(tmp_path):
     # Empty input skips the provider keys...
     assert "NVIDIA_API_KEY" not in values
     assert "GEMINI_API_KEY" not in values
+    assert "AGENTROUTER_API_KEY" not in values
     # ...and the generated secrets never reach the terminal.
     assert values["GATEWAY_API_KEY"] not in result.output
     assert values["INVINCIBLE_OWNER_SECRET"] not in result.output
@@ -106,7 +108,7 @@ def test_setup_preserves_existing_values(tmp_path):
     target.write_text(
         "GATEWAY_API_KEY=gw-1\nINVINCIBLE_OWNER_SECRET=owner-1\nNVIDIA_API_KEY=nim-1\n"
         "GROQ_API_KEY=groq-1\nOPENROUTER_API_KEY=or-1\nGEMINI_API_KEY=gem-1\n"
-        "TOKENROUTER_API_KEY=tok-1\n",
+        "TOKENROUTER_API_KEY=tok-1\nAGENTROUTER_API_KEY=agent-1\n",
         encoding="utf-8",
     )
     before = target.read_text(encoding="utf-8")
@@ -124,7 +126,7 @@ def test_setup_carries_legacy_mcp_shared_secret_into_new_key(tmp_path):
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n\n\n\n\nskip\n"
+        cli, ["setup", "--env-file", str(target)], input="\n" * 6 + "skip\n"
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -140,7 +142,8 @@ def test_setup_preserves_unrelated_vars_comments_and_blank_lines(tmp_path):
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\nskip\n"
+        cli, ["setup", "--env-file", str(target)],
+        input="k1\nk2\nk3\nk4\nk5\nk6\nskip\n",
     )
     assert result.exit_code == 0
     lines = target.read_text(encoding="utf-8").splitlines()
@@ -162,7 +165,8 @@ def test_setup_preserves_unicode_comments_and_values(tmp_path):
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\nskip\n"
+        cli, ["setup", "--env-file", str(target)],
+        input="k1\nk2\nk3\nk4\nk5\nk6\nskip\n",
     )
     assert result.exit_code == 0
     text = target.read_text(encoding="utf-8")
@@ -173,7 +177,8 @@ def test_setup_preserves_unicode_comments_and_values(tmp_path):
 def test_setup_repeated_runs_do_not_duplicate_keys(tmp_path):
     target = tmp_path / ".env"
     first = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\nskip\n"
+        cli, ["setup", "--env-file", str(target)],
+        input="k1\nk2\nk3\nk4\nk5\nk6\nskip\n",
     )
     assert first.exit_code == 0
     second = CliRunner().invoke(
@@ -183,7 +188,7 @@ def test_setup_repeated_runs_do_not_duplicate_keys(tmp_path):
     text = target.read_text(encoding="utf-8")
     for key in ("GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET", "NVIDIA_API_KEY",
                 "GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY",
-                "TOKENROUTER_API_KEY"):
+                "TOKENROUTER_API_KEY", "AGENTROUTER_API_KEY"):
         assert text.count(f"{key}=") == 1
 
 
@@ -192,12 +197,15 @@ def test_setup_force_updates_values(tmp_path):
     target.write_text(
         "GATEWAY_API_KEY=old-gw\nINVINCIBLE_OWNER_SECRET=old-owner\nNVIDIA_API_KEY=old-nim\n"
         "GROQ_API_KEY=old-groq\nOPENROUTER_API_KEY=old-or\nGEMINI_API_KEY=old-gem\n"
-        "TOKENROUTER_API_KEY=old-tok\n",
+        "TOKENROUTER_API_KEY=old-tok\nAGENTROUTER_API_KEY=old-agent\n",
         encoding="utf-8",
     )
     result = CliRunner().invoke(
         cli, ["setup", "--env-file", str(target), "--force"],
-        input="new-gw\nnew-owner\nnew-nim\nnew-groq\nnew-or\nnew-gem\nnew-tok\nskip\n",
+        input=(
+            "new-gw\nnew-owner\nnew-nim\nnew-groq\nnew-or\nnew-gem\nnew-tok\n"
+            "new-agent\nskip\n"
+        ),
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -209,6 +217,7 @@ def test_setup_force_updates_values(tmp_path):
         "OPENROUTER_API_KEY": "new-or",
         "GEMINI_API_KEY": "new-gem",
         "TOKENROUTER_API_KEY": "new-tok",
+        "AGENTROUTER_API_KEY": "new-agent",
     }
 
 
@@ -227,7 +236,8 @@ def test_setup_force_empty_input_preserves_existing(tmp_path):
 def test_setup_write_failure_returns_nonzero(tmp_path):
     target = tmp_path / "missing-dir" / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="k1\nk2\nk3\nk4\nk5\nskip\n"
+        cli, ["setup", "--env-file", str(target)],
+        input="k1\nk2\nk3\nk4\nk5\nk6\nskip\n",
     )
     assert result.exit_code == 1
     assert "Could not write env file" in result.output
@@ -714,22 +724,27 @@ def test_packaged_providers_config_loads_from_any_cwd(tmp_path, monkeypatch):
     # Structural contract keyed by stable identifiers (api_key_env/tier);
     # names and model_ids rotate with the free-tier lineup.
     assert {p["api_key_env"] for p in providers} == {
-        "TOKENROUTER_API_KEY", "NVIDIA_API_KEY", "GROQ_API_KEY",
-        "OPENROUTER_API_KEY", "GEMINI_API_KEY",
+        "AGENTROUTER_API_KEY", "TOKENROUTER_API_KEY", "NVIDIA_API_KEY",
+        "GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY",
     }
     assert [p["tier"] for p in sorted(providers, key=lambda p: p["tier"])] == [
-        1, 2, 3, 4, 5,
+        1, 2, 3, 4, 5, 6,
     ]
+    agentrouter = next(
+        p for p in providers if p["api_key_env"] == "AGENTROUTER_API_KEY"
+    )
+    assert agentrouter["base_url"] == "https://agentrouter.org/v1"
+    assert agentrouter["tier"] == 1
     tokenrouter = next(
         p for p in providers if p["api_key_env"] == "TOKENROUTER_API_KEY"
     )
     assert tokenrouter["base_url"] == "https://api.tokenrouter.com/v1"
-    assert tokenrouter["tier"] == 1
+    assert tokenrouter["tier"] == 2
     nim = next(p for p in providers if p["api_key_env"] == "NVIDIA_API_KEY")
     assert nim["base_url"] == "https://integrate.api.nvidia.com/v1"
     assert nim["aliases"] == ["strong"]
-    assert nim["tier"] == 2
-    assert next(p for p in providers if p["name"] == "gemini-flash")["tier"] == 5
+    assert nim["tier"] == 3
+    assert next(p for p in providers if p["name"] == "gemini-flash")["tier"] == 6
 
 
 def test_custom_provider_config_path_still_works(tmp_path):
@@ -769,9 +784,9 @@ def test_default_db_url_resolution_comes_from_env(monkeypatch):
 
 # --- setup database-backend step (Phase 16) ---
 #
-# Prompt-count notes: of SUPPORTED_ENV_KEYS only the five provider keys
+# Prompt-count notes: of SUPPORTED_ENV_KEYS only the six provider keys
 # prompt when unset (GATEWAY_API_KEY / INVINCIBLE_OWNER_SECRET are
-# auto-generated), so a fresh .env consumes exactly five input lines before
+# auto-generated), so a fresh .env consumes exactly six input lines before
 # the database-backend choice.
 
 
@@ -781,7 +796,7 @@ def test_setup_paste_branch_writes_validated_url(tmp_path):
         cli,
         ["setup", "--env-file", str(target)],
         input=(
-            "\n" * 5
+            "\n" * 6
             + "paste\npostgresql+asyncpg://invincible:pw@db.example:5432/inv\n"
         ),
     )
@@ -799,7 +814,7 @@ def test_setup_paste_branch_normalizes_plain_postgres_scheme(tmp_path):
         cli,
         ["setup", "--env-file", str(target)],
         input=(
-            "\n" * 5
+            "\n" * 6
             + "paste\npostgresql://invincible@127.0.0.1:5433/invincible\n"
         ),
     )
@@ -817,7 +832,7 @@ def test_setup_paste_branch_rejects_unsupported_driver(tmp_path):
         cli,
         ["setup", "--env-file", str(target)],
         input=(
-            "\n" * 5
+            "\n" * 6
             + "paste\npostgresql+psycopg2://invincible@db/inv\n"
               "postgresql+asyncpg://invincible@db/inv\n"
         ),
@@ -833,7 +848,7 @@ def test_setup_paste_branch_rejects_unsupported_driver(tmp_path):
 def test_setup_skip_branch_omits_db_url(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n" * 5 + "skip\n"
+        cli, ["setup", "--env-file", str(target)], input="\n" * 6 + "skip\n"
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -849,7 +864,7 @@ def test_setup_existing_db_url_not_reprompted(tmp_path, monkeypatch):
     # generated (absent from the file); provider keys prompt-skip; the DB
     # step must NOT appear.
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n" * 5
+        cli, ["setup", "--env-file", str(target)], input="\n" * 6
     )
     assert result.exit_code == 0, result.output
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -890,7 +905,7 @@ def test_setup_dev_db_branch_provisions_and_writes(tmp_path, monkeypatch):
 
     monkeypatch.setattr("invincible.cli._provision_dev_db", fake_provision)
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n" * 5 + "dev-db\n"
+        cli, ["setup", "--env-file", str(target)], input="\n" * 6 + "dev-db\n"
     )
     assert result.exit_code == 0, result.output
     assert "Provisioning a local development database..." in result.output
@@ -910,7 +925,7 @@ def test_setup_dev_db_failure_skips_url_gracefully(tmp_path, monkeypatch):
     monkeypatch.setattr("invincible.cli._provision_dev_db", boom)
     target = tmp_path / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n" * 5 + "dev-db\n"
+        cli, ["setup", "--env-file", str(target)], input="\n" * 6 + "dev-db\n"
     )
     assert result.exit_code == 0, result.output
     assert "Could not provision locally (no server, no docker)" in result.output
