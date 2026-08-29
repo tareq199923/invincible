@@ -54,6 +54,12 @@ invincible/
     │                           x confidence; AND→OR query fallback)
     ├── context_builder.py      One unified token budget for memory + continuity
     │                           injections (Phase 4)
+    ├── compression.py          Send-time message compression (tool-result
+    │                           truncation + blank-run collapse)
+    ├── tool_compression.py     Send-time tool-schema compression (description
+    │                           caps + JSON-Schema noise stripping, LRU-cached)
+    ├── relay.py                Context relay: digest old turns into one system
+    │                           message above the kept tail
     ├── run_store.py            Provider-run records incl. token accounting (runs table)
     ├── projection.py           Shared session/run/task-state projection builder —
     │                           one engine under the graph endpoint AND the
@@ -323,6 +329,47 @@ The budget exists because trimming keeps system messages unconditionally:
 without a shared cap, oversized injections would blow small providers'
 contexts in the one way `trim_messages` cannot prevent. Default budget:
 1200 tokens (~4.8k chars), `INVINCIBLE_INJECTION_BUDGET_TOKENS`.
+
+---
+
+## 4b. The send-time pipeline (`router.py:: _iter_attempts`)
+
+Every attempt funnels one payload-preparation pipeline, in order:
+
+```
+compress_messages   (compression.py)   shrink individual contents:
+                                        truncate every "tool"-role result,
+                                        collapse 3+ newline runs
+relay_messages      (relay.py)          if non-system history exceeds
+                                        INVINCIBLE_RELAY_THRESHOLD_TOKENS:
+                                        replace all but the newest
+                                        INVINCIBLE_RELAY_KEEP_TURNS turns
+                                        with ONE system digest (user text,
+                                        tools invoked, elided-result
+                                        counts); system messages (the
+                                        client's prompt + Phase 4
+                                        injections) are extracted first and
+                                        never digested
+trim_messages       (trimming.py)       per-provider budget: drop oldest
+                                        whole turns (section 4)
+compress_tools      (tool_compression.py) cap tool/property descriptions,
+                                        strip non-semantic JSON Schema keys
+                                        (title/examples/$schema/$id/$comment)
+```
+
+Why this order: compression and relay run *before* trimming so the budget
+check sees post-compression sizes (otherwise trimming over-drops), and
+relay emits its digest as a system message — placed after the client's own
+system messages — precisely so trim's "keep every system message" rule
+preserves it. `compress_messages` truncates tool results per-message while
+relay removes whole old turns; the two attack different cost layers. All
+four stages are send-time only (stored history stays verbatim), degrade
+independently (a stage that raises is skipped with a warning, the rest
+still apply), and are individually toggleable via env. Tool-schema
+compression is memoized on the canonical serialization of the tools list —
+clients resend an identical toolset every turn, so turns 2..N are a cache
+hit. The per-attempt log line carries sizes only, including
+`raw_bytes`, `saved_bytes`, `saved_tokens`, `tools_bytes`, `relay_applied`.
 
 ---
 

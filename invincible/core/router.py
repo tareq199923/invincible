@@ -21,6 +21,7 @@ from invincible.core.config import (  # noqa: F401 - re-exports
     validate_providers_config,
 )
 from invincible.core.provider_health import HealthTracker
+from invincible.core.relay import relay_messages
 from invincible.core.run_store import new_run_entry
 from invincible.core.selection import (
     AUTO_ROUTING,
@@ -29,6 +30,7 @@ from invincible.core.selection import (
     routing_from_config,
 )
 from invincible.core.settings import settings
+from invincible.core.tool_compression import compress_tools
 from invincible.core.trimming import (  # noqa: F401 - re-exports
     DEFAULT_MAX_CONTEXT,
     RESERVE_TOKENS,
@@ -548,13 +550,43 @@ class Router:
                 continue
 
             headers = self._request_headers(provider, api_key)
-            # Compress before trimming so the budget check runs on
+            # Pipeline: compress → relay → trim, then compress tool
+            # schemas. Every stage is send-time only (the caller's
+            # `messages`/`tools` stay verbatim for session persistence) and
+            # degrades independently: a stage that raises is skipped with a
+            # warning and the remaining stages still apply. Compress and
+            # relay run before trimming so the budget check sees
             # post-compression sizes (otherwise trimming over-drops).
-            # Send-time only: the caller's `messages` stay verbatim for
-            # session persistence.
-            send_messages = (
-                compress_messages(messages) if compression_enabled() else messages
+            tools_bytes = (
+                len(json.dumps(tools, ensure_ascii=False)) if tools else 0
             )
+            raw_bytes = (
+                len(json.dumps(messages, ensure_ascii=False)) + tools_bytes
+            )
+            raw_tokens = sum(estimate_tokens(m) for m in messages) + (
+                sum(estimate_tokens(t) for t in tools) if tools else 0
+            )
+            if compression_enabled():
+                try:
+                    send_messages = compress_messages(messages)
+                except Exception:
+                    logger.warning(
+                        "compress_messages failed; sending uncompressed "
+                        "history",
+                        exc_info=True,
+                    )
+                    send_messages = messages
+            else:
+                send_messages = messages
+            relay_applied = False
+            try:
+                send_messages, relay_stats = relay_messages(send_messages)
+                relay_applied = relay_stats.applied
+            except Exception:
+                logger.warning(
+                    "Context relay failed; sending full history",
+                    exc_info=True,
+                )
             trimmed_messages = trim_messages(
                 send_messages, provider.get("max_context", DEFAULT_MAX_CONTEXT)
             )
@@ -565,7 +597,15 @@ class Router:
             if stream:
                 payload["stream"] = True
             if tools:
-                payload["tools"] = tools
+                try:
+                    payload["tools"] = compress_tools(tools)[0]
+                except Exception:
+                    logger.warning(
+                        "Tool schema compression failed; sending original "
+                        "tools",
+                        exc_info=True,
+                    )
+                    payload["tools"] = tools
             if tool_choice is not None:
                 payload["tool_choice"] = tool_choice
 
@@ -574,6 +614,13 @@ class Router:
                 estimate_tokens(m)
                 for m in trimmed_messages + (payload.get("tools") or [])
             )
+            pipeline_extra = {
+                "raw_bytes": raw_bytes,
+                "saved_bytes": max(0, raw_bytes - payload_bytes),
+                "saved_tokens": max(0, raw_tokens - estimated_tokens),
+                "tools_bytes": tools_bytes,
+                "relay_applied": "true" if relay_applied else "false",
+            }
 
             attempt_index += 1
             attempt_started = time.monotonic()
@@ -591,6 +638,7 @@ class Router:
                         session_pk=session_pk,
                         session_id=session_id,
                         attempt_index=attempt_index,
+                        pipeline_extra=pipeline_extra,
                     )
                     yield (first, tail), {
                         "request_id": request_id,
@@ -611,6 +659,7 @@ class Router:
                         session_pk=session_pk,
                         session_id=session_id,
                         attempt_index=attempt_index,
+                        pipeline_extra=pipeline_extra,
                     )
                     yield parsed, {
                         "request_id": request_id,
@@ -658,6 +707,7 @@ class Router:
         session_id: str | None = None,
         session_pk: int | None = None,
         attempt_index: int = 0,
+        pipeline_extra: dict | None = None,
     ) -> dict:
         """Non-streaming transport: POST, classify, parse.
 
@@ -679,7 +729,8 @@ class Router:
 
             if _status_wants_failover(provider, resp.status_code):
                 await self._handle_failover_status(
-                    provider, name, resp, payload_bytes, estimated_tokens
+                    provider, name, resp, payload_bytes, estimated_tokens,
+                    pipeline_extra,
                 )
                 await self._record_run(
                     provider, attempt_index, time.time(), "failover",
@@ -710,6 +761,7 @@ class Router:
                     "malformed_json",
                     True,
                     level=logging.WARNING,
+                    **(pipeline_extra or {}),
                 )
                 self.health_tracker.record_failure(_health_key(provider))
                 await resp.aclose()
@@ -731,6 +783,7 @@ class Router:
                 estimated_tokens,
                 resp.status_code,
                 False,
+                **(pipeline_extra or {}),
             )
             # Phase 4 usage accounting: real upstream counts when present,
             # otherwise a flagged chars/4 estimate of the response body.
@@ -760,6 +813,7 @@ class Router:
                     True,
                     level=logging.WARNING,
                     disabled=True,
+                    **(pipeline_extra or {}),
                 )
                 self.health_tracker.disable(_health_key(provider))
                 await e.response.aclose()
@@ -781,6 +835,7 @@ class Router:
                 status,
                 False,
                 level=logging.WARNING,
+                **(pipeline_extra or {}),
             )
             body = await e.response.aread()
             parsed_body = _parse_json_or_raw(body)
@@ -800,7 +855,8 @@ class Router:
 
         except httpx.RequestError as e:
             self._handle_network_error(
-                provider, name, payload_bytes, estimated_tokens, attempt_started, e
+                provider, name, payload_bytes, estimated_tokens, attempt_started, e,
+                pipeline_extra,
             )
             details = _network_error_details(e)
             await self._record_run(
@@ -827,6 +883,7 @@ class Router:
         session_id: str | None = None,
         session_pk: int | None = None,
         attempt_index: int = 0,
+        pipeline_extra: dict | None = None,
     ) -> tuple[dict | None, AsyncIterator[dict]]:
         """Streaming transport: build/send, classify pre-read, open the SSE
         iterator, consume the first chunk.
@@ -851,7 +908,8 @@ class Router:
 
             if _status_wants_failover(provider, resp.status_code):
                 await self._handle_failover_status(
-                    provider, name, resp, payload_bytes, estimated_tokens
+                    provider, name, resp, payload_bytes, estimated_tokens,
+                    pipeline_extra,
                 )
                 await self._record_run(
                     provider, attempt_index, time.time(), "failover",
@@ -875,6 +933,7 @@ class Router:
                     True,
                     level=logging.WARNING,
                     disabled=True,
+                    **(pipeline_extra or {}),
                 )
                 self.health_tracker.disable(_health_key(provider))
                 await resp.aclose()
@@ -898,6 +957,7 @@ class Router:
                     resp.status_code,
                     False,
                     level=logging.WARNING,
+                    **(pipeline_extra or {}),
                 )
                 body = await resp.aread()
                 await resp.aclose()
@@ -929,6 +989,7 @@ class Router:
                 estimated_tokens,
                 resp.status_code,
                 False,
+                **(pipeline_extra or {}),
             )
             await self._record_run(
                 provider, attempt_index, time.time(), "ok",
@@ -956,6 +1017,7 @@ class Router:
                 "malformed_sse",
                 True,
                 level=logging.WARNING,
+                **(pipeline_extra or {}),
             )
             self.health_tracker.record_failure(_health_key(provider))
             await self._record_run(
@@ -971,7 +1033,8 @@ class Router:
 
         except httpx.RequestError as e:
             self._handle_network_error(
-                provider, name, payload_bytes, estimated_tokens, attempt_started, e
+                provider, name, payload_bytes, estimated_tokens, attempt_started, e,
+                pipeline_extra,
             )
             details = _network_error_details(e)
             await self._record_run(
@@ -992,6 +1055,7 @@ class Router:
         resp: httpx.Response,
         payload_bytes: int,
         estimated_tokens: int,
+        pipeline_extra: dict | None = None,
     ) -> None:
         """Shared failover-status action: warn-log the attempt, record the
         failure, release the response. The caller then skips providers."""
@@ -1003,6 +1067,7 @@ class Router:
             resp.status_code,
             True,
             level=logging.WARNING,
+            **(pipeline_extra or {}),
         )
         self.health_tracker.record_failure(_health_key(provider))
         await resp.aclose()
@@ -1015,6 +1080,7 @@ class Router:
         estimated_tokens: int,
         attempt_started: float,
         exc: httpx.RequestError,
+        pipeline_extra: dict | None = None,
     ) -> None:
         """Shared network-error action: structured error log plus the
         ERROR-level attempt line (elapsed and read-timeout fields), then
@@ -1037,6 +1103,7 @@ class Router:
             elapsed_s=round(time.monotonic() - attempt_started, 2),
             read_timeout_s=resolve_timeout(provider).read,
             **details,
+            **(pipeline_extra or {}),
         )
         self.health_tracker.record_failure(_health_key(provider))
 

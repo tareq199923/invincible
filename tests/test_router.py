@@ -1038,3 +1038,118 @@ async def test_chat_path_override_with_bearer_auth(make_router):
     assert "/v1/responses" in captured["url"]
     assert captured["authorization"] == "Bearer test-key-alpha"
     await router.close()
+
+
+# --- Send-time pipeline: tool-schema compression + context relay ----------
+
+
+async def test_tool_schemas_compressed_in_sent_payload_caller_verbatim(
+    make_router,
+):
+    big_description = "B" * 2000
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "big_tool",
+                "description": big_description,
+                "parameters": {"type": "object", "title": "Params"},
+            },
+        }
+    ]
+    captured = []
+
+    def alpha_handler(request: httpx.Request):
+        captured.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("alpha"))
+
+    router = make_router(handlers={"alpha.example.com": alpha_handler})
+    await router.route_request(MESSAGES, tools=tools)
+    sent_description = captured[0]["tools"][0]["function"]["description"]
+    assert sent_description == big_description[:512] + "…[description truncated]"
+    assert "title" not in captured[0]["tools"][0]["function"]["parameters"]
+    # The caller's tools list stays verbatim.
+    assert tools[0]["function"]["description"] == big_description
+    assert tools[0]["function"]["parameters"]["title"] == "Params"
+    await router.close()
+
+
+async def test_relay_digest_in_sent_payload_caller_messages_verbatim(
+    make_router, monkeypatch
+):
+    monkeypatch.setenv("INVINCIBLE_RELAY_THRESHOLD_TOKENS", "1")
+    messages = []
+    for i in range(4):
+        messages.append({"role": "user", "content": f"question {i} " + "x" * 60})
+        messages.append({"role": "assistant", "content": f"answer {i} " + "z" * 60})
+    snapshot = [json.dumps(m, sort_keys=True) for m in messages]
+    captured = []
+
+    def alpha_handler(request: httpx.Request):
+        captured.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("alpha"))
+
+    router = make_router(handlers={"alpha.example.com": alpha_handler})
+    await router.route_request(messages)
+    sent = captured[0]["messages"]
+    assert sent[0]["role"] == "system"
+    assert sent[0]["content"].startswith("[Context relay]")
+    assert sent[0]["content"].count('- user: "') == 1  # 4 turns, 3 kept
+    # The caller's message list is untouched (send-time only).
+    assert [json.dumps(m, sort_keys=True) for m in messages] == snapshot
+    assert len(messages) == 8
+    await router.close()
+
+
+async def test_compression_stage_failure_still_sends(make_router, monkeypatch):
+    import invincible.core.router as router_module
+
+    def boom(messages):
+        raise RuntimeError("compression exploded")
+
+    monkeypatch.setattr(router_module, "compress_messages", boom)
+    messy = [{"role": "user", "content": "para one.\n\n\n\n\npara two."}]
+    captured = []
+
+    def alpha_handler(request: httpx.Request):
+        captured.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("alpha"))
+
+    router = make_router(handlers={"alpha.example.com": alpha_handler})
+    result = await router.route_request(messy)
+    assert result == provider_body("alpha")
+    # Uncompressed content reached the wire (blank runs not collapsed).
+    assert captured[0]["messages"][0]["content"] == "para one.\n\n\n\n\npara two."
+    await router.close()
+
+
+async def test_pipeline_stats_logged_on_attempt_line(make_router, caplog, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_RELAY_THRESHOLD_TOKENS", "1")
+    messages = []
+    for i in range(4):
+        messages.append({"role": "user", "content": f"q{i} " + "x" * 60})
+        messages.append({"role": "assistant", "content": f"a{i} " + "z" * 60})
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "t", "description": "D" * 1000},
+        }
+    ]
+
+    def alpha_handler(request: httpx.Request):
+        return httpx.Response(200, json=provider_body("alpha"))
+
+    router = make_router(handlers={"alpha.example.com": alpha_handler})
+    with caplog.at_level(logging.INFO, logger="invincible.router"):
+        await router.route_request(messages, tools=tools)
+    attempt_lines = [
+        r.getMessage() for r in caplog.records if "raw_bytes=" in r.getMessage()
+    ]
+    assert attempt_lines, "expected the attempt line to carry pipeline fields"
+    line = attempt_lines[0]
+    assert "raw_bytes=" in line
+    assert "saved_bytes=" in line
+    assert "saved_tokens=" in line
+    assert "tools_bytes=" in line
+    assert "relay_applied=true" in line
+    await router.close()

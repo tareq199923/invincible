@@ -82,6 +82,8 @@ Fixture semantics (`tests/conftest.py`):
 | `core/tool_executor.py` | MCP tool execution, denylists, staged token approvals |
 | `core/trimming.py` | Token estimation, turn grouping, per-provider context trimming |
 | `core/compression.py` | Send-time-only request compression (stored history stays verbatim) |
+| `core/tool_compression.py` | Send-time tool-schema compression (description caps + noise-key stripping, LRU-cached) |
+| `core/relay.py` | Context relay: digests all but the newest N turns into one bounded system digest; system messages pass through untouched |
 | `core/db_import.py` | One-shot legacy SQLite → PostgreSQL importer |
 | `cli.py` | Click CLI: setup/start(+tunnel)/login(device flow)/doctor/dev-db/db/secret/oauth |
 | `compat/common.py`, `compat/anthropic.py` | Protocol-neutral internal message model; Anthropic translators/SSE |

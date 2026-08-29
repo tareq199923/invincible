@@ -46,6 +46,18 @@ DEFAULT_INJECTION_BUDGET_TOKENS = 1200
 # Stored-history turn cap when INVINCIBLE_HISTORY_MAX_TURNS is unset.
 DEFAULT_HISTORY_MAX_TURNS = 200
 
+# Tool-schema compression caps (core/tool_compression.py): tool-level and
+# property-level description truncation, in characters.
+DEFAULT_TOOL_DESCRIPTION_MAX_CHARS = 512
+DEFAULT_TOOL_PROPERTY_DESCRIPTION_MAX_CHARS = 160
+
+# Context relay (core/relay.py): relay engages only above this estimated
+# token size, keeps the newest N turns verbatim, and caps how many digested
+# turns get individual digest entries (older ones collapse to a count line).
+DEFAULT_RELAY_THRESHOLD_TOKENS = 12000
+DEFAULT_RELAY_KEEP_TURNS = 3
+DEFAULT_RELAY_DIGEST_MAX_ENTRIES = 20
+
 # Off-switch vocabulary shared by every INVINCIBLE_* boolean toggle.
 _OFF_VALUES = ("0", "false", "off")
 
@@ -136,6 +148,65 @@ class Settings:
     def compression_enabled(self) -> bool:
         """Send-time request compression (default on)."""
         return _env_flag("INVINCIBLE_COMPRESSION")
+
+    def tool_compression_enabled(self) -> bool:
+        """Send-time tool-schema compression (default on)."""
+        return _env_flag("INVINCIBLE_TOOL_COMPRESSION")
+
+    def tool_description_max_chars(self) -> int:
+        """Cap for tool-level ``function.description`` length."""
+        try:
+            return max(
+                1,
+                int(os.getenv("INVINCIBLE_TOOL_DESCRIPTION_MAX_CHARS", "")),
+            )
+        except ValueError:
+            return DEFAULT_TOOL_DESCRIPTION_MAX_CHARS
+
+    def tool_property_description_max_chars(self) -> int:
+        """Cap for property-level descriptions inside tool ``parameters``."""
+        try:
+            return max(
+                1,
+                int(
+                    os.getenv(
+                        "INVINCIBLE_TOOL_PROPERTY_DESCRIPTION_MAX_CHARS", ""
+                    )
+                ),
+            )
+        except ValueError:
+            return DEFAULT_TOOL_PROPERTY_DESCRIPTION_MAX_CHARS
+
+    def relay_enabled(self) -> bool:
+        """Context relay: digest old turns into one system message (default
+        on)."""
+        return _env_flag("INVINCIBLE_RELAY")
+
+    def relay_threshold_tokens(self) -> int:
+        """Estimated-token floor above which relay engages."""
+        try:
+            return max(
+                0, int(os.getenv("INVINCIBLE_RELAY_THRESHOLD_TOKENS", ""))
+            )
+        except ValueError:
+            return DEFAULT_RELAY_THRESHOLD_TOKENS
+
+    def relay_keep_turns(self) -> int:
+        """Newest turns relay always leaves verbatim."""
+        try:
+            return max(1, int(os.getenv("INVINCIBLE_RELAY_KEEP_TURNS", "")))
+        except ValueError:
+            return DEFAULT_RELAY_KEEP_TURNS
+
+    def relay_digest_max_entries(self) -> int:
+        """Max digested turns that get individual digest entries; older
+        ones collapse into a single count line."""
+        try:
+            return max(
+                1, int(os.getenv("INVINCIBLE_RELAY_DIGEST_MAX_ENTRIES", ""))
+            )
+        except ValueError:
+            return DEFAULT_RELAY_DIGEST_MAX_ENTRIES
 
     def memory_enabled(self) -> bool:
         """Fact extraction/injection (default on)."""
