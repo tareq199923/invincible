@@ -1148,6 +1148,10 @@ def oauth_test_client(redirect_uri):
     async def _run():
         engine = make_engine(db_url)
         store = OAuthStore(engine)
+        # The authorize flow reads app.state.engine (persistent login
+        # lockout + local-owner bootstrap); wire it alongside the OAuth
+        # store so the headless run works without the app lifespan.
+        app.state.engine = engine
         app.state.oauth_store = store
         try:
             async with httpx.AsyncClient(
