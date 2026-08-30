@@ -12,6 +12,11 @@ hosted relay. Dynamic client registration (RFC 7591), RFC 8414 metadata,
 RFC 9728 protected-resource metadata, and PKCE-only public clients are
 implemented because that is what MCP-compatible clients (including the
 Claude app's custom-connector flow) expect.
+
+Consent trust boundary: approval requires either the owner secret or an
+operator-role dashboard account (``users.role``); self-registered plain
+accounts are refused even with a valid session, because approval mints
+MCP bearer tokens (host tools). See docs/SECURITY.md §2.0.
 """
 import hashlib
 import hmac
@@ -28,10 +33,8 @@ from starlette.responses import RedirectResponse
 from invincible.core.accounts import (
     SESSION_COOKIE as ACCOUNT_SESSION_COOKIE,
 )
-from invincible.core.accounts import (
-    SessionManager,
-    UserService,
-)
+from invincible.core.accounts import resolve_session
+from invincible.core.db import ROLE_OPERATOR
 from invincible.core.identity import LoginRateLimiter
 from invincible.core.oauth_store import (
     ACCESS_TOKEN_TTL,
@@ -212,15 +215,51 @@ def _has_valid_cookie(request: Request) -> bool:
     return bool(cookie and _verify_cookie(cookie))
 
 
-def _session_user_id(request: Request) -> int | None:
+async def _session_user(request: Request) -> dict | None:
     """Q3 decision (2026-08-30): a valid dashboard session cookie
     (``invincible_session``) names the user a consent approval is granted
     AS - the same identity the account pages run under. The owner-secret
     cookie (``invincible_owner``) remains supported for headless/local
-    flows; it resolves to the system local owner (pre-Phase-5 behavior)."""
-    verified = SessionManager.verify(
-        request.cookies.get(ACCOUNT_SESSION_COOKIE))
-    return verified[0] if verified else None
+    flows; it resolves to the system local owner (pre-Phase-5 behavior).
+
+    Full principal resolution via ``resolve_session``: the cookie must
+    verify AND match a live user row whose session_version still equals
+    the minted one - a password-orphaned or deleted-account cookie is
+    treated like a forged one (SECURITY.md limit 14), never as a login.
+    """
+    return await resolve_session(
+        request.app.state.engine,
+        request.cookies.get(ACCOUNT_SESSION_COOKIE),
+    )
+
+
+async def _non_operator_response(request: Request, session_user: dict | None,
+                                 context: dict) -> HTMLResponse | None:
+    """403 for a logged-in non-operator on the consent flow, else None.
+
+    Approving a client mints MCP bearer tokens (execute_bash / write_file
+    on the host), and dashboard registration is open - so a self-registered
+    session alone must never be enough (the Phase 5 escalation closed by
+    the role gate). The owner-secret cookie path needs no check here:
+    possession of the secret already proves operator authority. A browser
+    holding BOTH cookies is still refused - silently falling back from a
+    plain session to the more-privileged owner identity would be a
+    confused deputy."""
+    if session_user is None or session_user["role"] == ROLE_OPERATOR:
+        return None
+    await _audit(
+        request, "oauth.consent_forbidden",
+        actor_user_id=session_user["id"],
+        resource_type="oauth_client",
+        resource_id=context["_client"]["client_id"],
+    )
+    return HTMLResponse(
+        ERROR_HTML.format(
+            message="This account is not permitted to authorize MCP "
+            "clients. Only operator accounts may approve connections."
+        ),
+        status_code=403,
+    )
 
 
 def _safe_query_value(value: str) -> bool:
@@ -401,16 +440,18 @@ async def oauth_authorize(request: Request):
             ),
             status_code=503,
         )
-    if not (_has_valid_cookie(request) or _session_user_id(request)):
+    session_user = await _session_user(request)
+    if not (_has_valid_cookie(request) or session_user is not None):
         return _login_page(context)
+    forbidden = await _non_operator_response(request, session_user, context)
+    if forbidden is not None:
+        return forbidden
 
     client = context["_client"]
     client_name = client["client_name"] or client["client_id"]
 
-    session_uid = _session_user_id(request)
-    if session_uid is not None:
-        user = await UserService(request.app.state.engine).get(session_uid)
-        identity = (user or {}).get("email") or f"user #{session_uid}"
+    if session_user is not None:
+        identity = session_user["email"]
     else:
         identity = "the local owner (owner-secret session)"
 
@@ -460,23 +501,28 @@ async def oauth_authorize_login(request: Request):
                 ),
                 status_code=503,
             )
-        session_uid = _session_user_id(request)
-        if not (_has_valid_cookie(request) or session_uid is not None):
+        session_user = await _session_user(request)
+        if not (_has_valid_cookie(request) or session_user is not None):
             return HTMLResponse(
                 ERROR_HTML.format(
-                    message="Not authenticated as the owner. Log in first."
+                    message="Not authenticated. Log in first."
                 ),
                 status_code=401,
             )
+        forbidden = await _non_operator_response(request, session_user,
+                                                 context)
+        if forbidden is not None:
+            return forbidden
         client = context["_client"]
         if action == "approve":
             store: OAuthStore = request.app.state.oauth_store
             # Q3 decision (2026-08-30): the approving identity is the
             # logged-in dashboard user when a session cookie is present;
             # the owner-secret path keeps resolving to the system *local*
-            # owner (pre-Phase-5 behavior, headless/local flows).
-            if session_uid is not None:
-                uid = session_uid
+            # owner (pre-Phase-5 behavior, headless/local flows). The
+            # role gate above guarantees the session user is an operator.
+            if session_user is not None:
+                uid = session_user["id"]
             else:
                 from invincible.core.db import ensure_local_owner
 

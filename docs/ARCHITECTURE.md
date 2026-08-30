@@ -13,7 +13,7 @@ invincible/
 ├── cli.py                      Click CLI (setup / start / login / doctor / dev-db / db / oauth / secret / api-key)
 ├── providers.yaml              Canonical provider config (packaged)
 ├── templates/                  Jinja2 UI (login/register/account/device pages + dashboard)
-├── migrations/                 Packaged Alembic environment (0001 baseline … 0006 session_version)
+├── migrations/                 Packaged Alembic environment (0001 baseline … 0008 operator_role)
 ├── endpoints/
 │   ├── auth.py                 require_auth: dual-realm Principal resolution for /v1/* (Phase 1)
 │   ├── accounts.py             Phase 3: /auth/*, /projects, /api-keys, /sessions,

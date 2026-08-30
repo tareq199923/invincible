@@ -40,6 +40,7 @@ from invincible.core.accounts import (
     ProjectService,
     SessionManager,
     UserService,
+    resolve_session,
     sign_value,
     verify_signed_value,
 )
@@ -134,40 +135,29 @@ def _page(template_name: str, request: Request, **context):
 
 
 async def require_user_session(request: Request) -> Principal:
-    resolved = SessionManager.verify(request.cookies.get(SESSION_COOKIE))
-    if resolved is None:
-        raise HTTPException(
-            status_code=401,
-            detail={"error": {"message": "Sign in required.",
-                              "type": "auth_error"}},
-        )
-    uid, token_version = resolved
-    user = await UserService(_engine(request)).get(uid)
+    user = await resolve_session(
+        _engine(request), request.cookies.get(SESSION_COOKIE))
     if user is None:
-        raise HTTPException(
-            status_code=401,
-            detail={"error": {"message": "Account no longer exists.",
-                              "type": "auth_error"}},
-        )
-    if user["session_version"] != token_version:
-        # Signature-valid but minted before a password set/change: the
-        # same invalid-cookie path as a forged or expired token.
+        # Signature-valid-but-stale cookies (password changed, account
+        # deleted) land here too - the same path as a forged or expired
+        # one (SECURITY.md limit 14).
         raise HTTPException(
             status_code=401,
             detail={"error": {"message": "Sign in required.",
                               "type": "auth_error"}},
         )
-    project_id = await ensure_default_project(_engine(request), uid)
-    return Principal(user_id=uid, project_id=project_id, kind="session")
+    project_id = await ensure_default_project(_engine(request), user["id"])
+    return Principal(user_id=user["id"], project_id=project_id, kind="session")
 
 
 async def require_account_admin(request: Request) -> Principal:
     """Browser session OR the user's own ``inv_`` API key. MCP bearers and
     the legacy gateway key never pass (resolve() matches inv_ hashes only)."""
     principal: Principal | None = None
-    resolved = SessionManager.verify(request.cookies.get(SESSION_COOKIE))
-    if resolved is not None:
-        principal = await _session_principal(request, *resolved)
+    user = await resolve_session(
+        _engine(request), request.cookies.get(SESSION_COOKIE))
+    if user is not None:
+        principal = await _session_principal(request, user)
     token = extract_token(request)
     if principal is None and token:
         resolved_key = await ApiKeyStore(_engine(request)).resolve(token)
@@ -187,13 +177,11 @@ async def require_account_admin(request: Request) -> Principal:
     return principal
 
 
-async def _session_principal(request: Request, uid: int,
-                             token_version: int) -> Principal | None:
-    user = await UserService(_engine(request)).get(uid)
-    if user is None or user["session_version"] != token_version:
-        return None
-    project_id = await ensure_default_project(_engine(request), uid)
-    return Principal(user_id=uid, project_id=project_id, kind="session")
+async def _session_principal(request: Request, user: dict) -> Principal:
+    """Session Principal for a fully resolved user row (already passed
+    ``resolve_session``: exists + session_version matches)."""
+    project_id = await ensure_default_project(_engine(request), user["id"])
+    return Principal(user_id=user["id"], project_id=project_id, kind="session")
 
 
 async def _set_session_cookie_for(request: Request, response,

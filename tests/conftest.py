@@ -255,6 +255,17 @@ async def register_account(
     return response, email
 
 
+async def promote_operator(uid: int) -> None:
+    """Elevate a dashboard account to operator (the role OAuth consent
+    requires). Real deployments get this from the local-owner bootstrap
+    or revision 0008; tests reach for the row directly."""
+    async with app.state.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET role = 'operator' WHERE id = :id"),
+            {"id": uid},
+        )
+
+
 async def login_account(client, email="user@example.com",
                         password="longenough1"):
     return await client.post(

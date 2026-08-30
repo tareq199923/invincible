@@ -95,18 +95,26 @@ async def ensure_local_owner(engine) -> tuple[int, int]:
 async def seed_local_owner_conn(conn) -> tuple[int, int]:
     """Connection-scoped variant of :func:`ensure_local_owner` - runs
     inside the caller's transaction (importer, batch bootstrap)."""
-    from sqlalchemy import select
+    from sqlalchemy import select, update
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     now = time.time()
     await conn.execute(
         pg_insert(users)
-        .values(email=LOCAL_OWNER_EMAIL, is_system=True, created_at=now)
+        .values(email=LOCAL_OWNER_EMAIL, is_system=True,
+                role=ROLE_OPERATOR, created_at=now)
         .on_conflict_do_nothing(index_elements=["email"])
     )
     user_id = (await conn.execute(
         select(users.c.id).where(users.c.email == LOCAL_OWNER_EMAIL)
     )).scalar_one()
+    # Elevate local-owner rows created before the role column existed
+    # (their migration default is ROLE_USER); idempotent either way.
+    await conn.execute(
+        update(users)
+        .where(users.c.id == user_id)
+        .values(role=ROLE_OPERATOR)
+    )
     await conn.execute(
         pg_insert(projects)
         .values(user_id=user_id, name=LOCAL_PROJECT_NAME,
@@ -211,6 +219,13 @@ async def warn_if_schema_stale(engine) -> None:
 LOCAL_OWNER_EMAIL = "local@invincible.local"
 LOCAL_PROJECT_NAME = "local"
 
+# Account roles. ``operator`` may approve OAuth clients (which mint
+# host-shell MCP tokens); ``user`` is the self-registration default and
+# cannot. Declared with the schema (not in accounts.py) because schema
+# truth lives here and the seed/migrations spell the literals.
+ROLE_USER = "user"
+ROLE_OPERATOR = "operator"
+
 users = Table(
     "users",
     metadata,
@@ -224,6 +239,12 @@ users = Table(
     # resolution rejects mismatches - a stolen cookie dies with the
     # password instead of surviving the full TTL.
     Column("session_version", Integer, nullable=False, server_default="0"),
+    # OAuth-consent gate: only ``operator`` may approve clients (approval
+    # mints MCP bearer tokens - execute_bash/write_file on the host), so
+    # open self-registration alone can never reach host tools. The local
+    # owner is seeded/elevated to operator (revision 0008 does the same
+    # for migrated databases).
+    Column("role", Text, nullable=False, server_default=ROLE_USER),
     Column("is_system", Boolean, nullable=False, server_default="false"),
     Column("created_at", Float, nullable=False),
 )

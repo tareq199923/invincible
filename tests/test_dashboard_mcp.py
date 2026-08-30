@@ -14,6 +14,7 @@ from invincible.main import app
 from tests.conftest import (
     oauth_register,
     obtain_access_token,
+    promote_operator,
     register_account,
 )
 
@@ -22,7 +23,11 @@ async def logged_in(client, seq):
     registered, _ = await register_account(
         client, f"mcp-ui-{seq}@example.com")
     assert registered.status_code == 201, registered.text
-    return registered.json()["id"]
+    uid = registered.json()["id"]
+    # This page manages MCP clients, so its user is an operator (the
+    # role the consent flow requires); plain accounts get 403 there.
+    await promote_operator(uid)
+    return uid
 
 
 async def test_page_requires_session(client):

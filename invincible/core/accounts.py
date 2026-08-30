@@ -142,7 +142,7 @@ class UserService:
         async with self.engine.connect() as conn:
             row = (await conn.execute(
                 select(users.c.id, users.c.email, users.c.created_at,
-                       users.c.session_version)
+                       users.c.session_version, users.c.role)
                 .where(users.c.id == user_id)
             )).mappings().first()
         return dict(row) if row is not None else None
@@ -283,6 +283,31 @@ class SessionManager:
             return int(uid_raw), int(version_raw)
         except ValueError:
             return None
+
+
+async def resolve_session(engine, cookie_value: str | None) -> dict | None:
+    """Full principal resolution for a browser session cookie.
+
+    ``SessionManager.verify`` only checks signature + expiry (the class
+    stays engine-free by design); this function adds the live-``users``-row
+    half: the account must still exist AND its ``session_version`` must
+    equal the version embedded at mint time. Returns the live user row
+    (``id``, ``email``, ``session_version``, ``role``) or None - a cookie
+    orphaned by a password change or a deleted account is treated exactly
+    like a forged one (SECURITY.md limit 14).
+
+    Every session consumer goes through here so the version check cannot
+    drift per-endpoint again (the OAuth consent flow once called only
+    ``SessionManager.verify`` and accepted stale cookies).
+    """
+    resolved = SessionManager.verify(cookie_value)
+    if resolved is None:
+        return None
+    uid, token_version = resolved
+    user = await UserService(engine).get(uid)
+    if user is None or user["session_version"] != token_version:
+        return None
+    return user
 
 
 def sign_value(value: str, *, ttl_seconds: int = 600) -> str | None:

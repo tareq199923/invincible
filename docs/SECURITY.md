@@ -66,6 +66,22 @@ remains supported for headless/local flows and resolves to the system
 *local* owner, exactly as before. `require_mcp_auth` itself is untouched:
 tokens have always resolved through `subject_user_id`.
 
+**Who may approve (the operator gate).** Dashboard registration
+(`POST /auth/register`) is open, so the session cookie alone must not be
+enough — approval mints MCP bearer tokens (`execute_bash`/`write_file` on
+the host). Consent therefore requires either the owner secret or an
+**operator-role account** (`users.role = 'operator'`; the local owner is
+seeded/elevated to operator, revision 0008 backfills migrated databases).
+A self-registered plain account gets 403 on both the consent page and the
+approve POST, and the refusal is audited (`oauth.consent_forbidden`).
+When a browser holds *both* cookies, the dashboard session wins: approval
+stamps that user (an operator) rather than silently falling back from a
+plain session to the owner identity, which would be a confused deputy.
+Session resolution on the consent endpoints is the full principal check —
+signature, expiry, live user row, and `session_version` match — so a
+password-orphaned or deleted-account cookie behaves exactly like a forged
+one.
+
 | Aspect | Value |
 |---|---|
 | Auth | `Authorization: Bearer <access_token>` |
@@ -231,8 +247,9 @@ second `tools/call` for `confirm_action` arrives with that token,
 **Where the boundary is now.** Approval of a pending action is decided by
 whatever the calling client reports back through a second `/mcp` call — the
 boundary is **"whoever holds a valid bearer access token"**. Since a token
-only exists after the owner logs in and approves the client on the consent
-page, this is a **named trust boundary** in a way the shared secret never
+only exists after an operator — the owner secret or an operator-role
+account — approves the client on the consent page, this is a **named trust
+boundary** in a way the shared secret never
 was: a grant is scoped to one registered client, is revocable, and expires
 on its own. This mirrors the earlier `confirm_action` trust-boundary change
 and is documented here explicitly.
@@ -393,7 +410,7 @@ Details:
 
 ## 4. The OAuth authorization server
 
-Invincible ships a small, single-operator OAuth 2.1 + PKCE authorization
+Invincible ships a small, few-operator OAuth 2.1 + PKCE authorization
 server (RFC 7591 dynamic client registration, RFC 8414 and RFC 9728
 metadata) so MCP-compatible clients can connect the way the ecosystem
 expects — no external identity provider, no hosted relay, everything in the
@@ -403,7 +420,10 @@ operator's own process.
   browser** on `/oauth/authorize`, then exchanges a **signed, HMAC-protected
   session cookie** (HttpOnly, SameSite=Lax, 30-day "remember this browser"
   TTL, `Secure` when served over HTTPS). The only place the owner secret is
-  ever transmitted is that login form.
+  ever transmitted is that login form. Operator-role dashboard accounts
+  (`users.role = 'operator'`) may approve with their `invincible_session`
+  cookie instead; plain self-registered accounts are refused — see the
+  consent-identity paragraph in §1.2.
 - **Client registration** (`POST /oauth/register`) is open by design —
   dynamic registration is supposed to be. The actual gate is the consent
   page: only a registered `client_id`/`redirect_uri` pair is ever redirected
@@ -510,7 +530,8 @@ sandbox:
    client off is `invincible oauth revoke <client_id>`, a separate lever.
 6. **Dynamic registration is open to the port.** Anyone who can reach
    `/oauth/register` can create a client, but the consent page still gates
-   every grant — an unregistered or mismatched redirect is never followed.
+   every grant — only the owner secret or an operator-role account may
+   approve, and an unregistered or mismatched redirect is never followed.
    The exposure is spam/annoyance, not access.
 7. **`/v1/*` fails open to the local identity if `GATEWAY_API_KEY` is
    unset.** Forgetting the key opens your provider credits to anyone who
@@ -555,7 +576,8 @@ sandbox:
     same UPDATE as the argon2id hash, `v2` session cookies embed the
     version they were minted against, and resolution rejects
     signature-valid-but-version-mismatched cookies exactly like forged
-    ones (`require_user_session` / `_session_principal`). The acting
+    ones (`resolve_session` — the shared resolver every session consumer,
+    including the OAuth consent flow, goes through). The acting
     browser is re-issued a live cookie on success; every other device
     must log back in. Deliberately NOT affected by a password change:
     `inv_*` API keys (minted as random tokens, SHA-256-hashed at rest,
