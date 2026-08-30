@@ -25,6 +25,13 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.responses import RedirectResponse
 
+from invincible.core.accounts import (
+    SESSION_COOKIE as ACCOUNT_SESSION_COOKIE,
+)
+from invincible.core.accounts import (
+    SessionManager,
+    UserService,
+)
 from invincible.core.identity import LoginRateLimiter
 from invincible.core.oauth_store import (
     ACCESS_TOKEN_TTL,
@@ -106,9 +113,12 @@ CONSENT_HTML = """<!doctype html>
 <h1>Connection request</h1>
 <p><strong>{client_name}</strong> wants access to your Invincible instance
 (via {redirect_uri}).</p>
+<p>Approving as <strong>{identity}</strong> &mdash; tokens minted from this
+consent act as that user.</p>
 <p>Approving issues a short-lived access token for MCP tool calls. You can
 revoke every token for this client at any time with
-<code>invincible oauth revoke &lt;client_id&gt;</code>.</p>
+<code>invincible oauth revoke &lt;client_id&gt;</code> or from the MCP
+page in the dashboard.</p>
 <form method="post" action="/oauth/authorize" style="display:inline">
 {hidden_fields}
 <input type="hidden" name="action" value="approve">
@@ -200,6 +210,17 @@ def _has_valid_cookie(request: Request) -> bool:
         return False
     cookie = request.cookies.get(SESSION_COOKIE)
     return bool(cookie and _verify_cookie(cookie))
+
+
+def _session_user_id(request: Request) -> int | None:
+    """Q3 decision (2026-08-30): a valid dashboard session cookie
+    (``invincible_session``) names the user a consent approval is granted
+    AS - the same identity the account pages run under. The owner-secret
+    cookie (``invincible_owner``) remains supported for headless/local
+    flows; it resolves to the system local owner (pre-Phase-5 behavior)."""
+    verified = SessionManager.verify(
+        request.cookies.get(ACCOUNT_SESSION_COOKIE))
+    return verified[0] if verified else None
 
 
 def _safe_query_value(value: str) -> bool:
@@ -380,16 +401,24 @@ async def oauth_authorize(request: Request):
             ),
             status_code=503,
         )
-    if not _has_valid_cookie(request):
+    if not (_has_valid_cookie(request) or _session_user_id(request)):
         return _login_page(context)
 
     client = context["_client"]
     client_name = client["client_name"] or client["client_id"]
 
+    session_uid = _session_user_id(request)
+    if session_uid is not None:
+        user = await UserService(request.app.state.engine).get(session_uid)
+        identity = (user or {}).get("email") or f"user #{session_uid}"
+    else:
+        identity = "the local owner (owner-secret session)"
+
     return HTMLResponse(
         CONSENT_HTML.format(
             client_name=html.escape(client_name),
             redirect_uri=html.escape(context["redirect_uri"]),
+            identity=html.escape(identity),
             hidden_fields=_hidden_fields(context),
         )
     )
@@ -431,7 +460,8 @@ async def oauth_authorize_login(request: Request):
                 ),
                 status_code=503,
             )
-        if not _has_valid_cookie(request):
+        session_uid = _session_user_id(request)
+        if not (_has_valid_cookie(request) or session_uid is not None):
             return HTMLResponse(
                 ERROR_HTML.format(
                     message="Not authenticated as the owner. Log in first."
@@ -441,12 +471,16 @@ async def oauth_authorize_login(request: Request):
         client = context["_client"]
         if action == "approve":
             store: OAuthStore = request.app.state.oauth_store
-            # Phase 2 subject binding: the approving owner (today always
-            # the system *local* owner) becomes the grant's user; tokens
-            # minted from this code act as that subject.
-            from invincible.core.db import ensure_local_owner
+            # Q3 decision (2026-08-30): the approving identity is the
+            # logged-in dashboard user when a session cookie is present;
+            # the owner-secret path keeps resolving to the system *local*
+            # owner (pre-Phase-5 behavior, headless/local flows).
+            if session_uid is not None:
+                uid = session_uid
+            else:
+                from invincible.core.db import ensure_local_owner
 
-            uid, _ = await ensure_local_owner(request.app.state.engine)
+                uid, _ = await ensure_local_owner(request.app.state.engine)
             await store.attach_owner(client["client_id"], uid)
             code = await store.create_code(
                 client["client_id"],

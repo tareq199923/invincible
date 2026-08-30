@@ -53,7 +53,18 @@ key. Hosted mode retires fail-open entirely (Phase 8).
 `/mcp` no longer takes a shared secret header. It accepts **short-lived
 access tokens** (`Authorization: Bearer <token>`, ~1h TTL) issued by
 Invincible's own, built-in authorization server (`/oauth/*`) after a
-browser-based owner-login and per-client consent.
+browser-based login and per-client consent. `inv_` API keys are
+deliberately **not** accepted here (owner decision, 2026-08-30): MCP
+grants must always pass the browser gate, so a leaked API key can never
+run `execute_bash`/`write_file`.
+
+**Consent identity (Phase 5, Q3):** a valid dashboard session cookie
+(`invincible_session`) grants consent **as that logged-in user** — the
+consent page names the identity, and tokens minted from the approval act
+as that user's subject. The owner-secret cookie (`invincible_owner`)
+remains supported for headless/local flows and resolves to the system
+*local* owner, exactly as before. `require_mcp_auth` itself is untouched:
+tokens have always resolved through `subject_user_id`.
 
 | Aspect | Value |
 |---|---|
