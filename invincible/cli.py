@@ -1437,6 +1437,113 @@ def api_key_revoke(key_ref):
         )
 
 
+# --- account roles (operator gate) ---------------------------------------------
+
+
+@click.group()
+@click.option("--env-file", default=".env", show_default=True,
+              help=".env file to load before running (existing process "
+                   "environment always wins).")
+@click.pass_context
+def users(ctx, env_file):
+    """Manage dashboard accounts and their operator role."""
+    _load_env_file(env_file)
+
+
+@users.command("list")
+def users_list():
+    """List accounts and their role (operator may approve MCP clients)."""
+    url = _resolve_db_url()
+    engine = make_engine(url)
+
+    async def _run():
+        try:
+            from sqlalchemy import select
+
+            from invincible.core.db import users as users_table
+
+            async with engine.connect() as conn:
+                rows = (await conn.execute(
+                    select(users_table.c.email, users_table.c.role,
+                           users_table.c.created_at)
+                    .order_by(users_table.c.id)
+                )).mappings().all()
+            return rows
+        finally:
+            await engine.dispose()
+
+    rows = run_coro_sync(_run())
+    if not rows:
+        click.echo("No accounts.")
+        return
+    for row in rows:
+        click.echo(f"{row['email']}  {row['role']}")
+
+
+@users.command("promote")
+@click.argument("email")
+def users_promote(email):
+    """Grant an account the operator role (may approve OAuth/MCP clients).
+
+    Approval mints MCP bearer tokens - execute_bash/write_file on the
+    host - so operator is the gate for self-registered accounts. The
+    system local owner is already an operator and cannot be changed.
+    """
+    _set_role(email, "operator", "promoted to operator",
+              "auth.user_promoted")
+
+
+@users.command("demote")
+@click.argument("email")
+def users_demote(email):
+    """Revoke an account's operator role back to plain user."""
+    _set_role(email, "user", "demoted to user", "auth.user_demoted")
+
+
+def _set_role(email: str, role: str, action_text: str,
+              audit_action: str) -> None:
+    url = _resolve_db_url()
+    engine = make_engine(url)
+
+    async def _run():
+        try:
+            from invincible.core.accounts import AccountError, UserService
+            from invincible.core.db import LOCAL_OWNER_EMAIL
+
+            service = UserService(engine)
+            user = await service.get_by_email(email)
+            if user is None:
+                return None, f"No account with email {email!r}."
+            # Immutability first: even a no-op change to the local owner
+            # is refused (set_role would allow the no-op silently).
+            if user["email"] == LOCAL_OWNER_EMAIL:
+                return None, ("The system local owner's role cannot be "
+                              "changed.")
+            if user["role"] == role:
+                return user, None  # already there; nothing to do
+            await service.set_role(user["id"], role)
+            await _AuditLog(engine).record(
+                audit_action,
+                actor_user_id=user["id"],
+                actor_kind="system",
+                resource_type="user",
+                resource_id=str(user["id"]),
+                meta={"email": user["email"], "role": role},
+            )
+            return user, None
+        except AccountError as exc:
+            return None, exc.message
+        finally:
+            await engine.dispose()
+
+    user, error = run_coro_sync(_run())
+    if error is not None:
+        raise click.ClickException(error)
+    if user is None:
+        raise click.ClickException(f"No account with email {email!r}.")
+    click.echo(f"{user['email']} {action_text}.")
+
+
 # --- local dev database -------------------------------------------------------
 
 
@@ -1678,6 +1785,7 @@ cli.add_command(doctor)
 cli.add_command(secret)
 cli.add_command(oauth)
 cli.add_command(api_key)
+cli.add_command(users)
 cli.add_command(db)
 cli.add_command(dev_db)
 

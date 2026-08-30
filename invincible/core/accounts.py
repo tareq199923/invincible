@@ -32,6 +32,9 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from invincible.core.db import (
+    LOCAL_OWNER_EMAIL,
+    ROLE_OPERATOR,
+    ROLE_USER,
     device_codes,
     projects,
     user_identities,
@@ -150,7 +153,8 @@ class UserService:
     async def get_by_email(self, email: str) -> dict | None:
         async with self.engine.connect() as conn:
             row = (await conn.execute(
-                select(users.c.id, users.c.email, users.c.created_at)
+                select(users.c.id, users.c.email, users.c.created_at,
+                       users.c.role)
                 .where(users.c.email == normalize_email(email))
             )).mappings().first()
         return dict(row) if row is not None else None
@@ -214,6 +218,34 @@ class UserService:
                         session_version=users.c.session_version + 1)
             )
         return {"id": user_id}
+
+    async def set_role(self, user_id: int, role: str) -> dict:
+        """Set the account role (ROLE_USER | ROLE_OPERATOR). The OAuth
+        consent gate reads it: only operators may approve clients. The
+        system *local* owner is refused - it is an operator by
+        construction (seed + migration 0008 both elevate it), and
+        demoting it would break the owner-secret consent path."""
+        if role not in (ROLE_USER, ROLE_OPERATOR):
+            raise AccountError(
+                "invalid_role", "Role must be 'user' or 'operator'.")
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(
+                select(users.c.email)
+                .where(users.c.id == user_id)
+            )).first()
+            if row is None:
+                raise AccountError(
+                    "not_found", "No such user.", status_code=404)
+            if row[0] == LOCAL_OWNER_EMAIL:
+                raise AccountError(
+                    "local_owner_immutable",
+                    "The system local owner's role cannot be changed.",
+                    status_code=409,
+                )
+            await conn.execute(
+                update(users).where(users.c.id == user_id).values(role=role)
+            )
+        return {"id": user_id, "role": role}
 
 
 class SessionManager:

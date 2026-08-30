@@ -29,6 +29,14 @@ def credential_key(monkeypatch):
 
 
 @pytest.fixture
+def no_credential_key(monkeypatch):
+    """Hermetic "key unset": main.py's import-time load_dotenv() pulls the
+    developer's real .env into the test process, so a locally generated
+    key must be forced out explicitly (not merely relied on to be absent)."""
+    monkeypatch.delenv("INVINCIBLE_CREDENTIAL_KEY", raising=False)
+
+
+@pytest.fixture
 def public_dns(monkeypatch):
     """Hermetic fake DNS: any dotted host resolves to a public address."""
     import invincible.core.url_safety as url_safety
@@ -58,7 +66,9 @@ async def connect(client, **overrides):
 # --- realm / fail-closed gates ---------------------------------------------
 
 
-async def test_surfaces_fail_closed_without_credential_key(client):
+async def test_surfaces_fail_closed_without_credential_key(
+    no_credential_key, client
+):
     await logged_in(client, "closed@example.com")
     assert (await client.get("/providers/mine")).status_code == 503
     assert (await client.post(

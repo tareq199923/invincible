@@ -71,9 +71,12 @@ tokens have always resolved through `subject_user_id`.
 enough — approval mints MCP bearer tokens (`execute_bash`/`write_file` on
 the host). Consent therefore requires either the owner secret or an
 **operator-role account** (`users.role = 'operator'`; the local owner is
-seeded/elevated to operator, revision 0008 backfills migrated databases).
-A self-registered plain account gets 403 on both the consent page and the
-approve POST, and the refusal is audited (`oauth.consent_forbidden`).
+seeded/elevated to operator, revision 0008 backfills migrated databases,
+and `invincible users promote <email>` / `demote <email>` is the runtime
+elevation path — every change is audit-logged, and the local owner's
+role is immutable). A self-registered plain account gets 403 on both the
+consent page and the approve POST, and the refusal is audited
+(`oauth.consent_forbidden`).
 When a browser holds *both* cookies, the dashboard session wins: approval
 stamps that user (an operator) rather than silently falling back from a
 plain session to the owner identity, which would be a confused deputy.

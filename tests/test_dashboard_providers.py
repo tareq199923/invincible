@@ -30,6 +30,14 @@ def credential_key(monkeypatch):
         "INVINCIBLE_CREDENTIAL_KEY", Fernet.generate_key().decode("ascii"))
 
 
+@pytest.fixture
+def no_credential_key(monkeypatch):
+    """Hermetic "key unset": main.py's import-time load_dotenv() pulls the
+    developer's real .env into the test process, so a locally generated
+    key must be forced out explicitly (not merely relied on to be absent)."""
+    monkeypatch.delenv("INVINCIBLE_CREDENTIAL_KEY", raising=False)
+
+
 async def logged_in(client):
     # Unique address per call: registration state must never collide
     # across tests or runs, whatever the DB truncation semantics.
@@ -70,7 +78,9 @@ async def test_inv_api_key_never_authorizes_providers_page(
         "/dashboard/providers", headers=headers)).status_code == 401
 
 
-async def test_page_fail_closed_without_credential_key(client):
+async def test_page_fail_closed_without_credential_key(
+    no_credential_key, client
+):
     await logged_in(client)
     assert (await client.get("/dashboard/providers")).status_code == 503
 

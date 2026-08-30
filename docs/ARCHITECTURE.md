@@ -10,7 +10,7 @@ non-obvious algorithms (context trimming, cooldowns, config resolution).
 ```
 invincible/
 ├── main.py                     FastAPI app, lifespan, auth wiring, /health, HEAD /
-├── cli.py                      Click CLI (setup / start / login / doctor / dev-db / db / oauth / secret / api-key)
+├── cli.py                      Click CLI (setup / start / login / doctor / dev-db / db / oauth / secret / api-key / users)
 ├── providers.yaml              Canonical provider config (packaged)
 ├── templates/                  Jinja2 UI (login/register/account/device pages + dashboard)
 ├── migrations/                 Packaged Alembic environment (0001 baseline … 0008 operator_role)
