@@ -17,6 +17,7 @@ import time
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 
 from invincible.core import credential_crypto
 from invincible.core.config import resolve_timeout
@@ -25,10 +26,16 @@ from invincible.core.credential_store import (
     DuplicateCredentialError,
 )
 from invincible.core.principal import Principal
-from invincible.core.provider_catalog import catalog_entry
+from invincible.core.provider_catalog import CATALOG, catalog_entry
 from invincible.core.trimming import DEFAULT_MAX_CONTEXT
 from invincible.core.url_safety import UnsafeUrlError, validate_public_https_url
-from invincible.endpoints.accounts import _audit, _page, _payload, require_user_session
+from invincible.endpoints.accounts import (
+    _audit,
+    _page,
+    _payload,
+    _wants_html,
+    require_user_session,
+)
 from invincible.endpoints.dashboard import _email
 
 logger = logging.getLogger("invincible.byok")
@@ -186,10 +193,24 @@ async def providers_page(
     principal: Principal = Depends(require_user_session),
 ):
     rows = await _store(request).list_for_user(principal.user_id)
+    # Phase 9 PR-D: the catalog renders as connect cards over the
+    # operator-supplied constants; a card whose catalog_key is already
+    # connected shows a connected state instead of a blank form.
+    catalog = [
+        {"key": key, "label": entry["label"],
+         "base_url": entry["base_url"], "model_id": entry["model_id"]}
+        for key, entry in CATALOG.items()
+    ]
+    connected_keys = {r["catalog_key"] for r in rows if r.get("catalog_key")}
     return _page(
         "providers.html", request,
         user_email=await _email(request.app.state.engine, principal),
         rows=rows,
+        catalog=catalog,
+        connected_keys=connected_keys,
+        connected=request.query_params.get("connected") == "1",
+        tested=request.query_params.get("tested"),
+        test_error=request.query_params.get("test_error") == "1",
     )
 
 
@@ -267,6 +288,11 @@ async def connect_provider(
         resource_id=str(row["id"]),
         meta=_audit_meta(row),
     )
+    if _wants_html(request):
+        # Browser form posts redirect back to the page with a bounded
+        # flash flag; JSON clients keep the 201-row wire shape.
+        return RedirectResponse(
+            "/dashboard/providers?connected=1", status_code=303)
     return row
 
 
@@ -292,6 +318,9 @@ async def test_provider(
                      resource_type="user_provider_credential",
                      resource_id=str(credential_id),
                      meta={**_audit_meta(row), "outcome": "blocked_url"})
+        if request.headers.get("HX-Request") == "true":
+            return Response(status_code=204, headers={
+                "HX-Redirect": "/dashboard/providers?test_error=1"})
         raise _bad_request(
             "base URL rejected: it now resolves to a blocked address"
         ) from None
@@ -326,6 +355,12 @@ async def test_provider(
         resource_id=str(credential_id),
         meta={**_audit_meta(row), "outcome": credential_status},
     )
+    if request.headers.get("HX-Request") == "true":
+        # The Test button is an HTMX post; bounce back to the page with a
+        # bounded flash flag instead of rendering the JSON report.
+        return Response(status_code=204, headers={
+            "HX-Redirect":
+                f"/dashboard/providers?tested={credential_status}"})
     return {**report, "credential_status": credential_status}
 
 

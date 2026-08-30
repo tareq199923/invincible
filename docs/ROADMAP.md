@@ -275,12 +275,13 @@ Remove hosted-mode fail-open paths; retire superseded local-era pieces
 Per-user Bring-Your-Own-Key provider connections: encrypted credential
 storage, connect/list/test/remove API, per-user router candidate pool,
 and a dashboard Providers page. **Status: In progress.** PR-A (storage
-& encryption primitive) lands the Fernet credential crypto,
+& encryption primitive) landed the Fernet credential crypto,
 ``user_provider_credentials`` schema + migration ``0007``,
 ``INVINCIBLE_CREDENTIAL_KEY`` settings accessor, CLI
-``secret credential-key``, and the startup fail-closed warning.
-Remaining: connect/list/test/remove API (PR-B), router per-user
-candidate pool (PR-C), dashboard UI (PR-D).
+``secret credential-key``, and the startup fail-closed warning. PR-B
+landed the connect/list/test/remove API with the SSRF guard and audit
+rows; PR-C landed the per-user router candidate pool
+(``byok_attempt_source``). Remaining: dashboard Providers UI (PR-D).
 
 ---
 

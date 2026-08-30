@@ -2,23 +2,78 @@
 {% block title %}Providers - Invincible{% endblock %}
 {% block content %}
 <h2>Provider connections</h2>
-<p class="muted">{{ rows|length }} connected provider{{ '' if rows|length == 1 else 's' }}.
-Chat requests route only through providers you connect here.</p>
+<p class="muted">Chat requests route only through providers you connect here.</p>
 
+{% if connected %}<p class="banner">Provider connected.</p>{% endif %}
+{% if tested == 'ok' %}<p class="banner">Connection test passed.</p>
+{% elif tested == 'failed' %}<p class="banner">Connection test failed &mdash;
+check the API key or base URL.</p>{% endif %}
+{% if test_error %}<p class="banner">Connection test blocked: the base URL no
+longer resolves to a public address.</p>{% endif %}
+
+<h3>Connect a provider</h3>
+<div class="cards">
+  {% for c in catalog %}
+  <div class="card provider-card{% if c.key in connected_keys %} connected{% endif %}">
+    <span class="label">{{ c.label }}</span>
+    {% if c.key in connected_keys %}
+    <p class="muted status-connected">Connected</p>
+    {% else %}
+    <p class="muted status-not-connected">Not connected</p>
+    <form method="post" action="/providers/mine" class="connect-form">
+      <input type="hidden" name="catalog_key" value="{{ c.key }}">
+      <input type="text" name="provider_name" value="{{ c.label }}"
+             maxlength="80" aria-label="Connection name" required>
+      <input type="text" name="model_id" value="{{ c.model_id }}"
+             aria-label="Model id" required>
+      <input type="text" name="base_url" value="{{ c.base_url }}"
+             aria-label="Base URL" required>
+      <input type="password" name="api_key" placeholder="API key"
+             autocomplete="off" required>
+      <button type="submit">Connect</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<details class="custom-provider">
+  <summary>Add a custom provider</summary>
+  <form method="post" action="/providers/mine" class="connect-form">
+    <input type="text" name="provider_name" placeholder="Name"
+           maxlength="80" required>
+    <input type="text" name="base_url" placeholder="https://api.example.com/v1"
+           required>
+    <input type="text" name="model_id" placeholder="model id" required>
+    <input type="password" name="api_key" placeholder="API key"
+           autocomplete="off" required>
+    <button type="submit">Connect</button>
+  </form>
+</details>
+
+<h3>Connected providers</h3>
 {% if rows %}
 <table>
-  <tr><th>Name</th><th>Model</th><th>Base URL</th><th>Key</th><th>Status</th></tr>
+  <tr><th>Name</th><th>Model</th><th>Base URL</th><th>Key</th><th>Status</th><th></th></tr>
   {% for r in rows %}
-  <tr>
+  <tr class="provider-row" data-credential-id="{{ r.id }}">
     <td>{{ r.provider_name }}</td>
     <td>{{ r.model_id }}</td>
     <td class="muted">{{ r.base_url }}</td>
     <td class="muted">{{ r.key_masked }}</td>
-    <td>{{ r.status }}</td>
+    <td><span class="status-badge status-{{ r.status }}">{{ r.status }}</span></td>
+    <td>
+      <button class="linklike test-provider"
+              hx-post="/providers/mine/{{ r.id }}/test">Test</button>
+      <button class="linklike delete-provider"
+              hx-delete="/providers/mine/{{ r.id }}"
+              hx-target="closest tr" hx-swap="delete"
+              hx-confirm="Disconnect {{ r.provider_name }}?">Remove</button>
+    </td>
   </tr>
   {% endfor %}
 </table>
 {% else %}
 <p class="muted">No providers connected yet. Connect one to start chatting.</p>
 {% endif %}
-{% endblock %}
+{% endblock content %}
