@@ -22,7 +22,7 @@ import logging
 import secrets
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -394,11 +394,9 @@ async def auth_password(
     return response
 
 
-@router.get("/account")
-async def account_page(
-    request: Request,
-    principal: Principal = Depends(require_user_session),
-):
+async def _account_page(request: Request, principal: Principal, **extra):
+    """Shared renderer for GET /account and the browser form branches
+    (Phase 2: the one-time raw API-key display rides on this)."""
     engine = _engine(request)
     user = await UserService(engine).get(principal.user_id)
     linked = await IdentityStore(engine).account_ids_for(
@@ -410,7 +408,16 @@ async def account_page(
         projects=await ProjectService(engine).list(principal.user_id),
         api_keys=await ApiKeyStore(engine).list(principal.user_id),
         github_linked=bool(linked),
+        **extra,
     )
+
+
+@router.get("/account")
+async def account_page(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    return await _account_page(request, principal)
 
 
 @router.get("/auth/me")
@@ -516,6 +523,10 @@ async def create_api_key(
                  actor_user_id=principal.user_id,
                  resource_type="api_key", resource_id=record["prefix"],
                  meta={"label": record["label"]})
+    if _wants_html(request):
+        # The raw key is shown EXACTLY ONCE, rendered into the page -
+        # never in a redirect URL (browsers and history would keep it).
+        return await _account_page(request, principal, new_key=record)
     return JSONResponse(record, status_code=201)
 
 
@@ -541,6 +552,9 @@ async def revoke_api_key(
         await _audit(request, "auth.api_key_revoked",
                      actor_user_id=principal.user_id,
                      resource_type="api_key", resource_id=owned[0]["prefix"])
+    if request.headers.get("HX-Request") == "true":
+        # HTMX row removal: empty 204 lets hx-swap="delete" drop the row.
+        return Response(status_code=204)
     return {"revoked": revoked}
 
 

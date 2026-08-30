@@ -18,18 +18,44 @@
 </ul>
 
 <h3>API keys</h3>
+
+<h4>Generate a key</h4>
+<form method="post" action="/api-keys" class="inline-form">
+  <input type="text" name="label" placeholder="label (optional)"
+         maxlength="120">
+  <button type="submit">Generate API key</button>
+</form>
+
+{% if new_key %}
+<div class="banner new-key-banner">
+  <p><strong>Copy your new API key now &mdash; it will not be shown
+  again.</strong></p>
+  <p><code class="new-key-raw">{{ new_key.raw }}</code></p>
+  {% if new_key.label %}<p class="muted">Label: {{ new_key.label }}</p>{% endif %}
+</div>
+{% endif %}
+
 <table>
-  <tr><th>Prefix</th><th>Label</th><th>Created</th><th>Status</th></tr>
+  <tr><th>Prefix</th><th>Label</th><th>Created</th><th>Status</th><th></th></tr>
   {% for key in api_keys %}
-  <tr>
+  <tr class="api-key-row" data-key-id="{{ key.id }}">
     <td><code>{{ key.prefix }}</code></td>
     <td>{{ key.label }}</td>
     <td class="muted">{{ key.created_at | int }}</td>
     <td>{% if key.revoked_at %}revoked{% else %}active{% endif %}</td>
+    <td>
+      {% if not key.revoked_at %}
+      <button class="linklike revoke-key"
+              hx-delete="/api-keys/{{ key.id }}"
+              hx-target="closest tr" hx-swap="delete"
+              hx-confirm="Revoke this API key? Clients using it stop
+                          working immediately.">Revoke</button>
+      {% endif %}
+    </td>
   </tr>
   {% else %}
-  <tr><td colspan="4" class="muted">No API keys yet - create one with
-      <code>invincible login</code> or the HTTP API.</td></tr>
+  <tr><td colspan="5" class="muted">No API keys yet - generate one above,
+      or use <code>invincible login</code>.</td></tr>
   {% endfor %}
 </table>
 
