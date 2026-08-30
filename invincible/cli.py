@@ -19,8 +19,10 @@ import os
 import secrets
 import shutil
 import subprocess
+import sys
 import threading
 import time
+import webbrowser
 
 import asyncpg
 import click
@@ -446,6 +448,23 @@ def setup(env_file, force):
                     click.echo(f"dev-db: {note}")
                 new_values["INVINCIBLE_DB_URL"] = url
 
+    # Q2 decision (2026-08-30): the BYOK credential master key is generated
+    # automatically so per-user provider connections work out of the box.
+    # Deliberately NEVER rotated here -- even --force keeps an existing
+    # value, because rotation makes every stored BYOK credential
+    # undecryptable. Deliberate rotation: `invincible secret credential-key`.
+    if not existing.get("INVINCIBLE_CREDENTIAL_KEY"):
+        from cryptography.fernet import Fernet
+
+        new_values["INVINCIBLE_CREDENTIAL_KEY"] = (
+            Fernet.generate_key().decode("ascii"))
+        click.echo(
+            "Generated INVINCIBLE_CREDENTIAL_KEY (encrypts stored BYOK "
+            "provider keys). BACK IT UP: losing it makes saved provider "
+            "keys undecryptable. Rotate deliberately with `invincible "
+            "secret credential-key`."
+        )
+
     _apply_env_updates(env_path, lines, new_values)
 
     click.echo(f"Configured {env_path}")
@@ -645,8 +664,11 @@ def _stop_tunnel(proc, reader, stopping) -> None:
               help="Cloudflare tunnel name for `cloudflared tunnel run` "
                    f"(default: {TUNNEL_NAME_ENV_KEY} env var or "
                    f"'{DEFAULT_TUNNEL_NAME}').")
+@click.option("--open-browser/--no-open-browser", default=True,
+              help="Open the dashboard in your browser once the server is "
+                   "coming up (skipped automatically in headless sessions).")
 def start(host, port, reload, log_level, env_file, config_path,
-          tunnel, tunnel_name):
+          tunnel, tunnel_name, open_browser):
     """Start the Invincible gateway server."""
     if not 1 <= port <= 65535:
         raise click.ClickException(f"--port must be between 1 and 65535 (got {port})")
@@ -684,6 +706,22 @@ def start(host, port, reload, log_level, env_file, config_path,
     else:
         click.echo(f"Invincible starting at http://{host}:{port}")
 
+    # Q4 decision (2026-08-30): `start` opens the dashboard for you. The
+    # timer lets uvicorn begin binding first; the headless guard keeps CI,
+    # services, and piped sessions from spawning a browser. Scheduling is
+    # deliberately BEFORE the tunnel spawn comment below - the timer is
+    # non-blocking and the tunnel's "last statement before try" invariant
+    # is untouched.
+    if open_browser:
+        browser_url = (
+            f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port}/")
+        if _browser_session_available():
+            click.echo(f"Opening {browser_url} in your browser...")
+            threading.Timer(1.5, _open_browser, (browser_url,)).start()
+        else:
+            click.echo(
+                f"Headless session: open {browser_url} manually.")
+
     # Spawning the tunnel is deliberately the LAST statement before the
     # `try` block: nothing may execute between the two, because any
     # exception raised there would orphan the cloudflared process before
@@ -717,6 +755,25 @@ def start(host, port, reload, log_level, env_file, config_path,
         click.echo("Shutting down.")
     finally:
         _stop_tunnel(tunnel_proc, tunnel_reader, tunnel_stopping)
+
+
+def _browser_session_available() -> bool:
+    """Whether opening a browser makes sense: attached to a real terminal.
+    CI, services, and piped output are headless - a browser there would
+    either fail silently or pop up on the wrong desktop."""
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _open_browser(url: str) -> None:
+    """Best-effort browser open; never let it take the server down."""
+    try:
+        if _browser_session_available():
+            webbrowser.open(url)
+    except Exception:  # noqa: BLE001 - launcher nicety, never fatal
+        click.echo(f"Could not open a browser; visit {url}", err=True)
 
 
 def _legacy_providers_path() -> str:
@@ -853,6 +910,22 @@ def _run_doctor_checks():
         bool(owner or legacy),
         note,
     ))
+
+    credential = os.getenv("INVINCIBLE_CREDENTIAL_KEY")
+    if credential:
+        checks.append((
+            "INVINCIBLE_CREDENTIAL_KEY exists (BYOK provider connections)",
+            True,
+            "back this key up - losing it makes saved provider keys "
+            "undecryptable",
+        ))
+    else:
+        checks.append((
+            "INVINCIBLE_CREDENTIAL_KEY exists (BYOK provider connections)",
+            False,
+            "BYOK provider connections are disabled; `invincible setup` "
+            "generates one, or run `invincible secret credential-key`",
+        ))
 
     return checks
 

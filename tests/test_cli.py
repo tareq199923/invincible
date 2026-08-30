@@ -75,6 +75,7 @@ def test_setup_creates_env_file(tmp_path):
         "GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET", "NVIDIA_API_KEY",
         "GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY",
         "TOKENROUTER_API_KEY", "AGENTROUTER_API_KEY",
+        "INVINCIBLE_CREDENTIAL_KEY",
     }
     assert values["NVIDIA_API_KEY"] == "nim-key"
     assert values["GROQ_API_KEY"] == "groq-key"
@@ -108,7 +109,8 @@ def test_setup_preserves_existing_values(tmp_path):
     target.write_text(
         "GATEWAY_API_KEY=gw-1\nINVINCIBLE_OWNER_SECRET=owner-1\nNVIDIA_API_KEY=nim-1\n"
         "GROQ_API_KEY=groq-1\nOPENROUTER_API_KEY=or-1\nGEMINI_API_KEY=gem-1\n"
-        "TOKENROUTER_API_KEY=tok-1\nAGENTROUTER_API_KEY=agent-1\n",
+        "TOKENROUTER_API_KEY=tok-1\nAGENTROUTER_API_KEY=agent-1\n"
+        "INVINCIBLE_CREDENTIAL_KEY=cred-1\n",
         encoding="utf-8",
     )
     before = target.read_text(encoding="utf-8")
@@ -197,7 +199,8 @@ def test_setup_force_updates_values(tmp_path):
     target.write_text(
         "GATEWAY_API_KEY=old-gw\nINVINCIBLE_OWNER_SECRET=old-owner\nNVIDIA_API_KEY=old-nim\n"
         "GROQ_API_KEY=old-groq\nOPENROUTER_API_KEY=old-or\nGEMINI_API_KEY=old-gem\n"
-        "TOKENROUTER_API_KEY=old-tok\nAGENTROUTER_API_KEY=old-agent\n",
+        "TOKENROUTER_API_KEY=old-tok\nAGENTROUTER_API_KEY=old-agent\n"
+        "INVINCIBLE_CREDENTIAL_KEY=old-cred\n",
         encoding="utf-8",
     )
     result = CliRunner().invoke(
@@ -218,6 +221,9 @@ def test_setup_force_updates_values(tmp_path):
         "GEMINI_API_KEY": "new-gem",
         "TOKENROUTER_API_KEY": "new-tok",
         "AGENTROUTER_API_KEY": "new-agent",
+        # Rotation would orphan every stored BYOK credential - even
+        # --force must keep the credential key exactly as it was.
+        "INVINCIBLE_CREDENTIAL_KEY": "old-cred",
     }
 
 

@@ -13,6 +13,8 @@ VALID_YAML = (
 )
 
 OWNER_LABEL = "INVINCIBLE_OWNER_SECRET exists (owner login for /mcp)"
+CREDENTIAL_LABEL = (
+    "INVINCIBLE_CREDENTIAL_KEY exists (BYOK provider connections)")
 DB_URL_LABEL = "INVINCIBLE_DB_URL exists"
 REACHABLE_LABEL = "PostgreSQL reachable"
 REVISION_LABEL = "schema revision matches head"
@@ -46,6 +48,7 @@ def _clean_invincible_env(monkeypatch):
         "GATEWAY_API_KEY",
         "INVINCIBLE_OWNER_SECRET",
         "MCP_SHARED_SECRET",
+        "INVINCIBLE_CREDENTIAL_KEY",
         "INVINCIBLE_CONFIG_PATH",
         "INVINCIBLE_DB_PATH",
         "INVINCIBLE_DB_URL",
@@ -56,6 +59,7 @@ def _clean_invincible_env(monkeypatch):
 def _set_secrets(monkeypatch):
     monkeypatch.setenv("GATEWAY_API_KEY", "gw-key")
     monkeypatch.setenv("INVINCIBLE_OWNER_SECRET", "owner-key")
+    monkeypatch.setenv("INVINCIBLE_CREDENTIAL_KEY", "cred-key")
 
 
 def _invoke(args=None):
@@ -133,6 +137,7 @@ def test_doctor_legacy_alias_counts_as_owner_secret(monkeypatch, tmp_path):
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
     monkeypatch.setenv("GATEWAY_API_KEY", "gw-key")
     monkeypatch.setenv("MCP_SHARED_SECRET", "legacy-owner")
+    monkeypatch.setenv("INVINCIBLE_CREDENTIAL_KEY", "cred-key")
     monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
     _hermetic_db(monkeypatch)
     _config_and_chdir(monkeypatch, tmp_path)
@@ -359,6 +364,7 @@ def test_doctor_loads_keys_from_env_file(monkeypatch, tmp_path):
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
     (tmp_path / ".env").write_text(
         "GATEWAY_API_KEY=gw-from-env\nINVINCIBLE_OWNER_SECRET=owner-from-env\n"
+        f"INVINCIBLE_CREDENTIAL_KEY=cred-from-env\n"
         f"INVINCIBLE_DB_URL={TEST_DB_URL}\n",
         encoding="utf-8",
     )
@@ -404,6 +410,38 @@ def test_doctor_missing_env_file_reports_missing_keys(monkeypatch, tmp_path):
     assert f"FAIL  {OWNER_LABEL}" in result.output
 
 
+def test_doctor_credential_key_missing_fails_with_guidance(
+    monkeypatch, tmp_path
+):
+    """Q2 decision: setup auto-generates the credential key, so a missing
+    one means an unmanaged/pre-setup config - FAIL with the fix pointer."""
+    _set_secrets(monkeypatch)
+    monkeypatch.delenv("INVINCIBLE_CREDENTIAL_KEY", raising=False)
+    monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
+    _hermetic_db(monkeypatch)
+    _config_and_chdir(monkeypatch, tmp_path)
+
+    result = _invoke()
+    assert result.exit_code == 1
+    assert f"FAIL  {CREDENTIAL_LABEL}" in result.output
+    assert "secret credential-key" in result.output
+
+
+def test_doctor_credential_key_present_warns_to_back_up(
+    monkeypatch, tmp_path
+):
+    """The owner asked for the backup warning explicitly (Q2 answer)."""
+    _set_secrets(monkeypatch)
+    monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
+    _hermetic_db(monkeypatch)
+    _config_and_chdir(monkeypatch, tmp_path)
+
+    result = _invoke()
+    assert result.exit_code == 0
+    assert f"OK  {CREDENTIAL_LABEL}" in result.output
+    assert "back this key up" in result.output
+
+
 def test_doctor_env_file_without_keys_still_fails(monkeypatch, tmp_path):
     monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
@@ -425,6 +463,7 @@ def test_doctor_custom_env_file_option(monkeypatch, tmp_path):
     custom = tmp_path / ".env.doctor"
     custom.write_text(
         "GATEWAY_API_KEY=custom-gw\nINVINCIBLE_OWNER_SECRET=custom-owner\n"
+        f"INVINCIBLE_CREDENTIAL_KEY=custom-cred\n"
         f"INVINCIBLE_DB_URL={TEST_DB_URL}\n",
         encoding="utf-8",
     )
