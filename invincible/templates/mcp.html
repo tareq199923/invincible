@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}MCP - Invincible{% endblock %}
+{% block content %}
+<h2>MCP connections</h2>
+<p class="muted">AI clients reach the MCP tool server over OAuth 2.1 + PKCE.
+Register a client, approve it in the browser, and its tokens act as
+you.</p>
+
+{% if revoked %}<p class="banner">All tokens for that client were revoked
+&mdash; it must reconnect and be approved again.</p>{% endif %}
+
+<h3>Connecting a client</h3>
+<ul class="plain">
+  <li>Register it: <code>POST /oauth/register</code> (dynamic client
+      registration; send <code>redirect_uris</code> and a
+      <code>client_name</code>).</li>
+  <li>Send the user to <code>GET /oauth/authorize</code> with PKCE
+      (<code>S256</code>); consent is granted in the browser.</li>
+  <li>Exchange the code at <code>POST /oauth/token</code>; call
+      <code>POST /mcp</code> with
+      <code>Authorization: Bearer &lt;access_token&gt;</code>.</li>
+  <li>Revoking a client's tokens below cuts off its live access
+      immediately.</li>
+</ul>
+<p class="muted">API keys (<code>inv_...</code>) are <strong>not</strong>
+accepted on /mcp &mdash; OAuth bearer tokens only (owner decision, Q1).</p>
+
+<h3>Registered clients</h3>
+{% if clients %}
+<table>
+  <tr><th>Name</th><th>Client ID</th><th>Redirect URIs</th>
+      <th>Active tokens</th><th></th></tr>
+  {% for c in clients %}
+  <tr class="mcp-client-row" data-client-id="{{ c.client_id }}">
+    <td>{{ c.client_name or '(unnamed)' }}</td>
+    <td class="muted"><code>{{ c.client_id }}</code></td>
+    <td class="muted">{{ c.redirect_uris | join(', ') }}</td>
+    <td>{{ c.active_tokens }}</td>
+    <td>
+      <button class="linklike revoke-mcp-tokens"
+              hx-delete="/dashboard/mcp/clients/{{ c.client_id }}/tokens"
+              hx-confirm="Revoke all tokens for {{ c.client_name or c.client_id }}? Its live MCP access stops immediately.">Revoke tokens</button>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">No MCP clients registered yet. A client registers itself
+via <code>POST /oauth/register</code> when it first connects.</p>
+{% endif %}
+{% endblock content %}

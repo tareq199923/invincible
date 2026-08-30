@@ -96,8 +96,9 @@ async def test_nav_links_providers(credential_key, client):
     await logged_in(client)
     page = await client.get("/dashboard")
     assert '<a href="/dashboard/providers">Providers</a>' in page.text
-    # MCP nav stays out until Phase 3's realm question is decided.
-    assert ">MCP</a>" not in page.text
+    # Q1 decided 2026-08-30: /mcp stays OAuth-only, but the management
+    # page ships (Phase 3), so the nav entry exists now.
+    assert '<a href="/dashboard/mcp">MCP</a>' in page.text
 
 
 async def test_connected_card_flips_state(credential_key, client):

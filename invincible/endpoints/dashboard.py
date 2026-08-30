@@ -491,3 +491,81 @@ async def settings_page(
         routing_mode=routing_mode,
         flags=flags,
     )
+
+
+# ---------------------------------------------------------------------------
+# MCP grants (Phase 3; Q1 decision 2026-08-30: /mcp stays OAuth-ONLY. This
+# page manages the OAuth clients/tokens behind /mcp - it never accepts inv_
+# keys itself and nothing here touches require_mcp_auth.)
+
+
+@router.get("/dashboard/mcp")
+async def mcp_page(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    store = _state(request, "oauth_store")
+    # Pre-Phase-5 grants were attached to the system local owner; the
+    # dashboard user manages their own clients plus that local-era pool.
+    from invincible.core.db import ensure_local_owner
+
+    local_uid, _ = await ensure_local_owner(_engine(request))
+    clients = await store.list_clients_manageable(
+        [principal.user_id, local_uid])
+    manageable = {c["client_id"] for c in clients}
+    active = [
+        t for t in await store.list_active_tokens()
+        if not t["revoked"] and t["client_id"] in manageable
+    ]
+    by_client: dict[str, int] = {}
+    for token in active:
+        by_client[token["client_id"]] = by_client.get(token["client_id"], 0) + 1
+    rows = [
+        {**c, "active_tokens": by_client.get(c["client_id"], 0)}
+        for c in clients
+    ]
+    return _page(
+        "mcp.html", request,
+        user_email=await _email(_engine(request), principal),
+        clients=rows,
+        revoked=request.query_params.get("revoked") == "1",
+    )
+
+
+@router.delete("/dashboard/mcp/clients/{client_id}/tokens")
+async def revoke_mcp_client_tokens(
+    client_id: str,
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    store = _state(request, "oauth_store")
+    # Ownership predicate: foreign and unknown clients are
+    # indistinguishable (anti-enumeration). Local-owner-era (pre-Phase-5)
+    # and unowned clients stay manageable from any dashboard session.
+    from invincible.core.db import ensure_local_owner
+
+    client_row = await store.get_client(client_id)
+    if client_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"message": "No such MCP client.",
+                              "type": "not_found_error"}},
+        )
+    owner = client_row["owner_user_id"]
+    if owner is not None:
+        local_uid, _ = await ensure_local_owner(_engine(request))
+        if owner not in (principal.user_id, local_uid):
+            raise HTTPException(
+                status_code=404,
+                detail={"error": {"message": "No such MCP client.",
+                                  "type": "not_found_error"}},
+            )
+    count = await store.revoke_client_tokens(client_id)
+    await _audit(request, "oauth.tokens_revoked",
+                 actor_user_id=principal.user_id,
+                 resource_type="oauth_client", resource_id=client_id,
+                 meta={"count": count})
+    if request.headers.get("HX-Request") == "true":
+        return Response(status_code=204, headers={
+            "HX-Redirect": "/dashboard/mcp?revoked=1"})
+    return {"revoked": count}

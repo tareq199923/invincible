@@ -11,7 +11,7 @@ import secrets
 import time
 from urllib.parse import urlparse
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 
 from invincible.core.db import oauth_clients, oauth_codes, oauth_tokens
 
@@ -342,6 +342,40 @@ class OAuthStore:
                 "created_at": client["created_at"],
             })
         return clients
+
+    async def list_clients_manageable(self, user_ids: list[int]) -> list:
+        """Clients any of these principals may manage on the dashboard:
+        owned by one of them, or unowned (local-owner era registrations).
+        Same shape as ``list_clients``; the only scoping difference is
+        ownership."""
+        if not user_ids:
+            return []
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                oauth_clients.select()
+                .where(or_(
+                    oauth_clients.c.owner_user_id.in_(user_ids),
+                    oauth_clients.c.owner_user_id.is_(None),
+                ))
+                .order_by(oauth_clients.c.created_at)
+            )).mappings().all()
+        clients = []
+        for row in rows:
+            client = dict(row)
+            clients.append({
+                "client_id": client["client_id"],
+                "client_name": client["client_name"],
+                "redirect_uris": client["redirect_uris"],
+                "created_at": client["created_at"],
+            })
+        return clients
+
+    async def get_client_owner(self, client_id: str) -> int | None:
+        async with self.engine.connect() as conn:
+            return (await conn.execute(
+                select(oauth_clients.c.owner_user_id)
+                .where(oauth_clients.c.client_id == client_id)
+            )).scalar()
 
     async def list_active_tokens(self, client_id: str = None) -> list:
         await self._expire_lazy()
