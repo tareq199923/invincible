@@ -131,6 +131,37 @@ def test_setup_generates_gateway_and_owner_secrets_without_printing(tmp_path):
     assert values["INVINCIBLE_OWNER_SECRET"] not in result.output
 
 
+def test_setup_announces_generated_gateway_api_key(tmp_path):
+    """R3: the first run must explain that /v1/* now requires the key."""
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(
+        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL]
+        + SKIP,
+    )
+    assert result.exit_code == 0
+    assert "Generated GATEWAY_API_KEY" in result.output
+    assert "Bearer token" in result.output
+    assert str(target) in result.output
+    # The explanation names the key, never its value.
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert values["GATEWAY_API_KEY"] not in result.output
+
+
+def test_setup_silent_when_gateway_api_key_already_exists(tmp_path):
+    target = tmp_path / ".env"
+    target.write_text(
+        "GATEWAY_API_KEY=gw-1\nINVINCIBLE_OWNER_SECRET=owner-1\n"
+        "INVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n"
+        "INVINCIBLE_CREDENTIAL_KEY=cred-1\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(
+        cli, ["setup", "--env-file", str(target)]
+    )
+    assert result.exit_code == 0
+    assert "Generated GATEWAY_API_KEY" not in result.output
+
+
 def test_setup_never_reads_stdin(tmp_path):
     """The Windows rehearsal finding R1: piped stdin must not hang setup."""
     target = tmp_path / ".env"
@@ -247,6 +278,9 @@ def test_setup_force_rotates_secrets_keeps_db_and_credential_key(tmp_path):
     assert values["GATEWAY_API_KEY"] != "old-gw"
     assert values["INVINCIBLE_OWNER_SECRET"] != "old-owner"
     assert values["INVINCIBLE_DB_URL"] == "postgresql+asyncpg://keep@db/x"
+    # --force regenerates the gateway key, so the announcement fires
+    # again - clients need to be told to update their Bearer token.
+    assert "Generated GATEWAY_API_KEY" in result.output
     # Rotation would orphan every stored BYOK credential - even
     # --force must keep the credential key exactly as it was.
     assert values["INVINCIBLE_CREDENTIAL_KEY"] == "old-cred"

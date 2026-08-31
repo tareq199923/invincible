@@ -11,21 +11,7 @@ Last updated: 2026-09-01.
 
 ## Open work — in fix order
 
-### 1. R3 — generated `GATEWAY_API_KEY` is unexplained (~15 min)
-
-**Finding (rehearsal):** setup generates the gateway key silently.
-Nothing tells a first-time user that the `/v1/*` chat endpoints now
-*require* this as a Bearer token (fail-open only applies when unset) —
-a classic "why did my old curl stop working?" trap.
-
-**Fix plan:**
-- One explanatory line after generation, alongside the existing
-  credential-key message:
-  *"Generated GATEWAY_API_KEY — chat clients must send it as a Bearer
-  token. It is in your .env."*
-- Test: assert the line appears only when the key is newly generated.
-
-### 2. R6 — no automated fresh-install test (~45 min)
+### 1. R6 — no automated fresh-install test (~45 min)
 
 **Finding (rehearsal):** the fresh-install journey (setup → upgrade →
 start → register → operator bootstrap) was proven only by a manual
@@ -130,6 +116,13 @@ Open decisions (multi-day project, fold into Phase 6/7 planning):
 
 ## Completed log (newest first)
 
+- **2026-09-01 — R3 FIXED: setup announces a generated
+  `GATEWAY_API_KEY`.** Fresh runs (and `--force` rotations) now print
+  "Generated GATEWAY_API_KEY - chat clients must send it as a Bearer
+  token on /v1/*. It is in <env path>." right where the credential-key
+  message sits. Silent when the key already exists and `--force` is
+  absent; the secret value never reaches the terminal. 914 tests green,
+  ruff clean.
 - **2026-09-01 — R2 FIXED: `setup --db-url` now verifies connectivity.**
   After normalization, one real `SELECT 1` connection (5s timeout, one
   retry with a 1s pause — covers serverless cold starts) runs before

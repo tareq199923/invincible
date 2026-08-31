@@ -422,6 +422,14 @@ def setup(env_file, db_url, force, skip_db_check):
     for key in SECRET_ENV_KEYS:
         if not existing.get(key) or force:
             new_values[key] = _generate_secret()
+            if key == "GATEWAY_API_KEY":
+                # R3: without this, a first-time user has no way to know
+                # the /v1/* chat endpoints now require the key (fail-open
+                # applies only while it is unset).
+                click.echo(
+                    "Generated GATEWAY_API_KEY - chat clients must send "
+                    f"it as a Bearer token on /v1/*. It is in {env_path}."
+                )
 
     # Q2 decision (2026-08-30): the BYOK credential master key is generated
     # automatically so per-user provider connections work out of the box.
