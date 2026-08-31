@@ -4,8 +4,8 @@ Where the project is, where it is going, and the status of every piece of
 work. This document supersedes the previous phase-numbered plan; that
 history is preserved in compressed form at the bottom.
 
-Active short-term work (verified findings + dress rehearsal + distribution
-decision) is tracked in [currentgoal.md](currentgoal.md).
+The single ordered list of actionable work (open findings, fix plans,
+decision queue, completed log) lives in [WORKQUEUE.md](WORKQUEUE.md).
 
 Status labels used throughout:
 
