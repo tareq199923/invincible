@@ -1,5 +1,6 @@
 import io
 import os
+import socket
 import subprocess
 import threading
 from pathlib import Path
@@ -69,11 +70,26 @@ def test_pyproject_declares_both_console_scripts():
 
 EXAMPLE_DB_URL = "postgresql+asyncpg://invincible:pw@db.example:5432/inv"
 
+# Tests below exercise env-file mechanics with unreachable example URLs;
+# the connectivity probe (R2) is opt-out via --skip-db-check so they stay
+# hermetic. The probe itself has its own tests below.
+SKIP = ["--skip-db-check"]
+
+
+def _closed_port():
+    """A port that is (almost certainly) not listening, for probe tests."""
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
 
 def test_setup_creates_env_file_with_db_url(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL],
+        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL]
+        + SKIP,
     )
     assert result.exit_code == 0
     assert str(target) in result.output
@@ -99,6 +115,7 @@ def test_setup_generates_gateway_and_owner_secrets_without_printing(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
         cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL]
+        + SKIP,
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -118,7 +135,8 @@ def test_setup_never_reads_stdin(tmp_path):
     """The Windows rehearsal finding R1: piped stdin must not hang setup."""
     target = tmp_path / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL],
+        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL]
+        + SKIP,
         input=None,
     )
     assert result.exit_code == 0
@@ -199,7 +217,8 @@ def test_setup_preserves_unicode_comments_and_values(tmp_path):
 def test_setup_repeated_runs_do_not_duplicate_keys(tmp_path):
     target = tmp_path / ".env"
     first = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL],
+        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL]
+        + SKIP,
     )
     assert first.exit_code == 0
     second = CliRunner().invoke(
@@ -240,7 +259,8 @@ def test_setup_db_url_flag_overrides_existing(tmp_path):
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL],
+        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL]
+        + SKIP,
     )
     assert result.exit_code == 0, result.output
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -264,7 +284,8 @@ def test_setup_normalizes_plain_postgres_scheme(tmp_path):
     result = CliRunner().invoke(
         cli,
         ["setup", "--env-file", str(target),
-         "--db-url", "postgresql://invincible@127.0.0.1:5433/invincible"],
+         "--db-url", "postgresql://invincible@127.0.0.1:5433/invincible"]
+        + SKIP,
     )
     assert result.exit_code == 0, result.output
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -277,10 +298,72 @@ def test_setup_normalizes_plain_postgres_scheme(tmp_path):
 def test_setup_write_failure_returns_nonzero(tmp_path):
     target = tmp_path / "missing-dir" / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL],
+        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL]
+        + SKIP,
     )
     assert result.exit_code == 1
     assert "Could not write env file" in result.output
+
+
+# --- setup --db-url connectivity probe (R2) ------------------------------------
+#
+# A typo'd host must fail HERE, naming host:port, with nothing written -
+# not later at start/doctor with a confusing error. Escape hatch:
+# --skip-db-check for offline pre-provisioning.
+
+UNREACHABLE_URL_TEMPLATE = (
+    "postgresql+asyncpg://invincible:sekrit@127.0.0.1:{port}/invincible"
+)
+
+
+def test_setup_db_url_probe_rejects_unreachable_host(tmp_path):
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(
+        cli,
+        ["setup", "--env-file", str(target),
+         "--db-url", UNREACHABLE_URL_TEMPLATE.format(port=_closed_port())],
+    )
+    assert result.exit_code == 1
+    assert "Could not connect to 127.0.0.1:" in result.output
+    assert "--skip-db-check" in result.output
+    # Nothing is written when the probe fails.
+    assert not target.exists()
+
+
+def test_setup_db_url_probe_failure_masks_password(tmp_path):
+    result = CliRunner().invoke(
+        cli,
+        ["setup", "--env-file", str(tmp_path / ".env"),
+         "--db-url", UNREACHABLE_URL_TEMPLATE.format(port=_closed_port())],
+    )
+    assert result.exit_code == 1
+    assert "sekrit" not in result.output
+
+
+def test_setup_skip_db_check_writes_without_probing(tmp_path):
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(
+        cli,
+        ["setup", "--env-file", str(target),
+         "--db-url", UNREACHABLE_URL_TEMPLATE.format(port=_closed_port()),
+         "--skip-db-check"],
+    )
+    assert result.exit_code == 0, result.output
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert values["INVINCIBLE_DB_URL"].startswith("postgresql+asyncpg://")
+
+
+def test_setup_db_url_probe_accepts_live_database(pg_live, monkeypatch,
+                                                  tmp_path):
+    """Live tier: a reachable DSN passes the probe and is written."""
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(
+        cli, ["setup", "--env-file", str(target), "--db-url", TEST_DB_URL],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Database connection verified" in result.output
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert values["INVINCIBLE_DB_URL"] == TEST_DB_URL
 
 
 # --- secret rotate behavior ---

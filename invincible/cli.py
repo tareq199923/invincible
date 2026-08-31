@@ -146,6 +146,44 @@ async def _try_connect(dsn: str) -> bool:
     return True
 
 
+async def _probe_db_url(url: str) -> None:
+    """One real connection (SELECT 1) against a --db-url candidate before
+    setup writes anything. Raises ``ValueError`` with an operator-facing
+    message naming host:port on failure.
+
+    Rehearsal finding R2: a typo'd host passed the format-only check and
+    failed much later at ``start``/``doctor`` with a confusing error. One
+    retry covers serverless cold starts (Neon suspends idle databases;
+    the first connect can be slow); a truly dead host fails twice fast.
+    The exception text never includes the DSN, so the password cannot
+    leak into the abort message."""
+    parsed = make_url(url)
+    host = parsed.host or "localhost"
+    port = parsed.port or 5432
+    last_error: Exception | None = None
+    for attempt in range(2):
+        conn = None
+        try:
+            conn = await asyncpg.connect(_plain_dsn(url), timeout=5)
+            await conn.execute("SELECT 1")
+            return
+        except Exception as exc:
+            last_error = exc
+        finally:
+            if conn is not None:
+                with contextlib.suppress(Exception):
+                    await conn.close()
+        if attempt == 0:
+            await asyncio.sleep(1)  # serverless cold start, not a dead host
+    detail = str(last_error).splitlines()[0][:120]
+    raise ValueError(
+        f"Could not connect to {host}:{port} ({detail}). "
+        "Nothing was written - the .env is unchanged. "
+        "To configure offline before the database exists, rerun with "
+        "--skip-db-check."
+    )
+
+
 def _admin_dsn(host: str, port: int, user: str,
                password: str | None = None) -> str:
     auth = f":{password}" if password else ""
@@ -329,7 +367,12 @@ def _parse_env_line(line):
     "--force", is_flag=True,
     help="Regenerate secrets that already have values.",
 )
-def setup(env_file, db_url, force):
+@click.option(
+    "--skip-db-check", is_flag=True,
+    help="Write the --db-url DSN without verifying the database is "
+         "reachable (offline pre-provisioning).",
+)
+def setup(env_file, db_url, force, skip_db_check):
     """Create or update a .env file - non-interactive.
 
     Q3 decision (2026-09-01): zero prompts. Secrets are generated
@@ -402,9 +445,26 @@ def setup(env_file, db_url, force):
     # operator pastes a managed-PostgreSQL DSN (Neon etc.).
     if db_url is not None:
         try:
-            new_values["INVINCIBLE_DB_URL"] = _normalize_db_url(db_url)
+            normalized = _normalize_db_url(db_url)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
+        # R2: verify the DSN with a real connection before anything is
+        # written, so a typo'd host fails here - naming the host:port -
+        # instead of confusingly at `start`/`doctor` later. Only the
+        # --db-url path is probed: without the flag, setup deliberately
+        # leaves the existing DSN untouched and must not gain a network
+        # round-trip (or a failure mode) it cannot affect.
+        if not skip_db_check:
+            try:
+                run_coro_sync(_probe_db_url(normalized))
+            except ValueError as exc:
+                raise click.ClickException(str(exc)) from exc
+            probed = make_url(normalized)
+            click.echo(
+                "Database connection verified "
+                f"({probed.host or 'localhost'}:{probed.port or 5432})"
+            )
+        new_values["INVINCIBLE_DB_URL"] = normalized
     elif not existing.get("INVINCIBLE_DB_URL"):
         raise click.ClickException(
             "No INVINCIBLE_DB_URL configured. Pass one explicitly:\n"

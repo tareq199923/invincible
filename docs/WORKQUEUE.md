@@ -11,23 +11,7 @@ Last updated: 2026-09-01.
 
 ## Open work — in fix order
 
-### 1. R2 — `setup --db-url` doesn't verify connectivity (~30 min)
-
-**Finding (rehearsal):** the DSN is validated for *format* only
-(`_normalize_db_url`, `cli.py`). A typo'd host or wrong port is
-accepted silently; the failure surfaces later at `invincible start`
-or `doctor` with a much more confusing error.
-
-**Fix plan:**
-- After normalization, attempt one real connection
-  (`SELECT 1`, short timeout ~5s) before writing the `.env`.
-- On failure: abort with a clear message naming the host/port —
-  nothing written (same clean-failure contract as the missing-URL
-  path).
-- Escape hatch for offline setups: `--skip-db-check` flag.
-- Tests: real scratch DB accepts; unreachable host rejects cleanly.
-
-### 2. R3 — generated `GATEWAY_API_KEY` is unexplained (~15 min)
+### 1. R3 — generated `GATEWAY_API_KEY` is unexplained (~15 min)
 
 **Finding (rehearsal):** setup generates the gateway key silently.
 Nothing tells a first-time user that the `/v1/*` chat endpoints now
@@ -41,7 +25,7 @@ a classic "why did my old curl stop working?" trap.
   token. It is in your .env."*
 - Test: assert the line appears only when the key is newly generated.
 
-### 3. R6 — no automated fresh-install test (~45 min)
+### 2. R6 — no automated fresh-install test (~45 min)
 
 **Finding (rehearsal):** the fresh-install journey (setup → upgrade →
 start → register → operator bootstrap) was proven only by a manual
@@ -56,6 +40,36 @@ database, so the real path is never exercised in CI.
 - Do this AFTER R2/R3 — the test should pin the final shape of setup.
 - This converts the entire dress rehearsal into permanent regression
   armor.
+
+### 3. Phase 7 — deployment: move the live server off the dev PC
+
+**Why now:** `invinseble-ai.me` currently runs from the developer's PC
+through a Cloudflare tunnel, with the database in a Temp-folder
+portable PG. That breaks two of Phase 7's own acceptance rules ("never
+a temp-directory or otherwise ephemeral cluster"; always-on) and means
+the public site dies whenever the PC sleeps/reboots. Users' chats and
+memories cannot live on a machine that turns off nightly.
+
+**The move (mostly ops, one weekend — see ROADMAP.md §Phase 7 for the
+full acceptance criteria: managed Postgres with backups, non-superuser
+app role, scram auth, fresh secrets):**
+- Provision Neon PostgreSQL (or equivalent managed Postgres); keep the
+  backup story.
+- Provision an always-on host (Railway per the roadmap; any small VPS
+  works) and run `inv setup --db-url <DSN>` → `inv db upgrade` →
+  `inv start` there. R2 (shipped) now catches a typo'd DSN at setup
+  time.
+- Point `invinseble-ai.me` at the host. Decision to make: keep the
+  Cloudflare tunnel from the host, or use a plain public origin —
+  a tunnel adds a moving part for no benefit on a host with a public
+  origin.
+- Migrate any data worth keeping off the Temp-folder dev PG, then
+  retire it (also resolves the Housekeeping item below).
+- Do NOT rotate `INVINCIBLE_CREDENTIAL_KEY` in the move: it would
+  orphan every stored BYOK credential.
+
+**Out of scope here:** Phase 6 (CLI client mode / zero-database user
+setup) — separate code project, planned after.
 
 ### 4. Phase 9 PR-D — dashboard Providers page
 
@@ -107,13 +121,24 @@ Open decisions (multi-day project, fold into Phase 6/7 planning):
 ### Housekeeping (10 min, whenever)
 
 - Move the dev database out of the Temp folder before a disk cleanup
-  eats it (portable PG on 5433, manual start, dies on reboot).
+  eats it (portable PG on 5433, manual start, dies on reboot) —
+  superseded by the Phase 7 deployment item above, which retires this
+  PG entirely.
 - Revoke stale Claude/Grok OAuth connectors (`invincible oauth list`).
 
 ---
 
 ## Completed log (newest first)
 
+- **2026-09-01 — R2 FIXED: `setup --db-url` now verifies connectivity.**
+  After normalization, one real `SELECT 1` connection (5s timeout, one
+  retry with a 1s pause — covers serverless cold starts) runs before
+  anything is written. Failure aborts naming host:port, keeps the
+  password out of the message, and writes nothing. Escape hatch:
+  `--skip-db-check` for offline pre-provisioning. Only the `--db-url`
+  path is probed — a no-flag run leaves the DSN untouched and gains no
+  network round-trip. Live smoke-tested both ways (5433 accept, dead
+  port reject, .env untouched). 912 tests green, ruff clean.
 - **2026-09-01 — R1 FIXED: setup is non-interactive** (`328ae8b`).
   Zero prompts; secrets auto-generated; provider-key prompts removed
   (dashboard/env is the path now); DB URL via `--db-url` (validated,

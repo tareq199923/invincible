@@ -27,7 +27,7 @@ def test_setup_generates_credential_key_when_absent(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
         cli,
-        ["setup", "--env-file", str(target),
+        ["setup", "--env-file", str(target), "--skip-db-check",
          "--db-url", "postgresql+asyncpg://invincible:pw@db.example:5432/inv"])
     assert result.exit_code == 0, result.output
 
