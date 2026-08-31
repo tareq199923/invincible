@@ -6,7 +6,9 @@ Live-tier tests (real local Postgres) auto-skip via the pg_live fixture so
 the suite stays runnable on machines without a server; everything else is
 hermetic.
 """
+import asyncio
 import json
+import socket
 import sqlite3
 
 import pytest
@@ -45,6 +47,131 @@ def test_normalize_rejects_garbage():
 
 
 # --- dev-db (hermetic) --------------------------------------------------------
+
+
+def _bind_listener():
+    """A TCP listener on a free localhost port (R4 stand-in for a busy port)."""
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(1)
+    return sock
+
+
+async def test_port_busy_detects_any_listener():
+    from invincible.cli import _port_busy
+
+    sock = _bind_listener()
+    port = sock.getsockname()[1]
+    try:
+        assert await _port_busy("127.0.0.1", port)
+    finally:
+        sock.close()
+    # A closed listener frees the port again.
+    await asyncio.sleep(0.05)
+    assert not await _port_busy("127.0.0.1", port)
+
+
+async def test_port_busy_false_on_free_port():
+    from invincible.cli import _port_busy
+
+    probe = _bind_listener()
+    port = probe.getsockname()[1]
+    probe.close()
+    assert not await _port_busy("127.0.0.1", port)
+
+
+async def test_first_free_port_skips_busy_ports():
+    from invincible.cli import _first_free_port
+
+    # Two listeners on consecutive ports: bind pairs until one lands
+    # adjacent (ephemeral allocation usually needs no retries).
+    first = second = None
+    for _ in range(50):
+        first = _bind_listener()
+        second = _bind_listener()
+        if second.getsockname()[1] == first.getsockname()[1] + 1:
+            break
+        first.close()
+        second.close()
+        first = second = None
+    if first is None:
+        pytest.skip("could not secure two consecutive free ports")
+    try:
+        base = first.getsockname()[1]
+        assert await _first_free_port(base) == base + 2
+    finally:
+        first.close()
+        second.close()
+
+
+async def test_dev_db_starts_docker_on_next_free_port(monkeypatch):
+    """R4: with 5433 occupied by anything, provisioning must publish the
+    container on the next free port - and that port lands in the DSN."""
+    from invincible.cli import _provision_dev_db_async
+
+    blocker = _bind_listener()
+    blocker_port = blocker.getsockname()[1]
+
+    started_ports = []
+
+    async def fake_start(port):
+        started_ports.append(port)
+        return f"postgresql://invincible@127.0.0.1:{port}/postgres"
+
+    async def fake_connect(dsn):
+        # Only the freshly started server answers; the blocker is not
+        # Postgres and the conventional ports have nothing.
+        return f":{started_ports[0]}/" in dsn if started_ports else False
+
+    async def fake_ensure(admin_dsn, database="invincible"):
+        return True
+
+    monkeypatch.setattr(
+        "invincible.cli._start_postgres_via_docker", fake_start)
+    monkeypatch.setattr("invincible.cli._try_connect", fake_connect)
+    monkeypatch.setattr("invincible.cli._ensure_database", fake_ensure)
+    monkeypatch.delenv("INVINCIBLE_DB_URL", raising=False)
+
+    try:
+        url, notes = await _provision_dev_db_async(blocker_port)
+    finally:
+        blocker.close()
+
+    assert started_ports == [blocker_port + 1]
+    assert f":{blocker_port + 1}/" in url
+    assert any(
+        f"port {blocker_port} is busy" in note for note in notes)
+
+
+async def test_dev_db_uses_requested_port_when_free(monkeypatch):
+    from invincible.cli import _provision_dev_db_async
+
+    finder = _bind_listener()
+    free_port = finder.getsockname()[1]
+    finder.close()  # release: the port is (almost certainly) free again
+
+    started_ports = []
+
+    async def fake_start(port):
+        started_ports.append(port)
+        return f"postgresql://invincible@127.0.0.1:{port}/postgres"
+
+    async def fake_connect(dsn):
+        return bool(started_ports) and f":{started_ports[0]}/" in dsn
+
+    async def fake_ensure(admin_dsn, database="invincible"):
+        return True
+
+    monkeypatch.setattr(
+        "invincible.cli._start_postgres_via_docker", fake_start)
+    monkeypatch.setattr("invincible.cli._try_connect", fake_connect)
+    monkeypatch.setattr("invincible.cli._ensure_database", fake_ensure)
+    monkeypatch.delenv("INVINCIBLE_DB_URL", raising=False)
+
+    url, notes = await _provision_dev_db_async(free_port)
+    assert started_ports == [free_port]
+    assert f":{free_port}/" in url
+    assert not any("is busy" in note for note in notes)
 
 
 def test_dev_db_prints_provisioned_url(monkeypatch):

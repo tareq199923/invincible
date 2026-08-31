@@ -146,6 +146,33 @@ async def _try_connect(dsn: str) -> bool:
     return True
 
 
+async def _port_busy(host: str, port: int) -> bool:
+    """True when ANYTHING is listening on host:port.
+
+    Deliberately a raw TCP check, not an auth probe: a port occupied by
+    another service - or a Postgres we cannot authenticate to - is still
+    unavailable for publishing a NEW container on (rehearsal finding R4:
+    docker fails to bind with a confusing error). Reuse of an existing
+    server is decided separately, by _try_connect."""
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=0.5)
+    except (OSError, asyncio.TimeoutError):
+        return False
+    writer.close()
+    with contextlib.suppress(Exception):
+        await writer.wait_closed()
+    return True
+
+
+async def _first_free_port(base: int, attempts: int = 10) -> int | None:
+    """First port >= ``base`` with nothing listening, or None."""
+    for port in range(base, base + attempts):
+        if not await _port_busy("127.0.0.1", port):
+            return port
+    return None
+
+
 async def _probe_db_url(url: str) -> None:
     """One real connection (SELECT 1) against a --db-url candidate before
     setup writes anything. Raises ``ValueError`` with an operator-facing
@@ -219,12 +246,13 @@ async def _ensure_database(admin_dsn: str, database: str = DEV_DB_NAME) -> bool:
         await conn.close()
 
 
-def _start_postgres_via_docker(port: int) -> str:
+async def _start_postgres_via_docker(port: int) -> str:
     """Start a disposable Postgres container and return its admin DSN.
 
     Prefers the bundled compose pair when running from a checkout; falls
-    back to a plain `docker run`. Raises DevDbError with guidance when
-    Docker is unavailable or fails."""
+    back to a plain `docker run`. ``port`` is expected to be free (the
+    caller probe-and-increments past busy ports - R4). Raises DevDbError
+    with guidance when Docker is unavailable or fails."""
     docker = shutil.which("docker")
     if not docker:
         raise DevDbError(
@@ -239,9 +267,14 @@ def _start_postgres_via_docker(port: int) -> str:
     )
     compose_file = os.path.join(repo_root, "docker-compose.yml")
     cwd = None
+    run_env = None
     if os.path.isfile(compose_file):
         cmd = [docker, "compose", "up", "-d", "db"]
         cwd = repo_root
+        # Compose reads variables from the process env, not the command
+        # line (no -e KEY=VAL there); the ports mapping in
+        # docker-compose.yml honors INVINCIBLE_DB_PORT.
+        run_env = dict(os.environ, INVINCIBLE_DB_PORT=str(port))
     else:
         cmd = [
             docker, "run", "-d", "--name", DEV_DB_CONTAINER,
@@ -253,7 +286,7 @@ def _start_postgres_via_docker(port: int) -> str:
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=180, cwd=cwd,
-            check=False,
+            check=False, env=run_env,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise DevDbError(f"Could not start Docker Postgres: {exc}") from exc
@@ -292,7 +325,21 @@ async def _provision_dev_db_async(port: int) -> tuple[str, list[str]]:
             break
 
     if admin is None:
-        admin = _start_postgres_via_docker(port)
+        # R4: probe-and-increment - publishing a new container on a busy
+        # port makes docker fail with a confusing bind error. The winning
+        # port flows into the returned DSN, so the URL always names a
+        # server that could actually start.
+        free_port = await _first_free_port(port)
+        if free_port is None:
+            raise DevDbError(
+                f"No free port found from {port} upward (tried 10) - "
+                "pass --port explicitly or free a port."
+            )
+        if free_port != port:
+            notes.append(
+                f"port {port} is busy - using {free_port} instead"
+            )
+        admin = await _start_postgres_via_docker(free_port)
         notes.append("started Postgres via Docker")
         for _ in range(30):  # first start / image pull can take a while
             if await _try_connect(admin):

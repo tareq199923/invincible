@@ -49,16 +49,7 @@ This is also what makes the promise true that setup now makes —
 "configure providers later in the dashboard." Details in
 [ROADMAP.md](ROADMAP.md) §Phase 9.
 
-### 3. R4 — `dev-db` hardcodes port 5433 (~20 min)
-
-**Finding (rehearsal):** two Invincible installs on one machine
-collide on the port (and with the documented dev convention).
-
-**Fix plan:** probe-and-increment — if 5433 is busy, try 5434+; write
-whichever port won into the generated DSN. Low priority: bites
-developers only.
-
-### 4. R5 — zero provider keys still served chat (investigate, then decide)
+### 3. R5 — zero provider keys still served chat (investigate, then decide)
 
 **Finding (rehearsal):** a fresh install with NO provider keys
 answered `/v1/chat/completions` with HTTP 200 via `agentrouter-glm`
@@ -100,6 +91,15 @@ Open decisions (multi-day project, fold into Phase 6/7 planning):
 
 ## Completed log (newest first)
 
+- **2026-09-01 — R4 FIXED: `dev-db` no longer hardcodes port 5433.**
+  Before starting a NEW Postgres (Docker), provisioning probe-and-
+  increments to the first free port (raw TCP check — anything listening
+  counts as busy, up to 10 ports) and the winner flows into the printed/
+  written DSN plus a "port X is busy - using Y instead" note. Probing
+  an existing server is unchanged (auth-based, no new round-trip).
+  docker-compose.yml ports mapping parameterized via
+  `INVINCIBLE_DB_PORT` (passed through the compose process env —
+  compose has no `-e KEY=VAL` flag). 920 tests green, ruff clean.
 - **2026-09-01 — R6 FIXED: automated fresh-install test.** New
   `tests/test_fresh_install.py` pins the whole dress-rehearsal journey
   against a throwaway scratch database: real `setup` (connectivity
