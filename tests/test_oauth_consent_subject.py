@@ -38,9 +38,13 @@ from tests.conftest import (
 )
 
 
-async def _flow_as_session_user(client, email, promote=True):
+async def _flow_as_session_user(client, email, promote=False):
     """Register a dashboard account, register an OAuth client, and return
-    (uid, authorize params) - the session cookie is already set."""
+    (uid, authorize params) - the session cookie is already set.
+
+    Since the first-human bootstrap, the FIRST registration on a fresh
+    (test) instance is an operator already; tests that need a plain user
+    must pass promote=False AND ensure an earlier human exists."""
     registered, _ = await register_account(client, email)
     assert registered.status_code == 201, registered.text
     uid = registered.json()["id"]
@@ -50,6 +54,18 @@ async def _flow_as_session_user(client, email, promote=True):
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
     return uid, params, verifier, client_id, redirect_uri
+
+
+async def _seed_prior_human(email="prior-human@example.com") -> None:
+    """Make the instance 'already inhabited' so the NEXT registration is
+    a plain user (first-human bootstrap skips when any human exists).
+    Raw SQL on purpose - bypasses the bootstrap being tested elsewhere."""
+    async with app.state.engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO users (email, created_at)"
+                 " VALUES (:e, 1.0)"),
+            {"e": email},
+        )
 
 
 async def _token_subject(access_token: str) -> int | None:
@@ -130,6 +146,8 @@ async def test_plain_user_session_is_refused(client):
     """Self-registration alone must never reach host-shell tokens: a
     valid session on a non-operator account gets 403 on both the consent
     page and the approve POST, with an audit row and zero codes issued."""
+    # Not the first human on this instance -> plain user.
+    await _seed_prior_human()
     uid, params, _, _, _ = await _flow_as_session_user(
         client, "plain-a@example.com", promote=False)
 

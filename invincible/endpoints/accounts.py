@@ -247,7 +247,8 @@ async def register(request: Request):
         return _error_response(exc)
     project_id = await ensure_default_project(_engine(request), user["id"])
     await _audit(request, "auth.registered", actor_user_id=user["id"],
-                 resource_type="user", resource_id=str(user["id"]))
+                 resource_type="user", resource_id=str(user["id"]),
+                 meta={"role": user.get("role")})
     if _wants_html(request):
         response = RedirectResponse("/account", status_code=303)
         await _set_session_cookie_for(request, response, user["id"])

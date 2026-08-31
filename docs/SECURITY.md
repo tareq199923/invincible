@@ -74,8 +74,12 @@ the host). Consent therefore requires either the owner secret or an
 seeded/elevated to operator, revision 0008 backfills migrated databases,
 and `invincible users promote <email>` / `demote <email>` is the runtime
 elevation path — every change is audit-logged, and the local owner's
-role is immutable). A self-registered plain account gets 403 on both the
-consent page and the approve POST, and the refusal is audited
+role is immutable). On a fresh instance the **first registered account
+bootstraps to operator** — the self-hosted model is one person per
+instance, and the person who ran `inv setup` must be able to govern
+their own machine without a terminal step; every later registration
+joins as a plain user. A self-registered plain account gets 403 on both
+the consent page and the approve POST, and the refusal is audited
 (`oauth.consent_forbidden`).
 When a browser holds *both* cookies, the dashboard session wins: approval
 stamps that user (an operator) rather than silently falling back from a

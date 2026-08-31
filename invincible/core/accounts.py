@@ -111,21 +111,43 @@ class UserService:
 
     async def _insert(self, email: str, password_hash: str | None) -> dict:
         now = time.time()
-        try:
-            async with self.engine.begin() as conn:
+        async with self.engine.begin() as conn:
+            try:
                 row = (await conn.execute(
                     users.insert()
                     .values(email=email, password_hash=password_hash,
                             created_at=now)
                     .returning(users.c.id)
                 )).one()
-        except IntegrityError:
-            raise AccountError(
-                "duplicate_email",
-                "An account with that email already exists.",
-                status_code=409,
-            ) from None
-        return {"id": int(row[0]), "email": email, "created_at": now}
+            except IntegrityError:
+                raise AccountError(
+                    "duplicate_email",
+                    "An account with that email already exists.",
+                    status_code=409,
+                ) from None
+            uid = int(row[0])
+            # FIRST-HUMAN BOOTSTRAP: on a fresh instance the first
+            # self-registered account becomes an operator - a personal
+            # self-hosted gateway must be governable by the person who
+            # set it up, without a terminal step. Later registrations,
+            # and the seeded system local owner, never trigger it.
+            # Benign race note: two simultaneous first-registrations can
+            # both win (uncommitted rows are invisible to each other);
+            # the worst case is one operator too many, demotable by hand.
+            earlier_human = (await conn.execute(
+                select(users.c.id)
+                .where(users.c.is_system.is_(False), users.c.id < uid)
+                .limit(1)
+            )).first()
+            role = ROLE_USER
+            if earlier_human is None:
+                await conn.execute(
+                    update(users)
+                    .where(users.c.id == uid)
+                    .values(role=ROLE_OPERATOR)
+                )
+                role = ROLE_OPERATOR
+        return {"id": uid, "email": email, "created_at": now, "role": role}
 
     async def authenticate(self, email: str, password: str) -> dict | None:
         """The user for correct credentials, else None. Unknown email and
