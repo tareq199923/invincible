@@ -11,23 +11,7 @@ Last updated: 2026-09-01.
 
 ## Open work — in fix order
 
-### 1. R6 — no automated fresh-install test (~45 min)
-
-**Finding (rehearsal):** the fresh-install journey (setup → upgrade →
-start → register → operator bootstrap) was proven only by a manual
-one-time walkthrough. `tests/conftest.py` uses a warm pre-created
-database, so the real path is never exercised in CI.
-
-**Fix plan:**
-- New `tests/test_fresh_install.py`: create a scratch database (the
-  CLI-tier scratch-DB fixtures already exist in conftest), run
-  `db upgrade` to head, boot the app against it, register the first
-  account, assert `role == "operator"`, hit `/health`.
-- Do this AFTER R2/R3 — the test should pin the final shape of setup.
-- This converts the entire dress rehearsal into permanent regression
-  armor.
-
-### 3. Phase 7 — deployment: move the live server off the dev PC
+### 1. Phase 7 — deployment: move the live server off the dev PC
 
 **Why now:** `invinseble-ai.me` currently runs from the developer's PC
 through a Cloudflare tunnel, with the database in a Temp-folder
@@ -57,7 +41,7 @@ app role, scram auth, fresh secrets):**
 **Out of scope here:** Phase 6 (CLI client mode / zero-database user
 setup) — separate code project, planned after.
 
-### 4. Phase 9 PR-D — dashboard Providers page
+### 2. Phase 9 PR-D — dashboard Providers page
 
 The BYOK API is complete (connect/list/test/remove with SSRF guard +
 audit, per-user router candidate pool); only the UI is missing.
@@ -65,7 +49,7 @@ This is also what makes the promise true that setup now makes —
 "configure providers later in the dashboard." Details in
 [ROADMAP.md](ROADMAP.md) §Phase 9.
 
-### 5. R4 — `dev-db` hardcodes port 5433 (~20 min)
+### 3. R4 — `dev-db` hardcodes port 5433 (~20 min)
 
 **Finding (rehearsal):** two Invincible installs on one machine
 collide on the port (and with the documented dev convention).
@@ -74,7 +58,7 @@ collide on the port (and with the documented dev convention).
 whichever port won into the generated DSN. Low priority: bites
 developers only.
 
-### 6. R5 — zero provider keys still served chat (investigate, then decide)
+### 4. R5 — zero provider keys still served chat (investigate, then decide)
 
 **Finding (rehearsal):** a fresh install with NO provider keys
 answered `/v1/chat/completions` with HTTP 200 via `agentrouter-glm`
@@ -116,6 +100,14 @@ Open decisions (multi-day project, fold into Phase 6/7 planning):
 
 ## Completed log (newest first)
 
+- **2026-09-01 — R6 FIXED: automated fresh-install test.** New
+  `tests/test_fresh_install.py` pins the whole dress-rehearsal journey
+  against a throwaway scratch database: real `setup` (connectivity
+  probe + R3 announcement asserted), real `db upgrade` to head, the
+  real FastAPI lifespan (not the hand-wired conftest client), `/health`,
+  and first-registration bootstrap — first account becomes `operator`,
+  second stays `user`. Auto-skips without a local Postgres, same as the
+  other live-tier tests. 915 tests green, ruff clean.
 - **2026-09-01 — R3 FIXED: setup announces a generated
   `GATEWAY_API_KEY`.** Fresh runs (and `--force` rotations) now print
   "Generated GATEWAY_API_KEY - chat clients must send it as a Bearer
