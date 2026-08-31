@@ -1,10 +1,13 @@
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Response
+from fastapi import Depends, FastAPI, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from invincible import __version__
 from invincible.core.config import load_providers_config
@@ -140,6 +143,38 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 app = FastAPI(title="Invincible", lifespan=lifespan)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _browser_login_redirect(request: Request, exc: StarletteHTTPException):
+    """Browser navigations that hit a 401 land on the login page instead of
+    raw JSON; every other client keeps the structured error body.
+
+    Real browsers send ``Accept: text/html,...`` on address-bar navigation;
+    API clients (curl, httpx, SDKs) send ``*/*`` or a JSON accept and are
+    never redirected. HTMX-driven requests carry ``HX-Request`` and get the
+    ``HX-Redirect`` header htmx understands. Only safe GET/HEAD navigation
+    is redirected - a form POST that lost its session should not silently
+    bounce into a GET of the same path.
+    """
+    if exc.status_code == 401 and request.method in ("GET", "HEAD"):
+        accept = request.headers.get("accept", "")
+        next_path = request.url.path
+        if next_path.startswith("/") and not next_path.startswith("//"):
+            login_url = f"/login?next={quote(next_path, safe='/')}"
+            if request.headers.get("hx-request") == "true":
+                return Response(
+                    status_code=exc.status_code,
+                    headers={"HX-Redirect": login_url})
+            if "text/html" in accept:
+                return RedirectResponse(login_url, status_code=302)
+    # Default FastAPI shape, byte-for-byte (``{"detail": ...}``) - the API
+    # surfaces and every existing 401 test depend on it.
+    return JSONResponse(
+        {"detail": exc.detail},
+        status_code=exc.status_code,
+        headers=getattr(exc, "headers", None),
+    )
 
 # /v1/* resolves a Principal per request (dual-realm: legacy gateway key
 # vs per-user API keys; fail-open anonymous when no gateway key is set -

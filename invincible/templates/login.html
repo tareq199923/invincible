@@ -4,6 +4,7 @@
 <h2>Sign in</h2>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 <form method="post" action="/auth/login">
+  {% if next_target %}<input type="hidden" name="next" value="{{ next_target }}">{% endif %}
   <label for="email">Email</label>
   <input type="email" id="email" name="email" autofocus required>
   <label for="password">Password</label>

@@ -51,31 +51,23 @@ database problem really is.
 
 ---
 
-## 3. Small polish (~30 min each) — CONFIRMED, DO FIRST
+## 3. Small polish (~30 min each) — **3a + 3b DONE (2026-08-31)**
 
-### 3a. `start` opens health-JSON instead of the dashboard — ✅ Verified
+### 3a. `start` opens health-JSON instead of the dashboard — ✅ FIXED
 
-`cli.py:716-717` opens `http://host:port/`; `main.py:183-185` routes
-`/` to `health_check()` returning `{"status": "healthy"}`. The comment
-at `cli.py:709` ("start opens the dashboard for you") disagrees with
-the URL it actually opens.
+`cli.py` now opens `/dashboard` (which redirects anonymous browsers to
+`/login`); was verified as opening `/` (health JSON). Pinned by
+`tests/test_browser_entry.py::test_start_opens_dashboard_not_health_json`.
 
-**Fix:** open `/dashboard` (redirecting to `/login` when not signed
-in — requires 3b). Note the existing `--open-browser/--no-open-browser`
-flag (`cli.py:667-669`) and the tested headless guard
-(`_browser_session_available`) are already in place.
+### 3b. Unauth'd `/dashboard` shows raw JSON 401 — ✅ FIXED
 
-### 3b. Unauth'd `/dashboard` shows raw JSON 401 — ✅ Verified
-
-`accounts.py:137-148` (`require_user_session`) raises a 401
-`HTTPException` with a JSON body; `main.py` registers no exception
-handler to convert it to a login redirect for browser requests. Every
-dashboard page inherits this.
-
-**Fix:** accept-header-aware handler — `Accept: text/html` gets a 302
-to `/login` (preserving a same-origin bounce target), everything else
-keeps the structured JSON 401. **Coupled with 3a:** pointing `start`
-at `/dashboard` without this lands users on a JSON 401.
+`main.py` now has a global HTTPException handler: 401 + GET/HEAD +
+browser `Accept: text/html` → 302 to `/login?next=<path>`; HTMX
+requests get `HX-Redirect`; every other client keeps the byte-identical
+JSON 401. The login page replays the `next` target through a hidden
+form field into the existing `_safe_next` POST handling (open-redirect
+safe). POSTs are never redirected. Pinned by
+`tests/test_browser_entry.py` (11 tests).
 
 ### 3c. Password reset flow — ✅ Verified gap
 
@@ -97,8 +89,9 @@ instances; future work.
 
 ## Recommended order
 
-1. **#3a + #3b** (~1 hour) — prerequisites, trivially verified fixes.
-2. **#1 dress rehearsal** — fast, produces evidence.
+1. ~~**#3a + #3b** (~1 hour) — prerequisites, trivially verified fixes.~~
+   **DONE 2026-08-31.**
+2. **#1 dress rehearsal** — fast, produces evidence. **← NEXT**
 3. **Decide #2** (distribution) with fresh eyes, informed by the
    rehearsal.
 4. **#4 housekeeping** whenever.

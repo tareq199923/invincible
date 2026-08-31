@@ -80,8 +80,10 @@ def test_start_opens_browser_in_attached_session(monkeypatch, tmp_path):
     result = CliRunner().invoke(cli, ["start"])
     assert result.exit_code == 0
     assert calls  # server actually ran
-    assert opened == ["http://127.0.0.1:8000/"]
-    assert "Opening http://127.0.0.1:8000/" in result.output
+    # /dashboard, not the health-JSON root: anonymous browsers get the
+    # login page instead of raw JSON.
+    assert opened == ["http://127.0.0.1:8000/dashboard"]
+    assert "Opening http://127.0.0.1:8000/dashboard" in result.output
 
 
 def test_start_headless_session_prints_url_instead(monkeypatch, tmp_path):
@@ -92,7 +94,7 @@ def test_start_headless_session_prints_url_instead(monkeypatch, tmp_path):
     result = CliRunner().invoke(cli, ["start"])
     assert result.exit_code == 0
     assert calls
-    assert "Headless session: open http://127.0.0.1:8000/" in result.output
+    assert "Headless session: open http://127.0.0.1:8000/dashboard" in result.output
     assert "Opening http://" not in result.output
 
 

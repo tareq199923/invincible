@@ -215,6 +215,9 @@ async def login_page(request: Request):
         error="GitHub sign-in failed; try again or use your password."
         if github_error else None,
         github_enabled=settings.github_client_id() is not None,
+        # Same-origin bounce target: where the 401 handler sent us from,
+        # replayed into the POST handler's existing `next` handling.
+        next_target=_safe_next(request.query_params.get("next", "")),
     )
 
 

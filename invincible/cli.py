@@ -713,8 +713,13 @@ def start(host, port, reload, log_level, env_file, config_path,
     # non-blocking and the tunnel's "last statement before try" invariant
     # is untouched.
     if open_browser:
+        # /dashboard, not /: the root is the health-JSON endpoint for
+        # clients; a browser landing there sees raw JSON. /dashboard
+        # renders the UI, and (since the 401 handler) anonymous browsers
+        # bounce to /login with a `next` bounce-back.
         browser_url = (
-            f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port}/")
+            f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port}"
+            "/dashboard")
         if _browser_session_available():
             click.echo(f"Opening {browser_url} in your browser...")
             threading.Timer(1.5, _open_browser, (browser_url,)).start()
