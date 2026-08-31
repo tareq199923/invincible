@@ -53,12 +53,21 @@ port 8901 with `--no-tunnel`:
 | R5 | **Fresh install with ZERO provider keys still gets working chat** — the router called agentrouter.org with no key and got 200 (glm-5.3 answered). Pleasant out-of-box surprise, but undocumented and possibly unintended: no startup warning fired for the missing `AGENTROUTER_API_KEY`. Worth verifying intent and documenting either way. | Info / verify |
 | R6 | The rehearsal itself had no scripted harness — driving it required a bespoke in-process driver. A tiny `tests/test_fresh_install.py` (scratch DB → upgrade → TestClient boot) would pin the journey CI-green permanently. | Medium (turns rehearsal into regression armor) |
 
-**Evidence for #2 (distribution):** the Postgres barrier is real but
-*thinner than expected* — the wizard's `paste`/`dev-db` choices plus
-auto-secret generation mean the only genuinely hard step for a new
-user is "have a Postgres." Bundling portable Postgres (as this machine
-already does) would collapse the whole journey to: install → `setup`
-→ `start`. The Python-clone-venv gap remains the other half.
+**Evidence for #2 (distribution):** with the non-interactive rewrite
+(below), `setup` is now one scriptable command —
+`invincible setup --db-url <remote-DSN>` — so the install story is
+install → setup → start, with only the DSN as user input. The
+Python-clone-venv gap remains the other half.
+
+**Follow-up (2026-09-01): R1 FIXED — setup is now non-interactive.**
+Zero prompts: secrets auto-generated, the six provider-key prompts
+removed (providers are configured via the dashboard's Providers page
+or the env file), and the DB URL arrives via `--db-url` (remote-first:
+Neon or any managed Postgres; plain `postgresql://` auto-upgraded to
+asyncpg). First run without `--db-url` and without an existing value
+fails cleanly with guidance instead of prompting. Verified against the
+real CLI with piped stdin — the Windows getpass hang is gone. R2 (DSN
+connectivity check) and R4 (dev-db port collision) remain open.
 
 ---
 

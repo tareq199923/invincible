@@ -60,42 +60,52 @@ def test_pyproject_declares_both_console_scripts():
     assert scripts["inv"] == "invincible.cli:cli"
 
 
-# --- setup behavior ---
+# --- setup behavior (Q3 2026-09-01: non-interactive) ---
+#
+# No prompts at all: secrets are generated, provider keys are configured
+# later via the dashboard / env file, and the DB URL arrives via --db-url
+# (remote-first). This also makes setup scriptable on Windows, where the
+# old hidden prompts read the console only and hung on piped stdin.
 
-def test_setup_creates_env_file(tmp_path):
+EXAMPLE_DB_URL = "postgresql+asyncpg://invincible:pw@db.example:5432/inv"
+
+
+def test_setup_creates_env_file_with_db_url(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)],
-        input="nim-key\ngroq-key\nor-key\ngem-key\ntok-key\nagent-key\nskip\n",
+        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL],
     )
     assert result.exit_code == 0
     assert str(target) in result.output
     values = _env_dict(target.read_text(encoding="utf-8"))
     assert set(values) == {
-        "GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET", "NVIDIA_API_KEY",
-        "GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY",
-        "TOKENROUTER_API_KEY", "AGENTROUTER_API_KEY",
-        "INVINCIBLE_CREDENTIAL_KEY",
+        "GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET",
+        "INVINCIBLE_DB_URL", "INVINCIBLE_CREDENTIAL_KEY",
     }
-    assert values["NVIDIA_API_KEY"] == "nim-key"
-    assert values["GROQ_API_KEY"] == "groq-key"
-    assert values["OPENROUTER_API_KEY"] == "or-key"
-    assert values["GEMINI_API_KEY"] == "gem-key"
-    assert values["TOKENROUTER_API_KEY"] == "tok-key"
-    assert values["AGENTROUTER_API_KEY"] == "agent-key"
+    assert values["INVINCIBLE_DB_URL"] == EXAMPLE_DB_URL
+
+
+def test_setup_requires_db_url_on_first_run(tmp_path):
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(cli, ["setup", "--env-file", str(target)])
+    assert result.exit_code == 1
+    assert "No INVINCIBLE_DB_URL configured" in result.output
+    assert "--db-url" in result.output
+    # Nothing is written when the run fails.
+    assert not target.exists()
 
 
 def test_setup_generates_gateway_and_owner_secrets_without_printing(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n" * 6 + "skip\n"
+        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL]
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
     assert values["GATEWAY_API_KEY"]
     assert values["INVINCIBLE_OWNER_SECRET"]
     assert values["GATEWAY_API_KEY"] != values["INVINCIBLE_OWNER_SECRET"]
-    # Empty input skips the provider keys...
+    # Provider keys are never written by setup anymore...
     assert "NVIDIA_API_KEY" not in values
     assert "GEMINI_API_KEY" not in values
     assert "AGENTROUTER_API_KEY" not in values
@@ -104,18 +114,27 @@ def test_setup_generates_gateway_and_owner_secrets_without_printing(tmp_path):
     assert values["INVINCIBLE_OWNER_SECRET"] not in result.output
 
 
+def test_setup_never_reads_stdin(tmp_path):
+    """The Windows rehearsal finding R1: piped stdin must not hang setup."""
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(
+        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL],
+        input=None,
+    )
+    assert result.exit_code == 0
+
+
 def test_setup_preserves_existing_values(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
         "GATEWAY_API_KEY=gw-1\nINVINCIBLE_OWNER_SECRET=owner-1\nNVIDIA_API_KEY=nim-1\n"
-        "GROQ_API_KEY=groq-1\nOPENROUTER_API_KEY=or-1\nGEMINI_API_KEY=gem-1\n"
-        "TOKENROUTER_API_KEY=tok-1\nAGENTROUTER_API_KEY=agent-1\n"
+        "INVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n"
         "INVINCIBLE_CREDENTIAL_KEY=cred-1\n",
         encoding="utf-8",
     )
     before = target.read_text(encoding="utf-8")
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="skip\n"
+        cli, ["setup", "--env-file", str(target)]
     )
     assert result.exit_code == 0
     assert target.read_text(encoding="utf-8") == before
@@ -124,11 +143,12 @@ def test_setup_preserves_existing_values(tmp_path):
 def test_setup_carries_legacy_mcp_shared_secret_into_new_key(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
-        "GATEWAY_API_KEY=gw-1\nMCP_SHARED_SECRET=old-mcp\n",
+        "GATEWAY_API_KEY=gw-1\nMCP_SHARED_SECRET=old-mcp\n"
+        "INVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n",
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n" * 6 + "skip\n"
+        cli, ["setup", "--env-file", str(target)]
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
@@ -140,12 +160,12 @@ def test_setup_preserves_unrelated_vars_comments_and_blank_lines(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
         'CUSTOM_SETTING=value\n# Existing comment\nANOTHER_VARIABLE=test\n'
-        'QUOTED="keep me"\n\n',
+        'QUOTED="keep me"\n\n'
+        "INVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n",
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)],
-        input="k1\nk2\nk3\nk4\nk5\nk6\nskip\n",
+        cli, ["setup", "--env-file", str(target)]
     )
     assert result.exit_code == 0
     lines = target.read_text(encoding="utf-8").splitlines()
@@ -163,12 +183,12 @@ def test_setup_preserves_unrelated_vars_comments_and_blank_lines(tmp_path):
 def test_setup_preserves_unicode_comments_and_values(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
-        "# notes in 中文 and emoji 🚀\nCUSTOM_SETTING=café\n",
+        "# notes in 中文 and emoji 🚀\nCUSTOM_SETTING=café\n"
+        "INVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n",
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)],
-        input="k1\nk2\nk3\nk4\nk5\nk6\nskip\n",
+        cli, ["setup", "--env-file", str(target)]
     )
     assert result.exit_code == 0
     text = target.read_text(encoding="utf-8")
@@ -179,71 +199,85 @@ def test_setup_preserves_unicode_comments_and_values(tmp_path):
 def test_setup_repeated_runs_do_not_duplicate_keys(tmp_path):
     target = tmp_path / ".env"
     first = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)],
-        input="k1\nk2\nk3\nk4\nk5\nk6\nskip\n",
+        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL],
     )
     assert first.exit_code == 0
     second = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="skip\n"
+        cli, ["setup", "--env-file", str(target)]
     )
     assert second.exit_code == 0
     text = target.read_text(encoding="utf-8")
-    for key in ("GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET", "NVIDIA_API_KEY",
-                "GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY",
-                "TOKENROUTER_API_KEY", "AGENTROUTER_API_KEY"):
+    for key in ("GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET",
+                "INVINCIBLE_DB_URL", "INVINCIBLE_CREDENTIAL_KEY"):
         assert text.count(f"{key}=") == 1
 
 
-def test_setup_force_updates_values(tmp_path):
+def test_setup_force_rotates_secrets_keeps_db_and_credential_key(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
-        "GATEWAY_API_KEY=old-gw\nINVINCIBLE_OWNER_SECRET=old-owner\nNVIDIA_API_KEY=old-nim\n"
-        "GROQ_API_KEY=old-groq\nOPENROUTER_API_KEY=old-or\nGEMINI_API_KEY=old-gem\n"
-        "TOKENROUTER_API_KEY=old-tok\nAGENTROUTER_API_KEY=old-agent\n"
+        "GATEWAY_API_KEY=old-gw\nINVINCIBLE_OWNER_SECRET=old-owner\n"
+        "INVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n"
         "INVINCIBLE_CREDENTIAL_KEY=old-cred\n",
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target), "--force"],
-        input=(
-            "new-gw\nnew-owner\nnew-nim\nnew-groq\nnew-or\nnew-gem\nnew-tok\n"
-            "new-agent\nskip\n"
-        ),
+        cli, ["setup", "--env-file", str(target), "--force"]
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
-    assert values == {
-        "GATEWAY_API_KEY": "new-gw",
-        "INVINCIBLE_OWNER_SECRET": "new-owner",
-        "NVIDIA_API_KEY": "new-nim",
-        "GROQ_API_KEY": "new-groq",
-        "OPENROUTER_API_KEY": "new-or",
-        "GEMINI_API_KEY": "new-gem",
-        "TOKENROUTER_API_KEY": "new-tok",
-        "AGENTROUTER_API_KEY": "new-agent",
-        # Rotation would orphan every stored BYOK credential - even
-        # --force must keep the credential key exactly as it was.
-        "INVINCIBLE_CREDENTIAL_KEY": "old-cred",
-    }
+    assert values["GATEWAY_API_KEY"] != "old-gw"
+    assert values["INVINCIBLE_OWNER_SECRET"] != "old-owner"
+    assert values["INVINCIBLE_DB_URL"] == "postgresql+asyncpg://keep@db/x"
+    # Rotation would orphan every stored BYOK credential - even
+    # --force must keep the credential key exactly as it was.
+    assert values["INVINCIBLE_CREDENTIAL_KEY"] == "old-cred"
 
 
-def test_setup_force_empty_input_preserves_existing(tmp_path):
+def test_setup_db_url_flag_overrides_existing(tmp_path):
     target = tmp_path / ".env"
-    target.write_text("GEMINI_API_KEY=keep-me\n", encoding="utf-8")
-    result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target), "--force"], input="\n" * 6 + "skip\n"
+    target.write_text(
+        "INVINCIBLE_DB_URL=postgresql+asyncpg://old@db/x\n",
+        encoding="utf-8",
     )
-    assert result.exit_code == 0
+    result = CliRunner().invoke(
+        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL],
+    )
+    assert result.exit_code == 0, result.output
     values = _env_dict(target.read_text(encoding="utf-8"))
-    assert values["GEMINI_API_KEY"] == "keep-me"
-    assert values["GATEWAY_API_KEY"] and values["INVINCIBLE_OWNER_SECRET"]
+    assert values["INVINCIBLE_DB_URL"] == EXAMPLE_DB_URL
+
+
+def test_setup_rejects_invalid_db_url_cleanly(tmp_path):
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(
+        cli,
+        ["setup", "--env-file", str(target),
+         "--db-url", "postgresql+psycopg2://invincible@db/inv"],
+    )
+    assert result.exit_code == 1
+    assert "Unsupported driver 'postgresql+psycopg2'" in result.output
+    assert not target.exists()
+
+
+def test_setup_normalizes_plain_postgres_scheme(tmp_path):
+    target = tmp_path / ".env"
+    result = CliRunner().invoke(
+        cli,
+        ["setup", "--env-file", str(target),
+         "--db-url", "postgresql://invincible@127.0.0.1:5433/invincible"],
+    )
+    assert result.exit_code == 0, result.output
+    values = _env_dict(target.read_text(encoding="utf-8"))
+    assert values["INVINCIBLE_DB_URL"] == (
+        "postgresql+asyncpg://invincible@127.0.0.1:5433/invincible"
+    )
+    assert "Normalized postgresql://" in result.output
 
 
 def test_setup_write_failure_returns_nonzero(tmp_path):
     target = tmp_path / "missing-dir" / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)],
-        input="k1\nk2\nk3\nk4\nk5\nk6\nskip\n",
+        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL],
     )
     assert result.exit_code == 1
     assert "Could not write env file" in result.output
@@ -788,155 +822,9 @@ def test_default_db_url_resolution_comes_from_env(monkeypatch):
     assert _resolve_db_url() == TEST_DB_URL
 
 
-# --- setup database-backend step (Phase 16) ---
-#
-# Prompt-count notes: of SUPPORTED_ENV_KEYS only the six provider keys
-# prompt when unset (GATEWAY_API_KEY / INVINCIBLE_OWNER_SECRET are
-# auto-generated), so a fresh .env consumes exactly six input lines before
-# the database-backend choice.
-
-
-def test_setup_paste_branch_writes_validated_url(tmp_path):
-    target = tmp_path / ".env"
-    result = CliRunner().invoke(
-        cli,
-        ["setup", "--env-file", str(target)],
-        input=(
-            "\n" * 6
-            + "paste\npostgresql+asyncpg://invincible:pw@db.example:5432/inv\n"
-        ),
-    )
-    assert result.exit_code == 0, result.output
-    values = _env_dict(target.read_text(encoding="utf-8"))
-    assert (
-        values["INVINCIBLE_DB_URL"]
-        == "postgresql+asyncpg://invincible:pw@db.example:5432/inv"
-    )
-
-
-def test_setup_paste_branch_normalizes_plain_postgres_scheme(tmp_path):
-    target = tmp_path / ".env"
-    result = CliRunner().invoke(
-        cli,
-        ["setup", "--env-file", str(target)],
-        input=(
-            "\n" * 6
-            + "paste\npostgresql://invincible@127.0.0.1:5433/invincible\n"
-        ),
-    )
-    assert result.exit_code == 0, result.output
-    values = _env_dict(target.read_text(encoding="utf-8"))
-    assert values["INVINCIBLE_DB_URL"] == (
-        "postgresql+asyncpg://invincible@127.0.0.1:5433/invincible"
-    )
-    assert "Normalized postgresql://" in result.output
-
-
-def test_setup_paste_branch_rejects_unsupported_driver(tmp_path):
-    target = tmp_path / ".env"
-    result = CliRunner().invoke(
-        cli,
-        ["setup", "--env-file", str(target)],
-        input=(
-            "\n" * 6
-            + "paste\npostgresql+psycopg2://invincible@db/inv\n"
-              "postgresql+asyncpg://invincible@db/inv\n"
-        ),
-    )
-    assert result.exit_code == 0, result.output
-    assert "Unsupported driver 'postgresql+psycopg2'" in result.output
-    values = _env_dict(target.read_text(encoding="utf-8"))
-    assert values["INVINCIBLE_DB_URL"] == (
-        "postgresql+asyncpg://invincible@db/inv"
-    )
-
-
-def test_setup_skip_branch_omits_db_url(tmp_path):
-    target = tmp_path / ".env"
-    result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n" * 6 + "skip\n"
-    )
-    assert result.exit_code == 0
-    values = _env_dict(target.read_text(encoding="utf-8"))
-    assert "INVINCIBLE_DB_URL" not in values
-
-
-def test_setup_existing_db_url_not_reprompted(tmp_path, monkeypatch):
-    target = tmp_path / ".env"
-    before = "GATEWAY_API_KEY=gw\nINVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n"
-    target.write_text(before, encoding="utf-8")
-    monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
-    # Gateway + DB URL exist and are kept verbatim; owner secret is newly
-    # generated (absent from the file); provider keys prompt-skip; the DB
-    # step must NOT appear.
-    result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n" * 6
-    )
-    assert result.exit_code == 0, result.output
-    values = _env_dict(target.read_text(encoding="utf-8"))
-    assert values["GATEWAY_API_KEY"] == "gw"
-    assert values["INVINCIBLE_DB_URL"] == (
-        "postgresql+asyncpg://keep@db/x"
-    )
-    assert values["INVINCIBLE_OWNER_SECRET"]
-
-
-def test_setup_force_reprompts_db_choice(tmp_path):
-    target = tmp_path / ".env"
-    target.write_text(
-        "INVINCIBLE_DB_URL=postgresql+asyncpg://old@db/x\n",
-        encoding="utf-8",
-    )
-    # --force: gateway + five provider keys prompt (owner regenerates
-    # silently); empty answers keep/regenerate as usual. Then the DB step
-    # reappears; 'skip' leaves the existing URL untouched.
-    result = CliRunner().invoke(
-        cli,
-        ["setup", "--env-file", str(target), "--force"],
-        input="\n" * 6 + "skip\n",
-    )
-    assert result.exit_code == 0, result.output
-    values = _env_dict(target.read_text(encoding="utf-8"))
-    assert values["INVINCIBLE_DB_URL"] == "postgresql+asyncpg://old@db/x"
-
-
-def test_setup_dev_db_branch_provisions_and_writes(tmp_path, monkeypatch):
-    target = tmp_path / ".env"
-
-    def fake_provision(port=5433):
-        return (
-            "postgresql+asyncpg://invincible@127.0.0.1:5433/invincible",
-            ["found local Postgres", "database already present: 'invincible'"],
-        )
-
-    monkeypatch.setattr("invincible.cli._provision_dev_db", fake_provision)
-    result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n" * 6 + "dev-db\n"
-    )
-    assert result.exit_code == 0, result.output
-    assert "Provisioning a local development database..." in result.output
-    assert "dev-db: found local Postgres" in result.output
-    values = _env_dict(target.read_text(encoding="utf-8"))
-    assert values["INVINCIBLE_DB_URL"] == (
-        "postgresql+asyncpg://invincible@127.0.0.1:5433/invincible"
-    )
-
-
-def test_setup_dev_db_failure_skips_url_gracefully(tmp_path, monkeypatch):
-    from invincible.cli import DevDbError
-
-    def boom(port=5433):
-        raise DevDbError("no server, no docker")
-
-    monkeypatch.setattr("invincible.cli._provision_dev_db", boom)
-    target = tmp_path / ".env"
-    result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)], input="\n" * 6 + "dev-db\n"
-    )
-    assert result.exit_code == 0, result.output
-    assert "Could not provision locally (no server, no docker)" in result.output
-    values = _env_dict(target.read_text(encoding="utf-8"))
-    assert "INVINCIBLE_DB_URL" not in values
+# --- setup database step: covered above; the wizard's paste/dev-db/skip
+# branches were removed with the Q3 non-interactive rewrite (2026-09-01).
+# The `dev-db` COMMAND still exists and is tested in test_cli_db.py.
 
 
 # --- oauth administration ---

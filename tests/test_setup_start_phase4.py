@@ -26,8 +26,9 @@ def _parse_env(path):
 def test_setup_generates_credential_key_when_absent(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target)],
-        input="\n" * 6 + "skip\n")
+        cli,
+        ["setup", "--env-file", str(target),
+         "--db-url", "postgresql+asyncpg://invincible:pw@db.example:5432/inv"])
     assert result.exit_code == 0, result.output
 
     values = _parse_env(target)
@@ -44,14 +45,12 @@ def test_setup_never_rotates_existing_credential_key_even_with_force(
     target = tmp_path / ".env"
     target.write_text(
         "INVINCIBLE_CREDENTIAL_KEY=keep-this-exact-value\n"
-        "GATEWAY_API_KEY=gw\nINVINCIBLE_OWNER_SECRET=owner\n",
+        "GATEWAY_API_KEY=gw\nINVINCIBLE_OWNER_SECRET=owner\n"
+        "INVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n",
         encoding="utf-8",
     )
     result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target), "--force"],
-        # --force re-prompts every SUPPORTED_ENV_KEYS entry (8) + the DB
-        # prompt; empty input keeps each existing value.
-        input="\n" * 8 + "skip\n")
+        cli, ["setup", "--env-file", str(target), "--force"])
     assert result.exit_code == 0, result.output
 
     values = _parse_env(target)

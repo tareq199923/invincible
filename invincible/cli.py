@@ -48,20 +48,10 @@ from invincible.core.identity import ApiKeyStore
 from invincible.core.identity import AuditLog as _AuditLog
 from invincible.core.oauth_store import OAuthStore
 
-SUPPORTED_ENV_KEYS = (
-    "GATEWAY_API_KEY",
-    "INVINCIBLE_OWNER_SECRET",
-    "NVIDIA_API_KEY",
-    "GROQ_API_KEY",
-    "OPENROUTER_API_KEY",
-    "GEMINI_API_KEY",
-    "TOKENROUTER_API_KEY",
-    "AGENTROUTER_API_KEY",
-)
 SECRET_ENV_KEYS = ("GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET")
 LEGACY_OWNER_SECRET_KEY = "MCP_SHARED_SECRET"
 
-# --- local dev database (dev-db / setup) ------------------------------------
+# --- local dev database (dev-db) ---------------------------------------------
 DEV_DB_PORT = 5433      # project convention: tests + local dev live here
 DEV_DB_NAME = "invincible"
 DEV_DB_USER = "invincible"
@@ -330,11 +320,26 @@ def _parse_env_line(line):
     help="Path of the .env file to create or update.",
 )
 @click.option(
-    "--force", is_flag=True,
-    help="Re-prompt variables that already have values.",
+    "--db-url", default=None,
+    help="PostgreSQL DSN (postgresql://... - the asyncpg driver is added "
+         "automatically). Required on first run when no "
+         "INVINCIBLE_DB_URL exists yet; never prompted.",
 )
-def setup(env_file, force):
-    """Create or update a .env file with gateway and provider keys."""
+@click.option(
+    "--force", is_flag=True,
+    help="Regenerate secrets that already have values.",
+)
+def setup(env_file, db_url, force):
+    """Create or update a .env file - non-interactive.
+
+    Q3 decision (2026-09-01): zero prompts. Secrets are generated
+    (never printed), provider API keys are configured later through the
+    dashboard's Providers page or by editing the env file, and the
+    database URL arrives via --db-url (remote-first: Neon or any
+    managed PostgreSQL). The old interactive wizard could not be piped
+    on Windows (getpass reads the console only) and blocked scripted
+    installs.
+    """
     env_path = os.path.abspath(env_file)
 
     existing = {}
@@ -369,84 +374,11 @@ def setup(env_file, force):
             "(it is now the owner-login secret for approving MCP connections)."
         )
 
-    for key in SUPPORTED_ENV_KEYS:
-        current = existing.get(key, "")
-        if key == "INVINCIBLE_OWNER_SECRET":
-            label = (
-                "INVINCIBLE_OWNER_SECRET (one-time login to /oauth/authorize "
-                "for approving MCP connections; not sent on /mcp any more)"
-            )
-        else:
-            label = key
-        if key in SECRET_ENV_KEYS:
-            if current and not force:
-                continue
-            if current:
-                new_values[key] = click.prompt(
-                    f"{label} (leave empty to keep the existing value)",
-                    default=current, hide_input=True, show_default=False,
-                )
-            else:
-                # Never printed; write straight to the env file.
-                new_values[key] = _generate_secret()
-        else:
-            if current and not force:
-                continue
-            if current:
-                entered = click.prompt(
-                    f"{key} (leave empty to keep the existing value)",
-                    default=current, hide_input=True, show_default=False,
-                )
-                if entered:
-                    new_values[key] = entered
-            else:
-                entered = click.prompt(
-                    f"{key} (leave empty to skip)",
-                    default="", hide_input=True, show_default=False,
-                )
-                if entered:
-                    new_values[key] = entered
-
-    # Database backend (Phase 16): INVINCIBLE_DB_URL is a secret-bearing
-    # connection string, so it gets its own interactive step instead of the
-    # flat prompt list. Existing values are left alone unless --force.
-    if not existing.get("INVINCIBLE_DB_URL") or force:
-        choice = click.prompt(
-            "Database backend (INVINCIBLE_DB_URL)",
-            type=click.Choice(("paste", "dev-db", "skip")),
-            default="skip",
-        )
-        if choice == "paste":
-            while True:
-                entered = click.prompt(
-                    "PostgreSQL URL (postgresql+asyncpg://...)"
-                )
-                if not entered.strip():
-                    break  # empty keeps any existing value untouched
-                try:
-                    new_values["INVINCIBLE_DB_URL"] = _normalize_db_url(entered)
-                    break
-                except ValueError as exc:
-                    click.echo(f"Invalid URL: {exc}", err=True)
-        elif choice == "dev-db":
-            click.echo("Provisioning a local development database...")
-            try:
-                url, notes = _provision_dev_db()
-            except (DevDbError, click.ClickException) as exc:
-                message = (
-                    exc.message
-                    if isinstance(exc, click.ClickException)
-                    else str(exc)
-                )
-                click.echo(
-                    f"Could not provision locally ({message}); "
-                    "skipping INVINCIBLE_DB_URL.",
-                    err=True,
-                )
-            else:
-                for note in notes:
-                    click.echo(f"dev-db: {note}")
-                new_values["INVINCIBLE_DB_URL"] = url
+    # Secrets: generated on first run, regenerated only with --force,
+    # never echoed and never prompted for.
+    for key in SECRET_ENV_KEYS:
+        if not existing.get(key) or force:
+            new_values[key] = _generate_secret()
 
     # Q2 decision (2026-08-30): the BYOK credential master key is generated
     # automatically so per-user provider connections work out of the box.
@@ -463,6 +395,22 @@ def setup(env_file, force):
             "provider keys). BACK IT UP: losing it makes saved provider "
             "keys undecryptable. Rotate deliberately with `invincible "
             "secret credential-key`."
+        )
+
+    # Database (remote-first): --db-url wins; an existing value is left
+    # alone; a first run with neither is an error, not a prompt - the
+    # operator pastes a managed-PostgreSQL DSN (Neon etc.).
+    if db_url is not None:
+        try:
+            new_values["INVINCIBLE_DB_URL"] = _normalize_db_url(db_url)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+    elif not existing.get("INVINCIBLE_DB_URL"):
+        raise click.ClickException(
+            "No INVINCIBLE_DB_URL configured. Pass one explicitly:\n"
+            "  invincible setup --db-url postgresql://user:pass@host/db\n"
+            "(a plain postgresql:// URL is upgraded to the asyncpg driver "
+            "automatically)"
         )
 
     _apply_env_updates(env_path, lines, new_values)
