@@ -6,7 +6,7 @@ below was checked against the code, not assumed.
 
 ---
 
-## 1. The dress rehearsal 🎭 — NOT DONE (recommended next)
+## 1. The dress rehearsal 🎭 — **DONE (2026-09-01)**
 
 **Claim:** The fresh-install journey is proven by tests, but tests run
 against a warm database — so the real new-user path
@@ -19,13 +19,46 @@ actual user path — `invincible setup` wizard → explicit
 `invincible db upgrade` (Alembic) → first-boot lifespan seeding — is
 never exercised as a user experiences it.
 
-**Plan:** wipe a scratch database, walk the exact brand-new-user path.
-Any rough step is a real finding. Known past finds: password confusion,
-health-JSON instead of dashboard, the promote bump.
+### What was walked (2026-09-01, fully isolated stack)
 
-**Sequencing note:** polish items 3a + 3b below are prerequisites for
-the rehearsal passing cleanly — do them first (~1 hour combined), then
-rehearse.
+Scratch PG 17.10 on port 5434 (initdb'd fresh; the live 5433 instance
+and its data untouched, verified after), scratch directory, server on
+port 8901 with `--no-tunnel`:
+
+1. `invincible setup` (in-process, real wizard code) — ✅ wrote a
+   clean `.env`: secrets auto-generated, DSN accepted, credential key
+   generated with a clear backup warning.
+2. `invincible db upgrade` — ✅ migrated to revision `0008` cleanly.
+3. `invincible start` — ✅ server up; `/health` OK; anonymous browser
+   hit on `/dashboard` correctly 302'd to `/login?next=/dashboard`
+   (the 3b fix working in the real app, first time observed live).
+4. Registered the first account → ✅ bootstrapped to **operator**
+   (verified in the DB), dashboard rendered with correct empty-state
+   count cards.
+5. OAuth dynamic registration → PKCE authorize → consent as operator
+   → code → token exchange — ✅ full flow, refresh token issued.
+6. MCP over the wire — ✅ `tools/list` (7 tools), `read_file` call,
+   and the staged `write_file` → `confirm_action` approval path wrote
+   the file.
+7. Chat completion — ✅ HTTP 200 via `agentrouter-glm`.
+
+### Findings (rough edges the tests couldn't catch)
+
+| # | Finding | Severity |
+|---|---|---|
+| R1 | **`setup` cannot be piped/scripted on Windows** — click's hidden prompts use `getpass`, which reads the Windows *console* (msvcrt) and ignores piped stdin; the wizard hangs silently after the first answer. Fine for a human at a terminal; blocks automation/CI/smoke-scripts. | Medium (blocks #2's installer ambitions) |
+| R2 | **The DSN prompt accepts any URL without validating connectivity** — a typo surfaces only later at `start`/`doctor`. One `SELECT 1` probe at prompt time would fix it. | Low |
+| R3 | **`GATEWAY_API_KEY` is generated silently** with no explanation that chat endpoints now REQUIRE it (the fail-open path only applies when unset). A first-time user who later pastes their `.env` elsewhere may be confused why their old curl no longer works. | Low |
+| R4 | **`dev-db` hardcodes port 5433** — two invincible installs on one machine collide; also collides with the documented dev convention. Needs a port-choice or auto-increment. | Low |
+| R5 | **Fresh install with ZERO provider keys still gets working chat** — the router called agentrouter.org with no key and got 200 (glm-5.3 answered). Pleasant out-of-box surprise, but undocumented and possibly unintended: no startup warning fired for the missing `AGENTROUTER_API_KEY`. Worth verifying intent and documenting either way. | Info / verify |
+| R6 | The rehearsal itself had no scripted harness — driving it required a bespoke in-process driver. A tiny `tests/test_fresh_install.py` (scratch DB → upgrade → TestClient boot) would pin the journey CI-green permanently. | Medium (turns rehearsal into regression armor) |
+
+**Evidence for #2 (distribution):** the Postgres barrier is real but
+*thinner than expected* — the wizard's `paste`/`dev-db` choices plus
+auto-secret generation mean the only genuinely hard step for a new
+user is "have a Postgres." Bundling portable Postgres (as this machine
+already does) would collapse the whole journey to: install → `setup`
+→ `start`. The Python-clone-venv gap remains the other half.
 
 ---
 
@@ -89,11 +122,13 @@ instances; future work.
 
 ## Recommended order
 
-1. ~~**#3a + #3b** (~1 hour) — prerequisites, trivially verified fixes.~~
-   **DONE 2026-08-31.**
-2. **#1 dress rehearsal** — fast, produces evidence. **← NEXT**
+1. ~~**#3a + #3b** — prerequisites.~~ **DONE 2026-08-31.**
+2. ~~**#1 dress rehearsal** — fast, produces evidence.~~ **DONE
+   2026-09-01** (findings R1–R6 above).
 3. **Decide #2** (distribution) with fresh eyes, informed by the
-   rehearsal.
+   rehearsal. **← NEXT** — the evidence says: bundle portable
+   Postgres + publish (PyPI or .exe), and fix R1 first because any
+   installer must script the wizard.
 4. **#4 housekeeping** whenever.
 
 ## Roadmap context (from ROADMAP.md)
