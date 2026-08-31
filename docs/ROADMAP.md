@@ -4,6 +4,9 @@ Where the project is, where it is going, and the status of every piece of
 work. This document supersedes the previous phase-numbered plan; that
 history is preserved in compressed form at the bottom.
 
+Active short-term work (verified findings + dress rehearsal + distribution
+decision) is tracked in [currentgoal.md](currentgoal.md).
+
 Status labels used throughout:
 
 | Label | Meaning |
@@ -109,6 +112,11 @@ Verified snapshot of shipped capability (file pointers in
 
 Honest limitations remaining:
 
+- `invincible start` opens the health-JSON root (`/`) in the browser
+  instead of the dashboard, and unauthenticated browser visits to
+  `/dashboard/*` get a raw JSON 401 rather than a login redirect (both
+  verified 2026-08-31; fixes are sequenced ahead of the fresh-install
+  dress rehearsal — see [currentgoal.md](currentgoal.md)).
 - Password RESET for forgotten passwords remains future work.
 - Device pairing stores one pending request per CLI start; there is no
   admin view of device history beyond audit rows.
