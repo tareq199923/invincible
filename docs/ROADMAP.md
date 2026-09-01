@@ -277,14 +277,17 @@ Remove hosted-mode fail-open paths; retire superseded local-era pieces
 ### Phase 9 — BYOK Provider Connections
 Per-user Bring-Your-Own-Key provider connections: encrypted credential
 storage, connect/list/test/remove API, per-user router candidate pool,
-and a dashboard Providers page. **Status: In progress.** PR-A (storage
+and a dashboard Providers page. **Status: Complete.** PR-A (storage
 & encryption primitive) landed the Fernet credential crypto,
 ``user_provider_credentials`` schema + migration ``0007``,
 ``INVINCIBLE_CREDENTIAL_KEY`` settings accessor, CLI
 ``secret credential-key``, and the startup fail-closed warning. PR-B
 landed the connect/list/test/remove API with the SSRF guard and audit
 rows; PR-C landed the per-user router candidate pool
-(``byok_attempt_source``). Remaining: dashboard Providers UI (PR-D).
+(``byok_attempt_source``). PR-D (`27bebf4`) landed the dashboard
+Providers UI: catalog connect cards with connected-state flip, custom
+provider form, HTMX test/remove with row delete, nav entry, and
+realm/fail-closed gates pinned by ``tests/test_dashboard_providers.py``.
 
 ---
 

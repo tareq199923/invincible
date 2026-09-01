@@ -41,14 +41,6 @@ app role, scram auth, fresh secrets):**
 **Out of scope here:** Phase 6 (CLI client mode / zero-database user
 setup) — separate code project, planned after.
 
-### 2. Phase 9 PR-D — dashboard Providers page
-
-The BYOK API is complete (connect/list/test/remove with SSRF guard +
-audit, per-user router candidate pool); only the UI is missing.
-This is also what makes the promise true that setup now makes —
-"configure providers later in the dashboard." Details in
-[ROADMAP.md](ROADMAP.md) §Phase 9.
-
 ---
 
 ## Decisions pending
@@ -78,6 +70,15 @@ Open decisions (multi-day project, fold into Phase 6/7 planning):
 
 ## Completed log (newest first)
 
+- **2026-09-01 — PR-D verified and closed: the dashboard Providers page
+  already shipped.** Commit `27bebf4` (Aug 30, "Phase 9 (4/4)") had
+  landed the full UI — catalog connect cards with connected-state flip,
+  custom provider form, HTMX test/remove with row delete, nav entry —
+  but the WORKQUEUE/ROADMAP still listed it as the remaining work.
+  Re-verified against the live 5433 dev PG: all 12
+  `tests/test_dashboard_providers.py` tests pass, the four other BYOK
+  suites pass (53 total), full suite 922 green, ruff clean. Phase 9 is
+  **Complete** in ROADMAP.md. No code changed — docs only.
 - **2026-09-01 — R5 FIXED: no provider key was ever keyless — it was a
   .env leak.** The rehearsal's "fresh install" answered chat because
   `main.py`'s module-level `load_dotenv()` resolved the `.env` by
