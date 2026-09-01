@@ -49,19 +49,6 @@ This is also what makes the promise true that setup now makes —
 "configure providers later in the dashboard." Details in
 [ROADMAP.md](ROADMAP.md) §Phase 9.
 
-### 3. R5 — zero provider keys still served chat (investigate, then decide)
-
-**Finding (rehearsal):** a fresh install with NO provider keys
-answered `/v1/chat/completions` with HTTP 200 via `agentrouter-glm`
-(no key configured, no startup warning fired).
-
-**Questions to answer:**
-- Does agentrouter.org serve keyless requests by design (free tier)?
-- Or did a key leak from the ambient environment during the rehearsal?
-
-**Then:** document as intended behavior, or add a startup warning /
-require the key. Do not change behavior before understanding it.
-
 ---
 
 ## Decisions pending
@@ -91,6 +78,21 @@ Open decisions (multi-day project, fold into Phase 6/7 planning):
 
 ## Completed log (newest first)
 
+- **2026-09-01 — R5 FIXED: no provider key was ever keyless — it was a
+  .env leak.** The rehearsal's "fresh install" answered chat because
+  `main.py`'s module-level `load_dotenv()` resolved the `.env` by
+  walking up from *the module's own directory* (python-dotenv's frame
+  walk), silently loading the developer's repo-root `.env` — provider
+  keys and all — into any process importing `invincible.main`, on any
+  source/editable install, regardless of launch directory. agentrouter
+  was simply serving a valid key the whole time. Fix:
+  `load_dotenv(find_dotenv(usecwd=True), override=False)` — direct
+  uvicorn launches from the project folder behave identically; launches
+  elsewhere no longer smuggle an unnamed `.env` in. Regression test in
+  `tests/test_env_isolation.py` runs the leak case as a real subprocess
+  script (the frame-walk only triggers when `__main__` has a `__file__`;
+  `python -c` never reproduces it) — verified it fails on the pre-fix
+  code. 922 tests green, ruff clean.
 - **2026-09-01 — R4 FIXED: `dev-db` no longer hardcodes port 5433.**
   Before starting a NEW Postgres (Docker), provisioning probe-and-
   increments to the first free port (raw TCP check — anything listening

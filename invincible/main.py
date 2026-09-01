@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -40,7 +40,14 @@ from invincible.endpoints.mcp import router as mcp_router
 from invincible.endpoints.oauth import router as oauth_router
 from invincible.endpoints.openai_compat import router as openai_router
 
-load_dotenv()
+# R5 (rehearsal): bare load_dotenv() resolves the .env by walking up from
+# THIS FILE's directory, not the working directory - so on a source/editable
+# install the developer's repo-root .env (provider keys, DB URL) silently
+# leaked into every process importing invincible.main, regardless of where
+# it was launched from. usecwd=True keeps the convenience for direct
+# `uvicorn invincible.main:app` launches (run from the project folder, the
+# documented place) while making the search location predictable: the cwd.
+load_dotenv(find_dotenv(usecwd=True), override=False)
 
 logging.basicConfig(level=logging.INFO)
 
