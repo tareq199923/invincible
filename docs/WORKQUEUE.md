@@ -5,41 +5,31 @@ priority order, with detail. Strategic context (phases, direction,
 what's implemented) lives in [ROADMAP.md](ROADMAP.md); completed items
 are logged at the bottom of this file.
 
-Last updated: 2026-09-01.
+Last updated: 2026-09-02.
 
 ---
 
 ## Open work — in fix order
 
-### 1. Phase 7 — deployment: move the live server off the dev PC
+### 1. Phase 7 wrap-up — domain cutover + host migration
 
-**Why now:** `invinseble-ai.me` currently runs from the developer's PC
-through a Cloudflare tunnel, with the database in a Temp-folder
-portable PG. That breaks two of Phase 7's own acceptance rules ("never
-a temp-directory or otherwise ephemeral cluster"; always-on) and means
-the public site dies whenever the PC sleeps/reboots. Users' chats and
-memories cannot live on a machine that turns off nightly.
+**The deployment is live** (2026-09-02): Neon Postgres (ap-southeast-1,
+least-privilege roles verified by probe) + the app on Railway's
+one-month trial at
+`invincible-gateway-production.up.railway.app`; fresh-start database,
+full acceptance journey smoke-tested (chat round-trip included).
+Details in [ROADMAP.md](ROADMAP.md) §Phase 7. Remaining:
 
-**The move (mostly ops, one weekend — see ROADMAP.md §Phase 7 for the
-full acceptance criteria: managed Postgres with backups, non-superuser
-app role, scram auth, fresh secrets):**
-- Provision Neon PostgreSQL (or equivalent managed Postgres); keep the
-  backup story.
-- Provision an always-on host (Railway per the roadmap; any small VPS
-  works) and run `inv setup --db-url <DSN>` → `inv db upgrade` →
-  `inv start` there. R2 (shipped) now catches a typo'd DSN at setup
-  time.
-- Point `invinseble-ai.me` at the host. Decision to make: keep the
-  Cloudflare tunnel from the host, or use a plain public origin —
-  a tunnel adds a moving part for no benefit on a host with a public
-  origin.
-- Migrate any data worth keeping off the Temp-folder dev PG, then
-  retire it (also resolves the Housekeeping item below).
-- Do NOT rotate `INVINCIBLE_CREDENTIAL_KEY` in the move: it would
-  orphan every stored BYOK credential.
-
-**Out of scope here:** Phase 6 (CLI client mode / zero-database user
-setup) — separate code project, planned after.
+- **Domain cutover:** Cloudflare CNAME for `invinseble-ai.me` →
+  the Railway URL (proxied). The old PC tunnel is already dead.
+- **Host migration before the trial ends (~2026-10-02):** move the
+  container to Azure for Students (no card needed, $100 credit; a
+  reminder is set for 2026-09-25). The Neon DB is host-agnostic —
+  nothing changes there. Then update the DNS record to the new host.
+- The Temp-folder portable PG is now dev/test-only (it holds no live
+  data; live data lives on Neon). It stays for the local test suite;
+  moving it out of Temp before a disk cleanup eats it remains a nice-
+  to-have, no longer urgent.
 
 ---
 
@@ -70,6 +60,23 @@ Open decisions (multi-day project, fold into Phase 6/7 planning):
 
 ## Completed log (newest first)
 
+- **2026-09-02 — PHASE 7 DEPLOYED: the live server is off the dev PC.**
+  Host: Railway trial (`invincible-gateway-production.up.railway.app`,
+  `railway.json` = start command + `/health` healthcheck; `PORT=8000`
+  so the Dockerfile CMD's fixed port routes). Database: Neon
+  (ap-southeast-1, pooled DSN; `invincible_migrate` schema owner +
+  `invincible_app` CRUD-only role created from `01-roles.sh` adapted
+  for Neon — memberships needed `WITH SET OPTION` before ownership
+  could transfer; DDL-denial and wrong-password rejection verified by
+  direct probe). Fresh-start decision: the dev dataset (~2 accounts of
+  rehearsal traffic) was not worth migrating; first registration
+  bootstrapped the operator. All four acceptance criteria (a–d) pass;
+  journey smoke-tested live incl. a real chat round-trip. Two en-route
+  fixes: `?sslmode=require` is not a valid asyncpg URL param (removed;
+  Neon enforces TLS regardless), and Windows CRLF + quoted `.env`
+  values corrupted staged env vars (re-parsed with python-dotenv).
+  Remaining wrap-up tracked as the open item above (domain cutover,
+  Azure migration before the trial ends).
 - **2026-09-01 — PR-D verified and closed: the dashboard Providers page
   already shipped.** Commit `27bebf4` (Aug 30, "Phase 9 (4/4)") had
   landed the full UI — catalog connect cards with connected-state flip,

@@ -250,8 +250,22 @@ mode; PostgreSQL/Alembic/tunnel/OAuth details hidden from ordinary users.
 *(Planned)*
 
 ### Phase 7 — Deployment
-Neon PostgreSQL + Railway hosting, health checks, connection-pooler
-handling; domain invincible-ai.me. *(Planned)*
+**Status: Deployed 2026-09-02 — one month free trial; host migration
+pending.** Neon PostgreSQL (ap-southeast-1, autosuspend + pooled DSN,
+role split per the acceptance criteria below, all verified by direct
+probe) + the app containerized on Railway
+(`invincible-gateway-production.up.railway.app`, `railway.json` start
+command + `/health` healthcheck). Fresh-start database: no dev data
+migrated (the live dataset was ~2 accounts of rehearsal traffic);
+first registration bootstrapped the operator. Full acceptance journey
+smoke-tested live: health, register→operator, login, dashboard,
+Providers page, and a real chat round-trip through the provider pool.
+Railway is a **one-month trial ending ~2026-10-02**; the planned
+follow-up host is Azure for Students (no card required, $100 credit).
+Domain `invinseble-ai.me` cutover (Cloudflare CNAME → host) pending.
+Dockerfile note: its default CMD runs migrations with the app DSN —
+on Railway the `?sslmode=require` URL param must stay out of the
+asyncpg DSN (migrations no-op at head anyway).
 
 Deployment acceptance criteria (explicit; permission model detailed in
 [SECURITY.md](SECURITY.md) §8):
