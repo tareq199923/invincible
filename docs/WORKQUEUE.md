@@ -11,17 +11,16 @@ Last updated: 2026-09-02.
 
 ## Open work — in fix order
 
-### 1. Phase 7 wrap-up — domain cutover + host migration
+### 1. Phase 7 wrap-up — host migration before the trial ends
 
-**The deployment is live** (2026-09-02): Neon Postgres (ap-southeast-1,
-least-privilege roles verified by probe) + the app on Railway's
-one-month trial at
-`invincible-gateway-production.up.railway.app`; fresh-start database,
-full acceptance journey smoke-tested (chat round-trip included).
-Details in [ROADMAP.md](ROADMAP.md) §Phase 7. Remaining:
+**The deployment is live and on its own domain** (2026-09-02): Neon
+Postgres (ap-southeast-1, least-privilege roles verified by probe) +
+the app on Railway's one-month trial, serving
+`invincible-ai.me` (Cloudflare CNAME → Railway, DNS-only; verified
+end-to-end including a chat round-trip). Fresh-start database; full
+acceptance journey smoke-tested. Details in
+[ROADMAP.md](ROADMAP.md) §Phase 7. Remaining:
 
-- **Domain cutover:** Cloudflare CNAME for `invinseble-ai.me` →
-  the Railway URL (proxied). The old PC tunnel is already dead.
 - **Host migration before the trial ends (~2026-10-02):** move the
   container to Azure for Students (no card needed, $100 credit; a
   reminder is set for 2026-09-25). The Neon DB is host-agnostic —
@@ -60,6 +59,16 @@ Open decisions (multi-day project, fold into Phase 6/7 planning):
 
 ## Completed log (newest first)
 
+- **2026-09-02 — DOMAIN LIVE: `invincible-ai.me` serves the app.**
+  Railway custom domain added on the service (port 8000), Cloudflare
+  CNAME `@` → the Railway host, DNS-only mode (Railway's Let's
+  Encrypt cert answers from its Singapore edge; flipping to proxied
+  later is optional and needs no Railway change). Verified end-to-end:
+  `/health`, dual-realm 401/302 behavior on `/dashboard`, and a real
+  chat round-trip through the domain. Along the way it surfaced that
+  `invinseble-ai.me` — the spelling these docs carried for weeks —
+  was never registered; a typo from the start. The real domain is
+  `invincible-ai.me` (both docs corrected).
 - **2026-09-02 — PHASE 7 DEPLOYED: the live server is off the dev PC.**
   Host: Railway trial (`invincible-gateway-production.up.railway.app`,
   `railway.json` = start command + `/health` healthcheck; `PORT=8000`
@@ -75,8 +84,8 @@ Open decisions (multi-day project, fold into Phase 6/7 planning):
   fixes: `?sslmode=require` is not a valid asyncpg URL param (removed;
   Neon enforces TLS regardless), and Windows CRLF + quoted `.env`
   values corrupted staged env vars (re-parsed with python-dotenv).
-  Remaining wrap-up tracked as the open item above (domain cutover,
-  Azure migration before the trial ends).
+  Remaining wrap-up tracked as the open item above (Azure migration
+  before the trial ends).
 - **2026-09-01 — PR-D verified and closed: the dashboard Providers page
   already shipped.** Commit `27bebf4` (Aug 30, "Phase 9 (4/4)") had
   landed the full UI — catalog connect cards with connected-state flip,

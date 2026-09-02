@@ -32,3 +32,5 @@ pytest_out*.log
 
 # AI session artifacts (planning notes) - never project material
 .zcode/
+.deploy/
+.claude/

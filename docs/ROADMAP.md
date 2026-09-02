@@ -262,7 +262,12 @@ smoke-tested live: health, register→operator, login, dashboard,
 Providers page, and a real chat round-trip through the provider pool.
 Railway is a **one-month trial ending ~2026-10-02**; the planned
 follow-up host is Azure for Students (no card required, $100 credit).
-Domain `invinseble-ai.me` cutover (Cloudflare CNAME → host) pending.
+Domain `invincible-ai.me` is live: Cloudflare CNAME → the Railway
+host (DNS-only mode; Railway serves a Let's Encrypt cert from its
+Singapore edge), verified end-to-end including a chat round-trip.
+Historical note: the docs carried the typo `invinseble-ai.me` for
+weeks — that domain was never registered; the real domain is
+`invincible-ai.me`.
 Dockerfile note: its default CMD runs migrations with the app DSN —
 on Railway the `?sslmode=require` URL param must stay out of the
 asyncpg DSN (migrations no-op at head anyway).
