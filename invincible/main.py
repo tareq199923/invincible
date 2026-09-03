@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 from dotenv import find_dotenv, load_dotenv
 from fastapi import Depends, FastAPI, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException

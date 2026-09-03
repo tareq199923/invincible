@@ -32,8 +32,8 @@ from invincible.core.accounts import (
 )
 from invincible.core.db import ROLE_OPERATOR
 from invincible.core.identity import ApiKeyStore, ensure_default_project
-from invincible.core.provider_registry import ProviderRegistryError
 from invincible.core.principal import Principal
+from invincible.core.provider_registry import ProviderRegistryError
 from invincible.endpoints.auth import extract_token
 
 logger = logging.getLogger(__name__)

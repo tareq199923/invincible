@@ -135,6 +135,7 @@ async def test_setup_page_unlocks_config_once_key_exists(
     client, monkeypatch
 ):
     from cryptography.fernet import Fernet
+
     import invincible.core.url_safety as url_safety
     from invincible.core.credential_store import ByokCredentialStore
 
