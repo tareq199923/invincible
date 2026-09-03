@@ -42,6 +42,19 @@ async def test_health_check(client):
     assert response.json() == {"status": "healthy"}
 
 
+async def test_root_serves_landing_page_to_browsers(client):
+    """Address-bar navigation (Accept: text/html) gets the marketing
+    page; the negotiation must never leak into API clients (above)."""
+    response = await client.get("/", headers={"Accept": "text/html"})
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    # Hero + CTA anchors render from the template, not a blank shell.
+    body = response.text
+    assert "One gateway" in body
+    assert 'href="/register"' in body
+    assert 'href="/login"' in body
+
+
 async def test_chat_completion_success(client, router_setter):
     alpha_body = provider_body("alpha")
     router_setter(

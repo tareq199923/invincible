@@ -5,8 +5,9 @@ from urllib.parse import quote
 
 from dotenv import find_dotenv, load_dotenv
 from fastapi import Depends, FastAPI, Request, Response
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from invincible import __version__
@@ -69,8 +70,9 @@ def _warn_if_gateway_open() -> None:
 
 def _warn_if_credential_key_unset() -> None:
     """BYOK provider connections refuse to run without INVINCIBLE_CREDENTIAL_KEY
-    (fail closed, same posture as INVINCIBLE_ADMIN_KEY). Surface that at
-    startup so operators notice before a user hits a 503 on /providers/mine."""
+    (fail closed, the same posture the management API keeps toward
+    INVINCIBLE_OWNER_SECRET). Surface that at startup so operators notice
+    before a user hits a 503 on /providers/mine."""
     if not settings.credential_key():
         logger.warning(
             "INVINCIBLE_CREDENTIAL_KEY is not set - BYOK provider connections "
@@ -207,7 +209,11 @@ app.mount(
                 / "templates" / "static"),
     name="static",
 )
-# Management surface carries its own fail-closed authz (INVINCIBLE_ADMIN_KEY).
+# Landing-page renderer (same pattern the account/dashboard routers use:
+# templates ship inside the package).
+templates = Jinja2Templates(
+    directory=str(Path(__file__).resolve().parent / "templates"))
+# Management surface carries its own fail-closed authz (operator realm).
 app.include_router(admin_router)
 app.include_router(graph_router)
 
@@ -223,7 +229,15 @@ async def mcp_head():
     return Response(status_code=200)
 
 @app.get("/")
-def health_check():
+async def root(request: Request):
+    """Content negotiation: address-bar browsers get the marketing
+    landing page; API clients (curl, SDKs, the pinned health test) keep
+    the JSON ``{"status": "healthy"}`` body. The negotiation predicate
+    matches the 401 redirect handler's: real browsers always list
+    text/html first in Accept."""
+    if "text/html" in request.headers.get("accept", ""):
+        return templates.TemplateResponse(
+            request, "landing.html", {})
     return {"status": "healthy"}
 
 @app.head("/")

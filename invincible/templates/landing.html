@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Invincible — One gateway. Every provider. Your AI agents.</title>
+  <meta name="description" content="A self-hosted AI gateway: tiered
+    provider failover for chat, MCP tool execution for agents, session
+    continuity and memory — behind your own login.">
+  <style>
+    :root {
+      --ink: #0e1116;
+      --muted: #5b6570;
+      --line: #e4e8ee;
+      --accent: #4f46e5;
+      --accent-ink: #3730a3;
+      --soft: #f6f7fb;
+      --ok: #12833f;
+      --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, sans-serif;
+      color: var(--ink); background: #fff; line-height: 1.55;
+    }
+    .wrap { max-width: 62rem; margin: 0 auto; padding: 0 1.25rem; }
+
+    /* top bar */
+    .topbar {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 1rem 0; border-bottom: 1px solid var(--line);
+    }
+    .logo { font-weight: 800; font-size: 1.15rem; letter-spacing: -0.02em;
+            text-decoration: none; color: var(--ink); }
+    .logo span { color: var(--accent); }
+    .topbar nav { display: flex; gap: 1.1rem; align-items: center; }
+    .topbar nav a { color: var(--muted); text-decoration: none;
+                    font-size: 0.95rem; }
+    .topbar nav a:hover { color: var(--ink); }
+    .topbar nav a.cta { color: #fff; background: var(--accent);
+                        padding: 0.45rem 0.95rem; border-radius: 6px;
+                        font-weight: 600; }
+    .topbar nav a.cta:hover { background: var(--accent-ink); }
+
+    /* hero */
+    .hero { padding: 4.5rem 0 3.5rem; text-align: center;
+            border-bottom: 1px solid var(--line); }
+    .hero h1 {
+      font-size: clamp(2.1rem, 5vw, 3.3rem); line-height: 1.12;
+      letter-spacing: -0.03em; margin: 0 0 1rem;
+    }
+    .hero h1 em { font-style: normal; color: var(--accent); }
+    .hero p.lead {
+      font-size: 1.2rem; color: var(--muted); max-width: 42rem;
+      margin: 0 auto 1.8rem;
+    }
+    .hero .actions { display: flex; gap: 0.9rem; justify-content: center;
+                     flex-wrap: wrap; }
+    .btn {
+      display: inline-block; text-decoration: none; font-weight: 600;
+      padding: 0.7rem 1.5rem; border-radius: 8px; font-size: 1rem;
+    }
+    .btn.primary { background: var(--accent); color: #fff; }
+    .btn.primary:hover { background: var(--accent-ink); }
+    .btn.ghost { border: 1px solid var(--line); color: var(--ink); }
+    .btn.ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* terminal window */
+    .terminal {
+      max-width: 34rem; margin: 2.5rem auto 0; background: var(--ink);
+      color: #d6deeb; border-radius: 10px; overflow: hidden;
+      box-shadow: 0 12px 40px rgba(14,17,22,0.25);
+      font-family: var(--mono); font-size: 0.85rem; text-align: left;
+    }
+    .terminal .bar {
+      display: flex; gap: 0.45rem; padding: 0.6rem 0.9rem;
+      background: #1c222b;
+    }
+    .terminal .bar i { width: 0.7rem; height: 0.7rem; border-radius: 50%;
+                       display: block; }
+    .terminal .bar i:nth-child(1) { background: #ff5f56; }
+    .terminal .bar i:nth-child(2) { background: #ffbd2e; }
+    .terminal .bar i:nth-child(3) { background: #27c93f; }
+    .terminal pre { margin: 0; padding: 1rem 1.1rem; line-height: 1.75;
+                    overflow-x: auto; }
+    .terminal .cmd { color: #7dcfff; }
+    .terminal .ok { color: #27c93f; }
+    .terminal .dim { color: #8b98a5; }
+
+    /* badges */
+    .badges { display: flex; gap: 0.6rem; justify-content: center;
+              flex-wrap: wrap; margin: 2.2rem 0 0; }
+    .badge {
+      border: 1px solid var(--line); border-radius: 999px;
+      padding: 0.3rem 0.9rem; font-size: 0.85rem; color: var(--muted);
+      background: var(--soft);
+    }
+
+    /* sections */
+    section { padding: 3.5rem 0; border-bottom: 1px solid var(--line); }
+    section.alt { background: var(--soft); }
+    h2 {
+      text-align: center; font-size: 1.75rem; letter-spacing: -0.02em;
+      margin: 0 0 0.6rem;
+    }
+    .sub { text-align: center; color: var(--muted); margin: 0 auto 2.2rem;
+           max-width: 38rem; }
+
+    /* how it works steps */
+    .steps { display: grid; gap: 1.2rem;
+             grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); }
+    .step { border: 1px solid var(--line); border-radius: 10px;
+            padding: 1.4rem 1.5rem; background: #fff; }
+    .step .num {
+      display: inline-block; width: 1.9rem; height: 1.9rem;
+      border-radius: 50%; background: var(--accent); color: #fff;
+      text-align: center; line-height: 1.9rem; font-weight: 700;
+      font-size: 0.9rem; margin-bottom: 0.7rem;
+    }
+    .step h3 { margin: 0 0 0.4rem; font-size: 1.05rem; }
+    .step p { margin: 0 0 0.8rem; color: var(--muted); font-size: 0.93rem; }
+    .step code {
+      display: block; background: var(--ink); color: #d6deeb;
+      border-radius: 6px; padding: 0.55rem 0.8rem; font-family: var(--mono);
+      font-size: 0.8rem; overflow-x: auto; white-space: nowrap;
+    }
+    .step .note { font-size: 0.82rem; color: var(--muted); margin: 0.6rem
+                  0 0; font-style: italic; }
+
+    /* architecture diagram */
+    .arch { display: flex; align-items: center; justify-content: center;
+            gap: 0; flex-wrap: wrap; margin: 1.5rem 0 1rem; }
+    .arch .node {
+      border: 1px solid var(--line); border-radius: 10px; padding: 1rem
+      1.3rem; text-align: center; background: #fff; min-width: 9rem;
+    }
+    .arch .node strong { display: block; font-size: 0.95rem; }
+    .arch .node small { color: var(--muted); font-size: 0.78rem;
+                        display: block; margin-top: 0.15rem; }
+    .arch .arrow {
+      color: var(--accent); font-weight: 700; padding: 0 0.7rem;
+      font-size: 1.1rem; white-space: nowrap;
+    }
+    .arch .arrow small { display: block; color: var(--muted);
+                         font-size: 0.72rem; font-weight: 400; }
+    .arch-note { text-align: center; color: var(--muted);
+                 font-size: 0.88rem; max-width: 40rem; margin: 0 auto; }
+
+    /* features grid */
+    .features { display: grid; gap: 1.2rem;
+                grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); }
+    .feature { padding: 1.2rem 1.3rem; border: 1px solid var(--line);
+               border-radius: 10px; background: #fff; }
+    .feature h3 { margin: 0 0 0.4rem; font-size: 1rem; }
+    .feature p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+    /* footer */
+    footer { padding: 2.5rem 0 3rem; color: var(--muted);
+             font-size: 0.88rem; }
+    footer .wrap { display: flex; justify-content: space-between;
+                   flex-wrap: wrap; gap: 1rem; }
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--ink); }
+    .live-dot { display: inline-block; width: 0.5rem; height: 0.5rem;
+                border-radius: 50%; background: var(--ok);
+                margin-right: 0.35rem; vertical-align: middle; }
+
+    @media (max-width: 40rem) {
+      .hero { padding: 3rem 0 2.5rem; }
+      section { padding: 2.5rem 0; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="topbar">
+    <a class="logo" href="/">Invincible<span>.</span></a>
+    <nav>
+      <a href="#how">How it works</a>
+      <a href="#architecture">Architecture</a>
+      <a href="/login">Sign in</a>
+      <a class="cta" href="/register">Get started</a>
+    </nav>
+  </header>
+</div>
+
+<section class="hero">
+  <div class="wrap">
+    <h1>One gateway.<br>Every provider. <em>Your rules.</em></h1>
+    <p class="lead">
+      Invincible sits between your AI clients and your providers — routing
+      chat across a tiered failover chain, executing agent tools under
+      per-client approval, and remembering context across sessions.
+    </p>
+    <div class="actions">
+      <a class="btn primary" href="/register">Get started</a>
+      <a class="btn ghost" href="#how">See how it works</a>
+    </div>
+
+    <div class="terminal">
+      <div class="bar"><i></i><i></i><i></i></div>
+      <pre><span class="dim">$</span> <span class="cmd">pip install invincible &amp;&amp; invincible start</span>
+<span class="ok">✓</span> Gateway listening on :8000
+<span class="ok">✓</span> Providers loaded: 5 (tiered failover armed)
+<span class="ok">✓</span> MCP tool server ready at /mcp
+<span class="dim">→</span> Point any OpenAI-compatible client at
+   <span class="cmd">http://localhost:8000/v1</span></pre>
+    </div>
+
+    <div class="badges">
+      <span class="badge">OpenAI-compatible</span>
+      <span class="badge">Anthropic Messages API</span>
+      <span class="badge">MCP-native</span>
+      <span class="badge">Self-hosted</span>
+      <span class="badge">Your database, your keys</span>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2>Running in under two minutes</h2>
+    <p class="sub">
+      From install to AI-ready with zero cloud lock-in. The first account
+      you register becomes the operator — no extra setup.
+    </p>
+    <div class="steps">
+      <div class="step">
+        <span class="num">1</span>
+        <h3>Install &amp; start</h3>
+        <p>One pip install, one command. Works on macOS, Linux, Windows.</p>
+        <code>pip install invincible<br>invincible start</code>
+      </div>
+      <div class="step">
+        <span class="num">2</span>
+        <h3>Register</h3>
+        <p>Create the first account — you become the operator
+           automatically, and the dashboard opens up.</p>
+        <code>→ /register in your browser</code>
+        <p class="note">The first registration owns the gateway.</p>
+      </div>
+      <div class="step">
+        <span class="num">3</span>
+        <h3>Connect your clients</h3>
+        <p>Point any OpenAI-compatible or Anthropic-native client at the
+           gateway. Approve MCP clients one by one from the dashboard.</p>
+        <code>base_url: http://localhost:8000/v1<br>api_key:  &lt;your key&gt;</code>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="architecture" class="alt">
+  <div class="wrap">
+    <h2>Secure by design</h2>
+    <p class="sub">
+      Every surface carries its own realm — a chat key can only spend
+      credits, a tool client can only run what you approved, and the
+      dashboard answers only to your login.
+    </p>
+    <div class="arch">
+      <div class="node">
+        <strong>AI Client</strong>
+        <small>Claude Code, scripts, apps</small>
+      </div>
+      <div class="arrow">
+        →<small>chat: /v1/*</small>
+      </div>
+      <div class="node">
+        <strong>Invincible</strong>
+        <small>failover · tools · memory</small>
+      </div>
+      <div class="arrow">
+        →<small>per-tier</small>
+      </div>
+      <div class="node">
+        <strong>Providers</strong>
+        <small>OpenRouter · Groq · Gemini…</small>
+      </div>
+    </div>
+    <p class="arch-note">
+      A rate-limited free tier no longer kills an agent's workflow:
+      requests fail over down the chain automatically. MCP tool clients
+      pair through an owner-consent OAuth flow — every client is
+      individually revocable. Chat credentials can never touch
+      management surfaces.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Everything an agent workflow needs</h2>
+    <p class="sub">One process, one database — no external services.</p>
+    <div class="features">
+      <div class="feature">
+        <h3>Tiered failover</h3>
+        <p>Requests cascade across providers on 429s and errors — pick the
+           cheapest tier that's alive, automatically.</p>
+      </div>
+      <div class="feature">
+        <h3>MCP tool execution</h3>
+        <p>read_file, write_file, execute_bash — behind per-client OAuth
+           tokens and a denylist + approval safety net.</p>
+      </div>
+      <div class="feature">
+        <h3>Session continuity</h3>
+        <p>Task state, checkpoints, and failover history persist per
+           session — agents resume where they left off.</p>
+      </div>
+      <div class="feature">
+        <h3>Scoped memory</h3>
+        <p>Each user's memories inject into their own prompts only —
+           budget-capped, provenance-tracked.</p>
+      </div>
+      <div class="feature">
+        <h3>Provider management</h3>
+        <p>Add, disable, and test providers at runtime; route auto,
+           pinned, or chained — no restarts.</p>
+      </div>
+      <div class="feature">
+        <h3>Usage analytics</h3>
+        <p>Per-provider attempts, failovers, token spend, and latency —
+           visible in the dashboard, recorded per run.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <span class="live-dot"></span>Invincible — self-hosted AI gateway
+    </div>
+    <div>
+      <a href="/login">Sign in</a> ·
+      <a href="/register">Register</a> ·
+      <a href="/health">Status</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
