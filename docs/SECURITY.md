@@ -577,8 +577,15 @@ sandbox:
     report that email as verified AND primary. A second GitHub identity
     reusing the same verified email is rejected (`identity_conflict`) rather
     than attached. Password-less accounts created through GitHub can adopt
-    a first password from Dashboard settings (Phase 5); a forgotten-password
-    RESET flow still does not exist.
+    a first password from Dashboard settings (Phase 5); a forgotten
+    password is reset by the operator:
+    `invincible users reset-password <email>` (audited as
+    `auth.password_reset`). There is deliberately no email-based
+    self-service reset - a self-hosted gateway has no mail
+    infrastructure, and database access is the operator's proof of
+    authority. The reset bumps `session_version`, so every existing
+    browser cookie dies with the old password; `inv_` keys and MCP
+    tokens are untouched (separate realms).
 14. **Password change invalidates browser sessions — and only browser
     sessions.** `/auth/password` bumps `users.session_version` in the
     same UPDATE as the argon2id hash, `v2` session cookies embed the
@@ -608,8 +615,7 @@ sandbox:
     decryption with a caught, user-visible "re-connect the provider"
     error — never plaintext, never a crash). Recovery is manual:
     re-connect each provider under the new key. See also the dashboard
-    Providers page and limit 13's framing of the (also absent) password
-    reset flow.
+    Providers page and limit 13's operator-side password reset.
 
 ---
 

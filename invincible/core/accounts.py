@@ -241,6 +241,28 @@ class UserService:
             )
         return {"id": user_id}
 
+    async def reset_password(self, user_id: int, new_password: str) -> dict:
+        """Operator-side password replacement (the CLI recovery path).
+
+        No current-password proof: the caller's authority is database
+        access, not account knowledge. Works for both password-holding
+        and password-less (GitHub-only) accounts. The session_version
+        bump rides in the same UPDATE as the new hash - there is no
+        window where a new password coexists with old-version cookies.
+        """
+        new_password = validate_password(new_password)
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(users)
+                .where(users.c.id == user_id)
+                .values(password_hash=hash_password(new_password),
+                        session_version=users.c.session_version + 1)
+            )
+        if not result.rowcount:
+            raise AccountError(
+                "not_found", "No such user.", status_code=404)
+        return {"id": user_id}
+
     async def set_role(self, user_id: int, role: str) -> dict:
         """Set the account role (ROLE_USER | ROLE_OPERATOR). The OAuth
         consent gate reads it: only operators may approve clients. The

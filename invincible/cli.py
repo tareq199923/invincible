@@ -1568,6 +1568,64 @@ def users_demote(email):
     _set_role(email, "user", "demoted to user", "auth.user_demoted")
 
 
+@users.command("reset-password")
+@click.argument("email")
+@click.option("--generate", is_flag=True,
+              help="Generate a strong password instead of prompting "
+                   "(printed once, never stored).")
+def users_reset_password(email, generate):
+    """Reset an account's password (operator recovery path).
+
+    A self-hosted gateway has no email infrastructure: the operator IS
+    the recovery mechanism, and database access is the proof of
+    authority. Prompts for the new password (hidden, confirmed) or
+    generates one with --generate. Every existing browser session is
+    signed out with the old password; inv_ keys and MCP tokens are
+    untouched (separate realms).
+    """
+    if generate:
+        new_password = secrets.token_urlsafe(12)
+    else:
+        new_password = click.prompt("New password", hide_input=True,
+                                    confirmation_prompt=True)
+
+    url = _resolve_db_url()
+    engine = make_engine(url)
+
+    async def _run():
+        try:
+            from invincible.core.accounts import AccountError, UserService
+
+            service = UserService(engine)
+            user = await service.get_by_email(email)
+            if user is None:
+                return None, f"No account with email {email!r}."
+            await service.reset_password(user["id"], new_password)
+            await _AuditLog(engine).record(
+                "auth.password_reset",
+                actor_user_id=user["id"],
+                actor_kind="system",
+                resource_type="user",
+                resource_id=str(user["id"]),
+                meta={"email": user["email"]},
+            )
+            return user, None
+        except AccountError as exc:
+            return None, exc.message
+        finally:
+            await engine.dispose()
+
+    user, error = run_coro_sync(_run())
+    if error is not None:
+        raise click.ClickException(error)
+    if user is None:
+        raise click.ClickException(f"No account with email {email!r}.")
+    click.echo(f"Password reset for {user['email']}. All browser "
+               f"sessions were signed out.")
+    if generate:
+        click.echo(f"New password (shown once): {new_password}")
+
+
 def _set_role(email: str, role: str, action_text: str,
               audit_action: str) -> None:
     url = _resolve_db_url()
