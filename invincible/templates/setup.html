@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Get started - Invincible{% endblock %}
+{% block content %}
+<style>
+  .setup-steps { display: flex; flex-direction: column; gap: 1.2rem; }
+  .setup-step {
+    border: 1px solid #ddd; border-radius: 8px; padding: 1.1rem 1.3rem;
+  }
+  .setup-step.done { border-color: #2da44e; background: #f6fef8; }
+  .setup-step .step-head { display: flex; align-items: center; gap: 0.6rem; }
+  .setup-step .step-mark {
+    width: 1.7rem; height: 1.7rem; border-radius: 50%;
+    background: #0366d6; color: #fff; text-align: center;
+    line-height: 1.7rem; font-weight: 700; flex-shrink: 0;
+  }
+  .setup-step.done .step-mark { background: #2da44e; }
+  .setup-step h3 { margin: 0; }
+  .setup-step .step-state { margin-left: auto; font-size: 0.85rem; }
+  .setup-step .step-state.done { color: #1a7f37; font-weight: 600; }
+  .setup-step .step-state.todo { color: #9a6700; }
+  .config-block {
+    position: relative; background: #0e1116; color: #d6deeb;
+    border-radius: 6px; padding: 0.9rem 1rem; margin: 0.6rem 0 0.4rem;
+    font-family: ui-monospace, Consolas, monospace; font-size: 0.82rem;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .copy-btn {
+    position: absolute; top: 0.5rem; right: 0.5rem;
+    background: #262d38; color: #d6deeb; border: 1px solid #3a4452;
+    border-radius: 4px; padding: 0.2rem 0.6rem; cursor: pointer;
+    font-size: 0.78rem;
+  }
+  .copy-btn:hover { background: #3a4452; }
+  .client-tab-note { font-size: 0.85rem; color: #666; margin: 0.9rem 0 0.2rem; }
+  .setup-complete {
+    border: 1px solid #2da44e; background: #f6fef8; border-radius: 8px;
+    padding: 1rem 1.3rem; margin-bottom: 1.2rem;
+  }
+</style>
+
+<h2>Get started</h2>
+<p class="muted">Two steps and your AI clients are running through
+<strong>{{ base_url }}</strong>.</p>
+
+{% if has_provider and has_key %}
+<div class="setup-complete">
+  <strong>You're all set. 🎉</strong> Chat requests with your key route
+  through your connected providers. The MCP tools connect separately from
+  your AI client and approve in the browser.
+</div>
+{% endif %}
+
+<div class="setup-steps">
+
+  {# ------------------------------------------------------------------ #}
+  <div class="setup-step{% if has_provider %} done{% endif %}">
+    <div class="step-head">
+      <span class="step-mark">{% if has_provider %}✓{% else %}1{% endif %}</span>
+      <h3>Connect a provider</h3>
+      <span class="step-state {% if has_provider %}done{% else %}todo{% endif %}">
+        {% if has_provider %}Connected{% else %}Not done yet{% endif %}
+      </span>
+    </div>
+    <p class="muted">Your key routes only through providers
+       <strong>you</strong> connect — your account, your billing. Pick one
+       to start (you can add more later):</p>
+    <ul class="plain">
+      {% for c in catalog_keys %}
+      <li><a href="/dashboard/providers">{{ c.label }}</a></li>
+      {% endfor %}
+      <li><a href="/dashboard/providers">Custom provider…</a></li>
+    </ul>
+    <p><a href="/dashboard/providers"><strong>Go to Providers →</strong></a></p>
+  </div>
+
+  {# ------------------------------------------------------------------ #}
+  <div class="setup-step{% if has_key %} done{% endif %}">
+    <div class="step-head">
+      <span class="step-mark">{% if has_key %}✓{% else %}2{% endif %}</span>
+      <h3>Create your API key</h3>
+      <span class="step-state {% if has_key %}done{% else %}todo{% endif %}">
+        {% if has_key %}Key exists ({{ api_key_prefix }}…){% else %}Not done yet{% endif %}
+      </span>
+    </div>
+    <p class="muted">One personal key, pasted into your AI client's
+       config. Shown once — revoke and re-mint anytime.</p>
+    <p><a href="/account"><strong>Go to Account → create a key</strong></a></p>
+  </div>
+
+  {# ------------------------------------------------------------------ #}
+  <div class="setup-step{% if has_provider and has_key %} done{% endif %}">
+    <div class="step-head">
+      <span class="step-mark">{% if has_provider and has_key %}✓{% else %}3{% endif %}</span>
+      <h3>Point your AI client at the gateway</h3>
+      <span class="step-state {% if has_provider and has_key %}done{% else %}todo{% endif %}">
+        {% if has_provider and has_key %}Ready to paste{% else %}Complete steps 1–2 first{% endif %}
+      </span>
+    </div>
+
+    {% if has_key %}
+    <p class="client-tab-note"><strong>Claude Code</strong> — shell profile
+       (<code>~/.bashrc</code>, <code>~/.zshrc</code>) or session:</p>
+    <div class="config-block" id="claude-config">export ANTHROPIC_BASE_URL="{{ base_url }}"
+export ANTHROPIC_AUTH_TOKEN="&lt;your inv_ key from Account&gt;"<button class="copy-btn" type="button"
+  onclick="navigator.clipboard.writeText(document.getElementById('claude-config').innerText.replace(/^.*\\n/, ''))">Copy</button></div>
+
+    <p class="client-tab-note"><strong>Codex / OpenAI SDK</strong> — config
+       or environment:</p>
+    <div class="config-block" id="openai-config">OPENAI_BASE_URL={{ base_url }}/v1
+OPENAI_API_KEY=&lt;your inv_ key from Account&gt;<button class="copy-btn" type="button"
+  onclick="navigator.clipboard.writeText(document.getElementById('openai-config').innerText.replace(/^.*\\n/, ''))">Copy</button></div>
+
+    <p class="muted">MCP tools connect separately: add
+       <code>{{ base_url }}/mcp</code> in your client's MCP settings and
+       approve it in the browser when prompted.</p>
+    {% else %}
+    <p class="muted">The exact copy-paste config appears here once your
+       key exists.</p>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock content %}

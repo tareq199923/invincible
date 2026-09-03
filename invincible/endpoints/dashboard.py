@@ -113,6 +113,14 @@ async def overview_page(
     usage = _usage_totals(
         await _state(request, "runs").usage_summary(principal.user_id,
                                                     days=7))
+    active_keys = sum(1 for k in keys if k["revoked_at"] is None)
+    # First-run signpost: chat can only succeed once BOTH a provider is
+    # connected AND a key exists (BYOK-only - the operator pool is never
+    # a fallback), so the banner stays until the pair is complete.
+    from invincible.core.credential_store import ByokCredentialStore
+
+    has_provider = bool(
+        await ByokCredentialStore(engine).list_for_user(principal.user_id))
     return _page(
         "dashboard.html", request,
         user_email=email,
@@ -120,11 +128,12 @@ async def overview_page(
             "projects": len(projects),
             "sessions":
                 await sessions_store.count_for_user(principal.user_id),
-            "api_keys": sum(1 for k in keys if k["revoked_at"] is None),
+            "api_keys": active_keys,
             "tasks": len(task_heads),
             "memories": memories_total,
             "usage_7d": usage["input_tokens"] + usage["output_tokens"],
         },
+        needs_setup=not (has_provider and active_keys > 0),
         recent_sessions=recent_sessions,
     )
 
@@ -472,7 +481,6 @@ async def settings_page(
         routing_mode = str((registry.routing() or {}).get("mode") or "")
     flags = [
         ("Gateway key set", bool(settings.gateway_api_key())),
-        ("Admin key set", bool(settings.admin_key())),
         ("Browser sessions", SessionManager.available()),
         ("GitHub login", bool(settings.github_client_id())),
         ("Memory writes", settings.memory_enabled()),
@@ -491,6 +499,50 @@ async def settings_page(
         routing_mode=routing_mode,
         flags=flags,
     )
+
+
+# ---------------------------------------------------------------------------
+# Guided setup (Omniroute-style onboarding): connect a provider, mint a
+# key, copy the client config. Two keys total - this page is the signpost
+# connecting the machinery that already exists.
+
+
+@router.get("/dashboard/setup")
+async def setup_page(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    engine = _engine(request)
+    from invincible.core.credential_store import ByokCredentialStore
+
+    provider_rows = await ByokCredentialStore(engine).list_for_user(
+        principal.user_id)
+    keys = await ApiKeyStore(engine).list(principal.user_id)
+    active_keys = [k for k in keys if k["revoked_at"] is None]
+    # The one-time raw key display rides the query string no-where; the
+    # account page's create flow already shows it once. Here we only
+    # answer "does a key exist".
+    base_url = str(request.base_url).rstrip("/")
+    return _page(
+        "setup.html", request,
+        user_email=await _email(engine, principal),
+        has_provider=bool(provider_rows),
+        has_key=bool(active_keys),
+        api_key_prefix=(active_keys[0]["prefix"] if active_keys else None),
+        base_url=base_url,
+        catalog_keys=[
+            {"key": key, "label": entry["label"]}
+            for key, entry in sorted(
+                _provider_catalog_items(), key=lambda kv: kv[1]["label"])
+        ],
+        new_key=request.query_params.get("new_key"),
+    )
+
+
+def _provider_catalog_items():
+    from invincible.core.provider_catalog import CATALOG
+
+    return CATALOG.items()
 
 
 # ---------------------------------------------------------------------------

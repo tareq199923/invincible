@@ -108,3 +108,68 @@ async def test_recent_sessions_cap_at_ten(client):
     page = await client.get("/dashboard")
     assert card_count(page.text, "sessions") == 12
     assert page.text.count("client-session-row") == 10
+
+
+# --- guided setup (Omniroute-style onboarding) ---------------------------------
+
+
+async def test_setup_page_requires_session(client):
+    anon = await client.get("/dashboard/setup")
+    assert anon.status_code == 401
+
+
+async def test_setup_page_shows_both_steps_pending(client):
+    await register_account(client, "fresh@example.com")
+    page = await client.get("/dashboard/setup")
+    assert page.status_code == 200
+    assert "Connect a provider" in page.text
+    assert "Create your API key" in page.text
+    # No key yet -> the copy-paste config block is withheld.
+    assert "ANTHROPIC_BASE_URL" not in page.text
+    # The dashboard carries the matching first-run signpost.
+    overview = await client.get("/dashboard")
+    assert "You're 2 steps away" in overview.text
+
+
+async def test_setup_page_unlocks_config_once_key_exists(
+    client, monkeypatch
+):
+    from cryptography.fernet import Fernet
+    import invincible.core.url_safety as url_safety
+    from invincible.core.credential_store import ByokCredentialStore
+
+    monkeypatch.setenv(
+        "INVINCIBLE_CREDENTIAL_KEY",
+        Fernet.generate_key().decode("ascii"))
+    monkeypatch.setattr(
+        url_safety, "_default_resolve", lambda host: ["93.184.216.34"])
+
+    made, _ = await register_account(client, "ready@example.com")
+    uid = made.json()["id"]
+    await ByokCredentialStore(app.state.engine).create(
+        user_id=uid, provider_name="Test Pool",
+        model_id="alpha-model",
+        base_url="https://alpha.example.com/v1",
+        api_key="user-key")
+
+    key = (await client.post("/api-keys", json={"label": "setup"})).json()
+    page = await client.get("/dashboard/setup")
+    assert page.status_code == 200
+    # Both steps done -> config blocks render, completion banner shows.
+    assert "You're all set" in page.text
+    assert "ANTHROPIC_BASE_URL" in page.text
+    assert "OPENAI_BASE_URL" in page.text
+    assert "/mcp" in page.text
+    # The RAW key never renders on this page - only Account shows it once.
+    assert key["raw"] not in page.text
+    # And the dashboard signpost is gone once setup is complete.
+    overview = await client.get("/dashboard")
+    assert "You're 2 steps away" not in overview.text
+
+
+async def test_setup_signpost_clears_with_key_only(client):
+    """A key without a provider still cannot chat - the signpost stays."""
+    await register_account(client, "half@example.com")
+    await client.post("/api-keys", json={"label": "only-key"})
+    overview = await client.get("/dashboard")
+    assert "You're 2 steps away" in overview.text

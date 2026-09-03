@@ -4,6 +4,14 @@
 <h2>Dashboard</h2>
 <p class="muted">Overview for <strong>{{ user_email }}</strong></p>
 
+{% if needs_setup %}
+<div class="banner">
+  <strong>You're 2 steps away from your first chat.</strong><br>
+  <a href="/dashboard/setup">Set up your gateway →</a>
+  <span class="muted">(connect a provider, create your API key)</span>
+</div>
+{% endif %}
+
 <div class="cards">
   <div class="card" data-card="projects"><span class="num">{{ counts.projects }}</span><span class="label">Projects</span></div>
   <div class="card" data-card="sessions"><span class="num">{{ counts.sessions }}</span><span class="label">Sessions</span></div>
