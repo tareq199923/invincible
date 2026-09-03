@@ -63,7 +63,7 @@ Fixture semantics (`tests/conftest.py`):
 | `endpoints/mcp.py` | `POST /mcp` JSON-RPC 2.0 tool server (OAuth-bearer protected) |
 | `endpoints/oauth.py` | Built-in OAuth 2.1 + PKCE authorization server (owner-consent browser flow) |
 | `endpoints/accounts.py` | `/auth/*`, `/projects`, `/api-keys`, `/sessions`, device pairing, GitHub login (session realm) |
-| `endpoints/admin_api.py` | `/api/v1/*` management surface (fail-closed `INVINCIBLE_ADMIN_KEY`) |
+| `endpoints/admin_api.py` | `/api/v1/*` management surface (fail-closed operator realm) |
 | `endpoints/graph.py` | `GET /api/v1/sessions/{id}/graph` continuity projection |
 | `core/router.py` | THE single tiered-failover loop (`_iter_attempts`); run recording |
 | `core/provider_health.py` | Failure counts + exponential cooldowns (in-memory) |
@@ -114,8 +114,10 @@ Fixture semantics (`tests/conftest.py`):
 6. **Auth realms are separate by design:**
    - `GATEWAY_API_KEY` guards `/v1/*` (timing-safe compare; FAILS OPEN when
      unset — there is a loud startup warning).
-   - `INVINCIBLE_ADMIN_KEY` guards `/api/v1/*` management/graph surface
-     (fails CLOSED).
+   - `/api/v1/*` management/graph surface authenticates through the
+     operator account realm (operator-role session cookie or the
+     operator's own `inv_` API key; fails CLOSED without
+     `INVINCIBLE_OWNER_SECRET`).
    - `/mcp` uses OAuth bearer tokens (hashed at rest, revocable via CLI).
    Do not merge realms or flip fail-open/fail-closed semantics casually.
 7. **Secrets discipline:** secrets are never logged or echoed; DSNs are

@@ -4,24 +4,37 @@ routing-mode control (Phase 13.5).
 
 Authz model - decided explicitly:
 
-- The surface is **fail-closed**: when INVINCIBLE_ADMIN_KEY is unset every
-  route answers 503, so a default deployment exposes nothing manageable.
-- The admin key is independent of GATEWAY_API_KEY on purpose. Chat clients
-  (and therefore the LLMs they reach) must never be able to rewrite the
-  provider list; holding the gateway key proves nothing for /api/v1/*.
-- Comparison is timing-safe and the key is never logged or echoed.
-
-Credentials remain env-var references only (``api_key_env``): this API
-never accepts raw provider keys and never returns secret values.
+- The surface is **fail-closed**: when browser sessions are not configured
+  (INVINCIBLE_OWNER_SECRET unset) every route answers 503, so a default
+  deployment exposes nothing manageable.
+- Management authenticates through the **operator account realm** (the
+  same realm as the dashboard): an operator-role browser session OR the
+  operator's own ``inv_`` API key. INVINCIBLE_ADMIN_KEY was retired -
+  a single-operator deployment should not carry a second top-level
+  secret. Chat credentials (the legacy gateway key, MCP bearer tokens)
+  still never pass: resolve() matches inv_ hashes only, and a plain-user
+  session or key answers 403.
+- Sessions ride a SameSite=Lax cookie, so cross-site form posts cannot
+  carry them (same CSRF posture as every other dashboard mutation).
+- Credentials remain env-var references only (``api_key_env``): this API
+  never accepts raw provider keys and never returns secret values.
 """
-import hmac
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from invincible.core.accounts import (
+    SESSION_COOKIE,
+    SessionManager,
+    UserService,
+    resolve_session,
+)
+from invincible.core.db import ROLE_OPERATOR
+from invincible.core.identity import ApiKeyStore, ensure_default_project
 from invincible.core.provider_registry import ProviderRegistryError
-from invincible.core.settings import settings
+from invincible.core.principal import Principal
+from invincible.endpoints.auth import extract_token
 
 logger = logging.getLogger(__name__)
 
@@ -32,40 +45,75 @@ class RoutingIn(BaseModel):
     chain: list[dict] | None = None
 
 
-async def require_admin(request: Request) -> None:
-    """Bearer INVINCIBLE_ADMIN_KEY check; 503 when unconfigured."""
-    key = settings.admin_key()
-    if not key:
+async def require_operator(request: Request) -> Principal:
+    """Operator-role account session or ``inv_`` API key; 503 when browser
+    sessions are unconfigured; 403 for an authenticated non-operator; 401
+    when no account credential is present at all."""
+    if not SessionManager.available():
         raise HTTPException(
             status_code=503,
             detail={
                 "error": {
                     "message": (
-                        "Management API disabled: INVINCIBLE_ADMIN_KEY "
-                        "is not set"
+                        "Management API disabled: INVINCIBLE_OWNER_SECRET "
+                        "is not set (no account sessions)"
                     ),
                     "type": "config_error",
                 }
             },
         )
-    auth = request.headers.get("Authorization") or ""
-    token = auth.removeprefix("Bearer ").strip()
-    if not token or not hmac.compare_digest(
-        token.encode("utf-8"), key.encode("utf-8")
-    ):
+    engine = request.app.state.engine
+
+    # Candidate credentials, in resolution order: session cookie, then
+    # bearer inv_ key. Any operator candidate admits the request; a
+    # resolved-but-plain-user candidate answers 403 (not 401) so a
+    # logged-in non-owner is told why, not invited to retry.
+    candidates: list[Principal] = []
+
+    async def _principal_for(user_id: int, kind: str,
+                             api_key_id: int | None = None) -> Principal:
+        project_id = await ensure_default_project(engine, user_id)
+        return Principal(user_id=user_id, project_id=project_id, kind=kind,
+                         api_key_id=api_key_id)
+
+    user = await resolve_session(
+        engine, request.cookies.get(SESSION_COOKIE))
+    if user is not None:
+        candidates.append(await _principal_for(int(user["id"]), "session"))
+        if user["role"] == ROLE_OPERATOR:
+            return candidates[0]
+    token = extract_token(request)
+    if token:
+        resolved_key = await ApiKeyStore(engine).resolve(token)
+        if resolved_key is not None:
+            candidates.append(await _principal_for(
+                resolved_key["user_id"], "api_key",
+                api_key_id=resolved_key["id"]))
+            row = await UserService(engine).get(resolved_key["user_id"])
+            if row is not None and row["role"] == ROLE_OPERATOR:
+                return candidates[-1]
+    if candidates:
         raise HTTPException(
-            status_code=401,
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=403,
             detail={
                 "error": {
-                    "message": "Invalid management credentials",
+                    "message": "Operator role required for management.",
                     "type": "auth_error",
                 }
             },
         )
+    raise HTTPException(
+        status_code=401,
+        detail={
+            "error": {
+                "message": "Sign in as an operator to manage this gateway.",
+                "type": "auth_error",
+            }
+        },
+    )
 
 
-router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin)])
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_operator)])
 
 
 def _registry(request: Request):
@@ -91,17 +139,18 @@ def _invalid(e: Exception) -> HTTPException:
     )
 
 
-async def _audit(request: Request, action: str,
+async def _audit(request: Request, principal: Principal, action: str,
                  resource_id: str | None = None) -> None:
     """Best-effort audit row for management mutations (Phase 2). The
-    actor is always the operator (admin realm carries no user ids)."""
+    actor is the operator account the request authenticated as."""
     log = getattr(request.app.state, "audit_log", None)
     if log is None:
         return
     try:
         await log.record(
             action,
-            actor_kind="admin",
+            actor_kind="operator",
+            actor_user_id=principal.user_id,
             resource_type="provider" if action.startswith("provider.")
             else "routing",
             resource_id=resource_id,
@@ -116,52 +165,57 @@ async def list_providers(request: Request):
 
 
 @router.post("/providers", status_code=201)
-async def add_provider(request: Request, entry: dict):
+async def add_provider(request: Request, entry: dict,
+                       principal: Principal = Depends(require_operator)):
     try:
         added = await _registry(request).add(entry)
     except (ValueError, ProviderRegistryError) as e:
         raise _invalid(e) from e
-    await _audit(request, "provider.added", added.get("name"))
+    await _audit(request, principal, "provider.added", added.get("name"))
     return {"provider": added}
 
 
 @router.patch("/providers/{name}")
-async def update_provider(name: str, request: Request, patch: dict):
+async def update_provider(name: str, request: Request, patch: dict,
+                          principal: Principal = Depends(require_operator)):
     try:
         updated = await _registry(request).update(name, patch)
     except (ValueError, ProviderRegistryError) as e:
         raise _invalid(e) from e
-    await _audit(request, "provider.updated", name)
+    await _audit(request, principal, "provider.updated", name)
     return {"provider": updated}
 
 
 @router.delete("/providers/{name}")
-async def remove_provider(name: str, request: Request):
+async def remove_provider(name: str, request: Request,
+                          principal: Principal = Depends(require_operator)):
     try:
         await _registry(request).remove(name)
     except ProviderRegistryError as e:
         raise _invalid(e) from e
-    await _audit(request, "provider.removed", name)
+    await _audit(request, principal, "provider.removed", name)
     return {"removed": name}
 
 
 @router.post("/providers/{name}/disable")
-async def disable_provider(name: str, request: Request):
+async def disable_provider(name: str, request: Request,
+                           principal: Principal = Depends(require_operator)):
     try:
         provider = await _registry(request).disable(name)
     except ProviderRegistryError as e:
         raise _invalid(e) from e
-    await _audit(request, "provider.disabled", name)
+    await _audit(request, principal, "provider.disabled", name)
     return {"provider": provider}
 
 
 @router.post("/providers/{name}/enable")
-async def enable_provider(name: str, request: Request):
+async def enable_provider(name: str, request: Request,
+                          principal: Principal = Depends(require_operator)):
     try:
         provider = await _registry(request).enable(name)
     except ProviderRegistryError as e:
         raise _invalid(e) from e
-    await _audit(request, "provider.enabled", name)
+    await _audit(request, principal, "provider.enabled", name)
     return {"provider": provider}
 
 

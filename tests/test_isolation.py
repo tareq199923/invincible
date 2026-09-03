@@ -155,15 +155,18 @@ async def test_graph_enumeration_probes_leak_nothing(client, alpha_handler):
 
 
 async def test_graph_admin_override_still_reads_any_session(
-    client, alpha_handler, monkeypatch
+    client, alpha_handler
 ):
-    monkeypatch.setenv("INVINCIBLE_ADMIN_KEY", "admin-key")
     a = await _mint_user_and_key(client, "visible@example.com")
     await _chat(client, auth_for(a["raw"]), "admin-visible", "hi")
 
-    admin = {"Authorization": "Bearer admin-key"}
-    resp = await client.get("/api/v1/sessions/admin-visible/graph",
-                            headers=admin)
+    from tests.conftest import operator_session, promote_operator
+
+    uid = await operator_session(client, email="override-op@example.com")
+    # Raw-SQL users above bypassed the first-human bootstrap, so this
+    # account registered as plain; reach for the row directly.
+    await promote_operator(uid)
+    resp = await client.get("/api/v1/sessions/admin-visible/graph")
     assert resp.status_code == 200
     assert resp.json()["known"] is True
 

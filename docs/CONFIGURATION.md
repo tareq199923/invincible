@@ -39,7 +39,7 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 | `INVINCIBLE_RELAY_DIGEST_MAX_ENTRIES` | per-request | Max digested turns that get individual digest entries; older ones collapse into a single count line so the digest cannot grow with the history it summarizes (default `20`). |
 
 | `INVINCIBLE_PROVIDERS_FILE` | management | **Opt-in**: writable provider-registry file. When set, it becomes the authoritative provider configuration (seeded from the packaged config on first use) and the management API can mutate it. When unset, providers load read-only and mutations refuse. |
-| `INVINCIBLE_ADMIN_KEY` | `/api/v1/*` | Bearer token for the management API (provider CRUD, routing modes). Deliberately independent of `GATEWAY_API_KEY`: chat clients must never manage providers. **If unset, the whole management surface answers 503 (fail closed).** |
+| `INVINCIBLE_OWNER_SECRET` | `/api/v1/*` + dashboard | Session-cookie signing secret. The management API authenticates through the **operator account realm** (operator-role session cookie, or the operator's own `inv_` API key for terminal use) — the retired `INVINCIBLE_ADMIN_KEY` bearer's successor. Chat credentials are never accepted there, and with the secret unset the whole management surface answers 503 (fail closed). |
 | `INVINCIBLE_GITHUB_CLIENT_ID` | `/auth/github/*` | GitHub OAuth App client ID. **Unset = GitHub login is hidden entirely** (the rest of the account surface is unaffected). Register `<public base URL>/auth/github/callback` as the app's callback URL. |
 | `INVINCIBLE_GITHUB_CLIENT_SECRET` | `/auth/github/*` | GitHub OAuth App client secret — resolved at request time, never logged or returned. Both values must be set for the feature to enable. |
 
@@ -215,7 +215,7 @@ output is never auto-promoted into canonical state.
 
 A read-only projection of this history - runs chain, states, checkpoints,
 turns as nodes/edges/timeline - is available to operators at
-`GET /api/v1/sessions/{id}/graph` (same admin key; see
+`GET /api/v1/sessions/{id}/graph` (operator session; see
 [API_REFERENCE.md](API_REFERENCE.md) §9).
 
 ---

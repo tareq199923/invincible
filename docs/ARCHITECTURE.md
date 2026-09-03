@@ -23,7 +23,7 @@ invincible/
 │   │                           detail, tasks, memory, usage, settings) plus the
 │   │                           /memories and /usage JSON siblings — all behind
 │   │                           require_user_session (cookies only; inv_* keys,
-│   │                           admin key, MCP bearers excluded by construction)
+│   │                           MCP bearers excluded by construction)
 │   ├── openai_compat.py        POST /v1/chat/completions, GET /v1/models
 │   ├── anthropic_compat.py     POST /v1/messages (Anthropic protocol)
 │   ├── mcp.py                  POST /mcp (JSON-RPC 2.0 dispatch, Bearer resource server)
@@ -107,12 +107,12 @@ import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
                      │
         serving               app.include_router(openai_router, deps=[require_auth])
                               app.include_router(anthropic_router, deps=[require_auth])
-                              app.include_router(admin_router)  (own INVINCIBLE_ADMIN_KEY)
+                              app.include_router(admin_router)  (own operator realm)
                               app.include_router(mcp_router, deps=[require_mcp_auth])
                               app.include_router(accounts_router)   (cookie realm)
                               app.include_router(dashboard_router)  (cookie realm, Phase 5)
                               app.include_router(oauth_router)      (no dep — own auth)
-                              app.include_router(graph_router)      (admin realm)
+                              app.include_router(graph_router)      (operator realm)
                      │
          shutdown (lifespan)   await router.close()  (httpx client)
                                await continuity.close() / runs.close()

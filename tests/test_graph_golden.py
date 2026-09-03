@@ -24,8 +24,6 @@ from invincible.core.continuity import ContinuityEngine
 from invincible.core.run_store import RunStore
 from invincible.main import app
 
-ADMIN = {"Authorization": "Bearer admin-secret"}
-
 GOLDEN_PATH = os.path.join(
     os.path.dirname(__file__), "golden", "session_graph_admin.json")
 
@@ -62,13 +60,15 @@ class _FakeClock:
 
 @pytest.fixture
 async def golden_stack(client, pg_engine, monkeypatch):
-    monkeypatch.setenv("INVINCIBLE_ADMIN_KEY", "admin-secret")
     monkeypatch.setattr("invincible.core.continuity.time", _FakeClock())
     runs = RunStore(engine=pg_engine)
     engine = ContinuityEngine(engine=pg_engine, runs=runs)
     app.state.runs = runs
     app.state.continuity = engine
     try:
+        from tests.conftest import operator_session
+
+        await operator_session(client)
         yield runs, engine
     finally:
         await engine.close()
@@ -132,7 +132,7 @@ async def test_projection_matches_golden(client, golden_stack):
     runs, engine = golden_stack
     await seed_rich_session(runs, engine)
 
-    resp = await client.get("/api/v1/sessions/default/graph", headers=ADMIN)
+    resp = await client.get("/api/v1/sessions/default/graph")
     assert resp.status_code == 200
     data = canonicalize(resp.json())
     assert set(data) == _TOP_LEVEL_KEYS

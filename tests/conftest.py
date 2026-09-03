@@ -272,6 +272,21 @@ async def login_account(client, email="user@example.com",
         "/auth/login", json={"email": email, "password": password})
 
 
+async def operator_session(client, email="op@example.com",
+                           password="longenough1"):
+    """Register a FRESH account - the first human registration is the
+    operator bootstrap, so with a clean users table this lands operator
+    by itself - then log in. The returned client carries the operator's
+    session cookie (management API realm)."""
+    response = await client.post(
+        "/auth/register", json={"email": email, "password": password})
+    assert response.status_code == 201, response.text
+    login = await client.post(
+        "/auth/login", json={"email": email, "password": password})
+    assert login.status_code == 200, login.text
+    return response.json()["id"]
+
+
 def pkce_pair():
     """Generate a (code_verifier, code_challenge) pair."""
     verifier = secrets.token_urlsafe(32)

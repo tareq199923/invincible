@@ -1,29 +1,33 @@
 # tests/test_graph_api.py
 """Phase 15c: continuity-graph projection endpoint.
 
-Covers authz (fail-closed admin key), the failover-chain edges that answer
-"why did work move from A to B", state/checkpoint pinning edges, and the
-summary contract - all as a pure PROJECTION over authoritative stores.
+Covers authz (fail-closed operator realm), the failover-chain edges that
+answer "why did work move from A to B", state/checkpoint pinning edges, and
+the summary contract - all as a pure PROJECTION over authoritative stores.
+
+The INVINCIBLE_ADMIN_KEY realm was retired: the operator override is now
+an operator-role account session (dashboard realm).
 """
 import pytest
 
 from invincible.core.continuity import ContinuityEngine
 from invincible.core.run_store import RunStore
 from invincible.main import app
+from tests.conftest import operator_session
 
-ADMIN = {"Authorization": "Bearer admin-secret"}
 GATEWAY = {"Authorization": "Bearer test-gateway-key"}
 
 
 @pytest.fixture
 async def graph_stack(client, pg_engine, monkeypatch):
-    monkeypatch.setenv("INVINCIBLE_ADMIN_KEY", "admin-secret")
-    # Attach runs + continuity exactly like the lifespan does.
+    # Attach runs + continuity exactly like the lifespan does; the
+    # operator session covers the admin-realm half of the tests.
     runs = RunStore(engine=pg_engine)
     engine = ContinuityEngine(engine=pg_engine, runs=runs)
     app.state.runs = runs
     app.state.continuity = engine
     try:
+        await operator_session(client)
         yield runs, engine
     finally:
         await engine.close()
@@ -50,11 +54,10 @@ async def record_run(runs, request_id, outcome, provider="alpha",
 
 
 async def test_graph_without_any_credential_is_401(client, monkeypatch):
-    """Phase 2 dual-realm: with the admin key unset the user realm decides
+    """Phase 2 dual-realm: with no operator session the user realm decides
     - and with the gateway key also unset, fail-open applies (anonymous
     local principal, scoped view) rather than 503."""
-    monkeypatch.delenv("INVINCIBLE_ADMIN_KEY", raising=False)
-    monkeypatch.setenv("GATEWAY_API_KEY", "test-gateway-key")
+    monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
     resp = await client.get("/api/v1/sessions/default/graph")
     assert resp.status_code == 401
 
@@ -70,13 +73,13 @@ async def test_graph_accepts_gateway_key_as_scoped_user(client, graph_stack):
 
 
 async def test_graph_admin_still_sees_any_session(client, graph_stack):
-    resp = await client.get("/api/v1/sessions/ghost/graph", headers=ADMIN)
+    resp = await client.get("/api/v1/sessions/ghost/graph")
     assert resp.status_code == 200
     assert resp.json()["known"] is False
 
 
 async def test_empty_session_projection_shape(client, graph_stack):
-    resp = await client.get("/api/v1/sessions/ghost/graph", headers=ADMIN)
+    resp = await client.get("/api/v1/sessions/ghost/graph")
     assert resp.status_code == 200
     data = resp.json()
     assert data["session_id"] == "ghost"
@@ -95,7 +98,7 @@ async def test_failover_chain_edges_answer_the_core_question(
     await record_run(runs, "req-1", "failover", provider="beta", attempt=2)
     await record_run(runs, "req-1", "ok", provider="gamma", attempt=3)
 
-    resp = await client.get("/api/v1/sessions/default/graph", headers=ADMIN)
+    resp = await client.get("/api/v1/sessions/default/graph", )
     data = resp.json()
     failovers = [e for e in data["edges"] if e["kind"] == "failover_from"]
     assert [(e["source"], e["target"]) for e in failovers] == [
@@ -115,7 +118,7 @@ async def test_separate_requests_are_followed_by_not_failover(client, graph_stac
     runs, _ = graph_stack
     await record_run(runs, "req-a", "ok", provider="alpha")
     await record_run(runs, "req-b", "ok", provider="beta")
-    resp = await client.get("/api/v1/sessions/default/graph", headers=ADMIN)
+    resp = await client.get("/api/v1/sessions/default/graph", )
     kinds = {(e["source"], e["target"]): e["kind"]
              for e in resp.json()["edges"] if e["target"].startswith("run:")
              and e["source"].startswith("run:")}
@@ -129,7 +132,7 @@ async def test_state_versions_and_checkpoint_pins(client, graph_stack):
     cp = await engine.create_checkpoint("default", note="through 37",
                                         actor="mcp:checkpoint_create")
 
-    resp = await client.get("/api/v1/sessions/default/graph", headers=ADMIN)
+    resp = await client.get("/api/v1/sessions/default/graph", )
     data = resp.json()
     state_ids = {n["id"] for n in data["nodes"] if n["kind"] == "task_state"}
     assert state_ids == {
@@ -156,7 +159,7 @@ async def test_interruption_note_surfaces_in_summary(client, graph_stack):
                                    actor="mcp")
     await record_run(runs, "req-x", "error", provider="groq")
 
-    resp = await client.get("/api/v1/sessions/default/graph", headers=ADMIN)
+    resp = await client.get("/api/v1/sessions/default/graph", )
     summary = resp.json()["summary"]
     assert summary["interruption_note"]
     assert "'groq'" in summary["interruption_note"]
@@ -169,7 +172,7 @@ async def test_turn_nodes_project_from_normalized_storage(client, graph_stack):
         {"role": "user", "content": "count please"},
         {"role": "assistant", "content": "1 2 3"},
     ])
-    resp = await client.get("/api/v1/sessions/default/graph", headers=ADMIN)
+    resp = await client.get("/api/v1/sessions/default/graph", )
     data = resp.json()
     assert data["known"] is True
     turn_nodes = [n for n in data["nodes"] if n["kind"] == "turn"]

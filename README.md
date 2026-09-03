@@ -20,7 +20,7 @@ serves two roles in one process:
 
 > **Recent additions (Phases 13–15):** runtime provider management with
 > `auto`/`pinned`/`chain` routing modes (`/api/v1/*`, fail-closed
-> `INVINCIBLE_ADMIN_KEY`), per-request `x-invincible-provider/model/attempts`
+> operator realm), per-request `x-invincible-provider/model/attempts`
 > headers, a shared Continuity Engine (canonical task state + checkpoints
 > injected into every prompt, writable from MCP via `task_state_set/get`
 > and `checkpoint_create`), and a continuity-graph projection at
@@ -590,8 +590,8 @@ store, and trimming logic consume.
 - Sessions are stored **plaintext** in PostgreSQL (protect the DSN);
   cooldowns and provider disables are **in-memory only**. Since Phase 2,
   every store path is ownership-scoped per principal, and the graph
-  endpoint is dual-realm: the admin key remains an explicit operator
-  override for any session.
+  endpoint is dual-realm: an operator-role session remains an explicit
+  operator override for any session.
 
 Full details: [docs/SECURITY.md](docs/SECURITY.md) → *Known limits*.
 

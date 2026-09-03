@@ -12,8 +12,9 @@ ONLY authz and ownership resolution.
 
 Authz since Phase 2 - dual-realm:
 
-- ``INVINCIBLE_ADMIN_KEY`` = operator override: fail-closed, sees any
-  session (documented out-of-band operator trust).
+- Operator override: an operator-role account session or ``inv_`` key
+  (the dashboard's realm; the retired INVINCIBLE_ADMIN_KEY's successor)
+  sees any session (documented out-of-band operator trust).
 - Otherwise a user Principal resolves exactly like /v1/* (legacy key,
   API key, OAuth/MCP token; fail-open local when no gateway key) and the
   projection is scoped to that principal's owning session row. A session
@@ -28,7 +29,7 @@ from invincible.core.projection import (
     build_session_projection,
     fetch_session_view,
 )
-from invincible.endpoints.admin_api import require_admin
+from invincible.endpoints.admin_api import require_operator
 from invincible.endpoints.auth import require_auth
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ _DEFAULT_LIMIT = 200
 async def require_graph_access(request: Request):
     """Operator override first; otherwise an authenticated user Principal."""
     try:
-        await require_admin(request)
+        await require_operator(request)
         return "admin"
     except HTTPException:
         return await require_auth(request)

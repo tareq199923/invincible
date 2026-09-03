@@ -89,20 +89,12 @@ class Settings:
         """Explicit providers.yaml override (INVINCIBLE_CONFIG_PATH)."""
         return os.getenv("INVINCIBLE_CONFIG_PATH")
 
-    def admin_key(self) -> str | None:
-        """Management-API credential (INVINCIBLE_ADMIN_KEY).
-
-        Deliberately separate from GATEWAY_API_KEY: chat clients must never
-        be able to mutate provider configuration. Unset disables the whole
-        management surface (fail closed).
-        """
-        return os.getenv("INVINCIBLE_ADMIN_KEY")
-
     def credential_key(self) -> str | None:
         """Master key encrypting user BYOK provider credentials at rest
         (INVINCIBLE_CREDENTIAL_KEY). Unset (or malformed) refuses every
-        /providers/mine surface - fail closed, same posture as
-        INVINCIBLE_ADMIN_KEY: stored user keys are never plaintext.
+        /providers/mine surface - fail closed, the same posture the
+        management API keeps toward INVINCIBLE_OWNER_SECRET: stored user
+        keys are never plaintext.
         """
         return os.getenv("INVINCIBLE_CREDENTIAL_KEY")
 

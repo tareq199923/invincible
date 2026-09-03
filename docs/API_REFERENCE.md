@@ -15,9 +15,9 @@ provider behind either request is chosen by the Router, never by the client.
 | `GET` | `/health` | none | `{"service", "status", "version"}` |
 | `POST` | `/v1/chat/completions` | `Bearer <GATEWAY_API_KEY>` or `Bearer inv_…` API key | OpenAI chat completion with failover |
 | `POST` | `/v1/messages` | same as above | Anthropic Messages completion with failover |
-| `GET/POST/PATCH/DELETE` | `/api/v1/providers[...]` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Provider management: list, add, update, remove, enable/disable, test connectivity |
-| `GET/PUT` | `/api/v1/routing` | `Authorization: Bearer <INVINCIBLE_ADMIN_KEY>` | Routing mode: `auto` / `pinned` / `chain` |
-| `GET` | `/api/v1/sessions/{id}/graph` | Admin key (operator override) or user Principal (scoped) | Continuity-graph projection: runs chain, task states, checkpoints as nodes/edges/timeline |
+| `GET/POST/PATCH/DELETE` | `/api/v1/providers[...]` | Operator session cookie or `Bearer inv_…` (operator role) | Provider management: list, add, update, remove, enable/disable, test connectivity |
+| `GET/PUT` | `/api/v1/routing` | Operator session cookie or `Bearer inv_…` (operator role) | Routing mode: `auto` / `pinned` / `chain` |
+| `GET` | `/api/v1/sessions/{id}/graph` | Operator session (operator override) or user Principal (scoped) | Continuity-graph projection: runs chain, task states, checkpoints as nodes/edges/timeline |
 | `POST` | `/auth/register`, `/auth/login`, `/auth/logout`, `/auth/password` · `GET` `/auth/me` | session cookie realm | Account auth + password set/change (Phases 3/5) — see §10 |
 | Mixed | `/projects`, `/api-keys`, `/sessions`, `/auth/device/*`, GitHub login | cookie (own `inv_` key accepted on some) | Account management + pairing (Phase 3) — see §10 |
 | `GET` | `/dashboard`, `/dashboard/sessions[/{pk}]`, `/dashboard/tasks`, `/dashboard/memory`, `/dashboard/usage`, `/dashboard/settings` | session cookie realm | Full-dashboard pages (Phase 5) — see §10 |
@@ -33,9 +33,14 @@ Auth details (dual-realm since Phase 1, resolved in this fixed order):
    request maps to the local owner (documented fail-open local mode).
 4. Wrong/missing token with the key set → `401`.
 
-The management surface (`/api/v1/*`) uses a separate credential
-(`INVINCIBLE_ADMIN_KEY`); it answers **503 when that key is unset**
-(fail closed), and neither chat credential is accepted there.
+The management surface (`/api/v1/*`) authenticates through the **operator
+account realm** — the same realm as the dashboard: an operator-role
+browser session cookie, or that operator's own `Bearer inv_…` API key for
+terminal use. It answers **503 when `INVINCIBLE_OWNER_SECRET` is unset**
+(no account sessions — fail closed), **403** for a logged-in non-operator
+account, and neither chat credential is accepted there. (The former
+`INVINCIBLE_ADMIN_KEY` bearer was retired: a single-operator deployment
+should not carry a second top-level secret.)
 
 ---
 

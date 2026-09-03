@@ -459,8 +459,9 @@ operator's own process.
   using the same string get fully independent sessions, task chains,
   checkpoints, and runs, and a foreign string reads exactly like a
   nonexistent one (anti-enumeration). The one exception is the operator:
-  `INVINCIBLE_ADMIN_KEY` may resolve any session on the graph surface —
-  documented out-of-band operator trust. History is stored as **plaintext
+  an operator-role account session (dashboard realm — the retired
+  `INVINCIBLE_ADMIN_KEY`'s successor) may resolve any session on the
+  graph surface — documented out-of-band operator trust. History is stored as **plaintext
   JSON in PostgreSQL** (`INVINCIBLE_DB_URL`) — the database credentials are
   the security boundary, and `invincible doctor` always prints the DSN
   password-masked so it never leaks into terminal output or CI logs.
@@ -562,9 +563,9 @@ sandbox:
    prompts in their own session. Payloads are size-capped and never
    treated as instructions by Invincible itself.
 11. **Graph API shows raw snippets.** `/api/v1/sessions/{id}/graph`
-    includes first-message JSON snippets per turn — admin-realm only
-    (`INVINCIBLE_ADMIN_KEY`), same exposure class as reading the session
-    via other management endpoints.
+    includes first-message JSON snippets per turn — operator-realm only
+    (operator-role session or `inv_` key), same exposure class as
+    reading the session via other management endpoints.
 12. **Account sessions inherit the owner-secret key.** The Phase 3 cookie
     realm is signed with a key derived from `INVINCIBLE_OWNER_SECRET`, so
     rotating that secret (deliberately) logs every browser out — including
