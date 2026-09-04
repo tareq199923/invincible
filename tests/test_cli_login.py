@@ -22,6 +22,9 @@ from invincible.cli import (
     _save_client_config,
     login,
 )
+from invincible.cli import (
+    agent as agent_command,
+)
 from invincible.core.credential_store import ByokCredentialStore
 from invincible.main import app
 from tests.conftest import register_account
@@ -319,3 +322,124 @@ async def test_account_page_has_pair_a_device_box(client):
     assert page.status_code == 200
     assert "Pair a device" in page.text
     assert 'action="/auth/devices"' in page.text
+
+
+# --- first-run agent self-pairing (one command, zero prior steps) ----------
+
+
+def test_agent_self_pairs_on_first_run(monkeypatch, tmp_path):
+    """No saved credentials: `invincible agent` pairs with the hosted
+    default, saves the token, teaches the MCP-connect step, and starts
+    the loop with the minted key."""
+    config_target = tmp_path / "config.json"
+    captured: dict = {}
+
+    async def _fake_pair(base_url, **kwargs):
+        captured["base_url"] = base_url
+        return {"access_token": "inv_selfpair", "prefix": "inv_selfpa"}
+
+    async def _fake_run_agent(server, api_key, **kwargs):
+        captured.update(agent_server=server, agent_key=api_key)
+
+    monkeypatch.setattr("invincible.cli._pair_device", _fake_pair)
+    monkeypatch.setattr("invincible.agent.runner.run_agent",
+                        _fake_run_agent)
+    result = CliRunner().invoke(
+        agent_command, ["--config", str(config_target)])
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "base_url": "https://invincible-ai.me",
+        "agent_server": "https://invincible-ai.me",
+        "agent_key": "inv_selfpair",
+    }
+    with open(config_target, encoding="utf-8") as handle:
+        assert json.load(handle)["api_key"] == "inv_selfpair"
+    assert "isn't paired yet" in result.output
+    assert "Paired" in result.output
+    assert "Next: connect your AI" in result.output
+
+
+def test_agent_first_run_honors_server_flag(monkeypatch, tmp_path):
+    config_target = tmp_path / "config.json"
+    captured: dict = {}
+
+    async def _fake_pair(base_url, **kwargs):
+        captured["base_url"] = base_url
+        return {"access_token": "inv_x", "prefix": "inv_x"}
+
+    async def _fake_run_agent(server, api_key, **kwargs):
+        captured["agent_server"] = server
+
+    monkeypatch.setattr("invincible.cli._pair_device", _fake_pair)
+    monkeypatch.setattr("invincible.agent.runner.run_agent",
+                        _fake_run_agent)
+    result = CliRunner().invoke(
+        agent_command, ["--server", "http://local.test:8000",
+                        "--config", str(config_target)])
+    assert result.exit_code == 0, result.output
+    assert captured["base_url"] == "http://local.test:8000"
+    assert captured["agent_server"] == "http://local.test:8000"
+
+
+def test_agent_uses_saved_config_without_pairing(monkeypatch, tmp_path):
+    """Saved credentials win: no pairing attempt, no first-run banner -
+    the loop runs against the saved server with the saved key."""
+    config_target = tmp_path / "config.json"
+    _save_client_config(server="https://selfhost.example",
+                        api_key="inv_saved", path=str(config_target))
+    captured: dict = {}
+
+    async def _must_not_pair(base_url, **kwargs):
+        raise AssertionError("must not pair when credentials exist")
+
+    async def _fake_run_agent(server, api_key, **kwargs):
+        captured.update(agent_server=server, agent_key=api_key)
+
+    monkeypatch.setattr("invincible.cli._pair_device", _must_not_pair)
+    monkeypatch.setattr("invincible.agent.runner.run_agent",
+                        _fake_run_agent)
+    result = CliRunner().invoke(
+        agent_command, ["--config", str(config_target)])
+    assert result.exit_code == 0, result.output
+    assert captured == {"agent_server": "https://selfhost.example",
+                        "agent_key": "inv_saved"}
+    assert "isn't paired yet" not in result.output
+    assert "Next: connect your AI" not in result.output
+
+
+def test_agent_pairing_failure_exits_cleanly(monkeypatch, tmp_path):
+    """Denied/expired pairing stops the command; the agent loop never
+    starts with no credentials."""
+    async def _failing(base_url, **kwargs):
+        raise _DevicePairError("the request was denied.")
+
+    ran: list = []
+
+    async def _fake_run_agent(server, api_key, **kwargs):
+        ran.append((server, api_key))
+
+    monkeypatch.setattr("invincible.cli._pair_device", _failing)
+    monkeypatch.setattr("invincible.agent.runner.run_agent",
+                        _fake_run_agent)
+    result = CliRunner().invoke(
+        agent_command, ["--config", str(tmp_path / "config.json")])
+    assert result.exit_code != 0
+    assert "Device pairing failed" in result.output
+    assert not ran
+
+
+def test_agent_corrupt_config_errors_instead_of_repairing(monkeypatch,
+                                                          tmp_path):
+    """A corrupt config file is surfaced, not silently re-paired over:
+    only a MISSING file triggers self-pairing."""
+    config_target = tmp_path / "config.json"
+    config_target.write_text("{ not json", encoding="utf-8")
+
+    async def _must_not_pair(base_url, **kwargs):
+        raise AssertionError("must not pair over a corrupt config")
+
+    monkeypatch.setattr("invincible.cli._pair_device", _must_not_pair)
+    result = CliRunner().invoke(
+        agent_command, ["--config", str(config_target)])
+    assert result.exit_code != 0
+    assert "Corrupt config" in result.output

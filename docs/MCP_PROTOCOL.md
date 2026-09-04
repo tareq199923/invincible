@@ -492,7 +492,9 @@ With routing **on** (deployments set `INVINCIBLE_AGENT_ROUTING=1`), the
 journey gains one hop: the server's checks (denylist, staging, token) are
 unchanged, but after `confirm_action` approves, the work travels to the
 caller's paired agent — `invincible agent` running on the *user's* machine,
-long-polling `POST /agent/poll` with the inv_ key from `invincible login`.
+long-polling `POST /agent/poll` with the inv_ key from pairing
+(`invincible login`, or the agent's own first-run self-pairing — it
+starts the same device flow when no saved credentials exist).
 The agent re-runs the denylist locally, confines reads/writes to the
 user's home (`INVINCIBLE_AGENT_ROOT` to override; `.env*`, `.git`, `.ssh`,
 key files blocked by name), executes with the user's own privileges, and

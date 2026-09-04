@@ -4,6 +4,7 @@
 <h2>Create account</h2>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 <form method="post" action="/auth/register">
+  {% if next_target %}<input type="hidden" name="next" value="{{ next_target }}">{% endif %}
   <label for="email">Email</label>
   <input type="email" id="email" name="email" autofocus required>
   <label for="password">Password ({{ min_password_len }}+ characters)</label>
@@ -11,5 +12,5 @@
          required>
   <button type="submit">Create account</button>
 </form>
-<p class="muted">Already registered? <a href="/login">Sign in</a></p>
+<p class="muted">Already registered? <a href="/login{% if next_target %}?next={{ next_target | urlencode }}{% endif %}">Sign in</a></p>
 {% endblock content %}

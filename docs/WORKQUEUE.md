@@ -59,6 +59,25 @@ Open decisions (multi-day project, fold into Phase 6/7 planning):
 
 ## Completed log (newest first)
 
+- **2026-09-05 — ONBOARDING COLLAPSED: 6 steps → 2 commands.** The
+  new-user journey to "my AI runs commands on my PC" is now
+  `pip install invincible-ai` + `invincible agent` — the agent
+  self-pairs on first run (the same device flow as `invincible login`,
+  now shared through `_pair_and_save`) and falls straight into the
+  polling loop, printing the one remaining setup step (add
+  `<server>/mcp` to the AI client) at the moment it matters. The
+  browser funnel for brand-new users is unbroken end-to-end: the
+  anonymous 401 from the approval page bounces to `/login?next=…`, and
+  registration now honors the `next` target (previously it
+  hard-redirected to `/account`, dropping the pairing context while
+  the CLI kept polling); login's error re-renders preserve it too, all
+  through the existing `_safe_next` guard — no new open-redirect
+  surface. Deliberate limits: only a *missing* config self-pairs (a
+  corrupt one is surfaced, never overwritten), and device approval
+  still requires an authenticated session. Full suite 1,011 green,
+  ruff clean. Docs updated: README local-agent section, MCP_PROTOCOL
+  agent-routing section, SECURITY limit 16, CONFIGURATION CLI
+  reference, account page Pair-a-device box.
 - **2026-09-02 — DOMAIN LIVE: `invincible-ai.me` serves the app.**
   Railway custom domain added on the service (port 8000), Cloudflare
   CNAME `@` → the Railway host, DNS-only mode (Railway's Let's

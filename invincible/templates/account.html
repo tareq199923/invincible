@@ -20,8 +20,9 @@
 <h3>API keys</h3>
 
 <h4>Pair a device</h4>
-<p class="muted">Approve a machine that ran <code>invincible login</code>:
-type the code it printed.</p>
+<p class="muted">Approve a machine that started pairing
+(<code>invincible agent</code> on first run, or <code>invincible
+login</code>): type the code it printed.</p>
 <form method="get" action="/auth/devices" class="inline-form">
   <input type="text" name="code" placeholder="device code (e.g. XK7M49QP)"
          maxlength="32" autocomplete="off" required>

@@ -620,7 +620,9 @@ sandbox:
 16. **The agent trusts the machine it runs on (Phase 10).** With agent
     routing on, confirmed tool execution happens on the user's own PC
     via `invincible agent`, authenticating with the `inv_` key from
-    `invincible login`. Malware on that PC can impersonate the agent —
+    device pairing (`invincible login`, or the agent's first-run
+    self-pairing — same device flow, same minted key). Malware on that
+    PC can impersonate the agent —
     the same trust level as any local dev tool. Mitigations: the key is
     per-user, stored `0600` in `~/.invincible/`, revocable with
     `invincible api-key revoke`, and every dispatch/resolution is

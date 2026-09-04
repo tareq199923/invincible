@@ -11,7 +11,7 @@
   <input type="password" id="password" name="password" required>
   <button type="submit">Sign in</button>
 </form>
-<p class="muted">No account? <a href="/register">Register</a></p>
+<p class="muted">No account? <a href="/register{% if next_target %}?next={{ next_target | urlencode }}{% endif %}">Register</a></p>
 <p class="muted" style="margin-top:1.5rem">Forgot your password? The
 gateway operator can reset it:<br>
 <code>invincible users reset-password &lt;email&gt;</code></p>

@@ -43,6 +43,20 @@ async def test_htmx_request_gets_hx_redirect(client):
     assert resp.headers["hx-redirect"] == "/login?next=/dashboard"
 
 
+async def test_anonymous_device_approval_bounces_to_login(client):
+    # First-run funnel: the CLI opens /auth/devices/{code} in a browser
+    # with no session; the anonymous navigation must land on the login
+    # page with the approval page as the bounce target, not raw JSON.
+    payload = (await client.post("/auth/device/code")).json()
+    resp = await client.get(
+        f"/auth/devices/{payload['user_code']}",
+        headers=BROWSER_ACCEPT, follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert resp.headers["location"] == (
+        f"/login?next=/auth/devices/{payload['user_code']}")
+
+
 async def test_form_post_401_is_not_redirected(client):
     # A POST losing its session must not silently bounce into a GET of
     # the same path - only safe navigations redirect.

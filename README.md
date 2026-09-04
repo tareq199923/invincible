@@ -325,17 +325,27 @@ Security model, full denylist inventory, and known limits:
 On a hosted deployment with `INVINCIBLE_AGENT_ROUTING=1`, confirmed tool
 actions execute on **your machine**, not the server — the security
 checks (denylist, staging, approval tokens) all stay server-side, but
-the work travels to a paired local agent:
+the work travels to a paired local agent. From zero to "my AI just ran a
+command on my PC" is two commands — no account to create first, no
+separate pairing step:
 
 ```bash
 pip install invincible-ai
-invincible login       # browser opens → click Approve (defaults to the hosted server)
-invincible agent       # prints "connected", Ctrl+C to stop
+invincible agent       # first run: browser opens → sign in or register → Approve
 ```
 
+On first run the agent pairs the machine itself: the browser opens on
+the approval page (create your account right there if you don't have
+one, then click **Approve**), the minted key is saved to
+`~/.invincible/config.json`, and the agent falls straight into its
+polling loop — it never asks you to run another command first. Every
+later start is just `invincible agent` again; pairing happens once per
+machine, ever.
+
 Self-hosters point at their own server once:
-`invincible login --server https://mycompany.ai` (or
+`invincible agent --server https://mycompany.ai` (or
 `--server http://127.0.0.1:8000` against a local `invincible start`).
+`invincible login` remains as the explicit re-pair/repair tool.
 
 Then connect Claude/Grok/any MCP client to `https://your-server.example.com/mcp`
 as usual. While the agent is running, its console shows each dispatched

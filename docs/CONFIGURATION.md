@@ -271,6 +271,7 @@ invincible start [--host 127.0.0.1] [--port 8000] [--reload]
 invincible dev-db [--port 5433] [--env-file .env] [--write-env]
 invincible db upgrade | import <legacy-sessions.db> [--env-file .env]
 invincible login [--server URL] [--config PATH]
+invincible agent [--server URL] [--config PATH]
 invincible oauth list | revoke <client_id> | test-client
 invincible api-key create [--label TEXT] | list | revoke <id-or-prefix>
 invincible --version | --help

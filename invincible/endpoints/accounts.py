@@ -208,7 +208,11 @@ async def _set_session_cookie_for(request: Request, response,
 @router.get("/login")
 async def login_page(request: Request):
     if SessionManager.verify(request.cookies.get(SESSION_COOKIE)) is not None:
-        return RedirectResponse("/account", status_code=302)
+        # Already signed in: go straight to the bounce target when one came
+        # along (the anonymous 401 from e.g. /auth/devices/{code} sent us
+        # here and needs no further authentication), else the account page.
+        target = _safe_next(request.query_params.get("next", ""))
+        return RedirectResponse(target or "/account", status_code=302)
     github_error = "github_error" in request.query_params
     return _page(
         "login.html", request,
@@ -223,8 +227,16 @@ async def login_page(request: Request):
 
 @router.get("/register")
 async def register_page(request: Request):
-    return _page("register.html", request,
-                 min_password_len=MIN_PASSWORD_LEN, error=None)
+    # ``next``: where to land after signup. A registration reached from an
+    # anonymous 401 (device pairing) bounces back to that page instead of
+    # stranding the new user on the dashboard while the CLI waits on
+    # approval. Same-origin only, enforced by the same _safe_next guard
+    # /auth/login uses - no new open-redirect surface.
+    return _page(
+        "register.html", request,
+        min_password_len=MIN_PASSWORD_LEN, error=None,
+        next_target=_safe_next(request.query_params.get("next", "")),
+    )
 
 
 @router.post("/auth/register")
@@ -243,9 +255,12 @@ async def register(request: Request):
             str(body.get("email", "")), str(body.get("password", "")))
     except AccountError as exc:
         if _wants_html(request):
+            # Re-render keeps the bounce target so a failed attempt does
+            # not silently drop the user out of the funnel they came from.
             return _page(
                 "register.html", request, error=exc.message,
                 min_password_len=MIN_PASSWORD_LEN,
+                next_target=_safe_next(str(body.get("next", ""))),
             )
         return _error_response(exc)
     project_id = await ensure_default_project(_engine(request), user["id"])
@@ -253,7 +268,11 @@ async def register(request: Request):
                  resource_type="user", resource_id=str(user["id"]),
                  meta={"role": user.get("role")})
     if _wants_html(request):
-        response = RedirectResponse("/account", status_code=303)
+        # Mirror /auth/login's ``next`` handling: bounce back to the page
+        # the anonymous 401 came from (device pairing) when one was
+        # carried; the dashboard remains the no-``next`` default.
+        target = _safe_next(str(body.get("next", ""))) or "/account"
+        response = RedirectResponse(target, status_code=303)
         await _set_session_cookie_for(request, response, user["id"])
         return response
     response = JSONResponse(
@@ -276,19 +295,24 @@ async def login(request: Request):
         )
     ip = _client_ip(request)
     limiter = _limiter(request)
+    # Parsed before the lockout check: the HTML error re-render preserves
+    # the ``next`` bounce target, which lives in the body.
+    body = await _payload(request)
     locked_for = await limiter.locked_out(ip)
     if locked_for is not None:
         await _audit(request, "auth.login_locked_out",
                      resource_type="client_ip", resource_id=ip)
         message = (f"Too many failed attempts; retry in {locked_for}s.")
         if _wants_html(request):
-            return _page("login.html", request, error=message,
-                         github_enabled=False)
+            return _page(
+                "login.html", request, error=message,
+                github_enabled=False,
+                next_target=_safe_next(str(body.get("next", ""))),
+            )
         return JSONResponse(
             {"error": {"code": "locked_out", "message": message}},
             status_code=429,
         )
-    body = await _payload(request)
     user = await UserService(_engine(request)).authenticate(
         str(body.get("email", "")), str(body.get("password", "")))
     if user is None:
@@ -298,9 +322,13 @@ async def login(request: Request):
                      resource_type="client_ip", resource_id=ip)
         message = "Invalid email or password."
         if _wants_html(request):
-            return _page("login.html", request, error=message,
-                         github_enabled=settings.github_client_id()
-                         is not None)
+            return _page(
+                "login.html", request, error=message,
+                github_enabled=settings.github_client_id() is not None,
+                # Keep the bounce target through a failed attempt; losing
+                # it here drops the user out of the funnel mid-pairing.
+                next_target=_safe_next(str(body.get("next", ""))),
+            )
         return JSONResponse(
             {"error": {"code": "invalid_credentials",
                        "message": message}},

@@ -1695,8 +1695,18 @@ def login(server: str, config_path: str | None):
     command finishes once approved and stores the minted API key locally.
     The URL + code are printed as a fallback for headless terminals.
     """
-    server = server.rstrip("/")
+    _pair_and_save(server.rstrip("/"), config_path)
+    click.echo("Start your agent with: invincible agent")
 
+
+def _pair_and_save(server: str, config_path: str | None) -> str:
+    """Interactive device pairing, then persist the minted key.
+
+    Shared by `login` and by `agent`'s first-run self-pairing so the two
+    can never drift: browser opens on the approval page, the poll loop
+    blocks until the user approves (or the code expires / is denied),
+    and the token is written to the config file. Returns that path.
+    """
     async def _run():
         async def _on_code(url: str, code: str) -> None:
             click.echo(f"Approval page: {url}")
@@ -1712,7 +1722,7 @@ def login(server: str, config_path: str | None):
     path = _save_client_config(
         server=server, api_key=token["access_token"], path=config_path)
     click.echo(f"Paired. API key {token['prefix']} saved to {path}")
-    click.echo("Start your agent with: invincible agent")
+    return path
 
 
 # --- device pairing plumbing (shared by tests via ASGI transport) ------------
@@ -1842,19 +1852,44 @@ def _load_client_config(path: str | None = None) -> dict:
               type=click.Path(dir_okay=False, path_type=str), default=None,
               help="Pairing credentials to use "
                    "(default ~/.invincible/config.json).")
-def agent(config_path: str | None):
+@click.option("--server", default=DEFAULT_SERVER,
+              show_default=True, envvar="INVINCIBLE_SERVER",
+              help="Server to pair with on first run, before saved "
+                   "credentials exist. Later runs always use the saved "
+                   "server; self-hosters pass their own URL here "
+                   "(e.g. --server http://127.0.0.1:8000).")
+def agent(config_path: str | None, server: str):
     """Run the local Invincible agent (Ctrl+C to stop).
 
     Executes this account's confirmed MCP tool actions on THIS machine:
     polls the paired server for dispatched jobs, re-checks the denylist
     locally, runs them with your own user privileges, and posts results
-    back. Pair first with `invincible login`.
+    back. On a machine with no saved credentials it pairs first: the
+    browser opens, you create your account / approve, and the agent
+    starts - `invincible login` is never a required prior step.
     """
     from invincible.agent.runner import run_agent
 
+    fresh_pair = False
+    if not os.path.isfile(_client_config_path(config_path)):
+        # First run: become the single entry point instead of refusing
+        # with "run invincible login first". Only a MISSING file pairs -
+        # a corrupt or incomplete one still falls through to
+        # _load_client_config's explicit repair hint (never overwritten
+        # silently).
+        click.echo(
+            "This machine isn't paired yet - starting one-time pairing "
+            f"with {server.rstrip('/')}.")
+        _pair_and_save(server.rstrip("/"), config_path)
+        fresh_pair = True
     config = _load_client_config(config_path)
     server = config["server"].rstrip("/")
     click.echo(f"Agent for {server} - polling for work. Ctrl+C to stop.")
+    if fresh_pair:
+        # The one remaining setup step, taught at the moment it matters.
+        click.echo(
+            f"Next: connect your AI - add {server}/mcp as its MCP "
+            "connector URL.")
     try:
         run_coro_sync(run_agent(server, config["api_key"]))
     except KeyboardInterrupt:
