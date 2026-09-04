@@ -1793,6 +1793,57 @@ def _save_client_config(*, server: str, api_key: str,
     return target
 
 
+def _load_client_config(path: str | None = None) -> dict:
+    """Read the pairing credentials ``login`` saved. Raises ClickException
+    with a pointer at ``invincible login`` when absent or incomplete -
+    the agent can never mint its own credentials."""
+    import json
+
+    target = _client_config_path(path)
+    try:
+        with open(target, encoding="utf-8") as handle:
+            config = json.load(handle)
+    except FileNotFoundError:
+        raise click.ClickException(
+            f"No pairing credentials at {target}. Run `invincible login` "
+            "first."
+        ) from None
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(
+            f"Corrupt config file {target}: {exc}"
+        ) from exc
+    if not config.get("server") or not config.get("api_key"):
+        raise click.ClickException(
+            f"Config file {target} is missing server or api_key. "
+            "Re-run `invincible login`."
+        )
+    return config
+
+
+@click.command()
+@click.option("--config", "config_path",
+              type=click.Path(dir_okay=False, path_type=str), default=None,
+              help="Pairing credentials to use "
+                   "(default ~/.invincible/config.json).")
+def agent(config_path: str | None):
+    """Run the local Invincible agent (Ctrl+C to stop).
+
+    Executes this account's confirmed MCP tool actions on THIS machine:
+    polls the paired server for dispatched jobs, re-checks the denylist
+    locally, runs them with your own user privileges, and posts results
+    back. Pair first with `invincible login`.
+    """
+    from invincible.agent.runner import run_agent
+
+    config = _load_client_config(config_path)
+    server = config["server"].rstrip("/")
+    click.echo(f"Agent for {server} - polling for work. Ctrl+C to stop.")
+    try:
+        run_coro_sync(run_agent(server, config["api_key"]))
+    except KeyboardInterrupt:
+        click.echo("\nAgent stopped.")
+
+
 @click.command("dev-db")
 @click.option("--port", default=DEV_DB_PORT, show_default=True, type=int,
               help="Local Postgres port to probe (and to publish when "
@@ -1907,6 +1958,7 @@ def cli():
 cli.add_command(setup)
 cli.add_command(start)
 cli.add_command(login)
+cli.add_command(agent)
 cli.add_command(doctor)
 cli.add_command(secret)
 cli.add_command(oauth)

@@ -66,7 +66,7 @@ serves two roles in one process:
 | **Conversation memory** | PostgreSQL-backed (Phase 16), keyed by the `X-Session-Id` header (default `default`). History is merged into every request and the assistant reply is persisted back. |
 | **Context trimming** | Per-provider `max_context`; system messages always kept; everything else dropped as atomic *turns* (an assistant `tool_calls` is never separated from its tool results); the most recent turn is always sent. |
 | **Per-provider timeouts** | Split connect/read/write/pool with sane defaults and per-provider overrides (NIM, Gemini, and the OpenRouter fallback get 90s reads; Groq 45s). |
-| **MCP tool server** | `read_file` (no approval), `execute_bash` and `write_file` (staged, then approved via a token round-trip through the `confirm_action` tool), guarded by denylists and an **OAuth 2.1 + PKCE bearer-token** auth layer (browser owner-login + per-client consent, tokens don't survive on requests like a shared header does). |
+| **MCP tool server** | `read_file` (no approval), `execute_bash` and `write_file` (staged, then approved via a token round-trip through the `confirm_action` tool), guarded by denylists and an **OAuth 2.1 + PKCE bearer-token** auth layer (browser owner-login + per-client consent, tokens don't survive on requests like a shared header does). With `INVINCIBLE_AGENT_ROUTING` on, confirmed actions execute on the **user's own PC** via the paired `invincible agent` (server keeps every security decision; see [§ Run tools on your own PC](#run-tools-on-your-own-pc-the-local-agent)). |
 | **Accounts & projects** (Phase 3) | Sign up / sign in in a browser (email + argon2id passwords, or **GitHub login**), manage your own projects and `inv_` API keys over HTTP, list your sessions — all under ownership predicates so users never see each other's data. Pair a CLI with `invincible login` via device-code approval. |
 | **Protocol-agnostic** | Native **OpenAI** and **Anthropic** protocols, both translated into one internal message model. Claude Code works with `ANTHROPIC_BASE_URL` pointing at the gateway. |
 
@@ -137,6 +137,8 @@ Everything is environment variables plus one YAML file — no other config.
 | `INVINCIBLE_CONFIG_PATH` | startup | Path to a custom `providers.yaml` (set by CLI `--config`). |
 | `INVINCIBLE_DB_URL` | startup (**required since Phase 16**) | PostgreSQL DSN for all persistent state, e.g. `postgresql+asyncpg://invincible@localhost:5433/invincible`. Provision with `invincible dev-db` or the bundled compose pair; masked in `doctor` output. |
 | `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the PostgreSQL database (`pending_actions` table) and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
+| `INVINCIBLE_AGENT_ROUTING` | startup | **Opt-in** (Phase 10): route confirmed tool execution to the caller's paired local agent (`invincible agent`) instead of running it on the server host. **Off by default** — tools execute locally on the server, exactly as before. When on, a non-operator may also approve their own MCP clients (their approval exposes only their own machine). |
+| `INVINCIBLE_AGENT_ROOT` | agent | Sandbox root for the local agent (default: the user's home directory). Reads and writes outside it are blocked; `.env*`, `.git`, `.ssh`, SSH keys, `*.pem`, `*credentials*` are blocked by name everywhere. |
 
 The two secrets are **independent**: a leaked tunnel URL alone is not enough
 to reach tool execution, and rotating one secret never affects the other.
@@ -178,6 +180,8 @@ Two commands, both exposed as `invincible` and `inv`:
 | `invincible api-key create --label L` | Mint an API key (`inv_…`) under the local owner — raw key shown **once**, only its SHA-256 hash is stored. |
 | `invincible api-key list` | List API keys by visible prefix (never hashes or raw keys). |
 | `invincible api-key revoke <id-or-prefix>` | Revoke a key immediately. |
+| `invincible login [--server URL]` | Pair this machine with an Invincible server (device flow): prints a URL + short code, you approve in a signed-in browser, and the minted `inv_` key is saved to `~/.invincible/config.json`. |
+| `invincible agent` | Run the local agent (Phase 10): polls the paired server for confirmed tool jobs and executes them on **this machine** with your own user privileges — denylist re-checked locally, reads/writes sandboxed to your home. Ctrl+C to stop. Requires `invincible login` first. |
 
 ```bash
 invincible setup --force
@@ -315,6 +319,29 @@ Full contract — sessions, trimming, timeout semantics:
 
 Security model, full denylist inventory, and known limits:
 [docs/SECURITY.md](docs/SECURITY.md).
+
+### Run tools on your own PC (the local agent)
+
+On a hosted deployment with `INVINCIBLE_AGENT_ROUTING=1`, confirmed tool
+actions execute on **your machine**, not the server — the security
+checks (denylist, staging, approval tokens) all stay server-side, but
+the work travels to a paired local agent:
+
+```bash
+pip install invincible-ai
+invincible login https://your-server.example.com   # pair (device flow, browser approve)
+invincible agent                                   # Ctrl+C to stop
+```
+
+Then connect Claude/Grok/any MCP client to `https://your-server.example.com/mcp`
+as usual. While the agent is running, its console shows each dispatched
+job; the dashboard MCP page shows a live **Agent: online/offline**
+badge. The agent sandbox is your home directory (`INVINCIBLE_AGENT_ROOT`
+to override), with `.env*`, `.git`, `.ssh`, and key material blocked
+everywhere. An offline agent means tool calls answer `agent_offline`
+immediately — nothing hangs. Full transport and threat model:
+[docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md) and
+[SECURITY.md §10](docs/SECURITY.md).
 
 ---
 

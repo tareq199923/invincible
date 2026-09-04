@@ -529,11 +529,20 @@ async def confirm_action(
     token: str,
     approve: bool,
     requester_subject: int | None = None,
+    executor=None,
 ) -> dict:
     """Resolve a staged action by token.
 
     ``requester_subject`` (Phase 2): a token staged by another subject
     resolves as not_found - existence never leaks across users.
+
+    ``executor`` (Phase 10): an optional ``async (action_type, args)
+    -> dict`` callback that replaces local execution of execute_bash /
+    write_file. The mcp endpoint passes one when agent routing is on,
+    forwarding the confirmed work to the caller's paired agent instead
+    of running it on the server host. Local execution paths below are
+    the unchanged fallback (and the only path when routing is off, so
+    every pre-Phase-10 test and workflow behaves byte-identically).
 
     Returns a dict the endpoint maps to an MCP result:
     ``{"status": "not_found"}`` for an unknown/expired/already-used token,
@@ -547,6 +556,8 @@ async def confirm_action(
         return {"status": "not_found"}
     if not approve:
         return {"status": "declined"}
+    if record["type"] in ("execute_bash", "write_file") and executor is not None:
+        return await executor(record["type"], record["args"])
     if record["type"] == "execute_bash":
         args = record["args"]
         return await _run_command(

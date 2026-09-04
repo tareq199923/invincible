@@ -30,6 +30,7 @@ from invincible.core import tool_executor
 from invincible.core.continuity import ContinuityConflictError
 from invincible.core.oauth_store import OAuthStore
 from invincible.core.principal import Principal
+from invincible.core.settings import AGENT_JOB_GRACE_SECONDS, settings
 from invincible.endpoints.auth import local_principal
 
 router = APIRouter()
@@ -258,6 +259,40 @@ def _tool_content(text: str, is_error: bool = False) -> dict:
     return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
 
+async def _agent_executor(request: Request, subject: int | None):
+    """Build the Phase 10 executor callback for confirm_action.
+
+    Returns None when agent routing is off (the default: every tool
+    executes locally on the server host, byte-identical to Phase 9).
+    When on, confirmed execute_bash/write_file work - and read_file,
+    which has no confirm step of its own - travels to the caller's
+    paired agent over its open long-poll. The agent re-runs the
+    denylist locally (wall 2) and confines reads/writes to the user's
+    own machine; the server never executes anything in this mode,
+    which is what makes the consent-gate relaxation safe.
+    """
+    if not settings.agent_routing():
+        return None
+    registry = getattr(request.app.state, "agent_registry", None)
+    if registry is None:
+        return None
+
+    async def _execute(action_type: str, args: dict) -> dict:
+        if subject is None or not registry.online(subject):
+            return {
+                "status": "agent_offline",
+                "message": (
+                    "No invincible agent is connected for this account. "
+                    "Start one on your machine with: invincible agent"
+                ),
+            }
+        timeout = float(args.get("timeout", 30.0)) + AGENT_JOB_GRACE_SECONDS
+        return await registry.dispatch(subject, action_type, args,
+                                       timeout=timeout)
+
+    return _execute
+
+
 async def _dispatch(method, rpc_id, params, request,
                     principal: Principal | None = None):
     if method == "initialize":
@@ -280,7 +315,26 @@ async def _dispatch(method, rpc_id, params, request,
 
         try:
             if name == "read_file":
-                result = await tool_executor.read_file(args.get("path", ""))
+                # Phase 10: with agent routing on, the read executes on
+                # the caller's own machine (their home is the sandbox
+                # there) instead of this server's read roots. No
+                # confirm step either way - reading is non-destructive;
+                # the agent's sandbox is the gate when routed.
+                agent_executor = await _agent_executor(request, owner_subject)
+                if agent_executor is not None:
+                    result = await agent_executor(
+                        "read_file", {"path": args.get("path", "")}
+                    )
+                else:
+                    result = await tool_executor.read_file(
+                        args.get("path", ""))
+                status = result.get("status")
+                if status in ("agent_offline", "agent_timeout"):
+                    await _audit_action(request, name, status,
+                                        subject=owner_subject)
+                    return _result(rpc_id, _tool_content(
+                        result.get("message", status), is_error=True
+                    ))
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "execute_bash":
@@ -304,6 +358,9 @@ async def _dispatch(method, rpc_id, params, request,
                 result = await tool_executor.confirm_action(
                     pending_actions, args.get("token", ""), approve,
                     requester_subject=owner_subject,
+                    # Phase 10: with routing on, confirmed work travels
+                    # to the caller's agent instead of running here.
+                    executor=await _agent_executor(request, owner_subject),
                 )
                 status = result.get("status")
                 await _audit_action(request, name, status,
@@ -314,6 +371,10 @@ async def _dispatch(method, rpc_id, params, request,
                     ))
                 if status == "declined":
                     return _result(rpc_id, _tool_content("Declined.", is_error=True))
+                if status in ("agent_offline", "agent_timeout"):
+                    return _result(rpc_id, _tool_content(
+                        result.get("message", status), is_error=True
+                    ))
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name in ("task_state_set", "task_state_get", "checkpoint_create"):

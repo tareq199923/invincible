@@ -6,6 +6,26 @@
 Register a client, approve it in the browser, and its tokens act as
 you.</p>
 
+<p id="agent-status" class="muted">Agent status: checking&hellip;</p>
+<script>
+  // Phase 10 badge: liveness of this account's paired local agent
+  // (invincible agent). Pure fetch - no htmx dependency, no assets.
+  fetch("/agent/status", {credentials: "same-origin"})
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      const el = document.getElementById("agent-status");
+      if (!el) return;
+      if (!data) { el.textContent = "Agent status: unknown"; return; }
+      el.textContent = data.agent_online
+        ? "Agent: online — your confirmed tool actions run on your machine."
+        : "Agent: offline — start one on your machine with: invincible agent";
+    })
+    .catch(() => {
+      const el = document.getElementById("agent-status");
+      if (el) el.textContent = "Agent status: unknown";
+    });
+</script>
+
 {% if revoked %}<p class="banner">All tokens for that client were revoked
 &mdash; it must reconnect and be approved again.</p>{% endif %}
 

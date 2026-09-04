@@ -244,8 +244,19 @@ async def _non_operator_response(request: Request, session_user: dict | None,
     possession of the secret already proves operator authority. A browser
     holding BOTH cookies is still refused - silently falling back from a
     plain session to the more-privileged owner identity would be a
-    confused deputy."""
+    confused deputy.
+
+    Phase 10 coupling - do not "simplify" this away: when
+    INVINCIBLE_AGENT_ROUTING is on, confirmed tool execution routes to
+    the *user's own paired agent* and no code path executes anything on
+    the server host, so a non-operator approving their own client
+    exposes only their own machine. The gate relaxes for them, and the
+    consent audit entries keep firing. With routing off (the default,
+    and every local dev workflow), the original 403 stands unchanged
+    because approval still means server-host execution."""
     if session_user is None or session_user["role"] == ROLE_OPERATOR:
+        return None
+    if settings.agent_routing():
         return None
     await _audit(
         request, "oauth.consent_forbidden",

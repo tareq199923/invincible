@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from invincible import __version__
+from invincible.core.agent_registry import AgentRegistry
 from invincible.core.config import load_providers_config
 from invincible.core.continuity import ContinuityEngine
 from invincible.core.db import (
@@ -31,6 +32,7 @@ from invincible.core.settings import settings
 from invincible.core.tool_executor import PendingActionStore
 from invincible.endpoints.accounts import router as accounts_router
 from invincible.endpoints.admin_api import router as admin_router
+from invincible.endpoints.agents import router as agents_router
 from invincible.endpoints.anthropic_compat import router as anthropic_router
 from invincible.endpoints.auth import require_auth
 from invincible.endpoints.byok import router as byok_router
@@ -139,6 +141,12 @@ async def lifespan(app: FastAPI):
     await app.state.sessions.init()
     app.state.api_keys = ApiKeyStore(engine)
     app.state.audit_log = AuditLog(engine)
+    # Phase 10: agent dispatch. In-memory on purpose (same trade-off as
+    # the default PendingActionStore) - a restart orphans in-flight jobs
+    # and agents re-register on their next poll. No engine, no
+    # migration; INVINCIBLE_AGENT_ROUTING decides whether the mcp
+    # endpoint ever dispatches to it.
+    app.state.agent_registry = AgentRegistry()
     app.state.router.run_recorder = runs.record
     yield
     await app.state.router.close()
@@ -196,6 +204,10 @@ app.include_router(mcp_router, dependencies=[Depends(require_mcp_auth)])
 # Account surface (browser sessions + per-user management) carries its own
 # realm: session cookies and inv_ keys only - never /v1/* or /mcp auth.
 app.include_router(accounts_router)
+# Phase 10 agent surface: /agent/poll + /agent/result carry their own
+# inv_-key dependency; /agent/status is session-cookie realm. Never
+# guarded by require_auth or require_mcp_auth on purpose.
+app.include_router(agents_router)
 # Phase 5 dashboard pages: cookie-realm only (require_user_session inside).
 app.include_router(dashboard_router)
 # Phase 9 BYOK surface: same cookie realm as the dashboard (its own

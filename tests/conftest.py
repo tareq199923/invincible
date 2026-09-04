@@ -10,6 +10,7 @@ import yaml
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
+from invincible.core.agent_registry import AgentRegistry
 from invincible.core.continuity import ContinuityEngine
 from invincible.core.db import (
     create_all_from_metadata,
@@ -223,6 +224,10 @@ async def client(pg_engine, router_setter, monkeypatch):
     continuity = ContinuityEngine(engine=pg_engine, runs=runs_store)
     await continuity.init()
     app.state.continuity = continuity
+    # Phase 10: fresh in-memory agent registry per test (liveness +
+    # job dispatch); a leaked one would cross-pollute poll/dispatch
+    # assertions exactly like a leaked router would.
+    app.state.agent_registry = AgentRegistry()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as async_client:
@@ -241,6 +246,7 @@ async def client(pg_engine, router_setter, monkeypatch):
     app.state.oauth_store = None
     app.state.registry = None
     app.state.byok_http_client = None
+    app.state.agent_registry = None
 
 
 # --- Phase 3 account helpers ----------------------------------------------------

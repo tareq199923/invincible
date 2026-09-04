@@ -30,6 +30,14 @@ COOLDOWN_CAP_SECONDS = 300
 # confirmed (PendingActionStore.TTL_SECONDS sources its default here).
 PENDING_ACTION_TTL_SECONDS = 600
 
+# Agent routing (core/agent_registry.py + endpoints/agents.py). An agent
+# counts as online if it polled within this window; a long-poll holds this
+# long before answering "nothing"; dispatched jobs get the action's own
+# timeout plus this grace before the holding /mcp request gives up.
+AGENT_ONLINE_TTL_SECONDS = 60
+AGENT_POLL_HOLD_SECONDS = 25
+AGENT_JOB_GRACE_SECONDS = 10
+
 # Fact-injection cap (core/memory.py) when INVINCIBLE_MEMORY_MAX_FACTS is
 # unset or unparseable.
 DEFAULT_MEMORY_MAX_FACTS = 40
@@ -127,6 +135,17 @@ class Settings:
     def persist_pending_actions(self) -> bool:
         """Whether staged MCP actions survive a restart."""
         return bool(os.getenv("INVINCIBLE_PERSIST_PENDING_ACTIONS"))
+
+    def agent_routing(self) -> bool:
+        """Route confirmed MCP tool execution to the caller's paired
+        agent (Phase 10). Opt-in on purpose, unlike the default-on
+        INVINCIBLE_* feature toggles: unset means every tool executes
+        locally on the server host, exactly as before, so local
+        ``invincible start`` development workflows are untouched. Also
+        read by the OAuth consent gate - when routing is on, non-
+        operators may approve their own MCP clients (approval exposes
+        only their own machine, never the server host)."""
+        return bool(os.getenv("INVINCIBLE_AGENT_ROUTING"))
 
     def debug_dump_400(self) -> bool:
         """Opt-in: dump the exact outgoing payload on non-failover 400s to

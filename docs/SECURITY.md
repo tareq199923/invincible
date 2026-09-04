@@ -617,6 +617,28 @@ sandbox:
     re-connect each provider under the new key. See also the dashboard
     Providers page and limit 13's operator-side password reset.
 
+16. **The agent trusts the machine it runs on (Phase 10).** With agent
+    routing on, confirmed tool execution happens on the user's own PC
+    via `invincible agent`, authenticating with the `inv_` key from
+    `invincible login`. Malware on that PC can impersonate the agent —
+    the same trust level as any local dev tool. Mitigations: the key is
+    per-user, stored `0600` in `~/.invincible/`, revocable with
+    `invincible api-key revoke`, and every dispatch/resolution is
+    audited server-side. The server never trusts agent-supplied *input*
+    — jobs flow out, results flow in, and a forged result can only
+    resolve a job the forger's own key was dispatched (submit_result
+    refuses cross-user job ids indistinguishably from unknown ones).
+
+17. **The agent registry is in-memory and single-instance (Phase 10).**
+    Same trade-off class as the default `PendingActionStore`: a restart
+    orphans in-flight jobs (the holding `/mcp` request gets a
+    connection reset; clients retry end-to-end) and every agent
+    re-registers on its next poll. Long-poll transport (plain HTTPS,
+    httpx, no WebSocket) survives flaky WiFi by design — the loop IS
+    the retry. Deploy note: the worst-case held request is the action's
+    own timeout plus 10s grace (~40s for the default 30s command) —
+    verify the platform's proxy timeout after first deploy.
+
 ---
 
 ## 8. Production database permission model
@@ -704,3 +726,47 @@ validated URL's host; it does not pin the resolved IP for the
 connection itself, so a same-request rebind (TOCTOU between check and
 connect) remains theoretically possible — the standard mitigation is
 egress filtering at the network layer for hosted deployments.
+
+---
+
+## 10. Agent routing: three walls, not one (Phase 10)
+
+`INVINCIBLE_AGENT_ROUTING=1` moves *execution* to the user's paired
+agent while every *decision* stays on the server:
+
+- **Wall 1 — server-side checks (unchanged).** Denylist, staging +
+  confirm tokens, audit, per-user binding. A malicious agent cannot
+  skip it: the server refuses to stage anything denylisted no matter
+  what the agent says.
+- **Wall 2 — the agent re-runs the same denylist locally**
+  (`tool_executor.check_denylist` for commands; the agent sandbox for
+  paths) before executing anything. Defense in depth: a command
+  crafted to hit something bad on a user's PC that the server's
+  patterns missed is caught locally and reported back as a `blocked`
+  result — never silently dropped.
+- **Wall 3 — PC-side scoping** (`invincible/agent/sandbox.py`). Reads
+  and writes both stay under the user's home
+  (`INVINCIBLE_AGENT_ROOT` to override) with `.env*`, `.git`, `.ssh`,
+  `id_rsa*`, `id_ed25519*`, `*.pem`, `*credentials*` blocked by name
+  on **every path component, both verbs**. This wall is new code on
+  purpose: the server's write denylist is repo-root-relative and
+  matches nothing outside the server repo — reusing it on a user's
+  machine would protect nothing. The agent process runs as the
+  logged-in user with exactly their privileges, never elevated.
+
+Isolation is structural, not a policy check: registry queues and job
+futures are keyed by `user_id`, an `inv_` key resolves to exactly one
+user, and `POST /agent/result` refuses results for another user's
+jobs. User 1's confirmed commands cannot reach user 2's PC because no
+code path tries.
+
+**The consent-gate coupling (do not "simplify" this apart):** the
+operator-only OAuth consent gate relaxes for plain users *iff* routing
+is on, because in that mode no code path executes a tool on the server
+host — approving a client exposes only the approver's own machine.
+With routing off, the Phase 5/6 refusal stands in full: a
+self-registered session must never mint host-shell MCP tokens. The
+coupling lives in `oauth.py`'s `_non_operator_response` and is pinned
+by `tests/test_oauth_consent_relaxation.py`.
+
+---

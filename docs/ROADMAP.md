@@ -310,6 +310,29 @@ Providers UI: catalog connect cards with connected-state flip, custom
 provider form, HTMX test/remove with row delete, nav entry, and
 realm/fail-closed gates pinned by ``tests/test_dashboard_providers.py``.
 
+
+### Phase 10 — Local Agent (tool execution on the user's PC)
+Move confirmed MCP tool execution off the server host and onto each
+user's own machine: a paired local agent (``invincible agent``) that
+long-polls ``POST /agent/poll`` with its ``inv_`` key, executes
+confirmed ``execute_bash``/``write_file``/``read_file`` jobs locally,
+and posts results back through ``POST /agent/result``. The server keeps
+every decision (denylist, staging, tokens, audit, routing by
+``user_id``); the agent only does the work — with a local denylist
+re-check (wall 2) and a home-relative read/write sandbox (wall 3,
+``invincible/agent/sandbox.py``). Opt-in via ``INVINCIBLE_AGENT_ROUTING``
+(default off = server-local execution, unchanged). The OAuth consent
+gate relaxes for non-operators **iff** routing is on (approving exposes
+only one's own machine — the coupling is pinned by
+``tests/test_oauth_consent_relaxation.py`` and documented in
+[SECURITY.md §10](SECURITY.md)). No new dependencies, no migrations:
+long-poll over plain HTTPS, in-memory registry (restart orphans
+in-flight jobs; agents re-register on next poll). Dashboard MCP page
+gained a live agent online/offline badge (``GET /agent/status``).
+Pinned by ``tests/test_agent_registry.py``,
+``tests/test_agent_endpoints.py``, ``tests/test_agent_routing.py``,
+``tests/test_agent_sandbox.py``, ``tests/test_cli_agent.py``.
+
 ---
 
 ## Deferred
