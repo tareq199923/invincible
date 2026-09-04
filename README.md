@@ -180,7 +180,7 @@ Two commands, both exposed as `invincible` and `inv`:
 | `invincible api-key create --label L` | Mint an API key (`inv_…`) under the local owner — raw key shown **once**, only its SHA-256 hash is stored. |
 | `invincible api-key list` | List API keys by visible prefix (never hashes or raw keys). |
 | `invincible api-key revoke <id-or-prefix>` | Revoke a key immediately. |
-| `invincible login [--server URL]` | Pair this machine with an Invincible server (device flow): prints a URL + short code, you approve in a signed-in browser, and the minted `inv_` key is saved to `~/.invincible/config.json`. |
+| `invincible login [--server URL]` | Pair this machine with an Invincible server (device flow): opens the approval page in your browser — click Approve and the command finishes, saving the `inv_` key to `~/.invincible/config.json`. Defaults to the hosted service (`https://invincible-ai.me`); pass `--server` for a self-hosted or local server. URL + code are printed for headless terminals; the Account page also has a "Pair a device" box for typing a code by hand. |
 | `invincible agent` | Run the local agent (Phase 10): polls the paired server for confirmed tool jobs and executes them on **this machine** with your own user privileges — denylist re-checked locally, reads/writes sandboxed to your home. Ctrl+C to stop. Requires `invincible login` first. |
 
 ```bash
@@ -329,9 +329,13 @@ the work travels to a paired local agent:
 
 ```bash
 pip install invincible-ai
-invincible login https://your-server.example.com   # pair (device flow, browser approve)
-invincible agent                                   # Ctrl+C to stop
+invincible login       # browser opens → click Approve (defaults to the hosted server)
+invincible agent       # prints "connected", Ctrl+C to stop
 ```
+
+Self-hosters point at their own server once:
+`invincible login --server https://mycompany.ai` (or
+`--server http://127.0.0.1:8000` against a local `invincible start`).
 
 Then connect Claude/Grok/any MCP client to `https://your-server.example.com/mcp`
 as usual. While the agent is running, its console shows each dispatched

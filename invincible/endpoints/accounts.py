@@ -586,6 +586,13 @@ async def device_code_start(request: Request):
         "device_code": request_data["device_code"],
         "user_code": request_data["user_code"],
         "verification_uri": f"{base}/login",
+        # RFC 8628 verification_uri_complete: the code embedded in the
+        # URL, so the client can open one link and the user just clicks
+        # Approve - no code typing, no URL editing. Without this the
+        # flow dead-ends: /login has no code-entry form and redirects
+        # signed-in users to /account.
+        "verification_uri_complete":
+            f"{base}/auth/devices/{request_data['user_code']}",
         "expires_in": request_data["expires_in"],
         "interval": request_data["interval"],
     }
@@ -598,6 +605,23 @@ def _device_result(request: Request, title: str, message: str,
         {"title": title, "message": message},
         status_code=status_code,
     )
+
+
+@router.get("/auth/devices")
+async def device_lookup(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    """Form target for the Account page's "Pair a device" box: takes
+    ?code= and redirects to the approval page. Exists because
+    /auth/devices/{code} is a path param a plain HTML form can't build -
+    and because pairing a browser-less machine means reading a code off
+    that machine's screen, with nowhere to type it otherwise."""
+    code = (request.query_params.get("code") or "").strip()
+    if not code:
+        return RedirectResponse("/account", status_code=303)
+    return RedirectResponse(
+        f"/auth/devices/{code.upper()}", status_code=303)
 
 
 @router.get("/auth/devices/{user_code}")

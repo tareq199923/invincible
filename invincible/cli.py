@@ -1673,9 +1673,17 @@ def _set_role(email: str, role: str, action_text: str,
 # --- local dev database -------------------------------------------------------
 
 
+DEFAULT_SERVER = "https://invincible-ai.me"
+
+
 @click.command("login")
-@click.option("--server", default="http://127.0.0.1:8000",
-              show_default=True, envvar="INVINCIBLE_SERVER")
+@click.option("--server", default=DEFAULT_SERVER,
+              show_default=True, envvar="INVINCIBLE_SERVER",
+              help="Server to pair with. Default is the hosted service; "
+                   "self-hosters pass their own URL "
+                   "(e.g. --server https://mycompany.ai, or "
+                   "--server http://127.0.0.1:8000 for a local "
+                   "`invincible start`).")
 @click.option("--config", "config_path",
               type=click.Path(dir_okay=False, path_type=str), default=None,
               help="Where to store the paired credentials "
@@ -1683,15 +1691,17 @@ def _set_role(email: str, role: str, action_text: str,
 def login(server: str, config_path: str | None):
     """Pair this machine with an Invincible server (device flow).
 
-    Prints a URL + short code; approve the request in a browser where you
-    are signed in, and this command stores the minted API key locally.
+    Opens the approval page in your browser (one click: Approve); the
+    command finishes once approved and stores the minted API key locally.
+    The URL + code are printed as a fallback for headless terminals.
     """
     server = server.rstrip("/")
 
     async def _run():
         async def _on_code(url: str, code: str) -> None:
-            click.echo(f"1. Open:  {url}")
-            click.echo(f"2. Code:  {code}  (approve within 10 minutes)")
+            click.echo(f"Approval page: {url}")
+            click.echo(f"Code: {code}  (approve within 10 minutes)")
+            _open_browser(url)
 
         return await _pair_device(server, on_code=_on_code)
 
@@ -1702,6 +1712,7 @@ def login(server: str, config_path: str | None):
     path = _save_client_config(
         server=server, api_key=token["access_token"], path=config_path)
     click.echo(f"Paired. API key {token['prefix']} saved to {path}")
+    click.echo("Start your agent with: invincible agent")
 
 
 # --- device pairing plumbing (shared by tests via ASGI transport) ------------
@@ -1732,8 +1743,13 @@ async def _pair_device(base_url: str, *, client=None,
         device_code = payload["device_code"]
         interval = float(payload.get("interval", 5))
         expires_in = float(payload.get("expires_in", 600))
-        verification_uri = payload.get("verification_uri",
-                                       f"{base_url}/login")
+        # Prefer the RFC 8628 verification_uri_complete (code already in
+        # the URL): the user opens one link and clicks Approve. Plain
+        # verification_uri is the fallback for older servers; the user
+        # then needs the code alongside it.
+        verification_uri = payload.get(
+            "verification_uri_complete"
+        ) or payload.get("verification_uri", f"{base_url}/login")
         user_code = payload["user_code"]
         if on_code is not None:
             result = on_code(verification_uri, user_code)
@@ -1805,8 +1821,9 @@ def _load_client_config(path: str | None = None) -> dict:
             config = json.load(handle)
     except FileNotFoundError:
         raise click.ClickException(
-            f"No pairing credentials at {target}. Run `invincible login` "
-            "first."
+            f"This machine isn't paired yet (no {target}).\n"
+            "Pair it first - the browser opens, you click Approve:\n"
+            "  invincible login --server https://your-server"
         ) from None
     except json.JSONDecodeError as exc:
         raise click.ClickException(
@@ -1815,7 +1832,7 @@ def _load_client_config(path: str | None = None) -> dict:
     if not config.get("server") or not config.get("api_key"):
         raise click.ClickException(
             f"Config file {target} is missing server or api_key. "
-            "Re-run `invincible login`."
+            "Re-run `invincible login --server https://your-server`."
         )
     return config
 

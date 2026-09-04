@@ -194,3 +194,128 @@ def test_login_command_reports_failure(monkeypatch):
     result = runner.invoke(login, ["--server", "http://example.test"])
     assert result.exit_code != 0
     assert "denied" in result.output
+
+
+def test_login_defaults_to_hosted_service(monkeypatch):
+    """Phase 11: the flexx-style default - plain `invincible login`
+    pairs with the hosted service, no URL, no questions. Self-hosters
+    opt out with --server (pinned separately by every other test)."""
+    captured: dict = {}
+
+    async def _fake_pair(base_url, **kwargs):
+        captured["base_url"] = base_url
+        return {"access_token": "inv_x", "prefix": "inv_x"}
+
+    monkeypatch.setattr("invincible.cli._pair_device", _fake_pair)
+    monkeypatch.setattr("invincible.cli._open_browser", lambda url: None)
+    runner = CliRunner()
+    result = runner.invoke(login, [])
+    assert result.exit_code == 0, result.output
+    assert captured["base_url"] == "https://invincible-ai.me"
+
+
+def test_login_opens_the_approval_page(monkeypatch, tmp_path):
+    """The one-click flow: the browser is opened on the URL the pairing
+    handshake reported (the code-embedded approval page)."""
+    opened: list = []
+
+    async def _fake_pair(base_url, **kwargs):
+        # reproduce the real helper's behavior: call on_code with the
+        # complete verification URL, then succeed
+        on_code = kwargs.get("on_code")
+        if on_code is not None:
+            result = on_code("https://sv.test/auth/devices/ABCD1234",
+                             "ABCD1234")
+            if hasattr(result, "__await__"):
+                await result
+        return {"access_token": "inv_y", "prefix": "inv_y"}
+
+    monkeypatch.setattr("invincible.cli._pair_device", _fake_pair)
+    monkeypatch.setattr("invincible.cli._open_browser",
+                        lambda url: opened.append(url))
+    runner = CliRunner()
+    config_target = tmp_path / "config.json"
+    result = runner.invoke(login, ["--server", "https://sv.test",
+                                   "--config", str(config_target)])
+    assert result.exit_code == 0, result.output
+    assert opened == ["https://sv.test/auth/devices/ABCD1234"]
+    assert "Approval page: https://sv.test/auth/devices/ABCD1234" \
+        in result.output
+
+
+# --- Phase 11: one-click pairing ------------------------------------------
+
+
+async def test_device_code_returns_complete_uri(client):
+    """The pairing handshake includes RFC 8628 verification_uri_complete:
+    the code embedded in the approval URL, so the CLI can open one link
+    instead of printing a dead-end /login and a code nobody can enter."""
+    response = await client.post("/auth/device/code")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["verification_uri_complete"] == (
+        f"http://test/auth/devices/{payload['user_code']}"
+    )
+
+
+async def test_pair_device_prefers_complete_uri(client):
+    """_pair_device hands on_code the complete URL (code inside), not
+    the bare /login that redirects signed-in users to /account."""
+    await register_account(client, "complete-uri@example.com")
+    seen: dict = {}
+    approved = False
+
+    async def _on_code(url: str, code: str) -> None:
+        seen["url"], seen["code"] = url, code
+
+    async def _tick(_seconds: float) -> None:
+        # approve from the logged-in browser once a code was seen
+        nonlocal approved
+        if seen and not approved:
+            approved = True
+            response = await client.post(
+                f"/auth/devices/{seen['code']}/approve")
+            assert response.status_code == 200
+
+    anon = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test")
+    try:
+        pair_task = asyncio.ensure_future(
+            _pair_device("http://test", client=anon,
+                         sleep=_tick, on_code=_on_code))
+        result = await asyncio.wait_for(pair_task, 10)
+        assert result["access_token"].startswith("inv_")
+        assert "/auth/devices/" in seen["url"]
+        assert seen["code"] in seen["url"]
+    finally:
+        await anon.aclose()
+
+
+async def test_device_lookup_redirects_to_approval_page(client):
+    """The Account page's Pair-a-device form target: ?code= becomes a
+    redirect to /auth/devices/<CODE> (uppercased, like the page does)."""
+    await register_account(client, "lookup@example.com")
+    login_response = await client.post(
+        "/auth/login",
+        json={"email": "lookup@example.com", "password": "longenough1"})
+    assert login_response.status_code == 200
+
+    response = await client.get("/auth/devices", params={"code": "xk7m49qp"},
+                                follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/auth/devices/XK7M49QP"
+
+    empty = await client.get("/auth/devices", follow_redirects=False)
+    assert empty.status_code == 303
+    assert empty.headers["location"] == "/account"
+
+
+async def test_account_page_has_pair_a_device_box(client):
+    await register_account(client, "pairbox@example.com")
+    await client.post("/auth/login",
+                      json={"email": "pairbox@example.com",
+                            "password": "longenough1"})
+    page = await client.get("/account")
+    assert page.status_code == 200
+    assert "Pair a device" in page.text
+    assert 'action="/auth/devices"' in page.text

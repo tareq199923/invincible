@@ -336,13 +336,17 @@ Notes on `api-key` (Platform Phase 1):
 - Both commands read `INVINCIBLE_DB_URL` from the environment or `.env`,
   like `oauth`/`db`.
 
-Notes on `login` (Platform Phase 3):
+Notes on `login` (Platform Phase 3; Phase 11 default change):
 
-- Runs the device pairing flow against a running server: it prints a URL
-  and short code, waits for you to approve in a browser where you are
-  signed in, then stores the minted API key.
-- `--server` defaults to `http://127.0.0.1:8000` (also via the
-  `INVINCIBLE_SERVER` env var); `--config` overrides where credentials are
+- Runs the device pairing flow against a running server: it opens the
+  approval page in your browser (RFC 8628 `verification_uri_complete`;
+  URL + code printed as fallback), waits for you to approve, then stores
+  the minted API key.
+- `--server` defaults to the hosted service,
+  `https://invincible-ai.me` (also via the `INVINCIBLE_SERVER` env var)
+  — self-hosters and local dev pass their own URL explicitly
+  (e.g. `--server http://127.0.0.1:8000` against a local
+  `invincible start`). `--config` overrides where credentials are
   saved — default `~/.invincible/config.json` (`{"server", "api_key"}`,
   mode 600 where supported).
 - Polling respects the server's interval and backs off on `slow_down`; a

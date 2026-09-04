@@ -105,8 +105,10 @@ async def run_agent(base_url: str, api_key: str,
     )
     headers = {"Authorization": f"Bearer {api_key}"}
     stop = stop or asyncio.Event()
+    announced = False  # one-time "connected" after the first good poll
 
     async def _one_cycle() -> None:
+        nonlocal announced
         polled = await http.post("/agent/poll", headers=headers)
         if polled.status_code == 401:
             # Revoked or unknown key: retrying with the same
@@ -117,6 +119,9 @@ async def run_agent(base_url: str, api_key: str,
             stop.set()
             return
         polled.raise_for_status()
+        if not announced:
+            announced = True
+            print("[agent] connected - waiting for jobs from your AI")
         job = polled.json().get("job")
         if job is None:
             return

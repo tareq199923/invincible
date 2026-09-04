@@ -19,6 +19,15 @@
 
 <h3>API keys</h3>
 
+<h4>Pair a device</h4>
+<p class="muted">Approve a machine that ran <code>invincible login</code>:
+type the code it printed.</p>
+<form method="get" action="/auth/devices" class="inline-form">
+  <input type="text" name="code" placeholder="device code (e.g. XK7M49QP)"
+         maxlength="32" autocomplete="off" required>
+  <button type="submit">Approve device</button>
+</form>
+
 <h4>Generate a key</h4>
 <form method="post" action="/api-keys" class="inline-form">
   <input type="text" name="label" placeholder="label (optional)"

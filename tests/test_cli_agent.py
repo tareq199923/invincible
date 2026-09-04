@@ -165,3 +165,28 @@ async def test_network_errors_back_off_and_retry(client, monkeypatch):
     stop.set()
     await asyncio.wait_for(loop_task, timeout=5)
     await flaky.aclose()
+
+
+async def test_agent_announces_connection_once(client, monkeypatch,
+                                               capsys):
+    """Phase 11 UX: the first successful poll prints a one-time
+    'connected' line so the user knows it worked without checking the
+    dashboard badge - and it must not repeat on later polls."""
+    monkeypatch.setenv("INVINCIBLE_AGENT_ROUTING", "1")
+    uid, key = await _mint_key(client)
+    # Short server-side hold so the 0.2s window fits many polls; with
+    # the default 25s hold exactly one poll would happen and the
+    # "not repeated" half of the assertion would never be exercised.
+    import invincible.endpoints.agents as agents_mod
+    monkeypatch.setattr(agents_mod, "AGENT_POLL_HOLD_SECONDS", 0.05)
+
+    stop = asyncio.Event()
+    loop_task = asyncio.ensure_future(
+        runner.run_agent("http://test", key, client=client, stop=stop)
+    )
+    await asyncio.sleep(0.3)  # several polls happen in this window
+    stop.set()
+    await asyncio.wait_for(loop_task, timeout=5)
+
+    out = capsys.readouterr().out
+    assert out.count("connected - waiting for jobs") == 1
