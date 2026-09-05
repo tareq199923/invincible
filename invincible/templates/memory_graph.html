@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Memory graph - Invincible{% endblock %}
+{% block content %}
+<h2>Memory graph</h2>
+<p class="muted">Who saved what, when, across which projects.</p>
+
+{% if graph.summary.truncated %}
+<div class="banner">Showing the {{ graph.summary.shown }} newest of
+  {{ graph.summary.total }} memories. Filter by project or kind to see more.</div>
+{% endif %}
+
+<div class="cards">
+  <div class="card"><span class="num">{{ graph.summary.total }}</span><span class="label">Memories</span></div>
+  <div class="card"><span class="num">{{ graph.summary.by_source | length }}</span><span class="label">Sources</span></div>
+  <div class="card"><span class="num">{{ graph.summary.by_project | length }}</span><span class="label">Projects</span></div>
+  <div class="card"><span class="num">{{ graph.summary.growth_7d }}</span><span class="label">This week</span></div>
+</div>
+
+<form method="get" action="/dashboard/memory/graph" class="memory-filters">
+  <select name="kind">
+    <option value="">any kind</option>
+    {% for k in kinds %}<option value="{{ k }}" {% if kind == k %}selected{% endif %}>{{ k }}</option>{% endfor %}
+  </select>
+  <select name="project_id">
+    <option value="0">all projects</option>
+    {% for p in projects %}
+    <option value="{{ p.id }}" {% if project_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Filter</button>
+</form>
+
+{% if graph.summary.by_source %}
+<p class="muted">
+  {% for source, count in graph.summary.by_source.items() %}
+  <span class="legend-item">
+    <svg width="10" height="10" style="vertical-align: middle;">
+      <circle cx="5" cy="5" r="5"
+              fill="{{ graph.layout['source:' ~ source].color if ('source:' ~ source) in graph.layout else '#999' }}"/>
+    </svg>
+    {{ source }} ({{ count }})
+  </span>&nbsp;&nbsp;
+  {% endfor %}
+</p>
+{% endif %}
+
+{% if graph.nodes | selectattr("kind", "equalto", "memory") | list %}
+<svg viewBox="0 0 {{ graph.canvas.width }} {{ graph.canvas.height }}"
+     width="100%" role="img" aria-label="Memory graph">
+  {% for edge in graph.edges if edge.kind in ("owned_by", "belongs_to") %}
+  <line x1="{{ graph.layout[edge.source].x }}" y1="{{ graph.layout[edge.source].y }}"
+        x2="{{ graph.layout[edge.target].x }}" y2="{{ graph.layout[edge.target].y }}"
+        stroke="#d0d7de" stroke-width="1"/>
+  {% endfor %}
+  {% for node in graph.nodes if node.kind == "memory" %}
+  <circle cx="{{ graph.layout[node.id].x }}" cy="{{ graph.layout[node.id].y }}"
+          r="5" fill="{{ graph.layout[node.id].color }}">
+    <title>{{ node.label }} ({{ node.source }}, {{ node.memory_kind }})</title>
+  </circle>
+  {% endfor %}
+  {% for node in graph.nodes if node.kind == "project" %}
+  <circle cx="{{ graph.layout[node.id].x }}" cy="{{ graph.layout[node.id].y }}"
+          r="10" fill="#f6f8fa" stroke="{{ graph.layout[node.id].color }}" stroke-width="2"/>
+  <text x="{{ graph.layout[node.id].x }}" y="{{ graph.layout[node.id].y + 28 }}"
+        text-anchor="middle" font-size="13" fill="#57606a">{{ node.label }} ({{ node.count }})</text>
+  {% endfor %}
+  {% for node in graph.nodes if node.kind == "user" %}
+  <circle cx="{{ graph.layout[node.id].x }}" cy="{{ graph.layout[node.id].y }}"
+          r="14" fill="{{ graph.layout[node.id].color }}"/>
+  <text x="{{ graph.layout[node.id].x }}" y="{{ graph.layout[node.id].y + 34 }}"
+        text-anchor="middle" font-size="13" font-weight="600" fill="#24292f">{{ node.label }}</text>
+  {% endfor %}
+</svg>
+
+<h3>Timeline</h3>
+<p class="muted">Oldest left, newest right, colored by source.</p>
+<svg viewBox="0 0 800 60" width="100%" role="img" aria-label="Memory timeline">
+  <line x1="10" y1="30" x2="790" y2="30" stroke="#d0d7de" stroke-width="1"/>
+  {% for point in graph.timeline_positions %}
+  <circle cx="{{ 10 + 780 * point.frac }}" cy="30" r="5" fill="{{ point.color }}">
+    <title>{{ point.label }} ({{ point.source }})</title>
+  </circle>
+  {% endfor %}
+</svg>
+{% else %}
+<p class="muted">No memories{% if kind %} of kind {{ kind }}{% endif %} yet.
+  Save some from the <a href="/dashboard/memory">Memory page</a>, through
+  chat, or let a connected AI save them via MCP.</p>
+{% endif %}
+{% endblock %}

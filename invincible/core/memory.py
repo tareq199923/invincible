@@ -304,6 +304,7 @@ class MemoryStore:
         query = (
             select(
                 memories.c.id,
+                memories.c.project_id,
                 memories.c.scope,
                 memories.c.layer,
                 memories.c.kind,
@@ -323,13 +324,18 @@ class MemoryStore:
 
     async def count_for_user(
         self, user_id: int, *, layer: str | None = None,
-        kind: str | None = None,
+        kind: str | None = None, project_id: int | None = None,
     ) -> int:
-        """Exact row count for one owner, honoring the same filters."""
+        """Exact row count for one owner, honoring the same filters
+        (including the project union ``list_for_user`` uses)."""
+        clauses = self._owner_filter(user_id, layer=layer, kind=kind)
+        if project_id is not None:
+            clauses.append(or_(memories.c.project_id.is_(None),
+                               memories.c.project_id == project_id))
         query = (
             select(func.count())
             .select_from(memories)
-            .where(*self._owner_filter(user_id, layer=layer, kind=kind))
+            .where(*clauses)
         )
         async with self.engine.connect() as conn:
             return int((await conn.execute(query)).scalar_one())

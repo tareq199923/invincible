@@ -279,6 +279,66 @@ async def memory_page(
     )
 
 
+# --------------------------------------------------------------------------
+# Memory graph (Level 1: derived relationships only). The projection
+# payload is the permanent contract - the JSON sibling exists so a future
+# UI redesign consumes tested data instead of re-deriving it.
+
+
+async def _memory_graph_payload(request: Request, principal: Principal,
+                                *, kind: str | None,
+                                project_id: int | None) -> dict:
+    from invincible.core.memory_projection import (
+        MEMORY_NODE_CAP,
+        build_memory_projection,
+    )
+
+    if kind is not None and kind not in _MEMORY_KINDS:
+        kind = None
+    return await build_memory_projection(
+        _state(request, "memory"),
+        ProjectService(_engine(request)),
+        user_id=principal.user_id,
+        user_label=await _email(_engine(request), principal),
+        kind=kind,
+        project_id=project_id,
+        limit=MEMORY_NODE_CAP,
+    )
+
+
+@router.get("/memories/graph")
+async def memory_graph_json(
+    request: Request,
+    kind: str | None = None,
+    project_id: int | None = None,
+    principal: Principal = Depends(require_user_session),
+):
+    return await _memory_graph_payload(request, principal, kind=kind,
+                                       project_id=project_id)
+
+
+@router.get("/dashboard/memory/graph")
+async def memory_graph_page(
+    request: Request,
+    kind: str | None = None,
+    project_id: int | None = None,
+    principal: Principal = Depends(require_user_session),
+):
+    graph = await _memory_graph_payload(request, principal, kind=kind,
+                                        project_id=project_id)
+    projects = await ProjectService(_engine(request)).list(
+        principal.user_id)
+    return _page(
+        "memory_graph.html", request,
+        user_email=await _email(_engine(request), principal),
+        graph=graph,
+        kind=kind or "",
+        kinds=_MEMORY_KINDS,
+        project_id=project_id if project_id is not None else 0,
+        projects=projects,
+    )
+
+
 @router.get("/memories")
 async def list_memories(
     request: Request,

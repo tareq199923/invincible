@@ -64,6 +64,10 @@ invincible/
     ├── projection.py           Shared session/run/task-state projection builder —
     │                           one engine under the graph endpoint AND the
     │                           dashboard session-detail view (Phase 5B extraction)
+    ├── memory_projection.py    Memory-graph projection (Level 1: derived
+    │                           relationships only) + deterministic radial
+    │                           layout — the payload under /memories/graph
+    │                           and the dashboard memory-graph page
     ├── continuity.py           Task-state/checkpoint engine + continuation brief
     │                           + reactive failover checkpoints (Phase 4)
     └── tool_executor.py        MCP tool execution + denylists + approval

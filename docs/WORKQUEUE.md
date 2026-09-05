@@ -59,6 +59,28 @@ Open decisions (multi-day project, fold into Phase 6/7 planning):
 
 ## Completed log (newest first)
 
+- **2026-09-06 — MEMORY GRAPH (Level 1): who saved what, when, across
+  which projects.** New `/dashboard/memory/graph` page renders the
+  memory store as a center-radial SVG (user → projects → memories,
+  dots colored by source: chat / dashboard / mcp:grok / mcp:claude)
+  plus a timeline strip and summary cards, with kind/project filters.
+  Built as a strictly-derived projection (`core/memory_projection.py`,
+  the same discipline as `core/projection.py`) — no new schema, no
+  state of its own; nodes are capped at 100 newest-first with a
+  visible truncation banner. `GET /memories/graph` is the JSON
+  sibling and the PERMANENT DATA CONTRACT: the current template is
+  deliberately disposable because a full dashboard UI redesign is
+  planned — the redesign consumes this payload instead of
+  re-deriving it. Memory nodes carry deterministic radial layout +
+  source colors so a future renderer needs no layout logic.
+  `list_for_user`/`count_for_user` gained `project_id` in their
+  output/filters (the same union semantics retrieval uses). Pinned by
+  `tests/test_memory_graph.py` (11 tests: empty store, multi-project/
+  multi-source shapes, cross-user isolation, union filter, visible
+  cap, kind filter, JSON/page parity, auth gates incl. `inv_` key
+  rejection). Level 2 (semantic memory↔memory edges) remains a
+  designed seam.
+
 - **2026-09-06 — MCP MEMORY TOOLS: any connected AI can now save into,
   search, and browse the user's memory store.** Three new data-plane
   tools on `/mcp` (`memory_save`/`memory_search`/`memory_list`) over
