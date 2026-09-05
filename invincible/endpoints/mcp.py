@@ -18,6 +18,12 @@ Approval for execute_bash/write_file is remote and token-based: a call
 stages a pending action and returns a token; only a confirm_action call
 with that token (approve=true) executes it. Whoever holds a valid Bearer
 token is the approver, not whoever happens to be sitting at the machine.
+
+The memory tools (memory_save / memory_search / memory_list) are
+data-plane instead of machine-plane: they read and write the caller's
+own rows in the shared memories store with no confirmation gate - the
+same risk class as chat-side "remember this" - and every query is
+predicated on the OAuth subject's user_id.
 """
 import contextlib
 import json
@@ -28,12 +34,25 @@ from fastapi.responses import JSONResponse
 from invincible import __version__
 from invincible.core import tool_executor
 from invincible.core.continuity import ContinuityConflictError
+from invincible.core.identity import resolve_project_by_name
+from invincible.core.memory import (
+    MAX_CONTENT_CHARS,
+    MCP_CONFIDENCE,
+    MEMORY_KINDS,
+)
 from invincible.core.oauth_store import OAuthStore
 from invincible.core.principal import Principal
 from invincible.core.settings import AGENT_JOB_GRACE_SECONDS, settings
 from invincible.endpoints.auth import local_principal
 
 router = APIRouter()
+
+# Response caps for the memory tools: MCP results land in an AI's context
+# window, so they obey the same token discipline as prompt injection.
+_MEMORY_SEARCH_DEFAULT = 5
+_MEMORY_SEARCH_MAX = 10
+_MEMORY_LIST_DEFAULT = 10
+_MEMORY_LIST_MAX = 20
 
 TOOLS = [
     {
@@ -165,6 +184,97 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "memory_save",
+        "description": (
+            "Deliberately store a fact about the user or one of their "
+            "projects into their memory store - the same store their "
+            "dashboard and gateway chats read. Use it for durable facts "
+            "worth recalling in later sessions (preferences, decisions, "
+            "working context); for transient task progress use "
+            "task_state_set instead. No confirmation is required: rows "
+            "are user-owned data, reversible from the dashboard."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "the fact to remember, "
+                                   f"1-{MAX_CONTENT_CHARS} characters",
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": list(MEMORY_KINDS),
+                    "description": "coarse classifier (default: note)",
+                },
+                "project": {
+                    "type": "string",
+                    "description": "one of the user's project names; "
+                                   "tags the memory to that project "
+                                   "(default: user-scope)",
+                },
+            },
+            "required": ["content"],
+        },
+    },
+    {
+        "name": "memory_search",
+        "description": (
+            "Search the user's memory store with the same ranking their "
+            "gateway chats use (lexical relevance x recency x "
+            "confidence). Returns a small ranked list, never a dump - "
+            "look here before asking the user something you may "
+            "already know."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "project": {
+                    "type": "string",
+                    "description": "restrict to that project's "
+                                   "memories plus user-scope ones",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": f"max results, 1-{_MEMORY_SEARCH_MAX} "
+                                   f"(default {_MEMORY_SEARCH_DEFAULT})",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "memory_list",
+        "description": (
+            "Browse the user's most recent memories, newest first - "
+            "useful for bootstrapping context at the start of a "
+            "session. Optional kind/project filters; capped at "
+            f"{_MEMORY_LIST_MAX} rows. There is deliberately no "
+            "memory_delete over MCP: deletion stays a human, "
+            "dashboard-only action."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": f"max rows, 1-{_MEMORY_LIST_MAX} "
+                                   f"(default {_MEMORY_LIST_DEFAULT})",
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": list(MEMORY_KINDS),
+                },
+                "project": {
+                    "type": "string",
+                    "description": "that project's memories plus "
+                                   "user-scope ones",
+                },
+            },
+        },
+    },
 ]
 
 
@@ -213,6 +323,10 @@ async def require_mcp_auth(request: Request) -> Principal:
     access = await store.validate_access(token)
     if access is None:
         raise _auth_error(request)
+    # Remember which OAuth client is calling: memory_save provenance
+    # records it (mcp:<client_name>) so the dashboard shows which AI
+    # saved each row.
+    request.state.mcp_client_id = access.get("client_id")
 
     from invincible.core.identity import ensure_default_project
 
@@ -291,6 +405,45 @@ async def _agent_executor(request: Request, subject: int | None):
                                        timeout=timeout)
 
     return _execute
+
+
+async def _mcp_project_id(request: Request, principal: Principal, args: dict):
+    """Resolve the memory tools' optional ``project`` argument (a project
+    NAME the caller owns) to its id.
+
+    Returns ``(project_id, error)`` - exactly one is set. Unknown names
+    error rather than silently de-scoping: an AI told it saved to
+    "invincible" must learn that it didn't.
+    """
+    name = str(args.get("project") or "").strip()
+    if not name:
+        return None, None
+    engine = getattr(request.app.state, "engine", None)
+    if engine is None:
+        return None, "Project lookup is not available on this server."
+    project_id = await resolve_project_by_name(
+        engine, principal.user_id, name)
+    if project_id is None:
+        return None, (
+            f"Unknown project: {name}. Save without 'project' for "
+            "user-scope, or use one of the user's existing project names."
+        )
+    return project_id, None
+
+
+async def _mcp_provenance(request: Request) -> str:
+    """Provenance tag for MCP-saved memories: the OAuth client's
+    registered name when it has one, else its client_id."""
+    client_id = getattr(request.state, "mcp_client_id", None)
+    if not client_id:
+        return "mcp:local"
+    store = getattr(request.app.state, "oauth_store", None)
+    if store is not None:
+        with contextlib.suppress(Exception):
+            client = await store.get_client(client_id)
+            if client and client.get("client_name"):
+                return f"mcp:{client['client_name']}"
+    return f"mcp:{client_id}"
 
 
 async def _dispatch(method, rpc_id, params, request,
@@ -463,6 +616,149 @@ async def _dispatch(method, rpc_id, params, request,
                     return _result(rpc_id, _tool_content(str(e), is_error=True))
                 except ValueError as e:
                     return _result(rpc_id, _tool_content(str(e), is_error=True))
+
+            if name in ("memory_save", "memory_search", "memory_list"):
+                # Data-plane tools: they read/write the caller's own
+                # memory rows, never the machine, so no confirm_action
+                # gate applies (same risk class as chat-side "remember
+                # this"). Every query is ownership-predicated below.
+                memory = getattr(request.app.state, "memory", None)
+                if principal is None or memory is None:
+                    return _result(rpc_id, _tool_content(
+                        "Memory store is not available on this server.",
+                        is_error=True,
+                    ))
+
+                if name == "memory_save":
+                    # The kill-switch gates CREATION only - search and
+                    # list keep working so saved data is never trapped.
+                    if not settings.memory_enabled():
+                        return _result(rpc_id, _tool_content(
+                            "Memory saving is disabled on this server "
+                            "(INVINCIBLE_MEMORY is off).",
+                            is_error=True,
+                        ))
+                    content = str(args.get("content") or "").strip()
+                    if not content:
+                        return _result(rpc_id, _tool_content(
+                            "memory_save requires non-empty 'content'.",
+                            is_error=True,
+                        ))
+                    if len(content) > MAX_CONTENT_CHARS:
+                        return _result(rpc_id, _tool_content(
+                            "Memory content must be at most "
+                            f"{MAX_CONTENT_CHARS} characters.",
+                            is_error=True,
+                        ))
+                    kind = str(args.get("kind") or "note")
+                    if kind not in MEMORY_KINDS:
+                        return _result(rpc_id, _tool_content(
+                            "kind must be one of: "
+                            + ", ".join(MEMORY_KINDS), is_error=True,
+                        ))
+                    project_id, project_error = await _mcp_project_id(
+                        request, principal, args)
+                    if project_error:
+                        return _result(rpc_id, _tool_content(
+                            project_error, is_error=True))
+                    made_id = await memory.save_memory(
+                        user_id=principal.user_id,
+                        content=content,
+                        layer="explicit",
+                        kind=kind,
+                        confidence=MCP_CONFIDENCE,
+                        provenance=await _mcp_provenance(request),
+                        project_id=project_id,
+                    )
+                    # Audit metadata only - never the content, which
+                    # could carry secrets (same rule as _audit_action).
+                    log = getattr(request.app.state, "audit_log", None)
+                    if log is not None:
+                        with contextlib.suppress(Exception):
+                            await log.record(
+                                "mcp.memory_save.saved",
+                                actor_user_id=principal.user_id,
+                                actor_kind="mcp",
+                                resource_type="memory",
+                                resource_id=str(made_id),
+                            )
+                    return _result(rpc_id, _tool_content(json.dumps({
+                        "saved": True,
+                        "id": made_id,
+                        "kind": kind,
+                        "scope": "project" if project_id is not None
+                                 else "user",
+                    })))
+
+                if name == "memory_search":
+                    retrieval = getattr(
+                        request.app.state, "retrieval", None)
+                    if retrieval is None:
+                        return _result(rpc_id, _tool_content(
+                            "Memory retrieval is not available on this "
+                            "server.", is_error=True,
+                        ))
+                    query = str(args.get("query") or "").strip()
+                    if not query:
+                        return _result(rpc_id, _tool_content(
+                            "memory_search requires non-empty 'query'.",
+                            is_error=True,
+                        ))
+                    try:
+                        limit = int(args.get("limit")
+                                    or _MEMORY_SEARCH_DEFAULT)
+                    except (TypeError, ValueError):
+                        limit = _MEMORY_SEARCH_DEFAULT
+                    limit = max(1, min(limit, _MEMORY_SEARCH_MAX))
+                    project_id, project_error = await _mcp_project_id(
+                        request, principal, args)
+                    if project_error:
+                        return _result(rpc_id, _tool_content(
+                            project_error, is_error=True))
+                    found = await retrieval.retrieve(
+                        user_id=principal.user_id,
+                        query=query,
+                        project_id=project_id,
+                        limit=limit,
+                    )
+                    return _result(rpc_id, _tool_content(json.dumps({
+                        "results": [
+                            {
+                                "id": m.id,
+                                "kind": m.kind,
+                                "content": m.content,
+                                "relevance": round(m.score, 4),
+                                "created_at": m.created_at,
+                            }
+                            for m in found
+                        ],
+                        "count": len(found),
+                    })))
+
+                # memory_list: newest-first browse for session bootstrap.
+                try:
+                    limit = int(args.get("limit") or _MEMORY_LIST_DEFAULT)
+                except (TypeError, ValueError):
+                    limit = _MEMORY_LIST_DEFAULT
+                limit = max(1, min(limit, _MEMORY_LIST_MAX))
+                kind = args.get("kind")
+                if kind is not None and kind not in MEMORY_KINDS:
+                    return _result(rpc_id, _tool_content(
+                        "kind must be one of: " + ", ".join(MEMORY_KINDS),
+                        is_error=True,
+                    ))
+                project_id, project_error = await _mcp_project_id(
+                    request, principal, args)
+                if project_error:
+                    return _result(rpc_id, _tool_content(
+                        project_error, is_error=True))
+                rows = await memory.list_for_user(
+                    principal.user_id, kind=kind, project_id=project_id,
+                    limit=limit,
+                )
+                return _result(rpc_id, _tool_content(json.dumps({
+                    "memories": rows, "count": len(rows),
+                })))
 
             return _error(rpc_id, -32601, f"Unknown tool: {name}")
 

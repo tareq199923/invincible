@@ -24,6 +24,7 @@ from invincible.core.accounts import (
     UserService,
 )
 from invincible.core.identity import ApiKeyStore
+from invincible.core.memory import MAX_CONTENT_CHARS, MEMORY_KINDS
 from invincible.core.principal import Principal
 from invincible.core.projection import (
     build_session_projection,
@@ -46,8 +47,10 @@ _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 _MEMORY_PAGE_SIZE = 20
-_MEMORY_MAX_CHARS = 2000
-_MEMORY_KINDS = ("note", "fact", "preference", "decision", "task")
+# Shared with the MCP memory_save path (core/memory.py) so both write
+# paths enforce the same cap and kind vocabulary.
+_MEMORY_MAX_CHARS = MAX_CONTENT_CHARS
+_MEMORY_KINDS = MEMORY_KINDS
 _MEMORY_LAYERS = ("explicit", "auto")
 
 

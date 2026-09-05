@@ -227,8 +227,9 @@ Response:
 {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
 ```
 
-Response: `result.tools` is an array of seven tool descriptors (the
-original file/exec/approval surface plus the Phase 15b continuity tools):
+Response: `result.tools` is an array of ten tool descriptors (the
+file/exec/approval surface, the Phase 15b continuity tools, and the
+memory tools):
 
 ```json
 {
@@ -301,6 +302,44 @@ original file/exec/approval surface plus the Phase 15b continuity tools):
         "inputSchema": {
           "type": "object",
           "properties": {"note": {"type": "string"}, "task_key": {"type": "string"}, "session_id": {"type": "string"}}
+        }
+      },
+      {
+        "name": "memory_save",
+        "description": "Deliberately store a fact about the user or one of their projects ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "content": {"type": "string", "description": "the fact to remember, 1-2000 characters"},
+            "kind": {"type": "string", "enum": ["note", "fact", "preference", "decision", "task"], "description": "coarse classifier (default: note)"},
+            "project": {"type": "string", "description": "one of the user's project names (default: user-scope)"}
+          },
+          "required": ["content"]
+        }
+      },
+      {
+        "name": "memory_search",
+        "description": "Search the user's memory store with the same ranking their gateway chats use ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {"type": "string"},
+            "project": {"type": "string"},
+            "limit": {"type": "integer", "description": "max results, 1-10 (default 5)"}
+          },
+          "required": ["query"]
+        }
+      },
+      {
+        "name": "memory_list",
+        "description": "Browse the user's most recent memories, newest first ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {"type": "integer", "description": "max rows, 1-20 (default 10)"},
+            "kind": {"type": "string", "enum": ["note", "fact", "preference", "decision", "task"]},
+            "project": {"type": "string"}
+          }
         }
       }
     ]
@@ -481,6 +520,68 @@ the exact token from that request; `approve` must be a real JSON boolean
 Tokens are valid for **10 minutes** and are **single-use**: the first
 `confirm_action` that resolves a token consumes it, so replaying the same
 token can never execute the action twice.
+
+#### `memory_save`
+
+```json
+"arguments": {"content": "Tareq prefers Python, deploys via Railway→Azure", "kind": "preference", "project": "invincible"}
+```
+
+Deliberately stores a fact into the user's memory store — the same
+`memories` table their dashboard and gateway chats read. `content` is
+required (1–2000 characters); `kind` is one of
+`note|fact|preference|decision|task` (default `note`); `project` is one
+of the user's existing project names and tags the row to that project
+(omit it for user-scope, which follows the person across projects).
+
+- **No confirmation gate**: unlike `execute_bash`/`write_file` this is
+  data-plane, not machine-plane — the row belongs to the user and is
+  reversible from the dashboard, so the save happens immediately.
+- Saves land at **confidence 0.9** (the AI chose to save; the user's own
+  dashboard saves are 1.0, auto-extracted chat memories 0.6) with
+  provenance `mcp:<client_name>` — the dashboard shows which client
+  saved each row.
+- `INVINCIBLE_MEMORY=0` blocks saves (clear error); reads keep working.
+- An unknown `project` name is an error, not a silent de-scope.
+
+Success:
+
+```json
+{"saved": true, "id": 42, "kind": "preference", "scope": "user"}
+```
+
+#### `memory_search`
+
+```json
+"arguments": {"query": "deployment preferences", "limit": 5}
+```
+
+Runs the same ranking gateway chats use (lexical relevance × recency ×
+confidence × kind weight) over the caller's memories. `limit` is capped
+at 10 (default 5) — results land in the caller's context window, so the
+response is a bounded, ranked list, never a dump. With `project` given,
+the scope is that project's memories **plus** user-scope ones.
+
+Success:
+
+```json
+{"results": [{"id": 42, "kind": "preference", "content": "prefers Python", "relevance": 0.0312, "created_at": 1787654321.0}], "count": 1}
+```
+
+#### `memory_list`
+
+```json
+"arguments": {"limit": 10, "kind": "decision"}
+```
+
+Newest-first browse of the caller's memories — useful for bootstrapping
+context at the start of a session. Optional `kind` and `project` filters
+(project uses the same union scope as `memory_search`); `limit` is
+capped at 20 (default 10).
+
+There is deliberately **no `memory_delete`** over MCP: deletion stays a
+human, dashboard-only action — an AI should not be able to erase your
+past.
 
 #### Where execution happens (Phase 10: agent routing)
 

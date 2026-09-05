@@ -13,7 +13,7 @@ or writes it in service code (only the legacy importer fills it).
 import re
 import time
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from invincible.core.db import MEMORY_FTS_CONFIG, memories
@@ -23,6 +23,15 @@ _TARGET_MAX_CHARS = 160
 # Confidence for deterministic auto-extracted rows; explicit "remember
 # this" saves are user-asserted and land at 1.0.
 AUTO_CONFIDENCE = 0.6
+# An MCP client chose to save (memory_save tool): more deliberate than
+# auto-extraction, less authoritative than the user's own dashboard save.
+MCP_CONFIDENCE = 0.9
+
+# Shared write-path vocabulary (dashboard explicit creates AND the MCP
+# memory_save tool): coarse kinds plus the content size cap. One source
+# so the two paths can never drift.
+MEMORY_KINDS = ("note", "fact", "preference", "decision", "task")
+MAX_CONTENT_CHARS = 2000
 
 # (entity, relation) paired with a pattern whose first group is the target.
 # Ordered roughly by confidence; all are matched case-insensitively.
@@ -278,9 +287,20 @@ class MemoryStore:
 
     async def list_for_user(
         self, user_id: int, *, layer: str | None = None,
-        kind: str | None = None, limit: int = 50, offset: int = 0,
+        kind: str | None = None, project_id: int | None = None,
+        limit: int = 50, offset: int = 0,
     ) -> list[dict]:
-        """Newest-first memory rows for one owner (dashboard browse)."""
+        """Newest-first memory rows for one owner (dashboard browse).
+
+        ``project_id`` narrows to that project's rows PLUS user-scope
+        rows - the same union RetrievalService uses, so the MCP
+        memory_list tool and chat-time injection agree on what "this
+        project's context" means.
+        """
+        clauses = self._owner_filter(user_id, layer=layer, kind=kind)
+        if project_id is not None:
+            clauses.append(or_(memories.c.project_id.is_(None),
+                               memories.c.project_id == project_id))
         query = (
             select(
                 memories.c.id,
@@ -292,7 +312,7 @@ class MemoryStore:
                 memories.c.provenance,
                 memories.c.created_at,
             )
-            .where(*self._owner_filter(user_id, layer=layer, kind=kind))
+            .where(*clauses)
             .order_by(memories.c.created_at.desc(), memories.c.id.desc())
             .limit(max(0, limit))
             .offset(max(0, offset))

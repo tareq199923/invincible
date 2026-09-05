@@ -284,6 +284,28 @@ Implications, stated plainly:
   action to its own stdout (`[MCP] Pending <token>: …`) — **informational
   only**, it is not a gate.
 
+### 2.0b Memory tools are data-plane — no approval gate
+
+`memory_save` / `memory_search` / `memory_list` touch the caller's own
+rows in the `memories` table, not the machine, so they run after auth
+with **no denylist and no `confirm_action` staging** — the same risk
+class as chat-side "remember this", which is also ungated. What keeps
+them safe:
+
+- **Ownership-predicated**: every query carries the OAuth subject's
+  `user_id`; a foreign user's rows are indistinguishable from absent
+  ones (anti-enumeration, same as every other store path).
+- **Audited**: each save writes an audit row
+  (`mcp.memory_save.saved`, metadata only — never the content, which
+  could carry secrets).
+- **Kill-switch**: `INVINCIBLE_MEMORY=0` blocks saving (reads keep
+  working so data is never trapped).
+- **Bounded responses**: search is capped at 10 results, list at 20 —
+  results land in the caller's context window, so they obey the same
+  token discipline as prompt injection.
+- **No deletion**: there is deliberately no `memory_delete` over MCP —
+  erasing history stays a human, dashboard-only action.
+
 ### 2.1 `execute_bash` denylist — full inventory
 
 Matched against the **full command string**, case-insensitive

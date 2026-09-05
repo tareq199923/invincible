@@ -87,6 +87,22 @@ async def ensure_default_project(engine, user_id: int) -> int:
         return int(project_id)
 
 
+async def resolve_project_by_name(engine, user_id: int,
+                                  name: str) -> int | None:
+    """The user's project id for ``name``, or None when they have no such
+    (non-archived) project. The ownership predicate means a foreign
+    user's project name is indistinguishable from an unknown one."""
+    async with engine.connect() as conn:
+        row = (await conn.execute(
+            select(projects.c.id).where(
+                projects.c.user_id == user_id,
+                projects.c.name == name,
+                projects.c.archived_at.is_(None),
+            )
+        )).first()
+    return int(row[0]) if row is not None else None
+
+
 class ApiKeyStore:
     """Thin repository over ``api_keys``."""
 
