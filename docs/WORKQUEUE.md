@@ -5,7 +5,7 @@ priority order, with detail. Strategic context (phases, direction,
 what's implemented) lives in [ROADMAP.md](ROADMAP.md); completed items
 are logged at the bottom of this file.
 
-Last updated: 2026-09-02.
+Last updated: 2026-09-06.
 
 ---
 
@@ -58,6 +58,21 @@ Open decisions (multi-day project, fold into Phase 6/7 planning):
 ---
 
 ## Completed log (newest first)
+
+- **2026-09-06 — MCP MEMORY TOOLS: any connected AI can now save into,
+  search, and browse the user's memory store.** Three new data-plane
+  tools on `/mcp` (`memory_save`/`memory_search`/`memory_list`) over
+  the same `memories` table the dashboard and gateway chats use.
+  Saves are ungated (same risk class as chat-side "remember this"),
+  land at confidence 0.9 with `mcp:<client_name>` provenance, obey
+  `INVINCIBLE_MEMORY`, and are audited; search runs the RetrievalService
+  ranking with project-union scoping; responses are capped (10/20).
+  Deliberately no `memory_delete` over MCP. Shared write-path vocabulary
+  (`MEMORY_KINDS`/`MAX_CONTENT_CHARS`) centralized in `core/memory.py`.
+  Full suite 1,026 green; docs updated (MCP_PROTOCOL §4, SECURITY
+  §2.0b, ROADMAP MCP row). Verified live with the Grok connector. The
+  natural follow-up is the memory-graph visualization (Level 1) that
+  rides on these rows.
 
 - **2026-09-05 — ONBOARDING COLLAPSED: 6 steps → 2 commands.** The
   new-user journey to "my AI runs commands on my PC" is now
