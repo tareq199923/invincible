@@ -62,6 +62,35 @@ async def test_poll_with_no_work_returns_none(registry):
     assert await reg.poll(7, hold=0.01) is None
 
 
+async def test_poll_cap_bounds_concurrent_polls_per_user(registry):
+    """LOW-5: at most MAX_POLLS_PER_USER held polls per user. Over-cap
+    raises PollCapacityExceeded, other users are unaffected, and slots
+    release both on completion and on cancellation."""
+    from invincible.core.agent_registry import (
+        MAX_POLLS_PER_USER,
+        PollCapacityExceeded,
+    )
+    reg, _ = registry
+    held = [
+        asyncio.ensure_future(reg.poll(1, hold=5))
+        for _ in range(MAX_POLLS_PER_USER)
+    ]
+    await asyncio.sleep(0.01)  # all five are parked on their event wait
+    with pytest.raises(PollCapacityExceeded):
+        await reg.poll(1, hold=0.01)
+    # the cap is per user - user 2 polls freely
+    assert await reg.poll(2, hold=0.01) is None
+    # a cancelled hold releases its slot
+    held[0].cancel()
+    await asyncio.sleep(0.01)
+    assert await reg.poll(1, hold=0.01) is None
+    for task in held[1:]:
+        task.cancel()
+    await asyncio.gather(*held, return_exceptions=True)
+    # all slots drained: a full set fits again
+    assert await reg.poll(1, hold=0.01) is None
+
+
 async def test_queue_is_fifo_per_user(registry):
     reg, _ = registry
     # Stage two dispatches concurrently (each runs to its await); the

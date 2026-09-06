@@ -5,6 +5,12 @@
 <p>A CLI is requesting an Invincible API key for
 <strong>{{ email }}</strong>. Approve only if you initiated this.</p>
 <p>Code: <code class="user-code">{{ user_code }}</code></p>
+<p>Machine fingerprint:
+  <code class="device-fingerprint">{{ fingerprint }}</code><br>
+  <small>Must match the fingerprint printed by the terminal that started
+  this request. A mismatch means the code belongs to a different
+  machine - deny it.</small>
+</p>
 <form method="post" action="/auth/devices/{{ user_code }}/approve"
       style="display:inline">
   <button type="submit">Approve</button>

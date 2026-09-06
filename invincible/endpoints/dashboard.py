@@ -674,7 +674,6 @@ async def setup_page(
             for key, entry in sorted(
                 _provider_catalog_items(), key=lambda kv: kv[1]["label"])
         ],
-        new_key=request.query_params.get("new_key"),
     )
 
 

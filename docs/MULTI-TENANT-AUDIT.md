@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-07
 **Auditor scope:** all 41 source modules (~18.3k lines), 8 Alembic migrations, test suite.
-**Status:** Audit complete. Step 1 APPLIED 2026-09-07 (HIGH-1 + HIGH-2 fixed, 5 regression tests added). Step 2 APPLIED 2026-09-07 (all silent local-owner fallbacks fail loudly; MEDIUM-2 + LOW-1 closed along the way). Step 3 APPLIED 2026-09-07 (MEDIUM-1 bootstrap gated on INVINCIBLE_ALLOW_FIRST_OPERATOR / no-secret; MEDIUM-4 per-IP rate limits on /oauth/register + /auth/device/code; agent-routing deployment posture documented in SECURITY.md §10). Steps 4-5 below remain open. This document is the handoff.
+**Status:** Audit complete. Step 1 APPLIED 2026-09-07 (HIGH-1 + HIGH-2 fixed, 5 regression tests added). Step 2 APPLIED 2026-09-07 (all silent local-owner fallbacks fail loudly; MEDIUM-2 + LOW-1 closed along the way). Step 3 APPLIED 2026-09-07 (MEDIUM-1 bootstrap gated on INVINCIBLE_ALLOW_FIRST_OPERATOR / no-secret; MEDIUM-4 per-IP rate limits on /oauth/register + /auth/device/code; agent-routing deployment posture documented in SECURITY.md §10). Step 4 APPLIED 2026-09-07 (LOW-2/LOW-3/LOW-5 closed - see the per-finding FIXED notes below). Step 5 test gaps remain open. This document is the handoff.
 
 ---
 
@@ -202,6 +202,21 @@ Do not change these — they are the model the fixes should imitate.
 - **Fix idea:** display a short hash of the `device_code` on both CLI and
   approval page so the approver verifies the code belongs to the machine in
   front of them; optionally rate-limit `/auth/devices/{code}` probes.
+- **FIXED (2026-09-07):** both surfaces now show the machine fingerprint —
+  first 8 hex chars of sha256(device_code), one shared derivation
+  (`DeviceCodeStore.fingerprint` / `fingerprint_from_hash`). The CLI
+  (`invincible login` and `invincible agent`'s first-run self-pairing,
+  via `_pair_device` → `on_code`) prints it next to the user_code; the
+  approval page (`device.html`) shows the same value with a
+  must-match/deny-on-mismatch instruction. The raw device_code never
+  reaches the page. Regression tests:
+  `test_device_page_shows_machine_fingerprint`,
+  `test_device_fingerprint_identifies_the_request`
+  (tests/test_accounts_ui.py);
+  `test_pair_device_fingerprint_matches_approval_page`,
+  `test_pair_device_fingerprint_is_device_code_hash`
+  (tests/test_cli_login.py). Probe rate-limiting was already covered by
+  Step 3's MEDIUM-4 device-code scope.
 
 ### 🟡 MEDIUM-4 — Unauthenticated, unthrottled endpoints
 
@@ -239,12 +254,21 @@ Do not change these — they are the model the fixes should imitate.
 - `core/accounts.py:483-518` — `_owned()` precheck then
   `UPDATE projects ... WHERE id = X` without `user_id`. Not currently
   exploitable (ownership checked first and never changes) but breaks the
-  predicate discipline. Add `projects.c.user_id == user_id` to both UPDATEs.
+  predicate discipline.
+- **FIXED (Step 4, 2026-09-07):** both UPDATEs now carry
+  `projects.c.user_id == user_id` alongside the id predicate.
 
 ### 🟢 LOW-3 — `/v1/models` discloses operator pool's provider/model names to all users
 
 - `endpoints/openai_compat.py:195-208` — BYOK-only users see models they can
-  never route to. Filter to the caller's effective pool.
+  never route to.
+- **FIXED (Step 4, 2026-09-07):** `list_models` resolves the caller via
+  `require_auth` and lists the caller's EFFECTIVE pool through
+  `byok_attempt_source` (same split as chat routing): api_key/BYOK
+  principals see only their own connected credentials (empty list with
+  none, mirroring the chat 400); legacy/anonymous local-mode principals
+  keep the operator pool. Regression tests in tests/test_chat_byok.py
+  (BYOK-only list, empty pool, gateway-key keeps operator pool).
 
 ### 🟢 LOW-4 — `INVINCIBLE_DEBUG_400` dumps full conversation payloads to disk
 
@@ -263,6 +287,21 @@ Do not change these — they are the model the fixes should imitate.
   it (raw keys must never ride URLs).
 - Agent long-poll connections unbounded per user (in-memory registry, 1-replica
   constraint) — cheap cap if it ever matters.
+- **FIXED (Step 4, 2026-09-07), all four items:**
+  1. `IdentityStore.link` is now insert-first: a lost uniqueness race hits
+     the `IntegrityError`, re-reads the winner's row, and returns it
+     (reporting the row's actual owner) — never a 500. Tests in
+     tests/test_accounts.py (`test_identity_link_duplicate_returns_existing_owner`,
+     plus re-link assertions).
+  2. The one-time raw-key page is served with `Cache-Control: no-store`
+     (tests/test_account_keys_ui.py
+     `test_one_time_key_page_is_never_cached`).
+  3. The dead `?new_key=` param is removed from `setup_page` (the template
+     never rendered it).
+  4. `AgentRegistry.poll` enforces `MAX_POLLS_PER_USER = 5` concurrent held
+     polls per user (`PollCapacityExceeded` → endpoint 429 + `Retry-After`,
+     slots released in `finally` so aborted connections never leak). Tests
+     in tests/test_agent_registry.py and tests/test_agent_endpoints.py.
 
 ---
 
@@ -330,10 +369,15 @@ obvious errors, not silent cross-user data mixing:
    requirement documented in docs/SECURITY.md §10 ("Deployment
    posture"), including the Railway → Azure migration check.
 
-### Step 4 — Smaller cleanups
+### Step 4 — Smaller cleanups (APPLIED 2026-09-07)
 
-LOW-2 ownership predicates in project UPDATEs; LOW-3 `/v1/models` filtering;
-LOW-5 items (link race, no-store header, dead `new_key` param, long-poll cap).
+1. ✅ LOW-2: ownership predicates (`projects.c.user_id == user_id`) on the
+   ProjectService rename/archive UPDATEs.
+2. ✅ LOW-3: `/v1/models` lists the caller's effective pool (BYOK split
+   mirrors chat routing; see LOW-3 above).
+3. ✅ LOW-5: link race handled insert-first; `Cache-Control: no-store` on
+   the one-time raw-key page; dead `?new_key=` param removed; per-user
+   concurrent long-poll cap (MAX_POLLS_PER_USER = 5, 429 + Retry-After).
 
 ### Step 5 — Test gaps to close (regression armor)
 
@@ -342,11 +386,23 @@ states, checkpoints, runs, facts, approval subject, api keys). Add:
 
 1. Cross-user **non-streaming** `/v1/messages` persist (would have caught HIGH-1).
 2. Dashboard MCP client revoke authorization matrix (plain user vs operator vs
-   own client) — would have caught HIGH-2.
-3. Two-user agent dispatch: user A's job never appears in user B's
-   `/agent/poll`; B's result submission for A's job_id is rejected.
-4. Cross-user BYOK routing: user A's chat never routes through user B's
-   credential (attempt with B's credential id fails/skips for A).
+   own client) — would have caught HIGH-2. ✅ SHIPPED (Step 1, in
+   tests/test_dashboard_mcp.py: `test_plain_user_cannot_see_or_revoke_legacy_clients`,
+   `test_operator_cannot_revoke_another_users_client`).
+3. ✅ Two-user agent dispatch: user A's job never appears in user B's
+   `/agent/poll`; B's result submission for A's job_id is rejected
+   indistinguishably from unknown/timed-out ids (anti-enumeration), and the
+   forgery never resolves A's future. Shipped 2026-09-07 in
+   tests/test_isolation.py (`test_agent_jobs_never_reach_another_users_poll`,
+   `test_cross_user_result_submission_is_indistinguishable`).
+4. ✅ Cross-user BYOK routing: user A's chat never routes through user B's
+   credential — pinned with per-host counting MockTransport handlers
+   (A's host hit exactly once; B's host and the whole operator pool
+   untouched), plus the cooldown arm: A's sole credential in cooldown
+   (`byok:{id}` health key) fails cleanly without consulting B's pool or
+   the operator's. Shipped 2026-09-07 in tests/test_isolation.py
+   (`test_byok_chat_never_routes_through_another_users_credential`,
+   `test_byok_cooldown_never_falls_back_to_another_users_pool`).
 5. Fallback-loudness tests: ✅ SHIPPED (Step 2) — `SessionStore` with no
    owner raises; MCP token with no subject 401s; anonymous principal
    refused once multi-user; subject-less pending actions not confirmable
@@ -379,6 +435,9 @@ view/revoke the operator's OAuth clients. **Both are now FIXED (2026-09-07,
 Step 1 complete).** Step 2 is also APPLIED (2026-09-07): every silent
 local-owner fallback now fails loudly (required owner on `SessionStore`, 401
 for subject-less MCP tokens, anonymous principal refused once multi-user,
-fail-closed pending actions). Remaining: harden deployment posture (Steps
-3-4) and add the remaining regression tests in Step 5 (items 2-4 overlap
-the already-shipped HIGH-2 tests).
+fail-closed pending actions). Step 3 APPLIED (bootstrap gate, anonymous
+endpoint rate limits, deployment posture). Step 4 APPLIED (LOW-2/LOW-3/LOW-5
+cleanups). Step 5 APPLIED (2026-09-07): all regression-armor tests shipped
+(items 1-5, see §4 Step 5) and MEDIUM-3 fixed (device-code machine
+fingerprint on both the CLI and the approval page). Remaining: the manual
+two-account prod verification (§5).

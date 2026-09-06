@@ -172,6 +172,48 @@ async def test_failover_across_user_providers(client, router_setter):
     assert_operator_pool_untouched(counters)
 
 
+async def test_models_lists_only_the_byok_pool(client, router_setter):
+    """LOW-3: /v1/models mirrors chat routing - a BYOK principal sees
+    only its own credentials' model ids, never the operator pool's."""
+    handlers, counters = transport_handlers()
+    router_setter(handlers)
+    _uid, raw = await byok_user(client, "models@example.com",
+                                credential_count=1)
+    resp = await client.get("/v1/models", headers=chat_headers(raw))
+    assert resp.status_code == 200, resp.text
+    assert [m["id"] for m in resp.json()["data"]] == ["u1-model"]
+    assert_operator_pool_untouched(counters)
+
+
+async def test_models_empty_for_byok_user_without_credentials(
+    client, router_setter
+):
+    """Zero connected credentials = zero advertised models (matching the
+    chat surface's clean 400, without leaking the operator pool)."""
+    handlers, _counters = transport_handlers()
+    router_setter(handlers)
+    registered, _ = await register_account(client, "nomodels@example.com")
+    key = await ApiKeyStore(app.state.engine).create(
+        registered.json()["id"], label="t")
+    resp = await client.get("/v1/models", headers=chat_headers(key["raw"]))
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"object": "list", "data": []}
+
+
+async def test_models_for_gateway_key_keeps_operator_pool(
+    client, router_setter
+):
+    """The split's other arm: the legacy gateway-key realm still sees the
+    full operator pool (unchanged behavior)."""
+    handlers, _ = transport_handlers()
+    router_setter(handlers)
+    resp = await client.get(
+        "/v1/models", headers={"Authorization": "Bearer test-gateway-key"})
+    assert resp.status_code == 200, resp.text
+    assert [m["id"] for m in resp.json()["data"]] == [
+        "alpha-model", "beta-model", "gamma-model"]
+
+
 async def test_legacy_gateway_key_completely_unaffected(client, router_setter):
     handlers, counters = transport_handlers()
     router_setter(handlers)

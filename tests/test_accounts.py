@@ -307,13 +307,30 @@ async def test_identity_link_idempotent_and_lookup(pg_engine):
     alice = await _seed_user(pg_engine, "alice@example.com")
     bob = await _seed_user(pg_engine, "bob@example.com")
     link = await identities.link(alice, "github", "12345")
+    # The re-link goes through the insert-first IntegrityError path (the
+    # unique constraint fires) and resolves to the same row.
     again = await identities.link(alice, "github", "12345")
     assert link["id"] == again["id"]
+    assert again["user_id"] == alice
     assert await identities.get_user("github", "12345") == alice
     assert await identities.get_user("github", "other") is None
     # same provider id under another provider never collides
     await identities.link(bob, "gitlab", "12345")
     assert await identities.get_user("gitlab", "12345") == bob
+
+
+async def test_identity_link_duplicate_returns_existing_owner(pg_engine):
+    """LOW-5: a lost uniqueness race (here: a plain duplicate insert)
+    re-reads the winner's row instead of surfacing a 500 - and reports
+    the row's ACTUAL owner, never the losing caller."""
+    identities = IdentityStore(pg_engine)
+    alice = await _seed_user(pg_engine, "alice@example.com")
+    bob = await _seed_user(pg_engine, "bob@example.com")
+    first = await identities.link(alice, "github", "12345")
+    duplicate = await identities.link(bob, "github", "12345")
+    assert duplicate["id"] == first["id"]
+    assert duplicate["user_id"] == alice
+    assert await identities.get_user("github", "12345") == alice
 
 
 # --- scoped login lockouts ---------------------------------------------------------

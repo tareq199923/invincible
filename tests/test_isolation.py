@@ -16,11 +16,20 @@ internals):
 - facts           : extracted from A's chat never injected into B's
                     outgoing context (and vice versa);
 - approvals       : execute_bash staged by A cannot be confirmed by B
-                    (unknown-token semantics), then A confirms fine.
+                    (unknown-token semantics), then A confirms fine;
+- agent dispatch  : A's confirmed job never reaches B's /agent/poll and
+                    B's forged /agent/result is rejected with responses
+                    indistinguishable from unknown/timed-out job ids
+                    (audit Step 5, item 3);
+- BYOK routing    : A's chat goes out through A's connected credential
+                    host only - B's host and the operator pool are
+                    provably never called, including while A's own
+                    credential sits in cooldown (audit Step 5, item 4).
 
 Enumeration: sequential id probing by B yields byte-identical negative
 shapes regardless of whether the string exists for someone else.
 """
+import asyncio
 import json
 
 import httpx
@@ -55,11 +64,13 @@ def provider_body(content="ok"):
     }
 
 
-async def _mint_user_and_key(client, email: str) -> dict:
+async def _mint_user_and_key(client, email: str, host: str = "alpha.example.com",
+                             model_id: str = "alpha-model") -> dict:
     """Real user row + default project + one API key + one connected BYOK
-    credential on the standard mock host (Phase 9: keyed principals chat
-    only through their own connected providers). Returns the key record
-    plus the resolved ids."""
+    credential (Phase 9: keyed principals chat only through their own
+    connected providers). ``host``/``model_id`` place the credential on a
+    chosen mock provider so cross-user routing tests can tell the pools
+    apart. Returns the key record plus the resolved ids."""
     engine = app.state.engine
     async with engine.begin() as conn:
         uid = (await conn.execute(text(
@@ -70,15 +81,15 @@ async def _mint_user_and_key(client, email: str) -> dict:
             "INSERT INTO projects (user_id, name, is_default, created_at)"
             " VALUES (:u, 'personal', TRUE, 1.0) RETURNING id"
         ), {"u": uid})).scalar_one()
-    await ByokCredentialStore(engine).create(
-        user_id=int(uid), provider_name="Test Pool",
-        model_id="alpha-model",
-        base_url="https://alpha.example.com/v1",
+    row = await ByokCredentialStore(engine).create(
+        user_id=int(uid), provider_name=f"Cred {host.split('.')[0]}",
+        model_id=model_id,
+        base_url=f"https://{host}/v1",
         api_key="user-key",
     )
     record = await app.state.api_keys.create(int(uid))
     return {"user_id": int(uid), "project_id": int(pid),
-            "raw": record["raw"]}
+            "credential_id": int(row["id"]), "raw": record["raw"]}
 
 
 def auth_for(key_raw: str) -> dict:
@@ -438,6 +449,178 @@ async def test_anthropic_non_streaming_persists_to_the_caller(client,
     assert await app.state.sessions.lookup(
         "anthropic-sess", user_id=local_uid, project_id=local_pid
     ) is None
+
+
+# --- agent dispatch (audit Step 5, item 3) ------------------------------------------
+
+
+async def _mint_agent_key(client, email: str) -> tuple[int, str]:
+    """Register an account and mint one inv_ key for agent surfaces."""
+    from invincible.core.identity import ApiKeyStore
+    from tests.conftest import register_account
+
+    made, _ = await register_account(client, email)
+    uid = int(made.json()["id"])
+    record = await ApiKeyStore(app.state.engine).create(uid, label="agent")
+    return uid, record["raw"]
+
+
+def _bearer(raw_key: str) -> dict:
+    return {"Authorization": f"Bearer {raw_key}"}
+
+
+async def _stage_agent_job(user_id: int, timeout: float = 5):
+    """Dispatch a job into the user's queue and return the awaiting
+    dispatcher task."""
+    reg = app.state.agent_registry
+    task = asyncio.ensure_future(
+        reg.dispatch(user_id, "execute_bash",
+                     {"command": "echo hi", "timeout": 1}, timeout=timeout)
+    )
+    await asyncio.sleep(0.01)  # let dispatch stage + park
+    return task
+
+
+async def test_agent_jobs_never_reach_another_users_poll(client,
+                                                          monkeypatch):
+    """Dispatch queues are keyed by owner (auth via require_agent_auth):
+    user B's long-poll answers ``{"job": null}`` even while user A has a
+    confirmed job staged, and A's own poll hands it out right after."""
+    import invincible.endpoints.agents as agents_mod
+
+    monkeypatch.setattr(agents_mod, "AGENT_POLL_HOLD_SECONDS", 0.05)
+    reg = app.state.agent_registry
+    uid_a, key_a = await _mint_agent_key(client, "poll-a@example.com")
+    _uid_b, key_b = await _mint_agent_key(client, "poll-b@example.com")
+    task = await _stage_agent_job(uid_a)
+
+    b_poll = await client.post("/agent/poll", headers=_bearer(key_b))
+    assert b_poll.status_code == 200
+    assert b_poll.json() == {"job": None}
+
+    a_poll = await client.post("/agent/poll", headers=_bearer(key_a))
+    job = a_poll.json()["job"]
+    assert job is not None
+    assert job["type"] == "execute_bash"
+    assert job["args"]["command"] == "echo hi"
+    reg.submit_result(uid_a, job["job_id"], {"stdout": "hi"})
+    assert (await task)["stdout"] == "hi"
+
+
+async def test_cross_user_result_submission_is_indistinguishable(
+        client, monkeypatch):
+    """Anti-enumeration on /agent/result: user B submitting a result for
+    A's live job_id, for A's expired job_id, and for an unknown job_id
+    all receive byte-identical ``{"accepted": false}`` responses - no
+    signal leaks about which job ids exist - and the forgery never
+    resolves A's future."""
+    import invincible.endpoints.agents as agents_mod
+
+    monkeypatch.setattr(agents_mod, "AGENT_POLL_HOLD_SECONDS", 0.05)
+    uid_a, key_a = await _mint_agent_key(client, "res-a@example.com")
+    _uid_b, key_b = await _mint_agent_key(client, "res-b@example.com")
+
+    live_task = await _stage_agent_job(uid_a)
+    live_poll = await client.post("/agent/poll", headers=_bearer(key_a))
+    live_id = live_poll.json()["job"]["job_id"]
+
+    expired_task = await _stage_agent_job(uid_a, timeout=0.05)
+    expired_poll = await client.post("/agent/poll", headers=_bearer(key_a))
+    expired_id = expired_poll.json()["job"]["job_id"]
+    expired_result = await asyncio.wait_for(expired_task, 1)
+    assert expired_result["status"] == "agent_timeout"
+
+    responses = []
+    for job_id in (live_id, expired_id, "no-such-job-id"):
+        forged = await client.post(
+            "/agent/result", headers=_bearer(key_b),
+            json={"job_id": job_id, "result": {"stdout": "evil"}},
+        )
+        responses.append(forged)
+    # identical shape: status, body, content type - no oracle for B
+    assert {r.status_code for r in responses} == {200}
+    assert {json.dumps(r.json(), sort_keys=True) for r in responses} \
+        == {'{"accepted": false}'}
+    assert len({r.headers["content-type"] for r in responses}) == 1
+
+    # the live job is untouched by the forgeries: A still resolves it
+    accepted = await client.post(
+        "/agent/result", headers=_bearer(key_a),
+        json={"job_id": live_id, "result": {"stdout": "good"}},
+    )
+    assert accepted.json()["accepted"] is True
+    assert (await live_task)["stdout"] == "good"
+
+
+# --- BYOK routing (audit Step 5, item 4) ---------------------------------------------
+
+
+def _counting_handlers(router_setter):
+    """Counting MockTransport handlers for every host that could carry a
+    request: both users' credential hosts plus the operator pool's."""
+    hosts = ("a.example.com", "b.example.com",
+             "alpha.example.com", "beta.example.com", "gamma.example.com")
+    captured = {host: [] for host in hosts}
+    handlers = {}
+    for host in hosts:
+        def handler(request, host=host):
+            captured[host].append(json.loads(request.read()))
+            return httpx.Response(200, json=provider_body(host.split(".")[0]))
+        handlers[host] = handler
+    router_setter(handlers)
+    return captured
+
+
+async def test_byok_chat_never_routes_through_another_users_credential(
+        client, router_setter):
+    """A's chat request leaves through A's connected credential host
+    only - B's credential host and the operator pool's hosts are
+    provably never called (routing is keyed to the requesting user's
+    credential rows; there is no cross-user fallback)."""
+    captured = _counting_handlers(router_setter)
+    a = await _mint_user_and_key(client, "route-a@example.com",
+                                 host="a.example.com", model_id="a-model")
+    # B exists with a live credential on a different host; routing to it
+    # would be the cross-user leak this test pins against.
+    await _mint_user_and_key(client, "route-b@example.com",
+                             host="b.example.com", model_id="b-model")
+
+    resp = await client.post(
+        "/v1/chat/completions", headers=auth_for(a["raw"]),
+        json={"model": "a-model",
+              "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-invincible-provider"] == "Cred a"
+    assert len(captured["a.example.com"]) == 1
+    assert captured["b.example.com"] == []
+    for host in ("alpha.example.com", "beta.example.com",
+                 "gamma.example.com"):
+        assert captured[host] == [], f"operator host {host} was called"
+
+
+async def test_byok_cooldown_never_falls_back_to_another_users_pool(
+        client, router_setter):
+    """A's sole credential in cooldown (health_id ``byok:{id}``) fails
+    the request cleanly - the router never consults B's credential pool
+    or the operator's to fill the gap."""
+    captured = _counting_handlers(router_setter)
+    a = await _mint_user_and_key(client, "cool-a@example.com",
+                                 host="a.example.com", model_id="a-model")
+    await _mint_user_and_key(client, "cool-b@example.com",
+                             host="b.example.com", model_id="b-model")
+
+    app.state.router.health_tracker.record_failure(
+        f"byok:{a['credential_id']}")
+
+    resp = await client.post(
+        "/v1/chat/completions", headers=auth_for(a["raw"]),
+        json={"model": "a-model",
+              "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert resp.status_code == 503, resp.text
+    for host, calls in captured.items():
+        assert calls == [], f"{host} was called during cooldown"
 
 
 def _json_loads(response) -> dict:

@@ -33,6 +33,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
 from invincible import __version__
+from invincible.core.accounts import DeviceCodeStore
 from invincible.core.config import load_providers_config
 from invincible.core.db import (
     ensure_local_owner,
@@ -1723,9 +1724,13 @@ def _pair_and_save(server: str, config_path: str | None) -> str:
     and the token is written to the config file. Returns that path.
     """
     async def _run():
-        async def _on_code(url: str, code: str) -> None:
+        async def _on_code(url: str, code: str,
+                           fingerprint: str) -> None:
             click.echo(f"Approval page: {url}")
             click.echo(f"Code: {code}  (approve within 10 minutes)")
+            click.echo(
+                f"Machine fingerprint: {fingerprint}  (must match the "
+                "fingerprint on the approval page)")
             _open_browser(url)
 
         return await _pair_device(server, on_code=_on_code)
@@ -1776,8 +1781,12 @@ async def _pair_device(base_url: str, *, client=None,
             "verification_uri_complete"
         ) or payload.get("verification_uri", f"{base_url}/login")
         user_code = payload["user_code"]
+        # MEDIUM-3: hand the callback the machine fingerprint too - the
+        # CLI prints it so the approver can verify, before donating their
+        # identity, that the approval page shows the same value.
+        fingerprint = DeviceCodeStore.fingerprint(device_code)
         if on_code is not None:
-            result = on_code(verification_uri, user_code)
+            result = on_code(verification_uri, user_code, fingerprint)
             if hasattr(result, "__await__"):
                 await result
 

@@ -498,7 +498,8 @@ class ProjectService:
             async with self.engine.begin() as conn:
                 await conn.execute(
                     update(projects)
-                    .where(projects.c.id == project_id)
+                    .where(projects.c.id == project_id,
+                           projects.c.user_id == user_id)
                     .values(name=name)
                 )
         except IntegrityError:
@@ -520,6 +521,7 @@ class ProjectService:
             await conn.execute(
                 update(projects)
                 .where(projects.c.id == project_id,
+                       projects.c.user_id == user_id,
                        projects.c.archived_at.is_(None))
                 .values(archived_at=time.time())
             )
@@ -541,6 +543,29 @@ class DeviceCodeStore:
     @staticmethod
     def _hash(raw: str) -> str:
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    # Audit MEDIUM-3: length of the device-code fingerprint shown on the
+    # CLI and the approval page. 8 hex chars - short enough to read off
+    # a terminal, long enough that a shoulder-surfed user_code can't be
+    # matched to a guessed machine.
+    FINGERPRINT_LENGTH = 8
+
+    @staticmethod
+    def fingerprint(raw_device_code: str) -> str:
+        """Short verification hint for the machine holding the raw
+        device_code (audit MEDIUM-3). The CLI prints this next to the
+        user_code; the approver compares it against the approval page's
+        copy before donating their identity, so a stolen user_code alone
+        can't silently bind someone else's terminal."""
+        return DeviceCodeStore._hash(
+            raw_device_code)[:DeviceCodeStore.FINGERPRINT_LENGTH]
+
+    @staticmethod
+    def fingerprint_from_hash(stored_hash: str) -> str:
+        """The same hint, derived from the stored full hash (approval
+        page side) - kept beside :meth:`fingerprint` so both surfaces
+        can never drift apart."""
+        return stored_hash[:DeviceCodeStore.FINGERPRINT_LENGTH]
 
     async def _sweep_expired(self, conn) -> None:
         await conn.execute(
@@ -585,6 +610,7 @@ class DeviceCodeStore:
             await self._sweep_expired(conn)
             row = (await conn.execute(
                 select(device_codes.c.status,
+                       device_codes.c.device_code_hash,
                        device_codes.c.expires_at)
                 .where(device_codes.c.user_code == user_code.strip().upper())
             )).mappings().first()
@@ -700,24 +726,38 @@ class IdentityStore:
 
     async def link(self, user_id: int, provider: str,
                    provider_account_id: str) -> dict:
+        """Attach an external identity to an account.
+
+        Insert-first (no check-then-insert window): the unique constraint
+        on (provider, provider_account_id) is the isolation line, so a
+        concurrent duplicate link loses the race to an IntegrityError and
+        is handled as an already-linked no-op - never a 500.
+        """
         now = time.time()
-        async with self.engine.begin() as conn:
+        try:
+            async with self.engine.begin() as conn:
+                row = (await conn.execute(
+                    user_identities.insert()
+                    .values(user_id=user_id, provider=provider,
+                            provider_account_id=provider_account_id,
+                            created_at=now)
+                    .returning(user_identities.c.id)
+                )).one()
+            return {"id": int(row[0]), "user_id": user_id}
+        except IntegrityError:
+            pass
+        async with self.engine.connect() as conn:
             existing = (await conn.execute(
-                select(user_identities.c.id)
+                select(user_identities.c.id, user_identities.c.user_id)
                 .where(user_identities.c.provider == provider,
                        user_identities.c.provider_account_id
                        == provider_account_id)
             )).first()
-            if existing is not None:
-                return {"id": int(existing[0]), "user_id": user_id}
-            row = (await conn.execute(
-                user_identities.insert()
-                .values(user_id=user_id, provider=provider,
-                        provider_account_id=provider_account_id,
-                        created_at=now)
-                .returning(user_identities.c.id)
-            )).one()
-        return {"id": int(row[0]), "user_id": user_id}
+        if existing is None:
+            # The constraint fired on something other than the
+            # provider-account uniqueness - surface it, don't mask it.
+            raise
+        return {"id": int(existing[0]), "user_id": int(existing[1])}
 
     async def get_user(self, provider: str,
                        provider_account_id: str) -> int | None:

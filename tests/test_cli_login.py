@@ -74,11 +74,14 @@ async def test_pair_device_happy_path(client, router_setter):
     anon = _anon_client()
     try:
         seen_codes: list[str] = []
+        seen_fingerprints: list[str] = []
         approved = False
         code_seen = asyncio.Event()
 
-        async def _on_code(url: str, code: str) -> None:
+        async def _on_code(url: str, code: str,
+                           fingerprint: str) -> None:
             seen_codes.append(code)
+            seen_fingerprints.append(fingerprint)
             code_seen.set()
 
         async def _tick(_seconds: float) -> None:
@@ -134,7 +137,8 @@ async def test_pair_device_denied(client):
         with pytest.raises(_DevicePairError) as excinfo:
             await _pair_device(
                 "http://test", client=anon, sleep=_deny_then_finish,
-                on_code=lambda url, code: seen_codes.append(code))
+                on_code=lambda url, code, fingerprint:
+                    seen_codes.append(code))
         assert "denied" in str(excinfo.value).lower()
     finally:
         await anon.aclose()
@@ -224,11 +228,12 @@ def test_login_opens_the_approval_page(monkeypatch, tmp_path):
 
     async def _fake_pair(base_url, **kwargs):
         # reproduce the real helper's behavior: call on_code with the
-        # complete verification URL, then succeed
+        # complete verification URL plus the machine fingerprint, then
+        # succeed
         on_code = kwargs.get("on_code")
         if on_code is not None:
             result = on_code("https://sv.test/auth/devices/ABCD1234",
-                             "ABCD1234")
+                             "ABCD1234", "ab12cd34")
             if hasattr(result, "__await__"):
                 await result
         return {"access_token": "inv_y", "prefix": "inv_y"}
@@ -244,6 +249,7 @@ def test_login_opens_the_approval_page(monkeypatch, tmp_path):
     assert opened == ["https://sv.test/auth/devices/ABCD1234"]
     assert "Approval page: https://sv.test/auth/devices/ABCD1234" \
         in result.output
+    assert "Machine fingerprint: ab12cd34" in result.output
 
 
 # --- Phase 11: one-click pairing ------------------------------------------
@@ -268,8 +274,10 @@ async def test_pair_device_prefers_complete_uri(client):
     seen: dict = {}
     approved = False
 
-    async def _on_code(url: str, code: str) -> None:
+    async def _on_code(url: str, code: str,
+                       fingerprint: str) -> None:
         seen["url"], seen["code"] = url, code
+        seen["fingerprint"] = fingerprint
 
     async def _tick(_seconds: float) -> None:
         # approve from the logged-in browser once a code was seen
@@ -292,6 +300,95 @@ async def test_pair_device_prefers_complete_uri(client):
         assert seen["code"] in seen["url"]
     finally:
         await anon.aclose()
+
+
+async def test_pair_device_fingerprint_matches_approval_page(client):
+    """MEDIUM-3: the fingerprint _pair_device reports to on_code is the
+    same value the approval page displays for that code - the approver
+    can verify the pairing request belongs to the machine in front of
+    them, and a stolen user_code alone no longer suffices to hijack the
+    approval."""
+    await register_account(client, "fp@pair.example")
+    seen: dict = {}
+    fetched: dict = {}
+
+    async def _on_code(url: str, code: str,
+                       fingerprint: str) -> None:
+        seen.update(code=code, fingerprint=fingerprint)
+
+    async def _tick(_seconds: float) -> None:
+        # capture the approval page while the request is still pending,
+        # then approve so the pairing completes
+        if seen and "page" not in fetched:
+            page = await client.get(f"/auth/devices/{seen['code']}")
+            assert page.status_code == 200
+            fetched["page"] = page.text
+            response = await client.post(
+                f"/auth/devices/{seen['code']}/approve")
+            assert response.status_code == 200
+
+    anon = _anon_client()
+    try:
+        pair_task = asyncio.ensure_future(
+            _pair_device("http://test", client=anon,
+                         sleep=_tick, on_code=_on_code))
+        result = await asyncio.wait_for(pair_task, 10)
+        assert result["access_token"].startswith("inv_")
+        # both surfaces agree on the fingerprint...
+        assert seen["fingerprint"] in fetched["page"]
+        # ...which is 8 lowercase hex chars
+        import re
+        assert re.fullmatch(r"[0-9a-f]{8}", seen["fingerprint"])
+    finally:
+        await anon.aclose()
+
+
+async def test_pair_device_fingerprint_is_device_code_hash():
+    """The CLI computes the fingerprint locally from the raw device_code
+    it alone holds: first 8 hex chars of its sha256, exactly
+    DeviceCodeStore.fingerprint (the value the server renders)."""
+    import hashlib
+
+    from invincible.core.accounts import DeviceCodeStore
+
+    raw = "test-device-code-material-42"
+
+    class _Start:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"device_code": raw, "user_code": "ABCD1234",
+                    "verification_uri_complete":
+                        "http://t/auth/devices/ABCD1234",
+                    "interval": 0, "expires_in": 600}
+
+    class _Token:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"access_token": "inv_z",
+                    "token_type": "invincible_api_key"}
+
+    class _Client:
+        async def post(self, url, data=None):
+            return _Token() if url.endswith("/token") else _Start()
+
+        async def aclose(self):
+            pass
+
+    seen: dict = {}
+    await _pair_device(
+        "http://t", client=_Client(), sleep=_noop_sleep,
+        on_code=lambda url, code, fp: seen.update(fp=fp))
+    assert seen["fp"] == hashlib.sha256(
+        raw.encode("utf-8")).hexdigest()[:8]
+    assert seen["fp"] == DeviceCodeStore.fingerprint(raw)
 
 
 async def test_device_lookup_redirects_to_approval_page(client):

@@ -25,6 +25,7 @@ caller.
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from invincible.core.accounts import resolve_session
+from invincible.core.agent_registry import PollCapacityExceeded
 from invincible.core.settings import AGENT_POLL_HOLD_SECONDS
 
 router = APIRouter()
@@ -57,9 +58,19 @@ async def agent_poll(request: Request,
     """Long-poll: answer with the next confirmed job for this agent's
     user, or ``{"job": null}`` after the hold window. Every call is a
     heartbeat, so liveness tracks connection health, not execution.
+    Over-cap concurrent polls (LOW-5) get a 429 - the agent runner
+    treats any non-200 like a network hiccup (2s backoff), so the
+    excess connection sheds without hot-looping.
     """
     registry = request.app.state.agent_registry
-    job = await registry.poll(user_id, AGENT_POLL_HOLD_SECONDS)
+    try:
+        job = await registry.poll(user_id, AGENT_POLL_HOLD_SECONDS)
+    except PollCapacityExceeded:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many concurrent polls for this account",
+            headers={"Retry-After": "5"},
+        ) from None
     if job is None:
         return {"job": None}
     return {"job": job}

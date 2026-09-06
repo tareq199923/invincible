@@ -54,6 +54,18 @@ async def test_form_generate_shows_raw_key_exactly_once(client):
     assert 'hx-delete="/api-keys/' in page.text
 
 
+async def test_one_time_key_page_is_never_cached(client):
+    """LOW-5: the page carrying the raw inv_ key is served with
+    Cache-Control: no-store so bfcache/back-forward can't retain it."""
+    await logged_in(client)
+    made = await client.post("/api-keys", data={"label": "ui"})
+    assert made.status_code == 200
+    assert made.headers["cache-control"] == "no-store"
+    # The plain account render (no raw key) carries no such header.
+    page = await client.get("/account")
+    assert "no-store" not in page.headers.get("cache-control", "")
+
+
 async def test_json_generate_keeps_201_record_shape(client):
     await logged_in(client)
     made = await client.post("/api-keys", json={"label": "cli"})

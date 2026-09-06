@@ -566,7 +566,10 @@ async def create_api_key(
     if _wants_html(request):
         # The raw key is shown EXACTLY ONCE, rendered into the page -
         # never in a redirect URL (browsers and history would keep it).
-        return await _account_page(request, principal, new_key=record)
+        # no-store keeps bfcache/back-forward from retaining the page.
+        response = await _account_page(request, principal, new_key=record)
+        response.headers["Cache-Control"] = "no-store"
+        return response
     return JSONResponse(record, status_code=201)
 
 
@@ -705,6 +708,10 @@ async def device_page(
         "device.html", request,
         email=email,
         user_code=user_code.strip().upper(),
+        # MEDIUM-3: the approver verifies the machine fingerprint against
+        # the CLI output before donating their identity to the device.
+        fingerprint=DeviceCodeStore.fingerprint_from_hash(
+            pending["device_code_hash"]),
         error=None,
     )
 

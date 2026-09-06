@@ -174,7 +174,9 @@ async def _stream_body(
 
 
 def models_from_providers(providers: list) -> list[dict]:
-    """Map the router's loaded providers to OpenAI /v1/models entries.
+    """Map a provider pool (the router's loaded providers, or a BYOK
+    user's credential candidates - same dict shape) to OpenAI /v1/models
+    entries.
 
     The router validates providers at startup, so every entry normally has
     a ``model_id``; the isinstance/get guard is cheap defense in depth.
@@ -193,7 +195,8 @@ def models_from_providers(providers: list) -> list[dict]:
 
 
 @router.get("/v1/models")
-async def list_models(request: Request):
+async def list_models(request: Request,
+                      principal: Principal = Depends(require_auth)):
     router = getattr(request.app.state, "router", None)
     if router is None:
         raise HTTPException(
@@ -205,7 +208,13 @@ async def list_models(request: Request):
                 }
             },
         )
-    return {"object": "list", "data": models_from_providers(router.providers)}
+    # LOW-3: list the caller's EFFECTIVE pool, mirroring chat routing -
+    # api_key (BYOK) principals see only their own connected credentials
+    # (an empty list when they have none, matching the chat 400), while
+    # legacy/anonymous local-mode principals keep the operator pool.
+    byok = await byok_attempt_source(request, principal)
+    providers = router.providers if byok is None else byok[0]
+    return {"object": "list", "data": models_from_providers(providers)}
 
 @router.post("/v1/chat/completions")
 async def chat_completions(

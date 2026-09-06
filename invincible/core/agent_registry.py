@@ -35,6 +35,23 @@ from invincible.core.settings import (
 )
 
 
+class PollCapacityExceeded(Exception):
+    """More concurrent held polls for one user than MAX_POLLS_PER_USER.
+
+    Raised by ``poll`` when a user already holds the cap's worth of open
+    long-poll connections. The endpoint maps it to a 429 so the excess
+    connection sheds immediately instead of parking another hold.
+    """
+
+
+# One paired machine runs one poll loop, so even a user with agents on
+# several machines stays well under this. The cap exists purely to bound
+# per-user held connections on the single-replica deployment (multi-tenant
+# audit LOW-5): the counter is plain dict state, race-free under the
+# event loop's single-threaded execution.
+MAX_POLLS_PER_USER = 5
+
+
 class AgentRegistry:
     """Liveness + dispatch table for paired agents.
 
@@ -43,11 +60,14 @@ class AgentRegistry:
     - ``_last_seen`` - wall-clock timestamp of the user's last poll.
       ``time.time()`` (not monotonic) purely for consistency with
       PendingActionStore; nothing here crosses a process boundary.
+    - ``_pollers`` - count of this user's currently held poll calls.
     - ``_queues`` - jobs waiting to be picked up by a poll.
     - ``_events`` - per-user event a held poll sleeps on; ``dispatch``
       sets it so an already-connected poll answers immediately.
     - ``_futures`` - job_id -> Future the dispatching /mcp request
       awaits; ``submit_result`` resolves it.
+    - ``_jobs`` - job_id -> owner user_id, for the single-use/owner
+      checks in submit_result. Entries live until resolved or swept.
 
     Events are created lazily and *kept* (not popped after a wake) so
     concurrent dispatches and the next held poll can share one event;
@@ -57,6 +77,7 @@ class AgentRegistry:
 
     def __init__(self, *, clock=time.time):
         self._last_seen: dict[int, float] = {}
+        self._pollers: dict[int, int] = {}
         self._queues: dict[int, deque] = {}
         self._events: dict[int, asyncio.Event] = {}
         self._futures: dict[int, dict[str, asyncio.Future]] = {}
@@ -86,7 +107,28 @@ class AgentRegistry:
     async def poll(self, user_id: int,
                    hold: float = AGENT_POLL_HOLD_SECONDS) -> dict | None:
         """Fetch the next job for this user's agent, or None after
-        ``hold`` seconds of quiet. Marks the heartbeat either way."""
+        ``hold`` seconds of quiet. Marks the heartbeat either way.
+
+        Raises ``PollCapacityExceeded`` when this user already holds
+        MAX_POLLS_PER_USER open polls (LOW-5 cap; released in ``finally``
+        so an aborted connection never leaks a slot).
+        """
+        inflight = self._pollers.get(user_id, 0)
+        if inflight >= MAX_POLLS_PER_USER:
+            raise PollCapacityExceeded(
+                f"user {user_id} already holds {inflight} polls "
+                f"(cap {MAX_POLLS_PER_USER})")
+        self._pollers[user_id] = inflight + 1
+        try:
+            return await self._poll_hold(user_id, hold)
+        finally:
+            remaining = self._pollers.get(user_id, 1) - 1
+            if remaining > 0:
+                self._pollers[user_id] = remaining
+            else:
+                self._pollers.pop(user_id, None)
+
+    async def _poll_hold(self, user_id: int, hold: float) -> dict | None:
         self.heartbeat(user_id)
         queue = self._queues.setdefault(user_id, deque())
         while True:

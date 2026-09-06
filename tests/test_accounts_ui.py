@@ -224,3 +224,47 @@ async def test_unknown_device_code_gets_result_page(client):
     page = await client.get("/auth/devices/ZZZZZZZZ")
     assert page.status_code == 404
     assert "Unknown or expired code" in page.text
+
+
+# --- device-code machine fingerprint (audit MEDIUM-3) -------------------------
+
+
+def _fingerprint_of(device_code: str) -> str:
+    """The expected approval-page hint: first 8 hex of sha256(raw)."""
+    import hashlib
+
+    return hashlib.sha256(device_code.encode("utf-8")).hexdigest()[:8]
+
+
+async def test_device_page_shows_machine_fingerprint(client, monkeypatch):
+    """MEDIUM-3: the approval page displays the device_code fingerprint -
+    first 8 hex chars of its sha256 - so the approver can verify the code
+    belongs to the machine in front of them before donating their
+    identity. The raw device_code (the store's secret) never appears."""
+    monkeypatch.setattr("invincible.endpoints.accounts.DEFAULT_POLL_INTERVAL", 0)
+    await register_account(client, "fp@device.example")
+    payload = (await client.post("/auth/device/code")).json()
+
+    page = await client.get(f"/auth/devices/{payload['user_code']}")
+    assert page.status_code == 200
+    assert _fingerprint_of(payload["device_code"]) in page.text
+    assert payload["device_code"] not in page.text
+
+
+async def test_device_fingerprint_identifies_the_request(client):
+    """Two pairing requests carry different fingerprints - the hint
+    identifies the individual request (so a mismatch with the CLI's
+    printout is meaningful), not just the flow."""
+    await register_account(client, "fp2@device.example")
+    first = (await client.post("/auth/device/code")).json()
+    second = (await client.post("/auth/device/code")).json()
+    assert _fingerprint_of(first["device_code"]) \
+        != _fingerprint_of(second["device_code"])
+
+    pages = [await client.get(f"/auth/devices/{p['user_code']}")
+             for p in (first, second)]
+    assert pages[0].status_code == 200 and pages[1].status_code == 200
+    assert _fingerprint_of(first["device_code"]) in pages[0].text
+    assert _fingerprint_of(first["device_code"]) not in pages[1].text
+    assert _fingerprint_of(second["device_code"]) in pages[1].text
+    assert _fingerprint_of(second["device_code"]) not in pages[0].text

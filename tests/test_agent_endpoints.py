@@ -62,6 +62,39 @@ async def test_poll_no_work_returns_null_job(client, monkeypatch):
     assert response.json() == {"job": None}
 
 
+async def test_poll_over_cap_sheds_with_429(client, monkeypatch):
+    """LOW-5: once a user holds MAX_POLLS_PER_USER concurrent polls, the
+    next answers 429 (+ Retry-After) instead of parking another held
+    connection; once the holds drain, polls answer normally again."""
+    import invincible.endpoints.agents as agents_mod
+    from invincible.core.agent_registry import MAX_POLLS_PER_USER
+    monkeypatch.setattr(agents_mod, "AGENT_POLL_HOLD_SECONDS", 1.0)
+    uid, key = await _mint_key(client, "cap@example.com")
+    held = [
+        asyncio.ensure_future(
+            client.post("/agent/poll", headers=agent_headers(key)))
+        for _ in range(MAX_POLLS_PER_USER)
+    ]
+    # Wait until every hold has actually parked server-side (registry
+    # counts it) - a fixed sleep flakes under a loaded full-suite run
+    # where the last request may not have reached the app yet.
+    registry = app.state.agent_registry
+    for _ in range(200):
+        if registry._pollers.get(uid, 0) >= MAX_POLLS_PER_USER:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise AssertionError("holds never parked server-side")
+    over = await client.post("/agent/poll", headers=agent_headers(key))
+    assert over.status_code == 429
+    assert over.headers["retry-after"] == "5"
+    for task in held:
+        assert (await task).status_code == 200
+    ok = await client.post("/agent/poll", headers=agent_headers(key))
+    assert ok.status_code == 200
+    assert ok.json() == {"job": None}
+
+
 async def test_poll_hands_out_dispatched_job(client):
     uid, key = await _mint_key(client)
     task = await _stage_job(uid)
