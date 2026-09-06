@@ -97,7 +97,11 @@ def test_setup_creates_env_file_with_db_url(tmp_path):
     assert set(values) == {
         "GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET",
         "INVINCIBLE_DB_URL", "INVINCIBLE_CREDENTIAL_KEY",
+        # MEDIUM-1: fresh self-hosts opt in to the first-human
+        # operator bootstrap (public deploys omit it).
+        "INVINCIBLE_ALLOW_FIRST_OPERATOR",
     }
+    assert values["INVINCIBLE_ALLOW_FIRST_OPERATOR"] == "1"
     assert values["INVINCIBLE_DB_URL"] == EXAMPLE_DB_URL
 
 

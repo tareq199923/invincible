@@ -116,6 +116,26 @@ class Settings:
         """Pre-rename alias (MCP_SHARED_SECRET), honored by endpoints.oauth."""
         return os.getenv("MCP_SHARED_SECRET")
 
+    def allow_first_operator(self) -> bool:
+        """Whether the first-human operator bootstrap may fire (MEDIUM-1,
+        2026-09-07 audit).
+
+        True when NO owner secret is configured (bare self-host without
+        the browser-session surface) or when INVINCIBLE_ALLOW_FIRST_OPERATOR
+        is explicitly enabled. ``invincible setup`` writes that flag into
+        fresh .env files, so the out-of-the-box one-person self-host keeps
+        its no-terminal bootstrap - the first human to register IS the
+        person who ran setup. Public/hosted deploys configure secrets by
+        hand (Railway vars) and omit the flag: a stranger winning the
+        registration race there lands a plain ``user`` account, and
+        elevation is ``invincible users promote`` (audit-logged).
+        """
+        if self.owner_secret() or self.legacy_owner_secret():
+            return os.getenv(
+                "INVINCIBLE_ALLOW_FIRST_OPERATOR", ""
+            ).strip().lower() in ("1", "true", "on", "yes")
+        return True
+
     def github_client_id(self) -> str | None:
         """GitHub OAuth App client ID - unset hides GitHub login entirely."""
         return os.getenv("INVINCIBLE_GITHUB_CLIENT_ID")
@@ -144,7 +164,9 @@ class Settings:
         ``invincible start`` development workflows are untouched. Also
         read by the OAuth consent gate - when routing is on, non-
         operators may approve their own MCP clients (approval exposes
-        only their own machine, never the server host)."""
+        only their own machine, never the server host). Public
+        multi-user deploys MUST set INVINCIBLE_AGENT_ROUTING=1 (see
+        docs/SECURITY.md §10 deployment posture)."""
         return bool(os.getenv("INVINCIBLE_AGENT_ROUTING"))
 
     def debug_dump_400(self) -> bool:

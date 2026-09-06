@@ -74,11 +74,16 @@ the host). Consent therefore requires either the owner secret or an
 seeded/elevated to operator, revision 0008 backfills migrated databases,
 and `invincible users promote <email>` / `demote <email>` is the runtime
 elevation path — every change is audit-logged, and the local owner's
-role is immutable). On a fresh instance the **first registered account
-bootstraps to operator** — the self-hosted model is one person per
+role is immutable). On a fresh **opted-in** instance the first registered
+account bootstraps to operator — the self-hosted model is one person per
 instance, and the person who ran `inv setup` must be able to govern
 their own machine without a terminal step; every later registration
-joins as a plain user. A self-registered plain account gets 403 on both
+joins as a plain user. MEDIUM-1 (2026-09-07 audit) made the bootstrap
+opt-in: it fires only when no owner secret is configured or when
+`INVINCIBLE_ALLOW_FIRST_OPERATOR=1` (which `invincible setup` writes
+into fresh `.env` files and public deploys deliberately omit — a
+stranger winning the registration race there lands a plain user
+account). A self-registered plain account gets 403 on both
 the consent page and the approve POST, and the refusal is audited
 (`oauth.consent_forbidden`).
 When a browser holds *both* cookies, the dashboard session wins: approval
@@ -792,5 +797,23 @@ With routing off, the Phase 5/6 refusal stands in full: a
 self-registered session must never mint host-shell MCP tokens. The
 coupling lives in `oauth.py`'s `_non_operator_response` and is pinned
 by `tests/test_oauth_consent_relaxation.py`.
+
+**Deployment posture (2026-09-07 audit, Step 3):** on any PUBLIC
+multi-user deployment, `INVINCIBLE_AGENT_ROUTING=1` is a hard
+requirement, not an optimization. With routing unset, confirmed MCP
+tool calls execute on the *server host* under the server's privileges —
+correct for a one-person `invincible start` self-host, indefensible
+when strangers can register. The current production deploy
+(invincible-ai.me, Railway) keeps the flag set in its environment
+variables; losing it would silently revert every confirmed tool call
+to server-host execution. The flag stays opt-in rather than
+defaulting on at multi-user detection (considered and rejected in the
+audit): settings are live env reads with no startup user-count gate,
+local dev workflows depend on the off default, and flipping the
+consent relaxation as a side effect of a runtime headcount would be a
+surprising behavioral change. Verify the flag after any platform
+migration (Railway → Azure, October 2026) via the deploy checklist:
+`invincible doctor` output plus the operator's MCP clients page
+showing per-user agents online.
 
 ---

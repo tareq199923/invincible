@@ -199,6 +199,10 @@ async def admin_pg(pg_live):
 async def client(pg_engine, router_setter, monkeypatch):
     monkeypatch.setenv("GATEWAY_API_KEY", "test-gateway-key")
     monkeypatch.setenv("INVINCIBLE_OWNER_SECRET", TEST_OWNER_SECRET)
+    # MEDIUM-1: the operator bootstrap is opt-in for secret-configured
+    # instances (setup writes this flag into fresh .env files); the tests
+    # mirror a normal setup-managed self-host.
+    monkeypatch.setenv("INVINCIBLE_ALLOW_FIRST_OPERATOR", "1")
     router_setter({})
     store = SessionStore(engine=pg_engine)
     app.state.engine = pg_engine
@@ -289,17 +293,22 @@ async def login_account(client, email="user@example.com",
 
 async def operator_session(client, email="op@example.com",
                            password="longenough1"):
-    """Register a FRESH account - the first human registration is the
-    operator bootstrap, so with a clean users table this lands operator
-    by itself - then log in. The returned client carries the operator's
+    """Register a FRESH account and promote it to operator explicitly.
+    The first-human bootstrap used to make this implicit, but it is
+    opt-in since MEDIUM-1 (the client fixture enables the flag, so a
+    clean table usually lands operator anyway - promote makes the
+    operator outcome explicit regardless of other humans/tests in the
+    same table). Then log in. The returned id carries the operator's
     session cookie (management API realm)."""
     response = await client.post(
         "/auth/register", json={"email": email, "password": password})
     assert response.status_code == 201, response.text
+    uid = response.json()["id"]
+    await promote_operator(uid)
     login = await client.post(
         "/auth/login", json={"email": email, "password": password})
     assert login.status_code == 200, login.text
-    return response.json()["id"]
+    return uid
 
 
 def pkce_pair():

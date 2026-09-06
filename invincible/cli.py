@@ -495,6 +495,21 @@ def setup(env_file, db_url, force, skip_db_check):
             "secret credential-key`."
         )
 
+    # MEDIUM-1 (2026-09-07 audit): setup-managed self-hosts opt in to the
+    # first-human operator bootstrap - the first account to register IS
+    # the person who ran setup. Hosted/public deploys build their env by
+    # hand and omit this line, so a stranger winning the registration
+    # race lands a plain user account (elevation = `invincible users
+    # promote`). Fresh .env files only: never injected into an existing
+    # one, where removing it is a deliberate posture choice.
+    if not os.path.isfile(env_path):
+        new_values["INVINCIBLE_ALLOW_FIRST_OPERATOR"] = "1"
+        click.echo(
+            "First registered account will become the operator "
+            "(INVINCIBLE_ALLOW_FIRST_OPERATOR=1; remove it on a public "
+            "deploy)."
+        )
+
     # Database (remote-first): --db-url wins; an existing value is left
     # alone; a first run with neither is an error, not a prompt - the
     # operator pastes a managed-PostgreSQL DSN (Neon etc.).

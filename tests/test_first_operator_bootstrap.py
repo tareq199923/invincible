@@ -1,15 +1,23 @@
 # tests/test_first_operator_bootstrap.py
-"""First-human bootstrap: the first registered account on a fresh
-instance becomes an operator.
+"""First-human bootstrap: on opted-in deployments the first registered
+account on a fresh instance becomes an operator.
 
 The self-hosted model is one person per instance - the person who ran
 ``inv setup`` must be able to govern their own machine (approve MCP
-clients) without a terminal step. Gates:
+clients) without a terminal step. MEDIUM-1 (2026-09-07 audit) made the
+bootstrap opt-in: it fires when no owner secret is configured, or when
+INVINCIBLE_ALLOW_FIRST_OPERATOR=1 (the ``client`` fixture sets the flag,
+mirroring what setup writes into fresh .env files). Gates:
 
 - first password registration -> operator (audited with the role);
 - first GitHub registration -> operator too (same _insert path);
 - any later registration -> plain user;
 - the bootstrap only fires when NO earlier non-system human exists;
+- with the flag absent and a secret set, first registration is a PLAIN
+  user (the hosted-deploy posture - a stranger winning the race gets
+  nothing);
+- with no secret configured at all, the bootstrap still fires (bare
+  self-host preserved);
 - end-to-end: the first user can register a client, approve it, and
   receive tokens stamped with their own subject - no promote step.
 """
@@ -72,9 +80,56 @@ async def test_inhabited_instance_never_bootstraps(client):
     assert await _role_of(registered.json()["id"]) == "user"
 
 
-async def test_github_first_registration_is_operator(pg_engine):
+async def test_secret_set_flag_absent_first_registration_is_plain_user(
+    client, monkeypatch
+):
+    """MEDIUM-1 regression: the hosted-deploy posture. With an owner
+    secret configured and the flag absent, a stranger winning the
+    registration race on a fresh instance lands a plain user account -
+    never operator (approval of MCP clients / provider management stays
+    out of reach; elevation is `invincible users promote`)."""
+    monkeypatch.delenv("INVINCIBLE_ALLOW_FIRST_OPERATOR", raising=False)
+    registered, _ = await register_account(client, "race@example.com")
+    assert registered.status_code == 201, registered.text
+    uid = registered.json()["id"]
+    assert await _role_of(uid) == "user"
+    async with app.state.engine.connect() as conn:
+        meta = (await conn.execute(
+            text("SELECT meta FROM audit_log WHERE action = 'auth.registered'")
+        )).scalar()
+    assert meta["role"] == "user"
+    # The gate is the flag, not order-of-registration: a SECOND account
+    # still stays user, and enabling the flag late changes nothing for
+    # accounts already registered (no retroactive promotion, none
+    # expected - only the first-human-on-fresh-instance path applies).
+    second, _ = await register_account(client, "second@example.com")
+    assert await _role_of(second.json()["id"]) == "user"
+
+
+async def test_no_secret_bootstraps_without_the_flag(
+    client, monkeypatch
+):
+    """Bare self-host: no owner secret configured (and no flag) still
+    bootstraps - a deployment without the browser-session surface is
+    unambiguously single-person, so the terminal-free bootstrap is
+    safe and preserved. Exercised at the service layer: with no secret
+    the HTTP register endpoint 503s (sessions disabled), which is the
+    same posture a bare self-host would face."""
+    monkeypatch.delenv("INVINCIBLE_ALLOW_FIRST_OPERATOR", raising=False)
+    monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
+    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     from invincible.core.accounts import UserService
 
+    user = await UserService(app.state.engine).register(
+        "bare@example.com", "longenough1")
+    assert user["role"] == "operator"
+
+
+async def test_github_first_registration_is_operator(pg_engine, monkeypatch):
+    from invincible.core.accounts import UserService
+
+    # The flag gate applies to the GitHub path too (same _insert).
+    monkeypatch.setenv("INVINCIBLE_ALLOW_FIRST_OPERATOR", "1")
     service = UserService(pg_engine)
     user = await service.register_without_password("gh-first@example.com")
     assert user["role"] == "operator"

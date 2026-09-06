@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-07
 **Auditor scope:** all 41 source modules (~18.3k lines), 8 Alembic migrations, test suite.
-**Status:** Audit complete. Step 1 APPLIED 2026-09-07 (HIGH-1 + HIGH-2 fixed, 5 regression tests added). Step 2 APPLIED 2026-09-07 (all silent local-owner fallbacks fail loudly; MEDIUM-2 + LOW-1 closed along the way). Steps 3-5 below remain open. This document is the handoff.
+**Status:** Audit complete. Step 1 APPLIED 2026-09-07 (HIGH-1 + HIGH-2 fixed, 5 regression tests added). Step 2 APPLIED 2026-09-07 (all silent local-owner fallbacks fail loudly; MEDIUM-2 + LOW-1 closed along the way). Step 3 APPLIED 2026-09-07 (MEDIUM-1 bootstrap gated on INVINCIBLE_ALLOW_FIRST_OPERATOR / no-secret; MEDIUM-4 per-IP rate limits on /oauth/register + /auth/device/code; agent-routing deployment posture documented in SECURITY.md §10). Steps 4-5 below remain open. This document is the handoff.
 
 ---
 
@@ -153,8 +153,17 @@ Do not change these — they are the model the fixes should imitate.
   `endpoints/graph.py:79-80`).
 - **Latent on current deployment** (owner registered first), **active for every
   future public deploy**.
-- **Fix options:** bootstrap only when `INVINCIBLE_OWNER_SECRET` is unset
-  (true self-host), or an explicit `INVINCIBLE_ALLOW_FIRST_OPERATOR=1` gate.
+- **FIXED (Step 3, 2026-09-07):** the bootstrap now fires only when
+  `settings.allow_first_operator()` is true — no owner secret configured
+  (bare self-host) OR `INVINCIBLE_ALLOW_FIRST_OPERATOR` explicitly set.
+  `invincible setup` writes the flag into FRESH .env files only, so the
+  out-of-the-box one-person self-host keeps the terminal-free bootstrap
+  while hosted/public deploys (hand-built env) never grant operator to a
+  stranger winning the registration race (elevation there =
+  `invincible users promote`, audit-logged). Regression tests:
+  `test_secret_set_flag_absent_first_registration_is_plain_user` and
+  `test_no_secret_bootstraps_without_the_flag`
+  (tests/test_first_operator_bootstrap.py).
 
 ### 🟡 MEDIUM-2 — Legacy pending actions with `owner_subject=None` confirmable by anyone (fail-open)
 
@@ -201,9 +210,16 @@ Do not change these — they are the model the fixes should imitate.
   `oauth_clients` table bloat, junk entries surface in operator's client lists.
 - `POST /auth/device/code` (`endpoints/accounts.py:608-628`) — same shape
   (rows do expire/sweep).
-- **Fix:** per-IP fixed-window limiter (reuse `LoginRateLimiter` /
-  `login_attempts` table with a new scope, e.g. "register") and/or cap
-  unowned client registrations.
+- **FIXED (Step 3, 2026-09-07):** both endpoints now carry per-IP
+  fixed-window caps (10 requests / 15 min) reusing `LoginRateLimiter` /
+  the `login_attempts` table with dedicated scopes (`client-register`,
+  `device-code`) — deliberately separate from every login scope, so an
+  anonymous flood can never lock a real user out of signing in. Every
+  attempt counts (valid or not: each is a potential row write). 429s
+  match each surface's existing error shape and are audit-logged
+  (`oauth.register_limited`, `device.code_limited`). Regression tests
+  in tests/test_anonymous_rate_limits.py (over-cap 429 + no row,
+  under-cap OK, different IP unaffected, scope separation from login).
 
 ### 🟢 LOW-1 — Anonymous fail-open principal rides the operator's provider pool
 
@@ -299,15 +315,20 @@ obvious errors, not silent cross-user data mixing:
 4. ✅ MEDIUM-2 along the way: fail-closed `PendingActionStore.take()` for
    `owner is None` + non-None requester (see MEDIUM-2 above).
 
-### Step 3 — Deployment-posture hardening
+### Step 3 — Deployment-posture hardening (APPLIED 2026-09-07)
 
-1. MEDIUM-1: gate first-human operator bootstrap (env flag or
-   owner-secret-unset condition).
-2. MEDIUM-4: rate-limit `/oauth/register` and `/auth/device/code`.
-3. Confirm hosted deployment keeps `INVINCIBLE_AGENT_ROUTING=1` (it does per
-   Railway vars) — agent routing is the design that makes "every user has MCP
-   tools" safe: each user's commands run on their own machine. Consider making
-   it the default when accounts/multi-user mode is detected.
+1. ✅ MEDIUM-1: first-human operator bootstrap gated on
+   `INVINCIBLE_ALLOW_FIRST_OPERATOR` / no-owner-secret (see MEDIUM-1
+   above); `invincible setup` opts fresh self-hosts in.
+2. ✅ MEDIUM-4: per-IP rate limits on `/oauth/register` and
+   `/auth/device/code` (see MEDIUM-4 above).
+3. ✅ Agent-routing posture: production keeps
+   `INVINCIBLE_AGENT_ROUTING=1` (Railway vars); the flag stays
+   opt-in (defaulting on at multi-user detection was considered and
+   rejected — live env reads, no startup user-count gate, and it would
+   flip the OAuth consent relaxation as a side effect). Public-deploy
+   requirement documented in docs/SECURITY.md §10 ("Deployment
+   posture"), including the Railway → Azure migration check.
 
 ### Step 4 — Smaller cleanups
 

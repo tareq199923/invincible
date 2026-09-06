@@ -62,6 +62,12 @@ router = APIRouter()
 AUTH_LOGIN_MAX_ATTEMPTS = 5
 AUTH_LOGIN_WINDOW_SECONDS = 15 * 60
 
+# MEDIUM-4 (2026-09-07 audit): anonymous write endpoints need their own
+# fixed-window caps so a single IP cannot bloat oauth_clients /
+# device_codes. Scoped "device-code" (never shared with a login scope).
+DEVICE_CODE_MAX_ATTEMPTS = 10
+DEVICE_CODE_WINDOW_SECONDS = 15 * 60
+
 # Jinja2 templates ship inside the package (no static pipeline; forms POST
 # to the same /auth/* endpoints the API uses).
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
@@ -79,6 +85,18 @@ def _limiter(request: Request) -> LoginRateLimiter:
         scope="auth-login",
         max_attempts=AUTH_LOGIN_MAX_ATTEMPTS,
         window_seconds=AUTH_LOGIN_WINDOW_SECONDS,
+    )
+
+
+def _device_code_limiter(request: Request) -> LoginRateLimiter:
+    """Fixed-window cap on anonymous /auth/device/code starts (MEDIUM-4).
+    Reuses the login_attempts table with a dedicated scope so a stranger
+    hammering pairing can never lock out logins (or vice versa)."""
+    return LoginRateLimiter(
+        _engine(request),
+        scope="device-code",
+        max_attempts=DEVICE_CODE_MAX_ATTEMPTS,
+        window_seconds=DEVICE_CODE_WINDOW_SECONDS,
     )
 
 
@@ -607,6 +625,22 @@ async def list_sessions(
 
 @router.post("/auth/device/code")
 async def device_code_start(request: Request):
+    # MEDIUM-4: anonymous, cookie-less, unthrottled otherwise - cap the
+    # write rate per IP. Every call counts (successes too): each one
+    # inserts a device_codes row, so this is table-bloat protection,
+    # not just brute-force protection.
+    ip = _client_ip(request)
+    limiter = _device_code_limiter(request)
+    locked_for = await limiter.locked_out(ip)
+    if locked_for is not None:
+        await _audit(request, "device.code_limited",
+                     resource_type="client_ip", resource_id=ip)
+        message = (f"Too many pairing requests; retry in {locked_for}s.")
+        return JSONResponse(
+            {"error": {"code": "locked_out", "message": message}},
+            status_code=429,
+        )
+    await limiter.record_failure(ip)
     interval = DEFAULT_POLL_INTERVAL
     ttl = DEVICE_CODE_TTL
     request_data = await DeviceCodeStore(_engine(request)).create(

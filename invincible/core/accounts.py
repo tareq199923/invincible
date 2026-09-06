@@ -131,6 +131,14 @@ class UserService:
             # self-hosted gateway must be governable by the person who
             # set it up, without a terminal step. Later registrations,
             # and the seeded system local owner, never trigger it.
+            # MEDIUM-1 gate (2026-09-07 audit): the bootstrap only fires
+            # on deployments that opted in - no owner secret configured,
+            # or INVINCIBLE_ALLOW_FIRST_OPERATOR=1 (setup writes it into
+            # fresh .env files, so out-of-the-box self-hosts keep the
+            # behavior). On a hosted deploy the flag is absent: a
+            # stranger winning the registration race gets a plain user
+            # account, never the operator role; elevation there is
+            # ``invincible users promote`` (audit-logged).
             # Benign race note: two simultaneous first-registrations can
             # both win (uncommitted rows are invisible to each other);
             # the worst case is one operator too many, demotable by hand.
@@ -140,7 +148,7 @@ class UserService:
                 .limit(1)
             )).first()
             role = ROLE_USER
-            if earlier_human is None:
+            if earlier_human is None and settings.allow_first_operator():
                 await conn.execute(
                     update(users)
                     .where(users.c.id == uid)

@@ -87,6 +87,22 @@ async def _audit(request: Request, action: str, **kwargs) -> None:
 LOGIN_MAX_ATTEMPTS = 5
 LOGIN_WINDOW_SECONDS = 15 * 60
 
+# MEDIUM-4 (2026-09-07 audit): dynamic client registration is open by
+# design (the gate is consent, not registration) but needs a per-IP cap
+# so one address cannot bloat oauth_clients with junk rows. Scoped
+# "client-register" - deliberately separate from the owner-login scope.
+REGISTER_MAX_ATTEMPTS = 10
+REGISTER_WINDOW_SECONDS = 15 * 60
+
+
+def _register_limiter(request: Request) -> LoginRateLimiter:
+    return LoginRateLimiter(
+        request.app.state.engine,
+        scope="client-register",
+        max_attempts=REGISTER_MAX_ATTEMPTS,
+        window_seconds=REGISTER_WINDOW_SECONDS,
+    )
+
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
@@ -336,7 +352,23 @@ async def protected_resource_metadata_path_form(request: Request, rest: str):
 @router.post("/oauth/register")
 async def oauth_register(request: Request):
     """RFC 7591 dynamic client registration. Open by design - the real
-    gate is the operator's consent on /oauth/authorize, not registration."""
+    gate is the operator's consent on /oauth/authorize, not registration.
+    MEDIUM-4: per-IP fixed-window cap (every attempt counts, successful
+    or not - each is a potential oauth_clients row) so the table cannot
+    be bloated by one address hammering the endpoint."""
+    ip = _client_ip(request)
+    limiter = _register_limiter(request)
+    locked_for = await limiter.locked_out(ip)
+    if locked_for is not None:
+        await _audit(request, "oauth.register_limited",
+                     resource_type="client_ip", resource_id=ip)
+        return JSONResponse(
+            {"error": "rate_limited",
+             "error_description":
+                 f"Too many registrations; retry in {locked_for}s."},
+            status_code=429,
+        )
+    await limiter.record_failure(ip)
     try:
         body = await request.json()
     except Exception:

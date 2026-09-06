@@ -60,6 +60,9 @@ async def test_fresh_install_journey(admin_pg, pg_live, tmp_path, monkeypatch):
         "GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET",
         "INVINCIBLE_DB_URL", "INVINCIBLE_CREDENTIAL_KEY",
     }
+    # MEDIUM-1: setup opts fresh self-hosts in to the first-human
+    # operator bootstrap, so the founder below lands operator.
+    assert values.get("INVINCIBLE_ALLOW_FIRST_OPERATOR") == "1"
     for key, value in values.items():
         monkeypatch.setenv(key, value)
     assert values["INVINCIBLE_DB_URL"] == scratch_url
