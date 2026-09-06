@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Dashboard - Invincible{% endblock %}
 {% block content %}
+<style>
+  .card .spark { display: block; width: 100%; height: 36px;
+                 margin-top: 0.6rem; }
+  .card .spark polyline { fill: none; stroke: var(--accent);
+                          stroke-width: 2; stroke-linejoin: round;
+                          stroke-linecap: round; }
+  .card .spark .area { fill: var(--accent-dim); stroke: none; }
+</style>
 <h2>Dashboard</h2>
 <p class="muted">Overview for <strong>{{ user_email }}</strong></p>
 
@@ -18,7 +26,16 @@
   <div class="card" data-card="api-keys"><span class="num">{{ counts.api_keys }}</span><span class="label">Active API keys</span></div>
   <div class="card" data-card="tasks"><span class="num">{{ counts.tasks }}</span><span class="label">Active tasks</span></div>
   <div class="card" data-card="memories"><span class="num">{{ counts.memories }}</span><span class="label">Memories</span></div>
-  <div class="card" data-card="usage-7d"><span class="num">{{ counts.usage_7d | compactnum }}</span><span class="label">Tokens (7d)</span></div>
+  <div class="card" data-card="usage-7d"><span class="num">{{ counts.usage_7d | compactnum }}</span><span class="label">Tokens (7d)</span>
+    {% if sparkline.points %}
+    <svg class="spark" viewBox="0 0 160 36" preserveAspectRatio="none"
+         role="img" aria-label="Tokens per day, last 7 days">
+      <polygon class="area"
+               points="0,36 {{ sparkline.points }} 160,36"/>
+      <polyline points="{{ sparkline.points }}"/>
+    </svg>
+    {% endif %}
+  </div>
 </div>
 
 <h3>Recent sessions</h3>

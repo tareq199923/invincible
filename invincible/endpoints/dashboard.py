@@ -38,7 +38,10 @@ from invincible.endpoints.accounts import (
     _wants_html,
     require_user_session,
 )
-from invincible.endpoints.template_filters import register_template_filters
+from invincible.endpoints.template_filters import (
+    compactnum,
+    register_template_filters,
+)
 
 logger = logging.getLogger("invincible.dashboard")
 
@@ -115,9 +118,21 @@ async def overview_page(
         principal.user_id)
     memories_total = await _state(request, "memory").count_for_user(
         principal.user_id)
-    usage = _usage_totals(
-        await _state(request, "runs").usage_summary(principal.user_id,
-                                                    days=7))
+    usage_rows = await _state(request, "runs").usage_summary(
+        principal.user_id, days=7)
+    usage = _usage_totals(usage_rows)
+    # 7-day series for the overview sparkline (same rows as the totals).
+    spark_days = {}
+    for row in usage_rows:
+        d = spark_days.setdefault(row["day"], {"day": row["day"],
+                                               "tokens": 0})
+        d["tokens"] += row["input_tokens"] + row["output_tokens"]
+    spark_list = sorted(spark_days.values(), key=lambda d: d["day"])
+    spark_peak = max((d["tokens"] for d in spark_list), default=0) or 1
+    sparkline = {
+        "points": _sparkline_points(spark_list, spark_peak),
+        "peak": spark_peak,
+    }
     active_keys = sum(1 for k in keys if k["revoked_at"] is None)
     # First-run signpost: chat can only succeed once BOTH a provider is
     # connected AND a key exists (BYOK-only - the operator pool is never
@@ -140,6 +155,7 @@ async def overview_page(
         },
         needs_setup=not (has_provider and active_keys > 0),
         recent_sessions=recent_sessions,
+        sparkline=sparkline,
     )
 
 
@@ -447,6 +463,48 @@ def _usage_totals(rows: list[dict]) -> dict:
     }
 
 
+# Tokens/day chart: viewBox is 720x200; bars live in the top 170 units,
+# day labels sit below. Caps at ~10 labels so 30-day windows stay legible.
+_CHART_W = 720
+_CHART_BARS_H = 170
+
+
+def _day_chart_geometry(days_list: list[dict], peak: int) -> dict:
+    """Compute SVG rect coordinates for the tokens-per-day chart."""
+    n = len(days_list)
+    if not n:
+        return {"w": _CHART_W, "bars_h": _CHART_BARS_H, "bars": [],
+                "label_every": 1, "peak": peak}
+    gap = 6 if n <= 20 else 2
+    bar_w = (_CHART_W - gap * (n - 1)) / n
+    for i, d in enumerate(days_list):
+        h = int(round(_CHART_BARS_H * d["tokens"] / peak))
+        d["x"] = round(i * (bar_w + gap), 1)
+        d["w"] = round(bar_w, 1)
+        d["h"] = max(h, 1 if d["tokens"] else 0)
+        d["y"] = _CHART_BARS_H - d["h"]
+        d["tokens_fmt"] = compactnum(d["tokens"])
+    return {
+        "w": _CHART_W,
+        "bars_h": _CHART_BARS_H,
+        "bars": days_list,
+        "label_every": max(1, (n + 9) // 10),
+        "peak": peak,
+    }
+
+
+def _sparkline_points(days_list: list[dict], peak: int,
+                      w: int = 160, h: int = 36) -> str:
+    """Polyline points for the overview card's 7-day token sparkline."""
+    n = len(days_list)
+    if n < 2:
+        return ""
+    step = w / (n - 1)
+    return " ".join(
+        f"{round(i * step, 1)},{round(h - 2 - (h - 4) * d['tokens'] / peak, 1)}"
+        for i, d in enumerate(days_list))
+
+
 @router.get("/usage")
 async def usage_json(
     request: Request,
@@ -497,16 +555,30 @@ async def usage_page(
     for d in days_list:
         d["pct"] = int(round(100 * d["tokens"] / peak))
 
+    # Chart geometry in viewBox units, computed server-side (same pattern
+    # as the memory graph): the template only places rects and labels.
+    chart = _day_chart_geometry(days_list, peak)
+
+    provider_rows = sorted(
+        by_provider.values(),
+        key=lambda p: (-(p["input_tokens"] + p["output_tokens"]),
+                       p["provider_name"], p["model_id"]))
+    max_provider_tokens = max(
+        (p["input_tokens"] + p["output_tokens"] for p in provider_rows),
+        default=0)
+    for p in provider_rows:
+        tokens = p["input_tokens"] + p["output_tokens"]
+        p["pct"] = int(round(100 * tokens / max_provider_tokens)) \
+            if max_provider_tokens else 0
+
     return _page(
         "usage.html", request,
         user_email=await _email(_engine(request), principal),
         window=window,
         totals=totals,
         days_rows=days_list,
-        provider_rows=sorted(
-            by_provider.values(),
-            key=lambda p: (-(p["input_tokens"] + p["output_tokens"]),
-                           p["provider_name"], p["model_id"])),
+        chart=chart,
+        provider_rows=provider_rows,
     )
 
 

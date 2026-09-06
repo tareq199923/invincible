@@ -1,48 +1,115 @@
 {% extends "base.html" %}
 {% block title %}Usage - Invincible{% endblock %}
 {% block content %}
+<style>
+  .segmented { display: inline-flex; border: 1px solid var(--border);
+               border-radius: var(--radius); overflow: hidden;
+               margin: 0.9rem 0 0; }
+  .segmented a { padding: 0.28rem 0.9rem; color: var(--muted);
+                 font-size: 0.8rem; text-decoration: none;
+                 border-right: 1px solid var(--border-soft); }
+  .segmented a:last-child { border-right: none; }
+  .segmented a:hover { color: var(--ink); text-decoration: none;
+                       background: var(--surface); }
+  .segmented a.active { color: var(--accent-ink);
+                        background: var(--accent-dim); }
+
+  .chart-card { background: var(--surface); border: 1px solid var(--border);
+                border-radius: var(--radius); padding: 1.1rem 1.2rem 0.6rem;
+                margin: 1.3rem 0; }
+  .chart-head { display: flex; justify-content: space-between;
+                align-items: baseline; margin-bottom: 0.4rem; }
+  .chart-peak { font-size: 0.72rem; color: var(--faint); }
+  .usage-chart { display: block; width: 100%; height: auto; }
+  .usage-chart .grid { stroke: var(--border-soft); stroke-width: 1; }
+  .usage-chart .bar { fill: url(#bar-grad); }
+  .usage-chart .bar:hover { fill: var(--accent); }
+  .usage-chart .day { fill: var(--faint); font-size: 11px;
+                      font-family: var(--mono); }
+
+  .share { width: 9rem; max-width: 24vw; height: 0.5rem;
+           background: var(--surface-2); border-radius: 2px;
+           overflow: hidden; }
+  .share-fill { height: 100%;
+                background: linear-gradient(90deg,
+                  var(--accent), #5a63d6); border-radius: 2px; }
+</style>
+
 <h2>Usage</h2>
-<p class="muted">Last {{ window }} day{{ 's' if window != 1 }} ·
-day buckets are UTC ·
-<a href="/dashboard/usage?days=7">7d</a> ·
-<a href="/dashboard/usage?days=14">14d</a> ·
-<a href="/dashboard/usage?days=30">30d</a></p>
+<p class="muted">Last {{ window }} day{{ 's' if window != 1 }} · day buckets are UTC</p>
+
+<nav class="segmented" aria-label="Window">
+  <a href="/dashboard/usage?days=7"{% if window == 7 %} class="active"{% endif %}>7d</a>
+  <a href="/dashboard/usage?days=14"{% if window == 14 %} class="active"{% endif %}>14d</a>
+  <a href="/dashboard/usage?days=30"{% if window == 30 %} class="active"{% endif %}>30d</a>
+</nav>
 
 <div class="cards">
-  <div class="card"><span class="num">{{ totals.attempts }}</span><span class="label">Attempts</span></div>
-  <div class="card"><span class="num">{{ totals.failovers }}</span><span class="label">Failovers</span></div>
-  <div class="card"><span class="num">{{ totals.input_tokens }}</span><span class="label">Input tokens</span></div>
-  <div class="card"><span class="num">{{ totals.output_tokens }}</span><span class="label">Output tokens</span></div>
+  <div class="card"><span class="num">{{ totals.attempts | compactnum }}</span><span class="label">Attempts</span></div>
+  <div class="card"><span class="num">{{ totals.failovers | compactnum }}</span><span class="label">Failovers</span></div>
+  <div class="card"><span class="num">{{ totals.input_tokens | compactnum }}</span><span class="label">Input tokens</span></div>
+  <div class="card"><span class="num">{{ totals.output_tokens | compactnum }}</span><span class="label">Output tokens</span></div>
 </div>
 
 <h3>Tokens per day</h3>
-<div class="bars">
-  {% for d in days_rows %}
-  <div class="bar-col" data-day="{{ d.day }}">
-    <div class="bar" style="height: {{ d.pct }}%"></div>
-    <span class="bar-day">{{ d.day[5:] }}</span>
-    <span class="bar-num muted">{{ d.tokens }}</span>
+{% if chart.bars %}
+<div class="chart-card">
+  <div class="chart-head">
+    <span class="chart-peak">peak {{ chart.peak | compactnum }} tokens/day</span>
   </div>
-  {% else %}
-  <p class="muted">No provider runs in this window.</p>
-  {% endfor %}
+  <svg class="usage-chart" viewBox="0 0 {{ chart.w }} 200"
+       role="img" aria-label="Tokens per day">
+    <defs>
+      <linearGradient id="bar-grad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="var(--accent)"/>
+        <stop offset="1" stop-color="#5a63d6"/>
+      </linearGradient>
+    </defs>
+    <line class="grid" x1="0" y1="42.5" x2="{{ chart.w }}" y2="42.5"/>
+    <line class="grid" x1="0" y1="85" x2="{{ chart.w }}" y2="85"/>
+    <line class="grid" x1="0" y1="127.5" x2="{{ chart.w }}" y2="127.5"/>
+    <line class="grid" x1="0" y1="{{ chart.bars_h }}" x2="{{ chart.w }}"
+          y2="{{ chart.bars_h }}"/>
+    {% for b in chart.bars %}
+    <rect class="bar" data-day="{{ b.day }}" x="{{ b.x }}" y="{{ b.y }}"
+          width="{{ b.w }}" height="{{ b.h }}" rx="2">
+      <title>{{ b.day }} — {{ b.tokens }} tokens ({{ b.attempts }} attempts)</title>
+    </rect>
+    {% if loop.index0 % chart.label_every == 0 %}
+    <text class="day" x="{{ b.x + b.w / 2 }}" y="{{ chart.bars_h + 18 }}"
+          text-anchor="middle">{{ b.day[5:] }}</text>
+    {% endif %}
+    {% endfor %}
+  </svg>
 </div>
+{% else %}
+<p class="muted empty">No provider runs in this window. Usage lands as
+chat requests run through the gateway.</p>
+{% endif %}
 
 <h3>By provider / model</h3>
+{% if provider_rows %}
 <table>
-  <tr><th>Provider</th><th>Model</th><th>Attempts</th><th>Failovers</th><th>In</th><th>Out</th></tr>
+  <tr><th>Provider</th><th>Model</th><th>Attempts</th><th>Failovers</th>
+      <th>In</th><th>Out</th><th>Share</th></tr>
   {% for p in provider_rows %}
   <tr class="provider-row">
     <td>{{ p.provider_name }}</td>
     <td><code>{{ p.model_id }}</code></td>
     <td>{{ p.attempts }}</td>
     <td>{{ p.failovers }}</td>
-    <td>{{ p.input_tokens }}</td>
-    <td>{{ p.output_tokens }}</td>
+    <td>{{ p.input_tokens | compactnum }}</td>
+    <td>{{ p.output_tokens | compactnum }}</td>
+    <td>
+      <div class="share" title="{{ p.pct }}% of window tokens">
+        <div class="share-fill" style="width: {{ p.pct }}%"></div>
+      </div>
+    </td>
   </tr>
-  {% else %}
-  <tr><td colspan="6" class="empty">Nothing recorded yet - usage lands as
-      chat requests run through the gateway.</td></tr>
   {% endfor %}
 </table>
+{% else %}
+<p class="muted empty">Nothing recorded yet — usage lands as
+chat requests run through the gateway.</p>
+{% endif %}
 {% endblock content %}
