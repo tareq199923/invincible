@@ -8,10 +8,10 @@
   <tr class="session-row">
     <td><a href="/dashboard/sessions/{{ s.id }}"><code>{{ s.client_session_id }}</code></a></td>
     <td>{{ s.project_id }}</td>
-    <td class="muted">{{ s.updated_at | int }}</td>
+    <td class="muted">{{ s.updated_at | timeago }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="3" class="muted">No sessions yet.</td></tr>
+  <tr><td colspan="3" class="empty">No sessions yet.</td></tr>
   {% endfor %}
 </table>
 {% endblock content %}

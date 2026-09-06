@@ -53,6 +53,7 @@ from invincible.core.principal import Principal
 from invincible.core.settings import settings
 from invincible.endpoints.auth import extract_token
 from invincible.endpoints.oauth import _client_ip, _parse_form
+from invincible.endpoints.template_filters import register_template_filters
 
 logger = logging.getLogger("invincible.accounts")
 
@@ -65,6 +66,7 @@ AUTH_LOGIN_WINDOW_SECONDS = 15 * 60
 # to the same /auth/* endpoints the API uses).
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+register_template_filters(templates)
 
 
 def _engine(request: Request):

@@ -23,17 +23,18 @@ import time
 MEMORY_NODE_CAP = 100
 
 # Deterministic source colors - the renderer and the legend share these.
+# Tuned for the dark console theme (vivid on near-black).
 _SOURCE_PALETTE = (
-    "#0366d6",  # blue
-    "#28a745",  # green
-    "#d29922",  # amber
-    "#bc2c3d",  # red
-    "#8250df",  # purple
-    "#1f6feb",  # bright blue
-    "#2da44e",  # bright green
-    "#bf8700",  # dark amber
-    "#cf222e",  # bright red
-    "#953800",  # brown
+    "#58a6ff",  # blue
+    "#3fb950",  # green
+    "#e3b341",  # amber
+    "#f47067",  # red
+    "#bc8cff",  # purple
+    "#39c5cf",  # cyan
+    "#ffa657",  # orange
+    "#7ee787",  # bright green
+    "#ff7b72",  # bright red
+    "#d2a8ff",  # bright purple
 )
 
 # Layout geometry for the center-radial map (viewBox units).
@@ -44,8 +45,8 @@ _PROJECT_RING = 175
 _MEMORY_RINGS = (85, 140, 195)  # outward rings around each project
 _SOURCE_ROW_Y = 40
 
-_USER_COLOR = "#24292f"
-_PROJECT_COLOR = "#57606a"
+_USER_COLOR = "#e6edf3"
+_PROJECT_COLOR = "#7e8a9e"
 
 
 def classify_source(provenance: str | None) -> str:

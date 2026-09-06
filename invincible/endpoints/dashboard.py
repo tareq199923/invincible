@@ -38,6 +38,7 @@ from invincible.endpoints.accounts import (
     _wants_html,
     require_user_session,
 )
+from invincible.endpoints.template_filters import register_template_filters
 
 logger = logging.getLogger("invincible.dashboard")
 
@@ -45,6 +46,7 @@ router = APIRouter()
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+register_template_filters(templates)
 
 _MEMORY_PAGE_SIZE = 20
 # Shared with the MCP memory_save path (core/memory.py) so both write

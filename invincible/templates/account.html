@@ -51,7 +51,7 @@ login</code>): type the code it printed.</p>
   <tr class="api-key-row" data-key-id="{{ key.id }}">
     <td><code>{{ key.prefix }}</code></td>
     <td>{{ key.label }}</td>
-    <td class="muted">{{ key.created_at | int }}</td>
+    <td class="muted">{{ key.created_at | timeago }}</td>
     <td>{% if key.revoked_at %}revoked{% else %}active{% endif %}</td>
     <td>
       {% if not key.revoked_at %}
@@ -64,7 +64,7 @@ login</code>): type the code it printed.</p>
     </td>
   </tr>
   {% else %}
-  <tr><td colspan="5" class="muted">No API keys yet - generate one above,
+  <tr><td colspan="5" class="empty">No API keys yet - generate one above,
       or use <code>invincible login</code>.</td></tr>
   {% endfor %}
 </table>

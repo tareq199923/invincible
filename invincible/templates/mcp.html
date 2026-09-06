@@ -65,7 +65,7 @@ accepted on /mcp &mdash; OAuth bearer tokens only (owner decision, Q1).</p>
   {% endfor %}
 </table>
 {% else %}
-<p class="muted">No MCP clients registered yet. A client registers itself
+<p class="muted empty">No MCP clients registered yet. A client registers itself
 via <code>POST /oauth/register</code> when it first connects.</p>
 {% endif %}
 {% endblock content %}

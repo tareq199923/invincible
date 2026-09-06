@@ -4,36 +4,31 @@
 <style>
   .setup-steps { display: flex; flex-direction: column; gap: 1.2rem; }
   .setup-step {
-    border: 1px solid #ddd; border-radius: 8px; padding: 1.1rem 1.3rem;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1.1rem 1.3rem; background: var(--surface);
   }
-  .setup-step.done { border-color: #2da44e; background: #f6fef8; }
+  .setup-step.done { border-color: rgba(63, 214, 143, 0.45); }
   .setup-step .step-head { display: flex; align-items: center; gap: 0.6rem; }
+  .setup-step h3 { margin: 0; }
+  .setup-step h3::before { content: none; }  /* steps number themselves */
   .setup-step .step-mark {
     width: 1.7rem; height: 1.7rem; border-radius: 50%;
-    background: #0366d6; color: #fff; text-align: center;
-    line-height: 1.7rem; font-weight: 700; flex-shrink: 0;
+    background: var(--accent-dim); color: var(--accent-ink);
+    border: 1px solid var(--accent);
+    text-align: center; line-height: 1.6rem; font-weight: 700;
+    flex-shrink: 0;
   }
-  .setup-step.done .step-mark { background: #2da44e; }
-  .setup-step h3 { margin: 0; }
+  .setup-step.done .step-mark {
+    background: var(--ok-dim); color: var(--ok); border-color: var(--ok);
+  }
   .setup-step .step-state { margin-left: auto; font-size: 0.85rem; }
-  .setup-step .step-state.done { color: #1a7f37; font-weight: 600; }
-  .setup-step .step-state.todo { color: #9a6700; }
-  .config-block {
-    position: relative; background: #0e1116; color: #d6deeb;
-    border-radius: 6px; padding: 0.9rem 1rem; margin: 0.6rem 0 0.4rem;
-    font-family: ui-monospace, Consolas, monospace; font-size: 0.82rem;
-    white-space: pre-wrap; word-break: break-all;
-  }
-  .copy-btn {
-    position: absolute; top: 0.5rem; right: 0.5rem;
-    background: #262d38; color: #d6deeb; border: 1px solid #3a4452;
-    border-radius: 4px; padding: 0.2rem 0.6rem; cursor: pointer;
-    font-size: 0.78rem;
-  }
-  .copy-btn:hover { background: #3a4452; }
-  .client-tab-note { font-size: 0.85rem; color: #666; margin: 0.9rem 0 0.2rem; }
+  .setup-step .step-state.done { color: var(--ok); font-weight: 600; }
+  .setup-step .step-state.todo { color: var(--warn); }
+  .client-tab-note { font-size: 0.85rem; color: var(--muted);
+                     margin: 0.9rem 0 0.2rem; }
   .setup-complete {
-    border: 1px solid #2da44e; background: #f6fef8; border-radius: 8px;
+    border: 1px solid rgba(63, 214, 143, 0.45);
+    background: var(--ok-dim); border-radius: var(--radius);
     padding: 1rem 1.3rem; margin-bottom: 1.2rem;
   }
 </style>

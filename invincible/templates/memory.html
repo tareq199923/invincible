@@ -37,14 +37,14 @@
     <td>{{ m.content }}</td>
     <td>{{ m.kind }}</td>
     <td class="muted">{{ m.layer }}</td>
-    <td class="muted">{{ m.created_at | int }}</td>
+    <td class="muted">{{ m.created_at | timeago }}</td>
     <td><button class="linklike delete-memory"
                 hx-delete="/memories/{{ m.id }}"
                 hx-target="closest tr" hx-swap="delete"
                 hx-confirm="Delete this memory?">Delete</button></td>
   </tr>
   {% else %}
-  <tr><td colspan="5" class="muted">No memories
+  <tr><td colspan="5" class="empty">No memories
       {%- if q %} matching your search{% endif %}.</td></tr>
   {% endfor %}
 </table>

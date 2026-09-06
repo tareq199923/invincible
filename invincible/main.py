@@ -42,6 +42,7 @@ from invincible.endpoints.mcp import require_mcp_auth
 from invincible.endpoints.mcp import router as mcp_router
 from invincible.endpoints.oauth import router as oauth_router
 from invincible.endpoints.openai_compat import router as openai_router
+from invincible.endpoints.template_filters import register_template_filters
 
 # R5 (rehearsal): bare load_dotenv() resolves the .env by walking up from
 # THIS FILE's directory, not the working directory - so on a source/editable
@@ -225,6 +226,7 @@ app.mount(
 # templates ship inside the package).
 templates = Jinja2Templates(
     directory=str(Path(__file__).resolve().parent / "templates"))
+register_template_filters(templates)
 # Management surface carries its own fail-closed authz (operator realm).
 app.include_router(admin_router)
 app.include_router(graph_router)

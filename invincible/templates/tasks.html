@@ -12,10 +12,10 @@
     <td>{{ t.status }}</td>
     <td>v{{ t.version }}</td>
     <td>{{ t.updated_by }}</td>
-    <td class="muted">{{ t.updated_at | int }}</td>
+    <td class="muted">{{ t.updated_at | timeago }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="6" class="muted">No active tasks right now.</td></tr>
+  <tr><td colspan="6" class="empty">No active tasks right now.</td></tr>
   {% endfor %}
 </table>
 {% endblock content %}

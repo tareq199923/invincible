@@ -319,6 +319,46 @@
     ul.plain { list-style: none; padding: 0; }
     ul.plain li { padding: 0.15rem 0; }
 
+    /* terminal code panel with copy affordance (setup, account keys) */
+    .config-block {
+      position: relative;
+      background: #0b0f16;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      color: var(--ink);
+      padding: 0.9rem 1rem;
+      margin: 0.6rem 0 0.4rem;
+      font-size: 0.82rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .copy-btn {
+      position: absolute; top: 0.5rem; right: 0.5rem;
+      background: var(--surface-2);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 0.18rem 0.6rem;
+      cursor: pointer;
+      font-size: 0.72rem;
+      margin: 0;
+    }
+    .copy-btn:hover { border-color: var(--accent); color: var(--accent-ink);
+                      background: var(--surface); }
+
+    /* empty tables / lists: quiet but present */
+    td.empty, .empty {
+      color: var(--faint);
+      text-align: center;
+      padding: 1.7rem 0.5rem;
+      letter-spacing: 0.04em;
+    }
+
+    /* htmx async affordances */
+    .htmx-indicator { opacity: 0; transition: opacity 0.2s ease; }
+    .htmx-request .htmx-indicator,
+    .htmx-request.htmx-indicator { opacity: 1; }
+
     /* ---------------- css bar chart (usage, pre-SVG) ---------------- */
     .bars { display: flex; align-items: flex-end; gap: 0.5rem;
             height: 8rem; margin: 1rem 0; }
