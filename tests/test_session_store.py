@@ -6,7 +6,12 @@ import pytest
 
 from invincible.core.session_store import SessionStore
 from invincible.main import app
-from tests.conftest import provider_body, sse_body, stream_chunk
+from tests.conftest import (
+    local_owner_kwargs,
+    provider_body,
+    sse_body,
+    stream_chunk,
+)
 
 
 @pytest.mark.asyncio
@@ -17,17 +22,22 @@ async def test_non_dict_payload_row_degrades_gracefully(pg_engine):
     # (e.g. after manual editing); load() skips it instead of blowing up.
     from sqlalchemy import text
 
+    from invincible.core.db import ensure_local_owner
+
     store = SessionStore(engine=pg_engine)
+    uid, pid = await ensure_local_owner(pg_engine)
+    owner = {"user_id": uid, "project_id": pid}
     await store.append(
         "broken", [{"role": "user", "content": "hi"},
-                   {"role": "assistant", "content": "hello"}]
+                   {"role": "assistant", "content": "hello"}],
+        **owner
     )
     async with pg_engine.begin() as conn:
         await conn.execute(
             text("UPDATE messages SET payload = '17' WHERE seq = 0")
         )
 
-    assert await store.load("broken") == [
+    assert await store.load("broken", **owner) == [
         {"role": "assistant", "content": "hello"}
     ]
 
@@ -120,16 +130,21 @@ async def test_concurrent_appends_lose_no_turns(pg_engine):
     (Phase 16 scope item 3), so N concurrent requests to the same session
     all land instead of last-write-wins or unique-violation crashes."""
     store = SessionStore(engine=pg_engine)
+    from invincible.core.db import ensure_local_owner
+
+    uid, pid = await ensure_local_owner(pg_engine)
+    owner = {"user_id": uid, "project_id": pid}
 
     async def append_turn(i):
         await store.append(
             "race-session", [{"role": "user", "content": f"q{i}"},
-                             {"role": "assistant", "content": f"a{i}"}]
+                             {"role": "assistant", "content": f"a{i}"}],
+            **owner
         )
 
     await asyncio.gather(*[append_turn(i) for i in range(25)])
 
-    history = await store.load("race-session")
+    history = await store.load("race-session", **owner)
     assert len(history) == 50
     users = [m["content"] for m in history if m["role"] == "user"]
     assistants = [m["content"] for m in history if m["role"] == "assistant"]
@@ -168,7 +183,8 @@ async def test_openai_system_messages_not_persisted_to_session(
         )
         assert response.status_code == 200
 
-    history = await app.state.sessions.load("openai-no-sys-accum")
+    owner = await local_owner_kwargs(app.state.engine)
+    history = await app.state.sessions.load("openai-no-sys-accum", **owner)
     assert [m["role"] for m in history] == [
         "user", "assistant", "user", "assistant", "user", "assistant",
     ]
@@ -287,7 +303,8 @@ async def test_streamed_reply_is_persisted_to_session(client, router_setter):
         json={"messages": [{"role": "user", "content": "hi"}], "stream": True},
     )
 
-    history = await app.state.sessions.load("stream-convo")
+    owner = await local_owner_kwargs(app.state.engine)
+    history = await app.state.sessions.load("stream-convo", **owner)
     assistant_messages = [m for m in history if m["role"] == "assistant"]
     assert len(assistant_messages) == 1
     assert assistant_messages[0]["content"] == "Hello world"

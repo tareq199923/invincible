@@ -10,7 +10,13 @@ from invincible.compat.anthropic import (
     translate_finish_reason,
 )
 from invincible.main import app
-from tests.conftest import default_providers, provider_body, sse_body, stream_chunk
+from tests.conftest import (
+    default_providers,
+    local_owner_kwargs,
+    provider_body,
+    sse_body,
+    stream_chunk,
+)
 
 AUTH = {"Authorization": "Bearer test-gateway-key"}
 ANTHROPIC_BODY = {
@@ -297,7 +303,8 @@ async def test_anthropic_streamed_reply_persisted(client, router_setter):
     )
     assert response.status_code == 200
 
-    history = await app.state.sessions.load("shared-convo")
+    history = await app.state.sessions.load(
+        "shared-convo", **await local_owner_kwargs(app.state.engine))
     assistant_messages = [m for m in history if m["role"] == "assistant"]
     assert len(assistant_messages) == 1
     assert assistant_messages[0]["content"] == "Hello world"
@@ -326,7 +333,8 @@ async def test_cross_protocol_session_sharing(client, router_setter):
         json={"messages": [{"role": "user", "content": "introduce yourself"}]},
     )
 
-    history = await app.state.sessions.load("shared")
+    history = await app.state.sessions.load(
+        "shared", **await local_owner_kwargs(app.state.engine))
     assert [m["role"] for m in history] == ["user", "assistant"]
     assert history[1]["content"] == "Hello world"
 
@@ -362,7 +370,8 @@ async def test_claude_code_session_id_isolates_history(client, router_setter):
         headers={**AUTH, "x-claude-code-session-id": "claude-session-A"},
         json={"messages": [{"role": "user", "content": "secret-from-A"}]},
     )
-    history_a = await app.state.sessions.load("claude-session-A")
+    history_a = await app.state.sessions.load(
+        "claude-session-A", **await local_owner_kwargs(app.state.engine))
     assert [m["role"] for m in history_a] == ["user", "assistant"]
 
     await client.post(
@@ -449,11 +458,13 @@ async def test_claude_code_session_id_wins_over_x_session_id(client, router_sett
         headers=headers,
         json={"messages": [{"role": "user", "content": "priority-secret"}]},
     )
-    assert [m["content"] for m in await app.state.sessions.load("claude-session")] == [
+    owner = await local_owner_kwargs(app.state.engine)
+    assert [m["content"] for m in
+            await app.state.sessions.load("claude-session", **owner)] == [
         "priority-secret",
         "ok",
     ]
-    assert await app.state.sessions.load("legacy-session") == []
+    assert await app.state.sessions.load("legacy-session", **owner) == []
 
 
 async def test_anthropic_no_session_header_uses_default(client, router_setter):
@@ -467,7 +478,8 @@ async def test_anthropic_no_session_header_uses_default(client, router_setter):
         headers=AUTH,
         json={"messages": [{"role": "user", "content": "default-convo"}]},
     )
-    assert [m["content"] for m in await app.state.sessions.load("default")] == [
+    assert [m["content"] for m in await app.state.sessions.load(
+        "default", **await local_owner_kwargs(app.state.engine))] == [
         "default-convo",
         "ok",
     ]
@@ -941,7 +953,8 @@ async def test_anthropic_streamed_tool_reply_persisted(client, router_setter):
     )
     assert response.status_code == 200
 
-    history = await app.state.sessions.load("tool-session")
+    history = await app.state.sessions.load(
+        "tool-session", **await local_owner_kwargs(app.state.engine))
     assistant_messages = [m for m in history if m["role"] == "assistant"]
     assert len(assistant_messages) == 1
     assert assistant_messages[0]["content"] is None
@@ -1255,7 +1268,8 @@ async def test_system_messages_not_persisted_to_session(client, router_setter):
         )
         assert response.status_code == 200
 
-    history = await app.state.sessions.load("no-sys-accum")
+    history = await app.state.sessions.load(
+        "no-sys-accum", **await local_owner_kwargs(app.state.engine))
     assert [m["role"] for m in history] == [
         "user", "assistant", "user", "assistant", "user", "assistant",
     ]
@@ -1348,7 +1362,8 @@ async def test_tool_history_intact_with_system(client, router_setter):
         },
     )
 
-    history = await app.state.sessions.load("tool-sys-session")
+    history = await app.state.sessions.load(
+        "tool-sys-session", **await local_owner_kwargs(app.state.engine))
     assert all(m.get("role") != "system" for m in history)
     assistant_with_tool = [
         m for m in history if m.get("tool_calls")

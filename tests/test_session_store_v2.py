@@ -14,6 +14,12 @@ the blob-era semantics.
 SQLite-era mechanics tests (blob-table migration, _invincible_schema
 marker, shared-connection lock) were retired with the SQLite backend; the
 legacy-data path is covered by `invincible db import` tests instead.
+
+Ownership: SessionStore takes a REQUIRED owner on every call (the
+local-owner fallback was removed - multi-tenant audit Step 2). These
+mechanics tests pin the system local owner explicitly via the ``owner``
+fixture; the loud-failure contract itself is pinned by
+``test_owner_less_calls_raise``.
 """
 import random
 
@@ -23,6 +29,7 @@ from sqlalchemy import func, select
 from invincible.core.db import (
     LOCAL_OWNER_EMAIL,
     LOCAL_PROJECT_NAME,
+    ensure_local_owner,
 )
 from invincible.core.db import (
     messages as messages_table,
@@ -58,10 +65,17 @@ async def store(pg_engine):
     return SessionStore(engine=pg_engine)
 
 
+@pytest.fixture
+async def owner(pg_engine):
+    """``**owner`` kwargs for the system local owner - the explicit
+    identity mechanics tests write and read under."""
+    uid, pid = await ensure_local_owner(pg_engine)
+    return {"user_id": uid, "project_id": pid}
+
+
 async def local_pk(store, session_id="s"):
     """Surrogate session pk for ``session_id`` under the system *local*
-    owner - doubles as a behavior pin: owner-less writes must land under
-    the local owner."""
+    owner (the identity the ``owner`` fixture pins)."""
     async with store.engine.connect() as conn:
         row = (await conn.execute(
             select(sessions_table.c.id)
@@ -109,10 +123,23 @@ async def turn_sizes(store, session_id="s"):
 # ---------------------------------------------------------------- basics
 
 
-async def test_append_load_roundtrip_matches_concat(store):
-    await store.append("s", [user("hi"), assistant("hello")])
-    await store.append("s", [user("more"), assistant("ok")])
-    assert await store.load("s") == [
+async def test_owner_less_calls_raise(pg_engine):
+    """Multi-tenant audit Step 2: the local-owner fallback is gone. An
+    owner-less call must fail loudly (TypeError from the required kwargs),
+    never silently write to or read from the operator's sessions."""
+    store = SessionStore(engine=pg_engine)
+    with pytest.raises(TypeError):
+        await store.append("s", [user("hi")])
+    with pytest.raises(TypeError):
+        await store.load("s")
+    with pytest.raises(TypeError):
+        await store.save("s", [])
+
+
+async def test_append_load_roundtrip_matches_concat(store, owner):
+    await store.append("s", [user("hi"), assistant("hello")], **owner)
+    await store.append("s", [user("more"), assistant("ok")], **owner)
+    assert await store.load("s", **owner) == [
         user("hi"),
         assistant("hello"),
         user("more"),
@@ -120,7 +147,7 @@ async def test_append_load_roundtrip_matches_concat(store):
     ]
 
 
-async def test_exotic_payload_fields_round_trip(store):
+async def test_exotic_payload_fields_round_trip(store, owner):
     exotic = [
         {
             "role": "assistant",
@@ -143,18 +170,18 @@ async def test_exotic_payload_fields_round_trip(store):
             "content": [{"type": "text", "text": "blocks"}],
         },
     ]
-    await store.append("s", exotic)
-    assert await store.load("s") == exotic
+    await store.append("s", exotic, **owner)
+    assert await store.load("s", **owner) == exotic
 
 
-async def test_load_missing_session_is_empty(store):
-    assert await store.load("nope") == []
+async def test_load_missing_session_is_empty(store, owner):
+    assert await store.load("nope", **owner) == []
 
 
 # ------------------------------------------- boundary rule (note #1/#5)
 
 
-async def test_tool_led_batch_attaches_to_previous_turn(store):
+async def test_tool_led_batch_attaches_to_previous_turn(store, owner):
     """Note #5: Claude Code style - tool results arrive as their OWN batch
     right after an assistant tool_calls reply."""
     first = {
@@ -165,15 +192,16 @@ async def test_tool_led_batch_attaches_to_previous_turn(store):
              "function": {"name": "f", "arguments": "{}"}}
         ],
     }
-    await store.append("s", [first])
+    await store.append("s", [first], **owner)
     await store.append(
         "s",
         [
             {"role": "tool", "tool_call_id": "c1", "content": "result"},
             user("continue"),
         ],
+        **owner,
     )
-    flat = await store.load("s")
+    flat = await store.load("s", **owner)
     assert flat == [first,
                     {"role": "tool", "tool_call_id": "c1",
                      "content": "result"},
@@ -186,16 +214,17 @@ async def test_tool_led_batch_attaches_to_previous_turn(store):
     assert [len(t) for t in grouped] == sizes
 
 
-async def test_assistant_led_batch_attaches_to_previous_turn(store):
-    await store.append("s", [user("q")])
-    await store.append("s", [assistant("partial-a"), assistant("partial-b")])
+async def test_assistant_led_batch_attaches_to_previous_turn(store, owner):
+    await store.append("s", [user("q")], **owner)
+    await store.append(
+        "s", [assistant("partial-a"), assistant("partial-b")], **owner)
     assert await turn_sizes(store) == [3]
-    flat = await store.load("s")
+    flat = await store.load("s", **owner)
     assert [len(t) for t in group_into_turns(flat)] == [3]
 
 
-async def test_first_message_any_role_opens_first_turn(store):
-    await store.append("s", [assistant("opening")])
+async def test_first_message_any_role_opens_first_turn(store, owner):
+    await store.append("s", [assistant("opening")], **owner)
     assert await turn_count(store) == 1
     assert await turn_sizes(store) == [1]
 
@@ -203,13 +232,14 @@ async def test_first_message_any_role_opens_first_turn(store):
 # ------------------------------------------------- retention (note #2)
 
 
-async def test_retention_deletes_whole_turns_only(monkeypatch, store):
+async def test_retention_deletes_whole_turns_only(monkeypatch, store, owner):
     monkeypatch.setenv("INVINCIBLE_HISTORY_MAX_TURNS", "2")
-    await store.append("s", [user("t1"), assistant("a1"), assistant("a1b")])
-    await store.append("s", [user("t2"), assistant("a2")])
-    await store.append("s", [user("t3"), assistant("a3")])
+    await store.append(
+        "s", [user("t1"), assistant("a1"), assistant("a1b")], **owner)
+    await store.append("s", [user("t2"), assistant("a2")], **owner)
+    await store.append("s", [user("t3"), assistant("a3")], **owner)
 
-    loaded = await store.load("s")
+    loaded = await store.load("s", **owner)
     assert loaded == [user("t2"), assistant("a2"), user("t3"), assistant("a3")]
     sizes = await turn_sizes(store)
     assert sizes == [2, 2]
@@ -218,39 +248,41 @@ async def test_retention_deletes_whole_turns_only(monkeypatch, store):
         assert size > 0
 
 
-async def test_retention_keeps_single_oversized_turn(monkeypatch, store):
+async def test_retention_keeps_single_oversized_turn(monkeypatch, store,
+                                                      owner):
     monkeypatch.setenv("INVINCIBLE_HISTORY_MAX_TURNS", "1")
     big_turn = [user("q")] + [assistant("x")] * 50
-    await store.append("s", big_turn)
-    assert await store.load("s") == big_turn
+    await store.append("s", big_turn, **owner)
+    assert await store.load("s", **owner) == big_turn
     assert await turn_sizes(store) == [51]
 
 
-async def test_retention_disabled_via_off(monkeypatch, store):
+async def test_retention_disabled_via_off(monkeypatch, store, owner):
     monkeypatch.setenv("INVINCIBLE_HISTORY_MAX_TURNS", "off")
     for i in range(5):
-        await store.append("s", [user(str(i)), assistant("r")])
+        await store.append("s", [user(str(i)), assistant("r")], **owner)
     assert await turn_count(store) == 5
 
 
 # ------------------------------------------------- save full replace (#3)
 
 
-async def test_save_full_replace_through_same_walker(monkeypatch, store):
+async def test_save_full_replace_through_same_walker(monkeypatch, store,
+                                                      owner):
     """Note #3: save() deletes everything and re-inserts via the walker -
     proven by boundary structure surviving identical to append-path."""
     monkeypatch.setenv("INVINCIBLE_HISTORY_MAX_TURNS", "off")
-    await store.append("s", [user("old1"), assistant("o1")])
-    await store.append("s", [user("old2"), assistant("o2")])
+    await store.append("s", [user("old1"), assistant("o1")], **owner)
+    await store.append("s", [user("old2"), assistant("o2")], **owner)
 
     replacement = [
         assistant("led-by-assistant"),
         {"role": "tool", "tool_call_id": "c", "content": "r"},
         user("new"),
     ]
-    await store.save("s", replacement)
+    await store.save("s", replacement, **owner)
 
-    assert await store.load("s") == replacement
+    assert await store.load("s", **owner) == replacement
     # Same walker -> same grouping the append path would have produced.
     sizes = await turn_sizes(store)
     assert [len(t) for t in group_into_turns(replacement)] == sizes
@@ -259,31 +291,31 @@ async def test_save_full_replace_through_same_walker(monkeypatch, store):
     assert total == len(replacement)
 
 
-async def test_save_empty_clears_session(store):
-    await store.append("s", [user("bye")])
-    await store.save("s", [])
-    assert await store.load("s") == []
+async def test_save_empty_clears_session(store, owner):
+    await store.append("s", [user("bye")], **owner)
+    await store.save("s", [], **owner)
+    assert await store.load("s", **owner) == []
     assert await turn_count(store) == 0
 
 
 # ------------------------------------------------- concurrency & coexist
 
 
-async def test_concurrent_appends_both_persist(store):
-    await asyncio_gather_appends(store)
-    flat = await store.load("s")
+async def test_concurrent_appends_both_persist(store, owner):
+    await asyncio_gather_appends(store, owner)
+    flat = await store.load("s", **owner)
     assert len(flat) == 4
     assert {flat[0]["content"], flat[2]["content"]} == {"one", "two"}
     # Whatever the interleaving, grouping stays consistent.
     assert [len(t) for t in group_into_turns(flat)] == await turn_sizes(store)
 
 
-async def asyncio_gather_appends(store):
+async def asyncio_gather_appends(store, owner):
     import asyncio
 
     await asyncio.gather(
-        store.append("s", [user("one"), assistant("1")]),
-        store.append("s", [user("two"), assistant("2")]),
+        store.append("s", [user("one"), assistant("1")], **owner),
+        store.append("s", [user("two"), assistant("2")], **owner),
     )
 
 
@@ -294,14 +326,16 @@ async def test_memory_and_run_stores_coexist_on_shared_engine(pg_engine):
     memory = MemoryStore(engine=pg_engine)
     runs = RunStore(engine=pg_engine)
 
-    await store.append("sess", [user("remember that x is 9"), assistant("ok")])
-    from invincible.core.db import ensure_local_owner, memories
+    uid, pid = await ensure_local_owner(pg_engine)
+    await store.append(
+        "sess", [user("remember that x is 9"), assistant("ok")],
+        user_id=uid, project_id=pid)
+    from invincible.core.db import memories
 
-    uid, _pid = await ensure_local_owner(pg_engine)
     assert await memory.record_memories(
         user_id=uid,
         client_session_id="sess",
-        messages_list=await store.load("sess"),
+        messages_list=await store.load("sess", user_id=uid, project_id=pid),
     ) == 1
     async with pg_engine.connect() as conn:
         assert (await conn.execute(
@@ -325,7 +359,7 @@ async def test_memory_and_run_stores_coexist_on_shared_engine(pg_engine):
 # ------------------------------------------------- property equivalence
 
 
-async def test_property_equivalence_with_blob_semantics(store):
+async def test_property_equivalence_with_blob_semantics(store, owner):
     """Seeded random streams: normalized storage output must equal the
     blob-era concat + group_into_turns reference, boundaries included."""
     rng = random.Random(1507)
@@ -340,10 +374,10 @@ async def test_property_equivalence_with_blob_semantics(store):
                               "content": rng.randint(0, 99)})
             else:
                 batch.append({"role": role, "content": rng.random()})
-        await store.append("s", batch)
+        await store.append("s", batch, **owner)
         reference.extend(batch)
 
-    loaded = await store.load("s")
+    loaded = await store.load("s", **owner)
     assert loaded == reference
     stored_sizes = await turn_sizes(store)
     grouped_sizes = [len(t) for t in group_into_turns(reference)]

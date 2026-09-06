@@ -12,7 +12,7 @@ import httpx
 
 from invincible.core.continuity import ContinuityEngine
 from invincible.core.run_store import RunStore
-from tests.conftest import provider_body, sse_body, stream_chunk
+from tests.conftest import local_owner_kwargs, provider_body, sse_body, stream_chunk
 
 GATEWAY = {"Authorization": "Bearer test-gateway-key"}
 MARKER = "Session continuity"
@@ -103,7 +103,9 @@ async def test_injected_brief_is_never_persisted(client, router_setter):
     router_setter({"alpha.example.com": lambda r: httpx.Response(
         200, json=provider_body("alpha"))})
     await chat(client)
-    history = await app_state_sessions().load("default")
+    history = await app_state_sessions().load(
+        "default", **await local_owner_kwargs(
+            app_state_sessions().engine))
     assert history, "assistant reply should persist"
     assert all(MARKER not in (m.get("content") or "") for m in history)
 

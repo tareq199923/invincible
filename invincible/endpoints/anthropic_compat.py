@@ -60,14 +60,17 @@ def _assistant_message_from_provider(provider_message: dict) -> dict:
 
 
 async def _persist(store, session_id, new_messages: list, assistant_message: dict,
-                   memory: MemoryStore | None = None,
-                   principal: Principal | None = None):
+                   memory: MemoryStore | None,
+                   principal: Principal):
     """Append this request's new turns to the session under the store's lock.
 
     ``new_messages`` is the request's own messages (system role already
     excluded here so repeated system prompts never accumulate in history);
     the assistant reply is appended after them. Memories are extracted from
     the persisted turns (Phase 4) on a best-effort basis.
+
+    ``principal`` is required (multi-tenant audit Step 2): persistence must
+    land under the caller's own session, never a fallback owner.
     """
     saved = [m for m in new_messages if m.get("role") != "system"]
     new_turns = saved + [assistant_message]
@@ -75,16 +78,12 @@ async def _persist(store, session_id, new_messages: list, assistant_message: dic
         await store.append(
             session_id,
             new_turns,
-            **(
-                {}
-                if principal is None
-                else {"user_id": principal.user_id,
-                      "project_id": principal.project_id}
-            ),
+            user_id=principal.user_id,
+            project_id=principal.project_id,
         )
     except Exception:
         logger.exception("Failed to persist session history for %s", session_id)
-    if memory is None or principal is None:
+    if memory is None:
         return
     try:
         await memory.record_memories(

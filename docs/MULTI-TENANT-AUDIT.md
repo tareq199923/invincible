@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-07
 **Auditor scope:** all 41 source modules (~18.3k lines), 8 Alembic migrations, test suite.
-**Status:** Audit complete. Step 1 APPLIED 2026-09-07 (HIGH-1 + HIGH-2 fixed, 5 regression tests added; full suite 1042 passing). Steps 2-5 below remain open. This document is the handoff.
+**Status:** Audit complete. Step 1 APPLIED 2026-09-07 (HIGH-1 + HIGH-2 fixed, 5 regression tests added). Step 2 APPLIED 2026-09-07 (all silent local-owner fallbacks fail loudly; MEDIUM-2 + LOW-1 closed along the way). Steps 3-5 below remain open. This document is the handoff.
 
 ---
 
@@ -169,6 +169,11 @@ Do not change these — they are the model the fixes should imitate.
   `INVINCIBLE_PERSIST_PENDING_ACTIONS` is on and rows were staged by a
   pre-Phase-2 process. Tiny window (rows expire at TTL and `_sweep()` runs on
   load) → **latent fail-open pattern**, not a live hole.
+- **FIXED (Step 2, 2026-09-07):** `take()` now treats a subject-less record
+  as not-found for any subject-holding requester (fail closed); subject-less
+  requesters keep access. Regression test:
+  `test_subject_less_record_not_confirmable_by_subject`
+  (tests/test_tool_executor.py).
 - **Fix:** fail closed — when `requester_subject is not None and owner is
   None`, treat as not-found (or discard subject-less records at load).
 
@@ -206,9 +211,12 @@ Do not change these — they are the model the fixes should imitate.
   only scopes `kind == "api_key"`. With `GATEWAY_API_KEY` unset, any
   unauthenticated caller = local owner (their provider spend, sessions,
   memory). Loudly warned at startup; documented local mode.
-- **Fix idea:** once >1 human account exists, refuse the anonymous principal
-  (cheap `users` count check) — "local mode" is meaningless on a multi-user
-  instance.
+- **FIXED (Step 2, 2026-09-07):** `require_auth` refuses the anonymous
+  principal once more than one human (`is_system = false`) account exists —
+  "local mode" is meaningless on a multi-user instance. Exactly-one-human
+  local mode still works. Regression tests in tests/test_dual_realm.py
+  (`test_fail_open_survives_exactly_one_human_account`,
+  `test_fail_open_refused_once_multi_user`).
 
 ### 🟢 LOW-2 — `ProjectService.rename`/`archive` UPDATE lacks `user_id` predicate
 
@@ -263,22 +271,33 @@ Do not change these — they are the model the fixes should imitate.
    pools, plain user keeps own-client control, operator cannot touch
    another user's client.
 
-### Step 2 — Kill the local-owner fallback bug CLASS
+### Step 2 — Kill the local-owner fallback bug CLASS (APPLIED 2026-09-07)
 
 Make silent fallbacks fail loudly so future forgotten-`principal` bugs become
 obvious errors, not silent cross-user data mixing:
 
-1. `SessionStore._owner` (`core/session_store.py:93-107`): when `user_id is
-   None` on any caller in the request path → raise (keep explicit None only
-   for explicitly-documented operator paths like `owner_context`/graph
-   override, if any legitimate ones remain after step 2.2).
-2. `require_mcp_auth` (`endpoints/mcp.py:334-337`): token with no
-   `subject_user_id` → 401, not local-owner principal (only reachable on
-   unmigrated DBs today, but fail closed anyway).
-3. `require_auth` fail-open (`endpoints/auth.py:76-83`): refuse the anonymous
-   principal when more than one human user exists in the DB.
-4. MEDIUM-2 along the way: fail-closed `PendingActionStore.take()` for
-   `owner is None` + non-None requester.
+1. ✅ `SessionStore._owner` (`core/session_store.py`): the fallback is GONE.
+   `user_id`/`project_id` are now REQUIRED keyword args on
+   `load`/`save`/`append`/`session_meta`/`turn_overview` (matching
+   `lookup`/`resolve_or_create`, which always required them) — an owner-less
+   call is a loud `TypeError` at the signature, and `_owner` (plus its
+   latent dead-branch bug at old line ~106) is deleted outright. Every
+   production call site already passed an explicit owner (verified by
+   grep before the change); the only fallback users were tests, which now
+   pin the owner explicitly. `anthropic_compat._persist` also takes a
+   required `principal` now (both call sites passed it since Step 1).
+   Regression test: `test_owner_less_calls_raise`
+   (tests/test_session_store_v2.py).
+2. ✅ `require_mcp_auth` (`endpoints/mcp.py`): a token with no
+   `subject_user_id` (or a missing engine) → 401 with the
+   WWW-Authenticate challenge, never a local-owner principal. Regression
+   test: `test_mcp_subject_less_token_returns_401`
+   (tests/test_mcp_endpoint.py).
+3. ✅ `require_auth` fail-open (`endpoints/auth.py`): the anonymous
+   principal is refused once more than one human (`is_system = false`)
+   user exists (see LOW-1 above for tests).
+4. ✅ MEDIUM-2 along the way: fail-closed `PendingActionStore.take()` for
+   `owner is None` + non-None requester (see MEDIUM-2 above).
 
 ### Step 3 — Deployment-posture hardening
 
@@ -307,8 +326,10 @@ states, checkpoints, runs, facts, approval subject, api keys). Add:
    `/agent/poll`; B's result submission for A's job_id is rejected.
 4. Cross-user BYOK routing: user A's chat never routes through user B's
    credential (attempt with B's credential id fails/skips for A).
-5. Fallback-loudness tests: `SessionStore` with no owner raises; MCP token
-   with no subject 401s.
+5. Fallback-loudness tests: ✅ SHIPPED (Step 2) — `SessionStore` with no
+   owner raises; MCP token with no subject 401s; anonymous principal
+   refused once multi-user; subject-less pending actions not confirmable
+   by a subject-holding requester.
 
 ---
 
@@ -334,7 +355,9 @@ live bugs are both instances of the single-user "local owner" fallback: (1)
 `anthropic_compat.py` non-streaming path omits `principal` so user chats are
 saved into the operator's session; (2) the dashboard MCP page lets any user
 view/revoke the operator's OAuth clients. **Both are now FIXED (2026-09-07,
-Step 1 complete, 1042 tests passing).** Remaining: make all local-owner
-fallbacks fail loudly (Step 2), then harden deployment posture (Steps 3-4)
-and add the remaining regression tests in Step 5 (items 2-4 overlap the
-already-shipped HIGH-2 tests).
+Step 1 complete).** Step 2 is also APPLIED (2026-09-07): every silent
+local-owner fallback now fails loudly (required owner on `SessionStore`, 401
+for subject-less MCP tokens, anonymous principal refused once multi-user,
+fail-closed pending actions). Remaining: harden deployment posture (Steps
+3-4) and add the remaining regression tests in Step 5 (items 2-4 overlap
+the already-shipped HIGH-2 tests).

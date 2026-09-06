@@ -9,11 +9,12 @@ guarantee from Phase 15a survives.
 
 Platform Phase 1 identity: ``sessions`` rows carry surrogate ownership -
 ``(user_id, project_id, client_session_id)`` UNIQUE - and ``turns.session_id``
-is now a FK to ``sessions.id``. The public API keeps taking the client
-session string; every method accepts optional ``user_id``/``project_id``
-and falls back to the system *local* owner when omitted, so single-tenant
-call sites behave exactly as before. Ownership predicates on cross-user
-paths arrive in Phase 2.
+is now a FK to ``sessions.id``. Every method takes the caller's
+``user_id``/``project_id`` as REQUIRED arguments: there is deliberately no
+local-owner fallback (multi-tenant audit Step 2, 2026-09-07), so a call site
+that forgets its principal fails loudly instead of silently mixing users'
+data. Operator paths that genuinely span owners resolve the owner explicitly
+up front (``owner_context``).
 
 Concurrency: every write takes ``SELECT ... FOR UPDATE`` on the resolved
 session row inside its transaction, so concurrent appends to one session
@@ -25,7 +26,6 @@ from sqlalchemy import Text, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from invincible.core.db import (
-    ensure_local_owner,
     messages,
     sessions,
     turns,
@@ -41,9 +41,6 @@ def history_max_turns() -> int | None:
 class SessionStore:
     def __init__(self, engine):
         self.engine = engine
-        # Memoized fallback context: the system local owner, resolved once
-        # per store instance on first owner-less call.
-        self._local_owner: tuple[int, int] | None = None
 
     async def init(self) -> None:
         """Schema is owned by core.db metadata (create_all / Alembic);
@@ -84,27 +81,10 @@ class SessionStore:
     ) -> int:
         """Resolve-or-create within one transaction and take the row lock;
         returns the surrogate id (write paths, e.g. MCP task tools)."""
-        uid, pid = await self._owner(user_id, project_id)
         async with self.engine.begin() as conn:
             return await self._resolve_for_write(
-                conn, session_id, uid, pid
+                conn, session_id, user_id, project_id
             )
-
-    async def _owner(
-        self, user_id: int | None, project_id: int | None
-    ) -> tuple[int, int]:
-        """Effective ``(user_id, project_id)`` for this call. Either part
-        may be pinned explicitly; missing parts fall back to the system
-        local owner."""
-        if user_id is not None and project_id is not None:
-            return user_id, project_id
-        if self._local_owner is None:
-            self._local_owner = await ensure_local_owner(self.engine)
-        fallback_user, fallback_project = self._local_owner
-        return (
-            fallback_user if user_id is None else user_id,
-            fallback_project if project_id is None else project_id,
-        )
 
     @staticmethod
     async def _lookup_pk(
@@ -123,11 +103,9 @@ class SessionStore:
     # Reads
 
     async def load(self, session_id: str, *,
-                   user_id: int | None = None,
-                   project_id: int | None = None) -> list:
-        uid, pid = await self._owner(user_id, project_id)
+                   user_id: int, project_id: int) -> list:
         async with self.engine.begin() as conn:
-            pk = await self._lookup_pk(conn, session_id, uid, pid)
+            pk = await self._lookup_pk(conn, session_id, user_id, project_id)
             if pk is None:
                 return []
             rows = (await conn.execute(
@@ -140,11 +118,9 @@ class SessionStore:
         return [r for r in rows if isinstance(r, dict)]
 
     async def session_meta(self, session_id: str, *,
-                           user_id: int | None = None,
-                           project_id: int | None = None) -> dict | None:
-        uid, pid = await self._owner(user_id, project_id)
+                           user_id: int, project_id: int) -> dict | None:
         async with self.engine.connect() as conn:
-            pk = await self._lookup_pk(conn, session_id, uid, pid)
+            pk = await self._lookup_pk(conn, session_id, user_id, project_id)
             if pk is None:
                 return None
             row = (await conn.execute(
@@ -216,10 +192,8 @@ class SessionStore:
         return str(row[0]), (int(row[1]), int(row[2]))
 
     async def turn_overview(self, session_id: str, *,
-                            user_id: int | None = None,
-                            project_id: int | None = None) -> list[dict]:
+                            user_id: int, project_id: int) -> list[dict]:
         """Per-turn message counts + first-payload snippet (graph projection)."""
-        uid, pid = await self._owner(user_id, project_id)
         msg_count = (
             select(func.count(messages.c.id))
             .where(messages.c.turn_id == turns.c.id)
@@ -237,7 +211,7 @@ class SessionStore:
             .scalar_subquery()
         )
         async with self.engine.connect() as conn:
-            pk = await self._lookup_pk(conn, session_id, uid, pid)
+            pk = await self._lookup_pk(conn, session_id, user_id, project_id)
             if pk is None:
                 return []
             rows = (await conn.execute(
@@ -255,21 +229,20 @@ class SessionStore:
     # process-wide write lock)
 
     async def save(self, session_id: str, new_messages: list, *,
-                   user_id: int | None = None,
-                   project_id: int | None = None) -> None:
+                   user_id: int, project_id: int) -> None:
         """Full replace: wipe the session's turns/messages and re-insert
         ``messages`` through the boundary walker."""
-        uid, pid = await self._owner(user_id, project_id)
         async with self.engine.begin() as conn:
-            pk = await self._resolve_for_write(conn, session_id, uid, pid)
+            pk = await self._resolve_for_write(
+                conn, session_id, user_id, project_id
+            )
             await self._delete_turn_rows(conn, pk)
             await self._insert_grouped(conn, pk, new_messages)
             await self._bump_updated_at(conn, pk, time.time())
             await self._enforce_retention(conn, pk)
 
     async def append(self, session_id: str, new_messages: list, *,
-                     user_id: int | None = None,
-                     project_id: int | None = None) -> None:
+                     user_id: int, project_id: int) -> None:
         """Insert this request's new messages, opening/closing turns by the
         group_into_turns boundary rule.
 
@@ -278,9 +251,10 @@ class SessionStore:
         """
         if not new_messages:
             return
-        uid, pid = await self._owner(user_id, project_id)
         async with self.engine.begin() as conn:
-            pk = await self._resolve_for_write(conn, session_id, uid, pid)
+            pk = await self._resolve_for_write(
+                conn, session_id, user_id, project_id
+            )
             await self._insert_grouped(conn, pk, new_messages)
             await self._bump_updated_at(conn, pk, time.time())
             await self._enforce_retention(conn, pk)

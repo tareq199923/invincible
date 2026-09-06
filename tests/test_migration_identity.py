@@ -193,9 +193,14 @@ async def test_upgrade_from_populated_0001_preserves_counts(
 
     await _assert_migrated_content(engine)
 
-    # Integration proof: the CURRENT store reads migrated history through
-    # the local-owner fallback with zero code changes.
-    loaded = await SessionStore(engine=engine).load("alpha")
+    # Integration proof: the CURRENT store reads migrated history under
+    # the local owner the migration backfilled everything to (the owner
+    # is passed explicitly - there is no fallback).
+    from invincible.core.db import ensure_local_owner
+
+    uid, pid = await ensure_local_owner(engine)
+    loaded = await SessionStore(engine=engine).load(
+        "alpha", user_id=uid, project_id=pid)
     assert loaded == EXPECTED_ALPHA_FLAT
 
 

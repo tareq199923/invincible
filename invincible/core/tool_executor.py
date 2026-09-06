@@ -321,7 +321,9 @@ class PendingActionStore:
 
         A subject mismatch does NOT consume the entry: the legitimate
         owner can still confirm afterwards, while the mismatched caller
-        sees exactly an unknown-token answer.
+        sees exactly an unknown-token answer. Subject-less records
+        (pre-Phase-2 legacy rows) are invisible to subject-holding
+        requesters - fail closed (audit MEDIUM-2).
         """
         self._sweep()
         record = self._pending.get(token)
@@ -335,6 +337,12 @@ class PendingActionStore:
             )
             return None
         owner = record.get("owner_subject")
+        if owner is None and requester_subject is not None:
+            # Fail closed (multi-tenant audit MEDIUM-2): a subject-less
+            # record (staged by a pre-Phase-2 process) must not be
+            # confirmable by an authenticated subject. Subject-less
+            # requesters keep full access.
+            return None
         if owner is not None and requester_subject != owner:
             return None
         del self._pending[token]

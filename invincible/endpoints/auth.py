@@ -8,7 +8,10 @@ Dual-realm resolution - the order is fixed and unambiguous:
 2. else an unrevoked API key whose sha256 equals the token -> that key's
    user + default project (``kind="api_key"``);
 3. else, when the gateway key is UNSET, the documented fail-open local
-   identity (``kind="anonymous"``; same loud startup warning as before);
+   identity (``kind="anonymous"``; same loud startup warning as before) -
+   but ONLY while at most one human account exists. Once a second human
+   registers, "local mode" is meaningless on a multi-user instance and
+   the anonymous principal is refused (multi-tenant audit Step 2);
 4. otherwise 401.
 
 A token that somehow matches both realms resolves as legacy (step 1
@@ -19,8 +22,9 @@ Lives outside ``main`` so route modules can declare
 import hmac
 
 from fastapi import FastAPI, HTTPException, Request
+from sqlalchemy import func, select
 
-from invincible.core.db import ensure_local_owner
+from invincible.core.db import ensure_local_owner, users
 from invincible.core.identity import ensure_default_project
 from invincible.core.principal import Principal
 from invincible.core.settings import settings
@@ -44,6 +48,16 @@ async def local_principal(app: FastAPI,
                           kind: str = "legacy") -> Principal:
     user_id, project_id = await ensure_local_owner(app.state.engine)
     return Principal(user_id=user_id, project_id=project_id, kind=kind)
+
+
+async def _human_user_count(engine) -> int:
+    """Number of non-system (human) accounts - the cheap check that gates
+    anonymous local mode. The system local owner does not count."""
+    async with engine.connect() as conn:
+        return int((await conn.execute(
+            select(func.count()).select_from(users)
+            .where(users.c.is_system.is_(False))
+        )).scalar_one())
 
 
 async def require_auth(request: Request) -> Principal:
@@ -74,7 +88,17 @@ async def require_auth(request: Request) -> Principal:
             )
 
     if not gateway_key:
-        # Documented fail-open local mode (loud startup warning in main).
+        # Documented fail-open local mode (loud startup warning in main),
+        # valid only while the instance is genuinely single-tenant: once
+        # more than one human account exists the anonymous principal is
+        # refused - it would silently ride the local owner's data and
+        # provider pool (multi-tenant audit Step 2 / LOW-1).
+        engine = getattr(request.app.state, "engine", None)
+        if engine is not None and await _human_user_count(engine) > 1:
+            raise _auth_error(
+                "Authentication required: this server has multiple user "
+                "accounts"
+            )
         principal = await local_principal(request.app)
         return Principal(
             user_id=principal.user_id,

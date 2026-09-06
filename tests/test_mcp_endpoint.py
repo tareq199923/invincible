@@ -4,7 +4,7 @@ import os
 from invincible.core import tool_executor
 from invincible.core.oauth_store import OAuthStore
 from invincible.main import app
-from tests.conftest import obtain_access_token
+from tests.conftest import oauth_register, obtain_access_token
 
 TOOLS_LIST_REQUEST = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
@@ -48,6 +48,21 @@ async def test_mcp_with_revoked_token_returns_401(client):
         json=TOOLS_LIST_REQUEST,
     )
     assert response.status_code == 401
+
+
+async def test_mcp_subject_less_token_returns_401(client):
+    """Multi-tenant audit Step 2: a token with no subject (pre-0003
+    database era) must not fall back to the local owner - fail closed."""
+    client_id, _ = await oauth_register(client)
+    tokens = await OAuthStore(app.state.engine).issue_token_pair(client_id)
+    response = await client.post(
+        "/mcp",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        json=TOOLS_LIST_REQUEST,
+    )
+    assert response.status_code == 401
+    challenge = response.headers.get("www-authenticate", "")
+    assert "oauth-protected-resource" in challenge
 
 
 async def test_mcp_tools_list(client, bearer_headers):

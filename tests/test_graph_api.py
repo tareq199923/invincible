@@ -166,12 +166,14 @@ async def test_interruption_note_surfaces_in_summary(client, graph_stack):
 
 
 async def test_turn_nodes_project_from_normalized_storage(client, graph_stack):
+    from invincible.core.db import ensure_local_owner
     from invincible.main import app as fastapi_app
 
+    uid, pid = await ensure_local_owner(fastapi_app.state.engine)
     await fastapi_app.state.sessions.append("default", [
         {"role": "user", "content": "count please"},
         {"role": "assistant", "content": "1 2 3"},
-    ])
+    ], user_id=uid, project_id=pid)
     resp = await client.get("/api/v1/sessions/default/graph", )
     data = resp.json()
     assert data["known"] is True

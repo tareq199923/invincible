@@ -449,7 +449,7 @@ async def test_db_import_round_trips_legacy_file(
     """Acceptance criterion: `invincible db import` round-trips a populated
     legacy sessions.db - ids preserved, JSONB decoded, bools converted."""
 
-    from invincible.core.db import turns
+    from invincible.core.db import ensure_local_owner, turns
     from invincible.core.oauth_store import OAuthStore
     from invincible.core.session_store import SessionStore
 
@@ -461,8 +461,11 @@ async def test_db_import_round_trips_legacy_file(
     assert "sessions: imported 1 row(s)" in result.output
     assert "oauth_tokens: imported 1 row(s)" in result.output
 
+    # The importer maps every legacy session to the system local owner.
     store = SessionStore(engine=pg_engine)
-    loaded = await store.load("imp-s")
+    uid, pid = await ensure_local_owner(pg_engine)
+    owner = {"user_id": uid, "project_id": pid}
+    loaded = await store.load("imp-s", **owner)
     assert loaded == [
         {"role": "user", "content": "imported ünïcode ✅ history"}
     ]
@@ -486,18 +489,19 @@ async def test_db_import_round_trips_legacy_file(
             await conn.execute(select(func.max(turns.c.id)))
         ).scalar_one()
     # A user message after an existing turn opens a NEW turn row.
-    await store.append("imp-s", [{"role": "user", "content": "post"}])
+    await store.append("imp-s", [{"role": "user", "content": "post"}],
+                       **owner)
     async with pg_engine.connect() as conn:
         new_max_turn = (
             await conn.execute(select(func.max(turns.c.id)))
         ).scalar_one()
     assert new_max_turn > max_turn >= 501
-    assert len(await store.load("imp-s")) == 2
+    assert len(await store.load("imp-s", **owner)) == 2
 
     # Re-import is safe: conflicts are skipped, nothing doubles up.
     again = CliRunner().invoke(cli, ["db", "import", legacy_sqlite])
     assert again.exit_code == 0, again.output
-    assert len(await store.load("imp-s")) == 2
+    assert len(await store.load("imp-s", **owner)) == 2
 
 
 async def test_db_import_requires_db_url(legacy_sqlite, tmp_path, monkeypatch):

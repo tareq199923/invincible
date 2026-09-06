@@ -14,6 +14,7 @@ from invincible.core.agent_registry import AgentRegistry
 from invincible.core.continuity import ContinuityEngine
 from invincible.core.db import (
     create_all_from_metadata,
+    ensure_local_owner,
     make_engine,
 )
 from invincible.core.db import (
@@ -250,6 +251,14 @@ async def client(pg_engine, router_setter, monkeypatch):
 
 
 # --- Phase 3 account helpers ----------------------------------------------------
+
+
+async def local_owner_kwargs(engine) -> dict:
+    """``**kwargs`` for the system local owner - the explicit identity
+    tests use when reading back what gateway-key (legacy realm) requests
+    persisted. SessionStore has no owner fallback (audit Step 2)."""
+    uid, pid = await ensure_local_owner(engine)
+    return {"user_id": uid, "project_id": pid}
 
 
 async def register_account(

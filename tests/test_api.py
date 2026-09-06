@@ -4,7 +4,13 @@ import logging
 import httpx
 
 from invincible.main import _warn_if_gateway_open, app
-from tests.conftest import default_providers, provider_body, sse_body, stream_chunk
+from tests.conftest import (
+    default_providers,
+    local_owner_kwargs,
+    provider_body,
+    sse_body,
+    stream_chunk,
+)
 
 MESSAGES = [{"role": "user", "content": "hi"}]
 AUTH = {"Authorization": "Bearer test-gateway-key"}
@@ -271,7 +277,8 @@ async def test_streamed_tool_calls_are_persisted(client, router_setter):
         json={"messages": MESSAGES, "stream": True},
     )
 
-    history = await app.state.sessions.load("tool-stream")
+    history = await app.state.sessions.load(
+        "tool-stream", **await local_owner_kwargs(app.state.engine))
     assistant = [m for m in history if m["role"] == "assistant"]
     assert len(assistant) == 1
     message = assistant[0]
@@ -320,7 +327,8 @@ async def test_streamed_parallel_tool_calls_persist_in_index_order(
         json={"messages": MESSAGES, "stream": True},
     )
 
-    history = await app.state.sessions.load("parallel-tools")
+    history = await app.state.sessions.load(
+        "parallel-tools", **await local_owner_kwargs(app.state.engine))
     assistant = [m for m in history if m["role"] == "assistant"][0]
     assert [t["id"] for t in assistant["tool_calls"]] == ["call_a", "call_b"]
     assert assistant["tool_calls"][0]["function"]["arguments"] == '{"y":2}'
@@ -362,7 +370,8 @@ async def test_midstream_error_persists_partial_tool_turn(client, router_setter)
     )
     assert '"error"' in response.text
 
-    history = await app.state.sessions.load("partial-tool-stream")
+    history = await app.state.sessions.load(
+        "partial-tool-stream", **await local_owner_kwargs(app.state.engine))
     assistant = [m for m in history if m["role"] == "assistant"]
     assert len(assistant) == 1
     assert assistant[0]["content"] is None

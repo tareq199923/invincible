@@ -5,8 +5,9 @@ Pins the exact resolution order documented in endpoints/auth.py:
 
 1. legacy ``GATEWAY_API_KEY`` -> system local owner;
 2. unrevoked API key -> that user + default project;
-3. unset gateway key -> fail-open anonymous local identity (behavior
-   preserved from the single-tenant era);
+3. unset gateway key -> fail-open anonymous local identity (single-tenant
+   only: refused once more than one human account exists - multi-tenant
+   audit Step 2);
 4. otherwise 401.
 
 Session placement is the observable: history must land under the owning
@@ -206,6 +207,48 @@ async def test_fail_open_local_mode_preserved(router_setter, client,
     assert await _session_owner(client, "open-s") == (
         LOCAL_OWNER_EMAIL, LOCAL_PROJECT_NAME,
     )
+
+
+async def test_fail_open_survives_exactly_one_human_account(
+    router_setter, client, monkeypatch,
+):
+    """Local mode stays valid with exactly one human account: an
+    unauthenticated request still resolves to the local owner."""
+    monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
+    router_setter({"alpha.example.com": lambda r: __import__(
+        "httpx").Response(200, json=provider_body())})
+    await _mint_key_for_new_user(client, "solo@example.com")
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers={"X-Session-Id": "open-solo"},
+        json=CHAT_BODY,
+    )
+    assert resp.status_code == 200, resp.text
+    assert await _session_owner(client, "open-solo") == (
+        LOCAL_OWNER_EMAIL, LOCAL_PROJECT_NAME,
+    )
+
+
+async def test_fail_open_refused_once_multi_user(router_setter, client,
+                                                 monkeypatch):
+    """Multi-tenant audit Step 2 (LOW-1): once more than one human
+    account exists, the anonymous local-owner principal is refused -
+    "local mode" is meaningless on a multi-user instance and would
+    silently ride the operator's data and provider pool."""
+    monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
+    router_setter({"alpha.example.com": lambda r: __import__(
+        "httpx").Response(200, json=provider_body())})
+    await _mint_key_for_new_user(client, "multi-first@example.com")
+    await _mint_key_for_new_user(client, "multi-second@example.com")
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers={"X-Session-Id": "open-multi"},
+        json=CHAT_BODY,
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error"]["type"] == "auth_error"
+    # Refused before any persistence: nothing landed anywhere.
+    assert await _session_owner(client, "open-multi") is None
 
 
 async def test_fail_open_still_prefers_valid_api_keys(router_setter, client,

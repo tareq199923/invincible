@@ -147,6 +147,21 @@ async def test_confirm_action_unknown_token():
     assert result["status"] == "not_found"
 
 
+async def test_subject_less_record_not_confirmable_by_subject():
+    """Multi-tenant audit MEDIUM-2: a subject-less record (staged by a
+    pre-Phase-2 process) is invisible to a subject-holding requester -
+    fail closed, never fail open. Subject-less (legacy local) requesters
+    keep full access, and the record is not consumed by the refusal."""
+    store = make_store()
+    token = store.put(
+        "execute_bash", {"command": "echo hi", "timeout": 30},
+        owner_subject=None)
+
+    assert store.take(token, requester_subject=1) is None
+    # The legitimate subject-less flow still resolves it.
+    assert store.take(token, requester_subject=None) is not None
+
+
 async def test_confirm_action_expired_token(monkeypatch):
     store = make_store()
     monkeypatch.setattr(tool_executor.PendingActionStore, "TTL_SECONDS", -1)

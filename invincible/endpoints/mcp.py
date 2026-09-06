@@ -43,7 +43,6 @@ from invincible.core.memory import (
 from invincible.core.oauth_store import OAuthStore
 from invincible.core.principal import Principal
 from invincible.core.settings import AGENT_JOB_GRACE_SECONDS, settings
-from invincible.endpoints.auth import local_principal
 
 router = APIRouter()
 
@@ -331,15 +330,18 @@ async def require_mcp_auth(request: Request) -> Principal:
     from invincible.core.identity import ensure_default_project
 
     engine = getattr(request.app.state, "engine", None)
-    if engine is None or access.get("subject_user_id") is None:
-        # No subjects (pre-0003 database or missing engine): fall back to
-        # the system local owner rather than failing MCP entirely.
-        return await local_principal(request.app, kind="mcp")
+    subject = access.get("subject_user_id")
+    if engine is None or subject is None:
+        # No resolvable subject (pre-0003 database or missing engine):
+        # fail closed. A subject-less token must never resolve to the
+        # system local owner - that fallback silently mixed tenants
+        # (multi-tenant audit Step 2).
+        raise _auth_error(request)
     project_id = await ensure_default_project(
-        engine, int(access["subject_user_id"])
+        engine, int(subject)
     )
     return Principal(
-        user_id=int(access["subject_user_id"]),
+        user_id=int(subject),
         project_id=project_id,
         kind="mcp",
     )

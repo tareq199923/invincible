@@ -3,6 +3,7 @@ import json
 import httpx
 import pytest
 
+from invincible.core.db import ensure_local_owner
 from invincible.core.memory import (
     MemoryStore,
     extract_explicit,
@@ -10,6 +11,7 @@ from invincible.core.memory import (
 )
 from invincible.core.session_store import SessionStore
 from invincible.main import app
+from tests.conftest import local_owner_kwargs
 
 
 def user(content):
@@ -78,9 +80,12 @@ def test_explicit_triggers_are_user_only():
 async def test_history_is_bounded_to_turn_cap(monkeypatch, pg_engine):
     monkeypatch.setenv("INVINCIBLE_HISTORY_MAX_TURNS", "3")
     store = SessionStore(engine=pg_engine)
+    uid, pid = await ensure_local_owner(pg_engine)
+    owner = {"user_id": uid, "project_id": pid}
     for i in range(6):
-        await store.append("s1", [user(f"turn {i}"), assistant(f"reply {i}")])
-    history = await store.load("s1")
+        await store.append("s1", [user(f"turn {i}"), assistant(f"reply {i}")],
+                           **owner)
+    history = await store.load("s1", **owner)
     users = [m["content"] for m in history if m["role"] == "user"]
     assert users == ["turn 3", "turn 4", "turn 5"]
 
@@ -89,9 +94,11 @@ async def test_history_is_bounded_to_turn_cap(monkeypatch, pg_engine):
 async def test_retention_disabled_when_off(monkeypatch, pg_engine):
     monkeypatch.setenv("INVINCIBLE_HISTORY_MAX_TURNS", "off")
     store = SessionStore(engine=pg_engine)
+    uid, pid = await ensure_local_owner(pg_engine)
+    owner = {"user_id": uid, "project_id": pid}
     for i in range(5):
-        await store.append("s1", [user(f"turn {i}")])
-    assert len(await store.load("s1")) == 5
+        await store.append("s1", [user(f"turn {i}")], **owner)
+    assert len(await store.load("s1", **owner)) == 5
 
 
 # --- end-to-end through the OpenAI endpoint ------------------------------------
@@ -147,7 +154,8 @@ async def test_retrieved_memory_injected_on_next_request(
     assert "postgres connection pooling matters here" in mem_msgs[0]["content"]
 
     # Injected memory must never be persisted into stored history.
-    stored = await store.load("mem-e2e")
+    stored = await store.load(
+        "mem-e2e", **await local_owner_kwargs(app.state.engine))
     assert all("[Relevant memory" not in (m.get("content") or "") for m in stored)
 
 

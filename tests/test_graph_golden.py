@@ -89,7 +89,7 @@ async def seed_rich_session(runs, engine):
     await app.state.sessions.append("default", [
         {"role": "user", "content": "count please"},
         {"role": "assistant", "content": "1 2 3"},
-    ])
+    ], user_id=uid, project_id=pid)
     session_pk = await app.state.sessions.lookup(
         "default", user_id=uid, project_id=pid)
 
