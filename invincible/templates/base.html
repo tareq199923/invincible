@@ -3,79 +3,467 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
   <title>{% block title %}Invincible{% endblock %}</title>
   <script src="/static/htmx.min.js" defer></script>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 40rem;
-           margin: 3rem auto; padding: 0 1rem; color: #1a1a1a; }
-    h1 a { text-decoration: none; color: inherit; }
-    label { display: block; margin-top: 0.9rem; font-weight: 600; }
-    input[type=email], input[type=password], input[type=text], textarea {
-      width: 100%; padding: 0.5rem; margin-top: 0.25rem;
-      border: 1px solid #bbb; border-radius: 4px; box-sizing: border-box; }
-    textarea { resize: vertical; font: inherit; }
-    button { margin-top: 1rem; padding: 0.5rem 1.2rem; cursor: pointer; }
-    .error { color: #900; margin-top: 0.75rem; }
-    .muted { color: #666; font-size: 0.9rem; }
-    code.user-code { font-size: 1.4rem; letter-spacing: 0.15em; }
-    table { border-collapse: collapse; width: 100%; }
-    td, th { text-align: left; padding: 0.35rem 0.5rem;
-             border-bottom: 1px solid #eee; }
-    ul.plain { list-style: none; padding: 0; }
-    .site-nav { display: flex; gap: 1rem; align-items: center;
-                margin: 0.5rem 0 1.5rem; }
-    .site-nav a { color: #0366d6; text-decoration: none; }
+    /* ---------------------------------------------------------------
+       Invincible console — design tokens.
+       One aesthetic: an operator's terminal. Everything monospace,
+       layered near-black surfaces, hairline borders, a single
+       electric-indigo accent. No CDNs, no webfonts — the stack IS
+       the identity.
+    ---------------------------------------------------------------- */
+    :root {
+      --bg: #0a0d13;
+      --bg-raise: #0e121a;
+      --surface: #11161f;
+      --surface-2: #171d29;
+      --border: #232b3a;
+      --border-soft: #1a212e;
+      --ink: #d9dfeb;
+      --muted: #7e8a9e;
+      --faint: #525d70;
+      --accent: #8b93ff;
+      --accent-ink: #b7bcff;
+      --accent-dim: rgba(139, 147, 255, 0.13);
+      --ok: #3fd68f;
+      --ok-dim: rgba(63, 214, 143, 0.12);
+      --warn: #e3b341;
+      --warn-dim: rgba(227, 179, 65, 0.10);
+      --err: #f3727d;
+      --err-dim: rgba(243, 114, 125, 0.12);
+      --mono: ui-monospace, "Cascadia Code", "SF Mono",
+              "Cascadia Mono", Consolas, Menlo, "Liberation Mono",
+              monospace;
+      --radius: 4px;
+    }
+
+    * { box-sizing: border-box; scrollbar-color: var(--border) transparent; }
+    ::selection { background: var(--accent-dim); }
+
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: var(--mono);
+      font-size: 0.88rem;
+      line-height: 1.55;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 1px 1px,
+          rgba(255, 255, 255, 0.022) 1px, transparent 0)
+        0 0 / 26px 26px,
+        var(--bg);
+      color-scheme: dark;
+    }
+
+    /* ---------------- shell ---------------- */
+    body.shell-body {
+      display: grid;
+      grid-template-columns: 15.5rem minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    body.bare-body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+
+    /* ---------------- sidebar ---------------- */
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-raise);
+      border-right: 1px solid var(--border-soft);
+      padding: 1.4rem 0.9rem 1.1rem;
+      overflow-y: auto;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      font-size: 1.02rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: var(--ink);
+      text-decoration: none;
+      padding: 0 0.65rem 1.1rem;
+    }
+    .brand:hover { color: var(--accent-ink); }
+    .brand-cursor {
+      display: inline-block;
+      width: 0.55em;
+      height: 1.02em;
+      margin-left: 0.18rem;
+      background: var(--accent);
+      animation: blink 1.15s steps(1) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .nav-group { margin-bottom: 0.35rem; }
+    .nav-label {
+      display: block;
+      padding: 0.95rem 0.75rem 0.3rem;
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+      color: var(--faint);
+    }
+    .nav-link {
+      display: block;
+      padding: 0.28rem 0.75rem;
+      color: var(--muted);
+      text-decoration: none;
+      border-left: 2px solid transparent;
+      transition: color 0.12s, background 0.12s;
+    }
+    .nav-link:hover { color: var(--ink); background: var(--surface); }
+    .nav-link.active {
+      color: var(--accent-ink);
+      border-left-color: var(--accent);
+      background: linear-gradient(90deg,
+        var(--accent-dim), transparent 72%);
+    }
+
+    .side-foot {
+      margin-top: auto;
+      padding: 0.9rem 0.75rem 0.3rem;
+      border-top: 1px solid var(--border-soft);
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .side-user {
+      font-size: 0.72rem;
+      color: var(--faint);
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* ---------------- content ---------------- */
+    main.content {
+      padding: 2.4rem clamp(1.25rem, 4vw, 3.5rem) 4rem;
+      max-width: 82rem;
+      width: 100%;
+      margin-inline: auto;
+      animation: rise 0.35s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+    }
+    main.bare { max-width: 27rem; }
+    main.bare .brand { font-size: 1.2rem; padding: 0 0 1.6rem; }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(7px); }
+      to { opacity: 1; transform: none; }
+    }
+    /* staggered entrance for the first blocks of a page */
+    main.content > *:nth-child(2) { animation: rise 0.4s 0.04s both; }
+    main.content > *:nth-child(3) { animation: rise 0.4s 0.08s both; }
+    main.content > *:nth-child(4) { animation: rise 0.4s 0.12s both; }
+    main.content > *:nth-child(5) { animation: rise 0.4s 0.16s both; }
+    main.content > *:nth-child(6) { animation: rise 0.4s 0.2s both; }
+
+    /* page title: the first h2 gets a prompt marker */
+    main.content > h2:first-child {
+      font-size: 1.12rem;
+      font-weight: 650;
+      margin: 0 0 0.4rem;
+      letter-spacing: 0.01em;
+    }
+    main.content > h2:first-child::before {
+      content: "\276F ";
+      color: var(--faint);
+      font-weight: 400;
+    }
+    h2 { font-size: 1.05rem; font-weight: 650; margin: 1.8rem 0 0.6rem; }
+    h3 { font-size: 0.88rem; font-weight: 650; margin: 1.5rem 0 0.5rem;
+         color: var(--muted); }
+    h3::before { content: "// "; color: var(--faint); font-weight: 400; }
+
+    /* ---------------- typography & links ---------------- */
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: var(--accent-ink); text-decoration: underline;
+              text-underline-offset: 3px; }
+    .muted { color: var(--muted); font-size: 0.82rem; }
+    .error { color: var(--err); margin-top: 0.75rem; }
+    hr { border: none; border-top: 1px solid var(--border-soft);
+         margin: 1.5rem 0; }
+
+    /* ---------------- forms ---------------- */
+    label { display: block; margin-top: 0.95rem; font-weight: 600;
+            font-size: 0.82rem; }
+    input[type=email], input[type=password], input[type=text],
+    input[type=number], input[type=url], select, textarea {
+      width: 100%;
+      padding: 0.5rem 0.65rem;
+      margin-top: 0.3rem;
+      background: var(--bg-raise);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--ink);
+      font: inherit;
+      transition: border-color 0.12s, box-shadow 0.12s;
+    }
+    textarea { resize: vertical; }
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+    button {
+      font: inherit;
+      background: var(--surface-2);
+      color: var(--ink);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.45rem 1.15rem;
+      cursor: pointer;
+      margin-top: 1rem;
+      transition: border-color 0.12s, color 0.12s, background 0.12s;
+    }
+    button:hover { border-color: var(--accent); color: var(--accent-ink); }
     .inline-form { display: inline; margin: 0; }
-    button.linklike { background: none; border: none; padding: 0;
-                      margin: 0; color: #0366d6; cursor: pointer;
-                      font: inherit; text-decoration: underline; }
-    .cards { display: grid;
-             grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
-             gap: 0.75rem; margin: 1rem 0; }
-    .card { border: 1px solid #ddd; border-radius: 6px;
-            padding: 0.75rem 0.9rem; }
-    .card .num { display: block; font-size: 1.6rem; font-weight: 700; }
-    .card .label { color: #666; font-size: 0.85rem; }
-    .banner { border-left: 4px solid #b58900; background: #fdf6e3;
-              padding: 0.6rem 0.8rem; margin: 1rem 0; }
+    button.linklike {
+      background: none; border: none; padding: 0; margin: 0;
+      color: var(--accent); cursor: pointer; font: inherit;
+      text-decoration: underline; text-underline-offset: 3px;
+    }
+    button.linklike:hover { color: var(--accent-ink); }
     .connect-form input { margin-bottom: 0.35rem; }
-    .provider-card.connected { border-color: #2da44e; }
-    .status-badge { padding: 0.1rem 0.4rem; border-radius: 3px;
-                    font-size: 0.8rem; }
-    .status-ok { background: #dafbe1; color: #116329; }
-    .status-failed { background: #ffebe9; color: #82071e; }
-    .status-untested { background: #f6f8fa; color: #57606a; }
-    code.payload { font-size: 0.8rem; word-break: break-all; }
+
+    /* ---------------- cards / stats ---------------- */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+      gap: 0.9rem;
+      margin: 1.3rem 0;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.1rem;
+      position: relative;
+    }
+    .card .num {
+      display: block;
+      font-size: 1.65rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.2;
+    }
+    .card .label {
+      display: block;
+      color: var(--muted);
+      font-size: 0.6rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      margin-top: 0.3rem;
+    }
+    .provider-card.connected { border-color: rgba(63, 214, 143, 0.45); }
+
+    /* ---------------- callouts & badges ---------------- */
+    .banner {
+      border: 1px solid rgba(227, 179, 65, 0.25);
+      border-left: 3px solid var(--warn);
+      background: var(--warn-dim);
+      padding: 0.65rem 0.9rem;
+      margin: 1rem 0;
+      border-radius: 3px;
+      font-size: 0.85rem;
+    }
+    .status-badge {
+      padding: 0.1rem 0.5rem;
+      border-radius: 3px;
+      font-size: 0.7rem;
+      border: 1px solid;
+    }
+    .status-ok { color: var(--ok); background: var(--ok-dim);
+                 border-color: rgba(63, 214, 143, 0.3); }
+    .status-failed { color: var(--err); background: var(--err-dim);
+                     border-color: rgba(243, 114, 125, 0.3); }
+    .status-untested { color: var(--muted); background: var(--surface-2);
+                       border-color: var(--border); }
+
+    /* ---------------- tables ---------------- */
+    table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
+    th {
+      text-align: left;
+      padding: 0.5rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--faint);
+    }
+    td { padding: 0.55rem 0.6rem; border-bottom: 1px solid var(--border-soft);
+         vertical-align: top; }
+    tbody tr:hover td, table tr:hover td { background: rgba(255, 255, 255, 0.015); }
+
+    /* ---------------- code ---------------- */
+    code {
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: 3px;
+      padding: 0.08em 0.35em;
+      font-size: 0.92em;
+    }
+    code.payload { font-size: 0.75rem; word-break: break-all; }
+    code.user-code { font-size: 1.3rem; letter-spacing: 0.14em; }
+    ul.plain { list-style: none; padding: 0; }
+    ul.plain li { padding: 0.15rem 0; }
+
+    /* ---------------- css bar chart (usage, pre-SVG) ---------------- */
     .bars { display: flex; align-items: flex-end; gap: 0.5rem;
             height: 8rem; margin: 1rem 0; }
     .bar-col { display: flex; flex-direction: column; justify-content:
                flex-end; align-items: center; width: 2.4rem; height: 100%; }
-    .bar { width: 100%; min-height: 1px; background: #0366d6;
+    .bar { width: 100%; min-height: 1px;
+           background: linear-gradient(180deg, var(--accent), #5a63d6);
            border-radius: 3px 3px 0 0; }
-    .bar-day { font-size: 0.7rem; color: #666; margin-top: 0.25rem; }
-    .bar-num { font-size: 0.65rem; }
+    .bar-day { font-size: 0.65rem; color: var(--faint); margin-top: 0.25rem; }
+    .bar-num { font-size: 0.62rem; }
+
+    /* ---------------- mobile drawer ---------------- */
+    .nav-drawer-input, .drawer-btn, .content-backdrop { display: none; }
+
+    @media (max-width: 920px) {
+      body.shell-body { display: block; }
+      .sidebar {
+        position: fixed;
+        left: 0; top: 0; bottom: 0;
+        width: 16rem;
+        z-index: 40;
+        transform: translateX(-100%);
+        transition: transform 0.22s ease;
+        box-shadow: none;
+      }
+      .nav-drawer-input:checked ~ .sidebar {
+        transform: none;
+        box-shadow: 1rem 0 3rem rgba(0, 0, 0, 0.55);
+      }
+      .drawer-btn {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 4px;
+        width: 2.4rem;
+        height: 2.4rem;
+        padding: 0 0.55rem;
+        position: fixed;
+        top: 0.75rem;
+        left: 0.75rem;
+        z-index: 45;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        cursor: pointer;
+      }
+      .drawer-btn i {
+        display: block;
+        height: 1.5px;
+        background: var(--muted);
+      }
+      .nav-drawer-input:checked ~ .drawer-btn i:nth-child(2) { opacity: 0.35; }
+      .content-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 35;
+        background: rgba(4, 6, 10, 0.6);
+        cursor: pointer;
+      }
+      .nav-drawer-input:checked ~ .content-backdrop { display: block; }
+      main.content { padding-top: 3.6rem; }
+    }
   </style>
 </head>
-<body>
-<h1><a href="/">Invincible</a></h1>
 {% if user_email %}
-<nav class="site-nav">
-  <a href="/dashboard">Dashboard</a>
-  <a href="/dashboard/setup">Get started</a>
-  <a href="/dashboard/sessions">Sessions</a>
-  <a href="/dashboard/tasks">Tasks</a>
-  <a href="/dashboard/memory">Memory</a>
-  <a href="/dashboard/memory/graph">Graph</a>
-  <a href="/dashboard/providers">Providers</a>
-  <a href="/dashboard/mcp">MCP</a>
-  <a href="/dashboard/usage">Usage</a>
-  <a href="/dashboard/settings">Settings</a>
-  <a href="/account">Account</a>
-  <form method="post" action="/auth/logout" class="inline-form">
-    <button type="submit" class="linklike">Sign out</button>
-  </form>
-</nav>
+{% set path = request.url.path if request is defined else '' %}
 {% endif %}
-{% block content %}{% endblock %}
+<body class="{% if user_email %}shell-body{% else %}bare-body{% endif %}">
+  {% if user_email %}
+  <input type="checkbox" id="nav-drawer" class="nav-drawer-input"
+         aria-hidden="true" tabindex="-1">
+  <label class="drawer-btn" for="nav-drawer" aria-label="Toggle navigation"
+         title="Menu"><i></i><i></i><i></i></label>
+  <label class="content-backdrop" for="nav-drawer" aria-hidden="true"></label>
+
+  <aside class="sidebar">
+    <a class="brand" href="/">invincible<span class="brand-cursor"></span></a>
+    <nav class="side-nav">
+      <div class="nav-group">
+        <span class="nav-label">overview</span>
+        <a class="nav-link{% if path == '/dashboard' %} active{% endif %}"
+           href="/dashboard">dashboard</a>
+        <a class="nav-link{% if path.startswith('/dashboard/usage') %} active{% endif %}"
+           href="/dashboard/usage">usage</a>
+        <a class="nav-link{% if path.startswith('/dashboard/setup') %} active{% endif %}"
+           href="/dashboard/setup">get started</a>
+      </div>
+      <div class="nav-group">
+        <span class="nav-label">activity</span>
+        <a class="nav-link{% if path.startswith('/dashboard/sessions') %} active{% endif %}"
+           href="/dashboard/sessions">sessions</a>
+        <a class="nav-link{% if path.startswith('/dashboard/tasks') %} active{% endif %}"
+           href="/dashboard/tasks">tasks</a>
+      </div>
+      <div class="nav-group">
+        <span class="nav-label">memory</span>
+        <a class="nav-link{% if path == '/dashboard/memory' %} active{% endif %}"
+           href="/dashboard/memory">memories</a>
+        <a class="nav-link{% if path.startswith('/dashboard/memory/graph') %} active{% endif %}"
+           href="/dashboard/memory/graph">graph</a>
+      </div>
+      <div class="nav-group">
+        <span class="nav-label">connections</span>
+        <a class="nav-link{% if path.startswith('/dashboard/providers') %} active{% endif %}"
+           href="/dashboard/providers">providers</a>
+        <a class="nav-link{% if path.startswith('/dashboard/mcp') %} active{% endif %}"
+           href="/dashboard/mcp">mcp</a>
+      </div>
+      <div class="nav-group">
+        <span class="nav-label">account</span>
+        <a class="nav-link{% if path.startswith('/dashboard/settings') %} active{% endif %}"
+           href="/dashboard/settings">settings</a>
+        <a class="nav-link{% if path == '/account' %} active{% endif %}"
+           href="/account">account</a>
+      </div>
+    </nav>
+    <div class="side-foot">
+      <span class="side-user" title="{{ user_email }}">{{ user_email }}</span>
+      <form method="post" action="/auth/logout" class="inline-form">
+        <button type="submit" class="linklike">sign out</button>
+      </form>
+    </div>
+  </aside>
+  {% endif %}
+
+  <main class="content{% if not user_email %} bare{% endif %}">
+    {% if not user_email %}
+    <a class="brand" href="/">invincible<span class="brand-cursor"></span></a>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  {% if user_email %}
+  <script>
+    // Close the mobile drawer after a nav tap.
+    (function () {
+      var box = document.getElementById('nav-drawer');
+      if (!box) return;
+      document.querySelectorAll('.side-nav a, .side-foot a')
+        .forEach(function (a) {
+          a.addEventListener('click', function () { box.checked = false; });
+        });
+    })();
+  </script>
+  {% endif %}
 </body>
 </html>
