@@ -1,6 +1,38 @@
 {% extends "base.html" %}
 {% block title %}Providers - Invincible{% endblock %}
 {% block content %}
+<style>
+  .prov-mark {
+    width: 2.1rem; height: 2.1rem; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 0.95rem; flex-shrink: 0;
+    color: var(--mark, var(--accent-ink));
+    background: color-mix(in srgb,
+      var(--mark, var(--accent)) 14%, transparent);
+    border: 1px solid color-mix(in srgb,
+      var(--mark, var(--accent)) 45%, transparent);
+  }
+  .prov-mark-sm { width: 1.6rem; height: 1.6rem; font-size: 0.78rem;
+                  border-radius: 5px; }
+  .provider-card .label {
+    font-size: 0.95rem; letter-spacing: 0; text-transform: none;
+    color: var(--ink); font-weight: 600;
+  }
+  .prov-card-head { display: flex; align-items: center; gap: 0.7rem;
+                    margin-bottom: 0.6rem; }
+  .status-connected { color: var(--ok); }
+  .status-not-connected { color: var(--muted); }
+  .provider-card.connected .label { color: var(--ink); }
+  details.custom-provider {
+    border: 1px dashed var(--border); border-radius: var(--radius);
+    padding: 0.85rem 1.05rem; margin: 1rem 0; background: transparent;
+  }
+  details.custom-provider summary { cursor: pointer; color: var(--muted);
+                                    font-size: 0.88rem; }
+  details.custom-provider summary:hover { color: var(--accent-ink); }
+  details.custom-provider[open] summary { margin-bottom: 0.7rem; }
+</style>
+
 <h2>Provider connections</h2>
 <p class="muted">Chat requests route only through providers you connect here.</p>
 
@@ -15,11 +47,18 @@ longer resolves to a public address.</p>{% endif %}
 <div class="cards">
   {% for c in catalog %}
   <div class="card provider-card{% if c.key in connected_keys %} connected{% endif %}">
-    <span class="label">{{ c.label }}</span>
-    {% if c.key in connected_keys %}
-    <p class="muted status-connected">Connected</p>
-    {% else %}
-    <p class="muted status-not-connected">Not connected</p>
+    <div class="prov-card-head">
+      <span class="prov-mark" style="--mark: {{ c.color }}">{{ c.label[0] | upper }}</span>
+      <div>
+        <span class="label">{{ c.label }}</span>
+        {% if c.key in connected_keys %}
+        <p class="muted status-connected">Connected</p>
+        {% else %}
+        <p class="muted status-not-connected">Not connected</p>
+        {% endif %}
+      </div>
+    </div>
+    {% if c.key not in connected_keys %}
     <form method="post" action="/providers/mine" class="connect-form">
       <input type="hidden" name="catalog_key" value="{{ c.key }}">
       <input type="text" name="provider_name" value="{{ c.label }}"
@@ -38,7 +77,7 @@ longer resolves to a public address.</p>{% endif %}
 </div>
 
 <details class="custom-provider">
-  <summary>Add a custom provider</summary>
+  <summary>+ Add a custom provider</summary>
   <form method="post" action="/providers/mine" class="connect-form">
     <input type="text" name="provider_name" placeholder="Name"
            maxlength="80" required>
@@ -54,11 +93,12 @@ longer resolves to a public address.</p>{% endif %}
 <h3>Connected providers</h3>
 {% if rows %}
 <table>
-  <tr><th>Name</th><th>Model</th><th>Base URL</th><th>Key</th><th>Status</th><th></th></tr>
+  <tr><th></th><th>Name</th><th>Model</th><th>Base URL</th><th>Key</th><th>Status</th><th></th></tr>
   {% for r in rows %}
   <tr class="provider-row" data-credential-id="{{ r.id }}">
+    <td><span class="prov-mark prov-mark-sm" style="--mark: {{ r.color }}">{{ r.provider_name[0] | upper }}</span></td>
     <td>{{ r.provider_name }}</td>
-    <td>{{ r.model_id }}</td>
+    <td><code>{{ r.model_id }}</code></td>
     <td class="muted">{{ r.base_url }}</td>
     <td class="muted">{{ r.key_masked }}</td>
     <td><span class="status-badge status-{{ r.status }}">{{ r.status }}</span></td>

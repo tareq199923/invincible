@@ -105,10 +105,12 @@ async def test_page_renders_one_card_per_catalog_entry(credential_key, client):
 async def test_nav_links_providers(credential_key, client):
     await logged_in(client)
     page = await client.get("/dashboard")
-    assert '<a href="/dashboard/providers">Providers</a>' in page.text
+    # Sidebar nav (ui overhaul 2026-09): attribute order/labels changed,
+    # the link targets are the contract.
+    assert 'href="/dashboard/providers"' in page.text
     # Q1 decided 2026-08-30: /mcp stays OAuth-only, but the management
     # page ships (Phase 3), so the nav entry exists now.
-    assert '<a href="/dashboard/mcp">MCP</a>' in page.text
+    assert 'href="/dashboard/mcp"' in page.text
 
 
 async def test_connected_card_flips_state(credential_key, client):

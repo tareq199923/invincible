@@ -26,6 +26,7 @@ from invincible.core.credential_store import (
     DuplicateCredentialError,
 )
 from invincible.core.principal import Principal
+from invincible.core.memory_projection import source_color
 from invincible.core.provider_catalog import CATALOG, catalog_entry
 from invincible.core.trimming import DEFAULT_MAX_CONTEXT
 from invincible.core.url_safety import UnsafeUrlError, validate_public_https_url
@@ -193,12 +194,16 @@ async def providers_page(
     principal: Principal = Depends(require_user_session),
 ):
     rows = await _store(request).list_for_user(principal.user_id)
+    for r in rows:
+        r["color"] = source_color(r.get("catalog_key") or r["provider_name"])
     # Phase 9 PR-D: the catalog renders as connect cards over the
     # operator-supplied constants; a card whose catalog_key is already
-    # connected shows a connected state instead of a blank form.
+    # connected shows a connected state instead of a blank form. The
+    # color is a deterministic per-provider hue for the card mark.
     catalog = [
         {"key": key, "label": entry["label"],
-         "base_url": entry["base_url"], "model_id": entry["model_id"]}
+         "base_url": entry["base_url"], "model_id": entry["model_id"],
+         "color": source_color(key)}
         for key, entry in CATALOG.items()
     ]
     connected_keys = {r["catalog_key"] for r in rows if r.get("catalog_key")}

@@ -12,11 +12,12 @@
   .setup-step h3 { margin: 0; }
   .setup-step h3::before { content: none; }  /* steps number themselves */
   .setup-step .step-mark {
-    width: 1.7rem; height: 1.7rem; border-radius: 50%;
+    min-width: 2.1rem; height: 1.7rem; border-radius: 6px;
+    padding: 0 0.45rem;
     background: var(--accent-dim); color: var(--accent-ink);
     border: 1px solid var(--accent);
     text-align: center; line-height: 1.6rem; font-weight: 700;
-    flex-shrink: 0;
+    letter-spacing: 0.08em; flex-shrink: 0;
   }
   .setup-step.done .step-mark {
     background: var(--ok-dim); color: var(--ok); border-color: var(--ok);
@@ -50,7 +51,7 @@
   {# ------------------------------------------------------------------ #}
   <div class="setup-step{% if has_provider %} done{% endif %}">
     <div class="step-head">
-      <span class="step-mark">{% if has_provider %}✓{% else %}1{% endif %}</span>
+      <span class="step-mark">{% if has_provider %}&#10003;{% else %}01{% endif %}</span>
       <h3>Connect a provider</h3>
       <span class="step-state {% if has_provider %}done{% else %}todo{% endif %}">
         {% if has_provider %}Connected{% else %}Not done yet{% endif %}
@@ -71,7 +72,7 @@
   {# ------------------------------------------------------------------ #}
   <div class="setup-step{% if has_key %} done{% endif %}">
     <div class="step-head">
-      <span class="step-mark">{% if has_key %}✓{% else %}2{% endif %}</span>
+      <span class="step-mark">{% if has_key %}&#10003;{% else %}02{% endif %}</span>
       <h3>Create your API key</h3>
       <span class="step-state {% if has_key %}done{% else %}todo{% endif %}">
         {% if has_key %}Key exists ({{ api_key_prefix }}…){% else %}Not done yet{% endif %}
@@ -85,7 +86,7 @@
   {# ------------------------------------------------------------------ #}
   <div class="setup-step{% if has_provider and has_key %} done{% endif %}">
     <div class="step-head">
-      <span class="step-mark">{% if has_provider and has_key %}✓{% else %}3{% endif %}</span>
+      <span class="step-mark">{% if has_provider and has_key %}&#10003;{% else %}03{% endif %}</span>
       <h3>Point your AI client at the gateway</h3>
       <span class="step-state {% if has_provider and has_key %}done{% else %}todo{% endif %}">
         {% if has_provider and has_key %}Ready to paste{% else %}Complete steps 1–2 first{% endif %}
