@@ -19,8 +19,8 @@ from fastapi.templating import Jinja2Templates
 
 from invincible.core.accounts import (
     MIN_PASSWORD_LEN,
-    ProjectService,
     SESSION_COOKIE,
+    ProjectService,
     SessionManager,
     UserService,
     resolve_session,
