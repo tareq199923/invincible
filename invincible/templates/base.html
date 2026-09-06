@@ -184,6 +184,9 @@
     h3 { font-size: 0.88rem; font-weight: 650; margin: 1.5rem 0 0.5rem;
          color: var(--muted); }
     h3::before { content: "// "; color: var(--faint); font-weight: 400; }
+    h4 { font-size: 0.82rem; font-weight: 600; margin: 1.2rem 0 0.4rem;
+         color: var(--muted); }
+    h4::before { content: "> "; color: var(--faint); font-weight: 400; }
 
     /* ---------------- typography & links ---------------- */
     a { color: var(--accent); text-decoration: none; }
@@ -352,6 +355,14 @@
       text-align: center;
       padding: 1.7rem 0.5rem;
       letter-spacing: 0.04em;
+    }
+
+    /* auth pages: one quiet panel on the bare centered layout */
+    main.bare .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.6rem 1.7rem;
     }
 
     /* htmx async affordances */

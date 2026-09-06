@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Account - Invincible{% endblock %}
 {% block content %}
+<style>
+  /* the one-time key sits inside a config-block; strip the nested
+     inline-code chrome so the panel reads as one terminal line */
+  .config-block .new-key-raw { background: none; border: none;
+                               padding: 0; font-size: 1rem;
+                               letter-spacing: 0.04em; }
+</style>
 <h2>Account</h2>
 <p>Signed in as <strong>{{ email }}</strong>
 {% if github_linked %}<span class="muted">(GitHub linked)</span>{% endif %}</p>
@@ -40,7 +47,8 @@ login</code>): type the code it printed.</p>
 <div class="banner new-key-banner">
   <p><strong>Copy your new API key now &mdash; it will not be shown
   again.</strong></p>
-  <p><code class="new-key-raw">{{ new_key.raw }}</code></p>
+  <div class="config-block"><code class="new-key-raw">{{ new_key.raw }}</code><button class="copy-btn" type="button"
+  onclick="navigator.clipboard.writeText(document.querySelector('.new-key-raw').innerText)">Copy</button></div>
   {% if new_key.label %}<p class="muted">Label: {{ new_key.label }}</p>{% endif %}
 </div>
 {% endif %}

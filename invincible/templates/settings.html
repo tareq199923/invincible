@@ -31,13 +31,13 @@
   <tr><th>Providers configured</th><td>{{ provider_rows | length }}</td></tr>
   {% for p in provider_rows %}
   <tr><td class="muted">{{ p.name }} - tier {{ p.tier }}</td>
-      <td>{{ "enabled" if p.enabled else "disabled" }}</td></tr>
+      <td><span class="status-badge status-{{ 'ok' if p.enabled else 'untested' }}">{{ "enabled" if p.enabled else "disabled" }}</span></td></tr>
   {% endfor %}
   {% if routing_mode %}
   <tr><th>Routing mode</th><td>{{ routing_mode }}</td></tr>
   {% endif %}
   {% for label, on in flags %}
-  <tr><th>{{ label }}</th><td>{{ "yes" if on else "no" }}</td></tr>
+  <tr><th>{{ label }}</th><td><span class="status-badge status-{{ 'ok' if on else 'untested' }}">{{ "on" if on else "off" }}</span></td></tr>
   {% endfor %}
 </table>
 <p class="muted">Secret values are never shown here - only whether each

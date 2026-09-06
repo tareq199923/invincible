@@ -181,5 +181,7 @@ async def test_system_panel_renders_readonly_without_registry(client):
     assert "Providers configured" in page.text
     assert "Routing mode" not in page.text
     assert "Browser sessions" in page.text
-    assert ">yes<" in page.text  # owner secret + gateway key are set here
-    assert page.text.count('href="/dashboard/settings">Settings</a>') == 1
+    # ui overhaul 2026-09: flags render as on/off badges now.
+    assert ">on<" in page.text  # owner secret + gateway key are set here
+    # Sidebar nav renders the settings link once (lowercase label).
+    assert page.text.count('href="/dashboard/settings">settings</a>') == 1

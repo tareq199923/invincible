@@ -25,8 +25,8 @@ from invincible.core.credential_store import (
     ByokCredentialStore,
     DuplicateCredentialError,
 )
-from invincible.core.principal import Principal
 from invincible.core.memory_projection import source_color
+from invincible.core.principal import Principal
 from invincible.core.provider_catalog import CATALOG, catalog_entry
 from invincible.core.trimming import DEFAULT_MAX_CONTEXT
 from invincible.core.url_safety import UnsafeUrlError, validate_public_https_url

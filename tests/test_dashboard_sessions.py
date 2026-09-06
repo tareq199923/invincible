@@ -8,6 +8,7 @@ API, identical generic missing pages for unknown AND foreign session ids
 (anti-enumeration), task-head isolation between users, and the overview
 Tasks card.
 """
+import re
 import time
 
 from invincible.main import app
@@ -15,8 +16,6 @@ from tests.conftest import register_account
 
 
 def card_count(html: str, name: str) -> int:
-    import re
-
     match = re.search(rf'data-card="{name}"><span class="num">(\d+)<', html)
     assert match is not None, f"card {name} missing from page"
     return int(match.group(1))
@@ -109,8 +108,12 @@ async def test_detail_page_renders_projection_pieces(client):
     assert "&#34;through&#34;: 9" in page.text or '"through": 9' in page.text
     assert "through 9" in page.text
     assert "ended unexpectedly" in page.text
+    # ui overhaul 2026-09: the chain renders as styled chips now, so
+    # assert on tag-stripped text instead of raw HTML.
+    chain_text = re.sub(r"<[^>]+>", " ", page.text).replace("\n", " ")
+    chain_text = re.sub(r"  +", " ", chain_text)
     assert "alpha/alpha-model [failover] → attempt #2 → beta/beta-model [ok]" \
-        in page.text.replace("\n", "")
+        in chain_text
 
 
 async def test_unknown_and_foreign_detail_are_identical_404s(client):

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Sign in - Invincible{% endblock %}
 {% block content %}
+<div class="panel">
 <h2>Sign in</h2>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 <form method="post" action="/auth/login">
@@ -20,4 +21,5 @@ gateway operator can reset it:<br>
   <button type="submit">Sign in with GitHub</button>
 </form>
 {% endif %}
+</div>
 {% endblock content %}

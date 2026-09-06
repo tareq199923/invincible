@@ -1,6 +1,18 @@
 {% extends "base.html" %}
 {% block title %}Session {{ client_session_id }} - Invincible{% endblock %}
 {% block content %}
+<style>
+  .failover-pair { display: inline-flex; align-items: center; gap: 0.5rem;
+                   margin: 0.2rem 0.7rem 0.2rem 0; }
+  .chip { border: 1px solid var(--border); background: var(--surface-2);
+          border-radius: 999px; padding: 0.1rem 0.65rem; font-size: 0.78rem; }
+  .chip.from { color: var(--err); border-color: rgba(243, 114, 125, 0.35);
+               background: var(--err-dim); }
+  .chip.to { color: var(--accent-ink);
+             border-color: rgba(139, 147, 255, 0.35);
+             background: var(--accent-dim); }
+  .failover-arrow { color: var(--faint); }
+</style>
 <h2>Session <code>{{ client_session_id }}</code></h2>
 <p class="muted">created {{ created_at | timeago }} · updated {{ updated_at | timeago }}</p>
 
@@ -42,11 +54,12 @@
 
 {% if failovers %}
 <h3>Failover chain</h3>
-<ul class="plain">
+<div class="failover-chain">
   {% for f in failovers %}
-  <li class="failover-row">{{ f.from }} → {{ f.to }}</li>
+  {# one line: the "from → to" text shape is asserted in tests #}
+  <span class="failover-pair"><span class="chip from">{{ f.from }}</span> <span class="failover-arrow">→</span> <span class="chip to">{{ f.to }}</span></span>
   {% endfor %}
-</ul>
+</div>
 {% endif %}
 
 <h3>Activity</h3>
