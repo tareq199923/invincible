@@ -241,6 +241,7 @@ async def anthropic_messages(
             internal_messages,
             _assistant_message_from_provider(choices[0]["message"]),
             memory,
+            principal,
         )
 
     anthropic_response = internal_to_anthropic(result, body.model, input_tokens)

@@ -20,8 +20,10 @@ from fastapi.templating import Jinja2Templates
 from invincible.core.accounts import (
     MIN_PASSWORD_LEN,
     ProjectService,
+    SESSION_COOKIE,
     SessionManager,
     UserService,
+    resolve_session,
 )
 from invincible.core.identity import ApiKeyStore
 from invincible.core.memory import MAX_CONTENT_CHARS, MEMORY_KINDS
@@ -694,13 +696,25 @@ async def mcp_page(
     principal: Principal = Depends(require_user_session),
 ):
     store = _state(request, "oauth_store")
-    # Pre-Phase-5 grants were attached to the system local owner; the
-    # dashboard user manages their own clients plus that local-era pool.
-    from invincible.core.db import ensure_local_owner
+    # Operator role gates the legacy pools: pre-Phase-5 grants were
+    # attached to the system local owner, and older rows may be unowned.
+    # Operators keep managing those; regular users see only their own
+    # clients (every user owns the clients they consented to post-Phase-5).
+    from invincible.core.db import ROLE_OPERATOR
 
-    local_uid, _ = await ensure_local_owner(_engine(request))
-    clients = await store.list_clients_manageable(
-        [principal.user_id, local_uid])
+    session_user = await resolve_session(
+        _engine(request), request.cookies.get(SESSION_COOKIE))
+    is_operator = (
+        session_user is not None and session_user["role"] == ROLE_OPERATOR)
+    if is_operator:
+        from invincible.core.db import ensure_local_owner
+
+        local_uid, _ = await ensure_local_owner(_engine(request))
+        clients = await store.list_clients_manageable(
+            [principal.user_id, local_uid], include_unowned=True)
+    else:
+        clients = await store.list_clients_manageable(
+            [principal.user_id])
     manageable = {c["client_id"] for c in clients}
     active = [
         t for t in await store.list_active_tokens()
@@ -730,8 +744,15 @@ async def revoke_mcp_client_tokens(
     store = _state(request, "oauth_store")
     # Ownership predicate: foreign and unknown clients are
     # indistinguishable (anti-enumeration). Local-owner-era (pre-Phase-5)
-    # and unowned clients stay manageable from any dashboard session.
-    from invincible.core.db import ensure_local_owner
+    # and unowned clients are operator-managed only; regular users may
+    # revoke solely on clients they own (operator override for the
+    # legacy pools mirrors mcp_page's listing rule).
+    from invincible.core.db import ROLE_OPERATOR, ensure_local_owner
+
+    session_user = await resolve_session(
+        _engine(request), request.cookies.get(SESSION_COOKIE))
+    is_operator = (
+        session_user is not None and session_user["role"] == ROLE_OPERATOR)
 
     client_row = await store.get_client(client_id)
     if client_row is None:
@@ -741,9 +762,21 @@ async def revoke_mcp_client_tokens(
                               "type": "not_found_error"}},
         )
     owner = client_row["owner_user_id"]
-    if owner is not None:
+    if owner == principal.user_id:
+        pass  # own client: always manageable
+    elif owner is None:
+        # Unowned (local-owner-era registration): operator-only.
+        if not is_operator:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": {"message": "No such MCP client.",
+                                  "type": "not_found_error"}},
+            )
+    else:
+        # Owned by someone else: operator override applies only to the
+        # local owner's legacy clients, never to another user's.
         local_uid, _ = await ensure_local_owner(_engine(request))
-        if owner not in (principal.user_id, local_uid):
+        if not (is_operator and owner == local_uid):
             raise HTTPException(
                 status_code=404,
                 detail={"error": {"message": "No such MCP client.",

@@ -399,6 +399,47 @@ async def test_api_keys_resolve_only_to_their_owner(client,
     assert resolved_b["user_id"] == b["user_id"]
 
 
+# --- /v1/messages non-streaming persist (HIGH-1 regression) --------------------------
+
+
+async def test_anthropic_non_streaming_persists_to_the_caller(client,
+                                                              alpha_handler):
+    """A keyed user's non-streaming Anthropic conversation must land in
+    THEIR session row - never the local owner's (audit 2026-09-07
+    HIGH-1: the non-streaming _persist call omitted the principal, so
+    the turns fell back to the operator's session and leaked there)."""
+    from invincible.core.db import ensure_local_owner
+
+    a = await _mint_user_and_key(client, "anthropic-a@example.com")
+    b = await _mint_user_and_key(client, "anthropic-b@example.com")
+
+    resp = await client.post(
+        "/v1/messages",
+        headers={**auth_for(a["raw"]), "X-Session-Id": "anthropic-sess"},
+        json={"model": "claude-sonnet-4", "max_tokens": 64,
+              "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # The turns live under A's identity...
+    pk_a = await app.state.sessions.lookup(
+        "anthropic-sess", user_id=a["user_id"], project_id=a["project_id"])
+    assert pk_a is not None
+    history_a = await app.state.sessions.load(
+        "anthropic-sess",
+        user_id=a["user_id"], project_id=a["project_id"])
+    assert [m["content"] for m in history_a if m["role"] == "assistant"] == ["ok"]
+
+    # ...not under B's, and crucially not under the local owner's.
+    assert await app.state.sessions.lookup(
+        "anthropic-sess", user_id=b["user_id"], project_id=b["project_id"]
+    ) is None
+    local_uid, local_pid = await ensure_local_owner(app.state.engine)
+    assert await app.state.sessions.lookup(
+        "anthropic-sess", user_id=local_uid, project_id=local_pid
+    ) is None
+
+
 def _json_loads(response) -> dict:
     """Extract the JSON object from an MCP tools/call text content."""
     body = response.json()

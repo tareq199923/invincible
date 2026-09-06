@@ -343,20 +343,23 @@ class OAuthStore:
             })
         return clients
 
-    async def list_clients_manageable(self, user_ids: list[int]) -> list:
+    async def list_clients_manageable(
+        self, user_ids: list[int], *, include_unowned: bool = False,
+    ) -> list:
         """Clients any of these principals may manage on the dashboard:
-        owned by one of them, or unowned (local-owner era registrations).
-        Same shape as ``list_clients``; the only scoping difference is
+        owned by one of them, plus — only when ``include_unowned`` is set
+        (operator role) — unowned local-owner-era registrations. Same
+        shape as ``list_clients``; the only scoping difference is
         ownership."""
         if not user_ids:
             return []
+        conditions = [oauth_clients.c.owner_user_id.in_(user_ids)]
+        if include_unowned:
+            conditions.append(oauth_clients.c.owner_user_id.is_(None))
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 oauth_clients.select()
-                .where(or_(
-                    oauth_clients.c.owner_user_id.in_(user_ids),
-                    oauth_clients.c.owner_user_id.is_(None),
-                ))
+                .where(or_(*conditions))
                 .order_by(oauth_clients.c.created_at)
             )).mappings().all()
         clients = []
