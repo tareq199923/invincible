@@ -27,9 +27,11 @@ _SIMILAR_SHORT_TOKENS = 3
 # tie-broken deterministically on the id pair.
 _SIMILAR_MAX_PER_NODE = 4
 _SIMILAR_MAX_TOTAL = 200
-_STOPWORDS = frozenset(
-    "the a an is are and or to of for with on in this that it its i "
-    "my we our you your be been was were not no".split())
+_STOPWORDS = frozenset([
+    "the", "a", "an", "is", "are", "and", "or", "to", "of", "for",
+    "with", "on", "in", "this", "that", "it", "its", "i", "my", "we",
+    "our", "you", "your", "be", "been", "was", "were", "not", "no",
+])
 
 # How many individual memory nodes the graph carries before truncating
 # (newest-first). Never silently dropped: ``summary.truncated`` and the
