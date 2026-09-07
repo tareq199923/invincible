@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-07
 **Auditor scope:** all 41 source modules (~18.3k lines), 8 Alembic migrations, test suite.
-**Status:** Audit complete. Step 1 APPLIED 2026-09-07 (HIGH-1 + HIGH-2 fixed, 5 regression tests added). Step 2 APPLIED 2026-09-07 (all silent local-owner fallbacks fail loudly; MEDIUM-2 + LOW-1 closed along the way). Step 3 APPLIED 2026-09-07 (MEDIUM-1 bootstrap gated on INVINCIBLE_ALLOW_FIRST_OPERATOR / no-secret; MEDIUM-4 per-IP rate limits on /oauth/register + /auth/device/code; agent-routing deployment posture documented in SECURITY.md §10). Step 4 APPLIED 2026-09-07 (LOW-2/LOW-3/LOW-5 closed - see the per-finding FIXED notes below). Step 5 test gaps remain open. This document is the handoff.
+**Status:** AUDIT FULLY CLOSED 2026-09-07. Steps 1-5 + MEDIUM-3 all APPLIED (commits 0583bb5, 382cd1d, e113842, fcee36d, 8d623f4 — all deployed to production; suite 1071 passing). §5 manual two-account prod verification PASSED 2026-09-07: two accounts on invincible-ai.me each sent a non-streaming POST /v1/messages with the same session string "default"; each dashboard showed only its own session (B's turn in B's row, absent from A's; BYOK isolation also held — neither account's request ever fell back to the other's or the operator's pool, including during an upstream provider failure). This document is retained as the record.
 
 ---
 
