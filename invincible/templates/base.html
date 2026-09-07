@@ -280,6 +280,18 @@
       border-radius: 3px;
       font-size: 0.85rem;
     }
+    /* success twin of .banner (same geometry, ok tokens) - amber is
+       reserved for warnings so users stop reading green flashes as
+       errors */
+    .banner-ok {
+      border: 1px solid rgba(63, 214, 143, 0.45);
+      border-left: 3px solid var(--ok);
+      background: var(--ok-dim);
+      padding: 0.65rem 0.9rem;
+      margin: 1rem 0;
+      border-radius: 3px;
+      font-size: 0.85rem;
+    }
     .status-badge {
       padding: 0.1rem 0.5rem;
       border-radius: 3px;
@@ -294,6 +306,7 @@
                        border-color: var(--border); }
 
     /* ---------------- tables ---------------- */
+    .table-scroll { overflow-x: auto; }
     table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
     th {
       text-align: left;
@@ -369,6 +382,25 @@
     .htmx-indicator { opacity: 0; transition: opacity 0.2s ease; }
     .htmx-request .htmx-indicator,
     .htmx-request.htmx-indicator { opacity: 1; }
+
+    /* ---------------- keyboard visibility ---------------- */
+    /* Hover styles everywhere, focus ring nowhere made tab navigation
+       invisible on the dark theme - a global :focus-visible ring is the
+       a11y baseline for every interactive element. */
+    a:focus-visible, button:focus-visible, summary:focus-visible,
+    input:focus-visible, select:focus-visible, textarea:focus-visible,
+    label:focus-visible, [tabindex]:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* ---------------- motion ---------------- */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+      }
+    }
 
     /* ---------------- mobile drawer ---------------- */
     .nav-drawer-input, .drawer-btn, .content-backdrop { display: none; }

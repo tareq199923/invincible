@@ -2,16 +2,22 @@
 {% block title %}Sessions - Invincible{% endblock %}
 {% block content %}
 <h2>Sessions</h2>
+<div class="table-scroll">
 <table>
-  <tr><th>Session</th><th>Project</th><th>Updated</th></tr>
+  <thead><tr><th>Session</th><th>Project</th><th>Updated</th></tr></thead>
+  <tbody>
   {% for s in sessions_rows %}
   <tr class="session-row">
     <td><a href="/dashboard/sessions/{{ s.id }}"><code>{{ s.client_session_id }}</code></a></td>
-    <td>{{ s.project_id }}</td>
-    <td class="muted">{{ s.updated_at | timeago }}</td>
+    <td>{% set pname = project_names.get(s.project_id) %}<span
+        {% if pname %}title="project #{{ s.project_id }}"{% endif %}>{% if pname %}{{ pname }}{% else %}<code class="muted">#{{ s.project_id }}</code>{% endif %}</span></td>
+    <td class="muted" title="{{ s.updated_at | absdate }}">{{ s.updated_at | timeago }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="3" class="empty">No sessions yet.</td></tr>
+  <tr><td colspan="3" class="empty">No sessions yet. <a
+      href="/dashboard/setup">Run your first chat &rarr;</a></td></tr>
   {% endfor %}
+  </tbody>
 </table>
+</div>
 {% endblock content %}

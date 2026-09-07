@@ -37,7 +37,7 @@ from invincible.endpoints.accounts import (
     _wants_html,
     require_user_session,
 )
-from invincible.endpoints.dashboard import _email
+from invincible.endpoints.dashboard import _email, templates
 
 logger = logging.getLogger("invincible.byok")
 
@@ -186,6 +186,24 @@ async def _probe(request: Request, base_url: str, api_key: str) -> dict:
     finally:
         if owns_client:
             await client.aclose()
+
+
+def _row_response(request: Request, row: dict, status: str) -> Response:
+    """Re-rendered provider row for the HTMX Test button
+    (hx-target="closest tr" + hx-swap="outerHTML"): the status badge
+    updates in place, no full-page reload. Built from explicit public
+    fields only - the encrypted key never reaches a template context."""
+    r = {
+        "id": row["id"],
+        "provider_name": row["provider_name"],
+        "model_id": row["model_id"],
+        "base_url": row["base_url"],
+        "key_masked": row["key_masked"],
+        "catalog_key": row.get("catalog_key"),
+        "status": status,
+        "color": source_color(row.get("catalog_key") or row["provider_name"]),
+    }
+    return templates.TemplateResponse(request, "_provider_row.html", {"r": r})
 
 
 @router.get("/dashboard/providers")
@@ -361,11 +379,11 @@ async def test_provider(
         meta={**_audit_meta(row), "outcome": credential_status},
     )
     if request.headers.get("HX-Request") == "true":
-        # The Test button is an HTMX post; bounce back to the page with a
-        # bounded flash flag instead of rendering the JSON report.
-        return Response(status_code=204, headers={
-            "HX-Redirect":
-                f"/dashboard/providers?tested={credential_status}"})
+        # The Test button swaps its row in place (T0-3): the re-rendered
+        # <tr> carries the updated status badge, so no page reload and no
+        # redirect flash. The ?tested= banners stay reachable for direct
+        # (non-htmx) browser hits.
+        return _row_response(request, row, credential_status)
     return {**report, "credential_status": credential_status}
 
 

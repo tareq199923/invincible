@@ -161,6 +161,11 @@ async def test_setup_page_unlocks_config_once_key_exists(
     assert "ANTHROPIC_BASE_URL" in page.text
     assert "OPENAI_BASE_URL" in page.text
     assert "/mcp" in page.text
+    # T0-1: copy buttons carry their text in data-copy (no
+    # regex-on-innerText, which copied the button label with the config).
+    assert page.text.count('data-copy="export ANTHROPIC_BASE_URL=') == 1
+    assert page.text.count('data-copy="OPENAI_BASE_URL=') == 1
+    assert "innerText" not in page.text
     # The RAW key never renders on this page - only Account shows it once.
     assert key["raw"] not in page.text
     # And the dashboard signpost is gone once setup is complete.

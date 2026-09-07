@@ -104,6 +104,14 @@ async def _email(engine, principal: Principal) -> str:
     return user["email"] if user else "unknown"
 
 
+async def _project_names(engine, user_id: int) -> dict[int, str]:
+    """id -> name for the user's projects (archived included - old
+    sessions may reference them, and the name map is display-only)."""
+    projects = await ProjectService(engine).list(
+        user_id, include_archived=True)
+    return {p["id"]: p["name"] for p in projects}
+
+
 @router.get("/dashboard")
 async def overview_page(
     request: Request,
@@ -157,6 +165,7 @@ async def overview_page(
         },
         needs_setup=not (has_provider and active_keys > 0),
         recent_sessions=recent_sessions,
+        project_names=await _project_names(engine, principal.user_id),
         sparkline=sparkline,
     )
 
@@ -176,6 +185,8 @@ async def sessions_page(
         "sessions.html", request,
         user_email=await _email(_engine(request), principal),
         sessions_rows=rows,
+        project_names=await _project_names(
+            _engine(request), principal.user_id),
     )
 
 

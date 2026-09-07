@@ -72,9 +72,11 @@ accepted on /mcp &mdash; OAuth bearer tokens only (owner decision, Q1).</p>
 
 <h3>Registered clients</h3>
 {% if clients %}
+<div class="table-scroll">
 <table>
-  <tr><th>Name</th><th>Client ID</th><th>Redirect URIs</th>
-      <th>Active tokens</th><th></th></tr>
+  <thead><tr><th>Name</th><th>Client ID</th><th>Redirect URIs</th>
+      <th>Active tokens</th><th></th></tr></thead>
+  <tbody>
   {% for c in clients %}
   <tr class="mcp-client-row" data-client-id="{{ c.client_id }}">
     <td>{{ c.client_name or '(unnamed)' }}</td>
@@ -88,7 +90,9 @@ accepted on /mcp &mdash; OAuth bearer tokens only (owner decision, Q1).</p>
     </td>
   </tr>
   {% endfor %}
+  </tbody>
 </table>
+</div>
 {% else %}
 <p class="muted empty">No MCP clients registered yet. A client registers itself
 via <code>POST /oauth/register</code> when it first connects.</p>

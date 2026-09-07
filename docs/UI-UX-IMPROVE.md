@@ -4,6 +4,16 @@ Last audited: 2026-09-06, against the dark-terminal design system shipped in
 `b228982..f0b7603` (sidebar shell, design tokens in `base.html`, provider
 marks, usage chart, setup steps).
 
+**Status 2026-09-08:** Tier 0 (T0-1..T0-3) and Tier 1 (T1-1..T1-7) shipped
+— same commit as this note, suite 1071 green. Notes: T0-1 was real but
+different from the suspicion — the template's regex was literally `\\n`
+(a no-op), so the copy included both lines *plus* the button label glued
+to line two; fixed with `data-copy` attributes as prescribed. T0-3: the
+Test button now swaps its row in place (`_provider_row.html` partial);
+the rare blocked-URL path still full-redirects to the `test_error`
+banner on purpose (the explanatory copy matters there). Tier 2/3 remain
+open.
+
 This is a living backlog. Pick items top-down within a tier; each item lists
 impact, effort (S < 1h, M ~half-day, L multi-day), and acceptance criteria.
 

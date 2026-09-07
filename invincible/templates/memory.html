@@ -30,14 +30,17 @@
   <button type="submit">Filter</button>
 </form>
 
+<div class="table-scroll">
 <table>
-  <tr><th>Content</th><th>Kind</th><th>Layer</th><th>Saved</th><th></th></tr>
+  <thead><tr><th>Content</th><th>Kind</th><th>Layer</th><th>Saved</th>
+      <th></th></tr></thead>
+  <tbody>
   {% for m in memories %}
   <tr class="memory-row" data-memory-id="{{ m.id }}">
     <td>{{ m.content }}</td>
     <td>{{ m.kind }}</td>
     <td class="muted">{{ m.layer }}</td>
-    <td class="muted">{{ m.created_at | timeago }}</td>
+    <td class="muted" title="{{ m.created_at | absdate }}">{{ m.created_at | timeago }}</td>
     <td><button class="linklike delete-memory"
                 hx-delete="/memories/{{ m.id }}"
                 hx-target="closest tr" hx-swap="delete"
@@ -47,7 +50,9 @@
   <tr><td colspan="5" class="empty">No memories
       {%- if q %} matching your search{% endif %}.</td></tr>
   {% endfor %}
+  </tbody>
 </table>
+</div>
 
 {% if not q and total > page_size %}
 <p class="muted pagination">

@@ -144,6 +144,9 @@ async def test_form_connect_redirects_and_never_echoes_key(
     page = await client.get(made.headers["location"])
     assert page.status_code == 200
     assert "Provider connected." in page.text
+    # T0-2: success flashes render green (banner-ok), amber stays
+    # warning-only.
+    assert 'class="banner-ok"' in page.text
     assert "Groq via form" in page.text
     # The submitted raw key string is absent from every later render.
     assert RAW_KEY not in page.text
@@ -179,7 +182,7 @@ async def test_remove_uses_htmx_row_delete(credential_key, client):
     assert listed.json()["count"] == 0
 
 
-async def test_test_button_flashes_ok(credential_key, client):
+async def test_test_button_swaps_row_in_place_ok(credential_key, client):
     await logged_in(client)
     made = await client.post("/providers/mine", json={
         "provider_name": "My Groq", "catalog_key": "groq",
@@ -189,6 +192,9 @@ async def test_test_button_flashes_ok(credential_key, client):
     page = await client.get("/dashboard/providers")
     assert f'hx-post="/providers/mine/{cred_id}/test"' in page.text
     assert "status-untested" in page.text
+    # T0-3: the Test button targets its own row for an outerHTML swap.
+    assert 'hx-target="closest tr"' in page.text
+    assert 'hx-swap="outerHTML"' in page.text
 
     transport, calls = _upstream_transport(200)
     app.state.byok_http_client = httpx.AsyncClient(transport=transport)
@@ -199,9 +205,12 @@ async def test_test_button_flashes_ok(credential_key, client):
     finally:
         await app.state.byok_http_client.aclose()
         app.state.byok_http_client = None
-    assert report.status_code == 204
-    assert (report.headers["HX-Redirect"]
-            == "/dashboard/providers?tested=ok")
+    assert report.status_code == 200
+    # The response is the re-rendered <tr>: updated badge, swap wiring
+    # intact for the next test, and never the raw key.
+    assert "status-ok" in report.text
+    assert 'hx-swap="outerHTML"' in report.text
+    assert RAW_KEY not in report.text
     assert calls[0]["authorization"] == f"Bearer {RAW_KEY}"
 
     page = await client.get("/dashboard/providers?tested=ok")
@@ -210,7 +219,7 @@ async def test_test_button_flashes_ok(credential_key, client):
     assert RAW_KEY not in page.text
 
 
-async def test_test_button_flashes_failed(credential_key, client):
+async def test_test_button_swaps_row_in_place_failed(credential_key, client):
     await logged_in(client)
     made = await client.post("/providers/mine", json={
         "provider_name": "My Groq", "catalog_key": "groq",
@@ -226,9 +235,9 @@ async def test_test_button_flashes_failed(credential_key, client):
     finally:
         await app.state.byok_http_client.aclose()
         app.state.byok_http_client = None
-    assert report.status_code == 204
-    assert (report.headers["HX-Redirect"]
-            == "/dashboard/providers?tested=failed")
+    assert report.status_code == 200
+    assert "status-failed" in report.text
+    assert RAW_KEY not in report.text
 
     page = await client.get("/dashboard/providers?tested=failed")
     assert "Connection test failed" in page.text

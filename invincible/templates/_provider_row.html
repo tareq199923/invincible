@@ -1,0 +1,23 @@
+{# One connected-provider row, shared by the /dashboard/providers table
+   and the HTMX Test endpoint (hx-target="closest tr" +
+   hx-swap="outerHTML" re-renders exactly this partial, so a test
+   round-trip updates the status badge in place with no page reload). #}
+<tr class="provider-row" data-credential-id="{{ r.id }}">
+  <td><span class="prov-mark prov-mark-sm" style="--mark: {{ r.color }}">{{ r.provider_name[0] | upper }}</span></td>
+  <td>{{ r.provider_name }}</td>
+  <td><code>{{ r.model_id }}</code></td>
+  <td class="muted">{{ r.base_url }}</td>
+  <td class="muted">{{ r.key_masked }}</td>
+  <td><span class="status-badge status-{{ r.status }}">{{ r.status }}</span></td>
+  <td>
+    <button class="linklike test-provider"
+            hx-post="/providers/mine/{{ r.id }}/test"
+            hx-target="closest tr" hx-swap="outerHTML"
+            hx-disabled-elt="this">Test<span class="htmx-indicator"
+            aria-hidden="true">&hellip;</span></button>
+    <button class="linklike delete-provider"
+            hx-delete="/providers/mine/{{ r.id }}"
+            hx-target="closest tr" hx-swap="delete"
+            hx-confirm="Disconnect {{ r.provider_name }}?">Remove</button>
+  </td>
+</tr>

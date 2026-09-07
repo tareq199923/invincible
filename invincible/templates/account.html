@@ -48,18 +48,22 @@ login</code>): type the code it printed.</p>
   <p><strong>Copy your new API key now &mdash; it will not be shown
   again.</strong></p>
   <div class="config-block"><code class="new-key-raw">{{ new_key.raw }}</code><button class="copy-btn" type="button"
-  onclick="navigator.clipboard.writeText(document.querySelector('.new-key-raw').innerText)">Copy</button></div>
+  data-copy="{{ new_key.raw }}"
+  onclick="navigator.clipboard.writeText(this.dataset.copy)">Copy</button></div>
   {% if new_key.label %}<p class="muted">Label: {{ new_key.label }}</p>{% endif %}
 </div>
 {% endif %}
 
+<div class="table-scroll">
 <table>
-  <tr><th>Prefix</th><th>Label</th><th>Created</th><th>Status</th><th></th></tr>
+  <thead><tr><th>Prefix</th><th>Label</th><th>Created</th><th>Status</th>
+      <th></th></tr></thead>
+  <tbody>
   {% for key in api_keys %}
   <tr class="api-key-row" data-key-id="{{ key.id }}">
     <td><code>{{ key.prefix }}</code></td>
     <td>{{ key.label }}</td>
-    <td class="muted">{{ key.created_at | timeago }}</td>
+    <td class="muted" title="{{ key.created_at | absdate }}">{{ key.created_at | timeago }}</td>
     <td>{% if key.revoked_at %}revoked{% else %}active{% endif %}</td>
     <td>
       {% if not key.revoked_at %}
@@ -75,7 +79,9 @@ login</code>): type the code it printed.</p>
   <tr><td colspan="5" class="empty">No API keys yet - generate one above,
       or use <code>invincible login</code>.</td></tr>
   {% endfor %}
+  </tbody>
 </table>
+</div>
 
 <form method="post" action="/auth/logout">
   <button type="submit">Sign out</button>

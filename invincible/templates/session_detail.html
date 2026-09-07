@@ -14,7 +14,7 @@
   .failover-arrow { color: var(--faint); }
 </style>
 <h2>Session <code>{{ client_session_id }}</code></h2>
-<p class="muted">created {{ created_at | timeago }} · updated {{ updated_at | timeago }}</p>
+<p class="muted">created <span title="{{ created_at | absdate }}">{{ created_at | timeago }}</span> · updated <span title="{{ updated_at | absdate }}">{{ updated_at | timeago }}</span></p>
 
 {% if summary.interruption_note %}
 <div class="banner">{{ summary.interruption_note }}</div>
@@ -28,8 +28,10 @@
 </div>
 
 <h3>Tasks</h3>
+<div class="table-scroll">
 <table>
-  <tr><th>Task</th><th>Status</th><th>Head</th><th>Payload</th></tr>
+  <thead><tr><th>Task</th><th>Status</th><th>Head</th><th>Payload</th></tr></thead>
+  <tbody>
   {% for key, st in tasks.items() %}
   <tr class="task-row">
     <td>{{ key }}</td>
@@ -40,7 +42,9 @@
   {% else %}
   <tr><td colspan="4" class="empty">No task state tracked for this session.</td></tr>
   {% endfor %}
+  </tbody>
 </table>
+</div>
 
 {% if checkpoints %}
 <h3>Checkpoints</h3>
@@ -63,15 +67,19 @@
 {% endif %}
 
 <h3>Activity</h3>
+<div class="table-scroll">
 <table>
-  <tr><th>When</th><th>What</th></tr>
+  <thead><tr><th>When</th><th>What</th></tr></thead>
+  <tbody>
   {% for n in activity %}
   <tr class="activity-row activity-{{ n.kind }}">
-    <td class="muted">{% if n.ts %}{{ n.ts | timeago }}{% else %}-{% endif %}</td>
+    <td class="muted">{% if n.ts %}<span title="{{ n.ts | absdate }}">{{ n.ts | timeago }}</span>{% else %}-{% endif %}</td>
     <td>{{ n.label }}</td>
   </tr>
   {% else %}
   <tr><td colspan="2" class="empty">No provider attempts or state changes recorded yet.</td></tr>
   {% endfor %}
+  </tbody>
 </table>
+</div>
 {% endblock content %}

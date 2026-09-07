@@ -36,14 +36,14 @@
 <h2>Provider connections</h2>
 <p class="muted">Chat requests route only through providers you connect here.</p>
 
-{% if connected %}<p class="banner">Provider connected.</p>{% endif %}
-{% if tested == 'ok' %}<p class="banner">Connection test passed.</p>
+{% if connected %}<p class="banner-ok">Provider connected.</p>{% endif %}
+{% if tested == 'ok' %}<p class="banner-ok">Connection test passed.</p>
 {% elif tested == 'failed' %}<p class="banner">Connection test failed &mdash;
 check the API key or base URL.</p>{% endif %}
 {% if test_error %}<p class="banner">Connection test blocked: the base URL no
 longer resolves to a public address.</p>{% endif %}
 
-<h3>Connect a provider</h3>
+<h3 id="connect">Connect a provider</h3>
 <div class="cards">
   {% for c in catalog %}
   <div class="card provider-card{% if c.key in connected_keys %} connected{% endif %}">
@@ -92,28 +92,19 @@ longer resolves to a public address.</p>{% endif %}
 
 <h3>Connected providers</h3>
 {% if rows %}
+<div class="table-scroll">
 <table>
-  <tr><th></th><th>Name</th><th>Model</th><th>Base URL</th><th>Key</th><th>Status</th><th></th></tr>
+  <thead><tr><th></th><th>Name</th><th>Model</th><th>Base URL</th>
+      <th>Key</th><th>Status</th><th></th></tr></thead>
+  <tbody>
   {% for r in rows %}
-  <tr class="provider-row" data-credential-id="{{ r.id }}">
-    <td><span class="prov-mark prov-mark-sm" style="--mark: {{ r.color }}">{{ r.provider_name[0] | upper }}</span></td>
-    <td>{{ r.provider_name }}</td>
-    <td><code>{{ r.model_id }}</code></td>
-    <td class="muted">{{ r.base_url }}</td>
-    <td class="muted">{{ r.key_masked }}</td>
-    <td><span class="status-badge status-{{ r.status }}">{{ r.status }}</span></td>
-    <td>
-      <button class="linklike test-provider"
-              hx-post="/providers/mine/{{ r.id }}/test">Test</button>
-      <button class="linklike delete-provider"
-              hx-delete="/providers/mine/{{ r.id }}"
-              hx-target="closest tr" hx-swap="delete"
-              hx-confirm="Disconnect {{ r.provider_name }}?">Remove</button>
-    </td>
-  </tr>
+  {% include "_provider_row.html" %}
   {% endfor %}
+  </tbody>
 </table>
+</div>
 {% else %}
-<p class="muted empty">No providers connected yet. Connect one to start chatting.</p>
+<p class="muted empty">No providers connected yet. <a href="#connect">Connect
+your first provider &rarr;</a></p>
 {% endif %}
 {% endblock content %}

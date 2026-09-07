@@ -40,6 +40,18 @@ def timeago(value) -> str:
     return time.strftime("%Y-%m-%d", time.localtime(ts))
 
 
+def absdate(value) -> str:
+    """Machine-checkable absolute timestamp for title attributes next to
+    timeago's relative ages (hovering "3d ago" shows the real moment)."""
+    if value is None or value == "":
+        return ""
+    try:
+        ts = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+
+
 def compactnum(value) -> str:
     """Render a count with k/M suffixes for stat cards (45213 -> 45.2k)."""
     try:
@@ -58,4 +70,5 @@ def compactnum(value) -> str:
 def register_template_filters(templates) -> None:
     """Attach the shared filter set to a Jinja2Templates instance."""
     templates.env.filters["timeago"] = timeago
+    templates.env.filters["absdate"] = absdate
     templates.env.filters["compactnum"] = compactnum

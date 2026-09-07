@@ -96,15 +96,19 @@
     {% if has_key %}
     <p class="client-tab-note"><strong>Claude Code</strong> — shell profile
        (<code>~/.bashrc</code>, <code>~/.zshrc</code>) or session:</p>
-    <div class="config-block" id="claude-config">export ANTHROPIC_BASE_URL="{{ base_url }}"
+    <div class="config-block">export ANTHROPIC_BASE_URL="{{ base_url }}"
 export ANTHROPIC_AUTH_TOKEN="&lt;your inv_ key from Account&gt;"<button class="copy-btn" type="button"
-  onclick="navigator.clipboard.writeText(document.getElementById('claude-config').innerText.replace(/^.*\\n/, ''))">Copy</button></div>
+  data-copy="export ANTHROPIC_BASE_URL=&quot;{{ base_url }}&quot;
+export ANTHROPIC_AUTH_TOKEN=&quot;&lt;your inv_ key from Account&gt;&quot;"
+  onclick="navigator.clipboard.writeText(this.dataset.copy)">Copy</button></div>
 
     <p class="client-tab-note"><strong>Codex / OpenAI SDK</strong> — config
        or environment:</p>
-    <div class="config-block" id="openai-config">OPENAI_BASE_URL={{ base_url }}/v1
+    <div class="config-block">OPENAI_BASE_URL={{ base_url }}/v1
 OPENAI_API_KEY=&lt;your inv_ key from Account&gt;<button class="copy-btn" type="button"
-  onclick="navigator.clipboard.writeText(document.getElementById('openai-config').innerText.replace(/^.*\\n/, ''))">Copy</button></div>
+  data-copy="OPENAI_BASE_URL={{ base_url }}/v1
+OPENAI_API_KEY=&lt;your inv_ key from Account&gt;"
+  onclick="navigator.clipboard.writeText(this.dataset.copy)">Copy</button></div>
 
     <p class="muted">MCP tools connect separately: add
        <code>{{ base_url }}/mcp</code> in your client's MCP settings and

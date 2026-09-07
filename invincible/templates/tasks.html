@@ -3,8 +3,11 @@
 {% block content %}
 <h2>Tasks</h2>
 <p class="muted">Active task heads across all of your sessions.</p>
+<div class="table-scroll">
 <table>
-  <tr><th>Session</th><th>Task</th><th>Status</th><th>Head</th><th>Updated by</th><th>When</th></tr>
+  <thead><tr><th>Session</th><th>Task</th><th>Status</th><th>Head</th>
+      <th>Updated by</th><th>When</th></tr></thead>
+  <tbody>
   {% for t in task_heads %}
   <tr class="task-head-row">
     <td><a href="/dashboard/sessions/{{ t.session_pk }}"><code>{{ t.client_session_id }}</code></a></td>
@@ -12,10 +15,14 @@
     <td>{{ t.status }}</td>
     <td>v{{ t.version }}</td>
     <td>{{ t.updated_by }}</td>
-    <td class="muted">{{ t.updated_at | timeago }}</td>
+    <td class="muted" title="{{ t.updated_at | absdate }}">{{ t.updated_at | timeago }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="6" class="empty">No active tasks right now.</td></tr>
+  <tr><td colspan="6" class="empty">No active tasks right now. Tasks appear
+      as your sessions run &mdash; <a href="/dashboard/sessions">view
+      sessions &rarr;</a></td></tr>
   {% endfor %}
+  </tbody>
 </table>
+</div>
 {% endblock content %}

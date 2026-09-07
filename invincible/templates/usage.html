@@ -26,6 +26,8 @@
   .usage-chart .bar:hover { fill: var(--accent); }
   .usage-chart .day { fill: var(--faint); font-size: 11px;
                       font-family: var(--mono); }
+  .usage-chart .axis { fill: var(--faint); font-size: 10px;
+                       font-family: var(--mono); }
 
   .share { width: 9rem; max-width: 24vw; height: 0.5rem;
            background: var(--surface-2); border-radius: 2px;
@@ -70,6 +72,13 @@
     <line class="grid" x1="0" y1="127.5" x2="{{ chart.w }}" y2="127.5"/>
     <line class="grid" x1="0" y1="{{ chart.bars_h }}" x2="{{ chart.w }}"
           y2="{{ chart.bars_h }}"/>
+    {# y-axis calibration: tick values at each gridline (peak, 3/4, 1/2,
+       1/4, 0) so the chart reads without the "peak" caption alone #}
+    <text class="axis" x="4" y="9">{{ chart.peak | compactnum }}</text>
+    <text class="axis" x="4" y="39">{{ (chart.peak * 0.75) | round | int | compactnum }}</text>
+    <text class="axis" x="4" y="81">{{ (chart.peak * 0.5) | round | int | compactnum }}</text>
+    <text class="axis" x="4" y="124">{{ (chart.peak * 0.25) | round | int | compactnum }}</text>
+    <text class="axis" x="4" y="166">0</text>
     {% for b in chart.bars %}
     <rect class="bar" data-day="{{ b.day }}" x="{{ b.x }}" y="{{ b.y }}"
           width="{{ b.w }}" height="{{ b.h }}" rx="2">
@@ -84,14 +93,17 @@
 </div>
 {% else %}
 <p class="muted empty">No provider runs in this window. Usage lands as
-chat requests run through the gateway.</p>
+chat requests run through the gateway. <a
+href="/dashboard/setup">Get started &rarr;</a></p>
 {% endif %}
 
 <h3>By provider / model</h3>
 {% if provider_rows %}
+<div class="table-scroll">
 <table>
-  <tr><th>Provider</th><th>Model</th><th>Attempts</th><th>Failovers</th>
-      <th>In</th><th>Out</th><th>Share</th></tr>
+  <thead><tr><th>Provider</th><th>Model</th><th>Attempts</th>
+      <th>Failovers</th><th>In</th><th>Out</th><th>Share</th></tr></thead>
+  <tbody>
   {% for p in provider_rows %}
   <tr class="provider-row">
     <td>{{ p.provider_name }}</td>
@@ -107,9 +119,12 @@ chat requests run through the gateway.</p>
     </td>
   </tr>
   {% endfor %}
+  </tbody>
 </table>
+</div>
 {% else %}
 <p class="muted empty">Nothing recorded yet — usage lands as
-chat requests run through the gateway.</p>
+chat requests run through the gateway. <a
+href="/dashboard/setup">Get started &rarr;</a></p>
 {% endif %}
 {% endblock content %}
