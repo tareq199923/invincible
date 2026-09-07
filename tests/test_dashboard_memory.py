@@ -221,6 +221,12 @@ async def test_memory_page_renders_rows_search_and_delete_buttons(client):
     assert 'hx-delete="/memories/' in page.text
     assert 'data-card' not in page.text  # page, not overview
 
+    # The merged page carries the graph alongside the table.
+    assert 'id="memgraph"' in page.text
+    assert 'aria-label="Memory graph' in page.text
+    assert 'data-graph-src="/memories/graph"' in page.text
+    assert 'src="/static/graph.js"' in page.text
+
     searched = await client.get(
         "/dashboard/memory", params={"q": "postgres"})
     assert "No memories matching your search." in searched.text
@@ -236,3 +242,13 @@ async def test_overview_memories_card_counts_owned_rows(client):
     await add_memory(client, "counted once")
     again = await client.get("/dashboard")
     assert card_count(again.text, "memories") == 1
+
+
+# --- Merged page: graph asset -------------------------------------------------
+
+
+async def test_graph_js_is_served_vendored(client):
+    resp = await client.get("/static/graph.js")
+    assert resp.status_code == 200
+    assert "javascript" in resp.headers["content-type"]
+    assert "MemoryGraph" in resp.text  # not a stub, the real renderer

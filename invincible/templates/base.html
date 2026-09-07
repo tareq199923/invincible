@@ -488,10 +488,8 @@
       </div>
       <div class="nav-group">
         <span class="nav-label">memory</span>
-        <a class="nav-link{% if path == '/dashboard/memory' %} active{% endif %}"
+        <a class="nav-link{% if path.startswith('/dashboard/memory') %} active{% endif %}"
            href="/dashboard/memory">memories</a>
-        <a class="nav-link{% if path.startswith('/dashboard/memory/graph') %} active{% endif %}"
-           href="/dashboard/memory/graph">graph</a>
       </div>
       <div class="nav-group">
         <span class="nav-label">connections</span>

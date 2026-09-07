@@ -1,9 +1,23 @@
 {% extends "base.html" %}
 {% block title %}Memory - Invincible{% endblock %}
 {% block content %}
+<script src="/static/graph.js" defer></script>
 <h2>Memory</h2>
 <p class="muted">{{ total }} memor{{ 'y' if total == 1 else 'ies' }}
-{% if q %} matching <strong>{{ q }}</strong>{% endif %}</p>
+{% if q %} matching <strong>{{ q }}</strong>{% endif %}
+&middot; who saved what, when, across which projects.</p>
+
+{% if graph.summary.truncated %}
+<div class="banner">Showing the {{ graph.summary.shown }} newest of
+  {{ graph.summary.total }} memories. Filter by project or kind to see more.</div>
+{% endif %}
+
+<div class="cards">
+  <div class="card"><span class="num">{{ graph.summary.total }}</span><span class="label">Memories</span></div>
+  <div class="card"><span class="num">{{ graph.summary.by_source | length }}</span><span class="label">Sources</span></div>
+  <div class="card"><span class="num">{{ graph.summary.by_project | length }}</span><span class="label">Projects</span></div>
+  <div class="card"><span class="num">{{ graph.summary.growth_7d }}</span><span class="label">This week</span></div>
+</div>
 
 <h3>Save a memory</h3>
 <form method="post" action="/memories" class="memory-add">
@@ -15,56 +29,183 @@
   <button type="submit">Save</button>
 </form>
 
-<h3>Browse</h3>
-<form method="get" action="/dashboard/memory" class="memory-filters">
-  <input type="text" name="q" value="{{ q }}" placeholder="Search memories">
-  <select name="layer">
-    <option value="">any layer</option>
-    <option value="explicit" {% if layer == 'explicit' %}selected{% endif %}>explicit</option>
-    <option value="auto" {% if layer == 'auto' %}selected{% endif %}>auto</option>
-  </select>
-  <select name="kind">
-    <option value="">any kind</option>
-    {% for k in kinds %}<option value="{{ k }}" {% if kind == k %}selected{% endif %}>{{ k }}</option>{% endfor %}
-  </select>
-  <button type="submit">Filter</button>
-</form>
+{% set has_memory_nodes = graph.nodes | selectattr("kind", "equalto", "memory") | list %}
 
-<div class="table-scroll">
-<table>
-  <thead><tr><th>Content</th><th>Kind</th><th>Layer</th><th>Saved</th>
-      <th></th></tr></thead>
-  <tbody>
-  {% for m in memories %}
-  <tr class="memory-row" data-memory-id="{{ m.id }}">
-    <td>{{ m.content }}</td>
-    <td>{{ m.kind }}</td>
-    <td class="muted">{{ m.layer }}</td>
-    <td class="muted" title="{{ m.created_at | absdate }}">{{ m.created_at | timeago }}</td>
-    <td><button class="linklike delete-memory"
-                hx-delete="/memories/{{ m.id }}"
-                hx-target="closest tr" hx-swap="delete"
-                hx-confirm="Delete this memory?">Delete</button></td>
-  </tr>
-  {% else %}
-  <tr><td colspan="5" class="empty">No memories
-      {%- if q %} matching your search{% endif %}.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+<div class="memview-toggle">
+  <input type="radio" id="memview-graph" name="memview" checked>
+  <label for="memview-graph">graph view</label>
+  <input type="radio" id="memview-table" name="memview">
+  <label for="memview-table">table view</label>
 </div>
 
-{% if not q and total > page_size %}
-<p class="muted pagination">
-  Showing {{ offset + 1 }}&ndash;{{ [offset + page_size, total] | min }} of {{ total }}
-  {% if offset > 0 %}
-  &middot; <a href="/dashboard/memory?offset={{ offset - page_size }}{% if layer %}&layer={{ layer }}{% endif %}{% if kind %}&kind={{ kind }}{% endif %}">Previous</a>
-  {% endif %}
-  {% if offset + page_size < total %}
-  &middot; <a href="/dashboard/memory?offset={{ offset + page_size }}{% if layer %}&layer={{ layer }}{% endif %}{% if kind %}&kind={{ kind }}{% endif %}">Next</a>
-  {% endif %}
-</p>
-{% elif q %}
-<p class="muted">Search shows a single ranked page; refine terms to narrow further.</p>
-{% endif %}
+<div class="memgraph-layout">
+  <div class="memgraph-stage">
+    <h3>Graph</h3>
+    <form method="get" action="/dashboard/memory" class="memory-filters memgraph-filters">
+      <select name="kind">
+        <option value="">any kind</option>
+        {% for k in kinds %}<option value="{{ k }}" {% if kind == k %}selected{% endif %}>{{ k }}</option>{% endfor %}
+      </select>
+      <select name="project_id">
+        <option value="0">all projects</option>
+        {% for p in projects %}
+        <option value="{{ p.id }}" {% if project_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Filter</button>
+      <button type="button" id="memgraph-reset" class="memgraph-reset">Reset view</button>
+    </form>
+
+    {% if has_memory_nodes %}
+    <p class="muted">
+      {% for source, count in graph.summary.by_source.items() %}
+      <span class="legend-item">
+        <svg width="10" height="10" style="vertical-align: middle;">
+          <circle cx="5" cy="5" r="5"
+                  fill="{{ graph.layout['source:' ~ source].color if ('source:' ~ source) in graph.layout else '#999' }}"/>
+        </svg>
+        {{ source }} ({{ count }})
+      </span>&nbsp;&nbsp;
+      {% endfor %}
+    </p>
+    <svg id="memgraph" data-graph-src="/memories/graph"
+         data-graph-kind="{{ kind }}" data-graph-project="{{ project_id }}"
+         viewBox="0 0 800 560" width="100%" role="application"
+         aria-label="Memory graph - drag nodes, scroll to zoom, click a node for details">
+      <g id="memgraph-root"></g>
+    </svg>
+    <noscript><p class="muted">The interactive graph needs JavaScript; the
+      timeline and table below still work without it.</p></noscript>
+    {% else %}
+    <p class="muted">No memories{% if kind %} of kind {{ kind }}{% endif %} yet.
+      Save some above, through chat, or let a connected AI save them via MCP.</p>
+    {% endif %}
+
+    <h3>Timeline</h3>
+    <p class="muted">Oldest left, newest right, colored by source.</p>
+    <svg viewBox="0 0 800 60" width="100%" role="img" aria-label="Memory timeline">
+      <line x1="10" y1="30" x2="790" y2="30" stroke="#232b3a" stroke-width="1"/>
+      {% for point in graph.timeline_positions %}
+      <circle cx="{{ 10 + 780 * point.frac }}" cy="30" r="5" fill="{{ point.color }}">
+        <title>{{ point.label }} ({{ point.source }})</title>
+      </circle>
+      {% endfor %}
+    </svg>
+  </div>
+
+  <aside id="memdetail" class="memdetail" aria-live="polite">
+    <h4>Selected</h4>
+    <p class="muted memdetail-hint">Click a node in the graph to inspect it
+      here: content, kind, layer, confidence, source, and what links it to
+      related memories.</p>
+    <div id="memdetail-body"></div>
+    <button type="button" id="memdetail-clear" class="linklike" hidden>Clear</button>
+  </aside>
+</div>
+
+<div class="memtable">
+  <h3>Browse</h3>
+  {% include "_memory_table.html" %}
+</div>
+
+<style>
+  /* page-scoped: the graph-first split view and its toggle */
+  .memgraph-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 16rem;
+    gap: 1.2rem;
+    align-items: start;
+    margin: 1.3rem 0;
+  }
+  .memgraph-layout .memgraph-stage { min-width: 0; }
+  #memgraph {
+    background: var(--bg-raise);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: block;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+  }
+  #memgraph.panning { cursor: grabbing; }
+  #memgraph .mg-edge { stroke: var(--border); stroke-width: 1; }
+  #memgraph .mg-edge.similar_to {
+    stroke: var(--accent); stroke-opacity: 0.25;
+    stroke-dasharray: 3 3;
+  }
+  #memgraph .mg-node { cursor: pointer; }
+  #memgraph .mg-node circle { fill-opacity: 0.9; }
+  #memgraph .mg-node text {
+    font-size: 11px; fill: var(--muted);
+    text-anchor: middle; pointer-events: none;
+  }
+  #memgraph .mg-node.dimmed { opacity: 0.18; }
+  #memgraph .mg-edge.dimmed { opacity: 0.08; }
+  #memgraph .mg-node.selected circle {
+    stroke: var(--accent-ink); stroke-width: 2.5;
+  }
+  .memdetail {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.9rem 1rem;
+    position: sticky;
+    top: 1rem;
+  }
+  .memdetail-hint { margin-top: 0.4rem; }
+  #memdetail-body dl { margin: 0; font-size: 0.8rem; }
+  #memdetail-body dt {
+    color: var(--faint); font-size: 0.6rem; letter-spacing: 0.18em;
+    text-transform: uppercase; margin-top: 0.7rem;
+  }
+  #memdetail-body dd { margin: 0.15rem 0 0; overflow-wrap: anywhere; }
+  #memdetail-body .keywords code { margin-right: 0.25rem; }
+
+  .memview-toggle {
+    display: flex;
+    gap: 0.8rem;
+    align-items: center;
+    margin: 1.6rem 0 0;
+    font-size: 0.8rem;
+  }
+  .memview-toggle input {
+    position: absolute; opacity: 0; width: 1px; height: 1px;
+  }
+  .memview-toggle label {
+    padding: 0.25rem 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .memview-toggle input:focus-visible + label {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  .memview-toggle input:checked + label {
+    color: var(--accent-ink);
+    border-color: var(--accent);
+    background: var(--accent-dim);
+  }
+  .memview-toggle input:not(:checked) + label:hover {
+    color: var(--ink); border-color: var(--accent);
+  }
+  /* the toggle drives the two views without any JS: graph view when
+     the graph radio is checked, table view when the table radio is.
+     The radios precede both views in the DOM so ~ sibling selectors
+     can see them. */
+  #memview-graph:checked ~ .memgraph-layout { display: grid; }
+  #memview-graph:not(:checked) ~ .memgraph-layout { display: none; }
+  #memview-table:not(:checked) ~ .memtable { display: none; }
+  .memgraph-filters button { margin-left: 0.5rem; }
+  .memgraph-reset { margin-left: 0.5rem; }
+
+  @media (max-width: 920px) {
+    .memgraph-layout { grid-template-columns: 1fr; }
+    .memdetail { position: static; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #memgraph .mg-node, #memgraph .mg-edge { transition: none; }
+  }
+</style>
 {% endblock content %}

@@ -1,11 +1,12 @@
 # tests/test_memory_graph.py
-"""Memory-graph projection (Level 1): derived relationships only.
+"""Memory-graph projection (Level 1 + Level 2 similarity edges).
 
 Covers the projection payload (nodes/edges/timeline/summary/layout),
 the cookie-realm gate on both surfaces, cross-user invisibility,
-project-union filter semantics, the visible memory-node cap, and
-JSON/page payload parity - the data contract a future UI redesign
-will consume unchanged.
+project-union filter semantics, the visible memory-node cap, the
+similar_to derivation (shared-keyword edges + keywords field), the
+merged-page redirect, and JSON/page payload parity - the data contract
+the interactive graph.js renderer consumes unchanged.
 """
 import time
 
@@ -15,6 +16,7 @@ from invincible.core.memory_projection import (
     MEMORY_NODE_CAP,
     build_memory_projection,
     classify_source,
+    similar_edges,
     source_color,
 )
 from tests.conftest import register_account
@@ -96,8 +98,8 @@ async def test_empty_store_yields_valid_empty_projection(client):
     assert node_kinds == {"user"}  # the root, nothing else
     assert payload["edges"] == []
     assert payload["timeline"] == []
-    # The page still renders for an empty store.
-    resp = await client.get("/dashboard/memory/graph")
+    # The merged page still renders for an empty store.
+    resp = await client.get("/dashboard/memory")
     assert resp.status_code == 200
     assert "No memories" in resp.text
 
@@ -208,7 +210,7 @@ async def test_node_cap_truncates_visibly(client):
     assert len([n for n in payload["nodes"]
                 if n["kind"] == "memory"]) == MEMORY_NODE_CAP
     # The page announces the truncation instead of hiding it.
-    page = await client.get("/dashboard/memory/graph")
+    page = await client.get("/dashboard/memory")
     assert "Showing the" in page.text
 
 
@@ -238,7 +240,7 @@ async def test_json_and_page_share_the_projection(client):
     await _seed(app, uid, count=2, provenance="mcp:grok")
 
     graph = (await client.get("/memories/graph")).json()
-    page = await client.get("/dashboard/memory/graph")
+    page = await client.get("/dashboard/memory")
     assert graph["summary"]["total"] == 2
     assert page.status_code == 200
     # The page renders nodes the JSON reports: mcp:grok provenance dots.
@@ -250,3 +252,77 @@ async def test_json_and_page_share_the_projection(client):
     filtered = (await client.get(
         "/memories/graph?kind=note")).json()
     assert filtered["summary"]["total"] == 2
+
+
+# --- Level 2: similar_to derivation -------------------------------------------
+
+
+def test_similar_edges_shared_tokens():
+    tokens = {
+        "memory:1": ["uses", "postgres", "pooling"],
+        "memory:2": ["postgres", "pooling", "notes"],
+        "memory:3": ["prefers", "dark", "mode"],
+    }
+    edges = similar_edges(tokens)
+    assert edges == [
+        {"source": "memory:1", "target": "memory:2",
+         "kind": "similar_to", "weight": 2},
+    ]
+
+
+def test_similar_edges_short_contents_need_one_token():
+    # Two terse memories sharing a single token still connect.
+    tokens = {"memory:1": ["postgres"], "memory:2": ["postgres", "tips"]}
+    assert similar_edges(tokens)[0]["weight"] == 1
+
+
+def test_similar_edges_capped_per_node_and_total():
+    # One hub id: every other id shares tokens with it, but its degree
+    # can never exceed _SIMILAR_MAX_PER_NODE (4).
+    tokens = {"memory:0": ["alpha", "beta", "gamma", "delta"]}
+    for i in range(1, 20):
+        tokens[f"memory:{i}"] = ["alpha", "beta", "gamma", f"v{i}"]
+    edges = similar_edges(tokens)
+    degree: dict[str, int] = {}
+    for e in edges:
+        degree[e["source"]] = degree.get(e["source"], 0) + 1
+        degree[e["target"]] = degree.get(e["target"], 0) + 1
+    assert all(d <= 4 for d in degree.values())
+    assert len(edges) <= 200
+
+
+async def test_projection_carries_keywords_and_similar_edges(client):
+    from invincible.main import app
+
+    made, _ = await register_account(client, "similar@example.com")
+    uid = made.json()["id"]
+    store = MemoryStore(app.state.engine)
+    await store.save_memory(user_id=uid, kind="note",
+                            content="uses postgres pooling everywhere")
+    await store.save_memory(user_id=uid, kind="note",
+                            content="postgres pooling needs monitoring")
+    await store.save_memory(user_id=uid, kind="note",
+                            content="prefers dark mode editors")
+
+    payload = await build_memory_projection(
+        MemoryStore(app.state.engine),
+        ProjectService(app.state.engine), user_id=uid)
+    mems = [n for n in payload["nodes"] if n["kind"] == "memory"]
+    assert all(n["keywords"] is not None for n in mems)
+    similar = [e for e in payload["edges"] if e["kind"] == "similar_to"]
+    assert len(similar) == 1
+    assert similar[0]["weight"] >= 2
+
+
+async def test_graph_redirects_to_merged_page(client):
+    await register_account(client, "redirect@example.com")
+    resp = await client.get(
+        "/dashboard/memory/graph", params={"kind": "note"},
+        follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/dashboard/memory?kind=note"
+    # Anonymous stays gated: 401, never a redirect loop.
+    client.cookies.clear()
+    anon = await client.get(
+        "/dashboard/memory/graph", follow_redirects=False)
+    assert anon.status_code == 401

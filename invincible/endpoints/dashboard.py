@@ -278,9 +278,15 @@ async def memory_page(
     q: str = "",
     layer: str | None = None,
     kind: str | None = None,
+    project_id: int | None = None,
     offset: int = 0,
     principal: Principal = Depends(require_user_session),
 ):
+    """Merged Memory page: save form, interactive graph, and browse table.
+
+    The table honors q/layer/kind/offset exactly as before; the graph
+    honors kind/project_id (the JSON sibling /memories/graph accepts the
+    same pair, which is what graph.js re-fetches on filter changes)."""
     store = _state(request, "memory")
     layer = _checked_layer(layer)
     query = q.strip()
@@ -296,6 +302,10 @@ async def memory_page(
         rows = await store.list_for_user(
             principal.user_id, layer=layer, kind=kind,
             limit=_MEMORY_PAGE_SIZE, offset=max(0, offset))
+    graph = await _memory_graph_payload(request, principal, kind=kind,
+                                        project_id=project_id)
+    projects = await ProjectService(_engine(request)).list(
+        principal.user_id)
     return _page(
         "memory.html", request,
         user_email=await _email(_engine(request), principal),
@@ -307,6 +317,9 @@ async def memory_page(
         kinds=_MEMORY_KINDS,
         page_size=_MEMORY_PAGE_SIZE,
         offset=offset,
+        graph=graph,
+        project_id=project_id if project_id is not None else 0,
+        projects=projects,
     )
 
 
@@ -326,6 +339,8 @@ async def _memory_graph_payload(request: Request, principal: Principal,
 
     if kind is not None and kind not in _MEMORY_KINDS:
         kind = None
+    if project_id is not None and project_id <= 0:
+        project_id = None  # the form's "all projects" sentinel
     return await build_memory_projection(
         _state(request, "memory"),
         ProjectService(_engine(request)),
@@ -349,25 +364,24 @@ async def memory_graph_json(
 
 
 @router.get("/dashboard/memory/graph")
-async def memory_graph_page(
+async def memory_graph_redirect(
     request: Request,
     kind: str | None = None,
     project_id: int | None = None,
     principal: Principal = Depends(require_user_session),
 ):
-    graph = await _memory_graph_payload(request, principal, kind=kind,
-                                        project_id=project_id)
-    projects = await ProjectService(_engine(request)).list(
-        principal.user_id)
-    return _page(
-        "memory_graph.html", request,
-        user_email=await _email(_engine(request), principal),
-        graph=graph,
-        kind=kind or "",
-        kinds=_MEMORY_KINDS,
-        project_id=project_id if project_id is not None else 0,
-        projects=projects,
-    )
+    """The graph page merged into /dashboard/memory; this keeps old
+    bookmarks working. Session-gated BEFORE the redirect so anonymous
+    visitors hit the login flow, never an open redirect."""
+    target = "/dashboard/memory"
+    params = [
+        (k, v) for k, v in (("kind", kind), ("project_id", project_id))
+        if v is not None and v != ""
+    ]
+    if params:
+        from urllib.parse import urlencode
+        target = f"{target}?{urlencode(params)}"
+    return RedirectResponse(target, status_code=303)
 
 
 @router.get("/memories")

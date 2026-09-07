@@ -15,7 +15,21 @@ disposable and expected to be replaced by a future UI redesign, which
 will consume this same shape (the JSON sibling of the dashboard page).
 """
 import math
+import re
 import time
+
+# Memory-to-memory similarity (Level 2 of the derived relationships):
+# lexical overlap between contents. The edge fires when two memories
+# share >= 2 distinct content tokens (>= 1 when both contents are short).
+_SIMILAR_MIN_SHARED = 2
+_SIMILAR_SHORT_TOKENS = 3
+# Capped so the canvas never becomes a hairball: strongest edges win,
+# tie-broken deterministically on the id pair.
+_SIMILAR_MAX_PER_NODE = 4
+_SIMILAR_MAX_TOTAL = 200
+_STOPWORDS = frozenset(
+    "the a an is are and or to of for with on in this that it its i "
+    "my we our you your be been was were not no".split())
 
 # How many individual memory nodes the graph carries before truncating
 # (newest-first). Never silently dropped: ``summary.truncated`` and the
@@ -67,6 +81,54 @@ def source_color(source: str) -> str:
     """Stable palette assignment: the same source always paints the same
     color, within and across requests."""
     return _SOURCE_PALETTE[sum(ord(c) for c in source) % len(_SOURCE_PALETTE)]
+
+
+def content_tokens(content: str) -> list[str]:
+    """Lowercased content tokens for similarity: alphanumerics >= 3 chars
+    minus stopwords, order-preserving (the first ~6 double as keywords)."""
+    return [
+        t for t in re.split(r"[^a-z0-9]+", content.lower())
+        if len(t) >= 3 and t not in _STOPWORDS
+    ]
+
+
+def similar_edges(
+        tokens_by_id: dict[str, list[str]]) -> list[dict]:
+    """Memory-to-memory ``similar_to`` edges from shared tokens.
+
+    Deterministic: pairs are visited in id order, thresholds come from
+    the token lists, and the per-node/global caps sort on
+    ``(-weight, source_id, target_id)`` so the same payload always
+    carries the same edges. Weight = number of distinct shared tokens.
+    """
+    ids = sorted(tokens_by_id)
+    sets_by_id = {i: set(t) for i, t in tokens_by_id.items()}
+    candidates: list[dict] = []
+    for i, left in enumerate(ids):
+        for right in ids[i + 1:]:
+            shared = sets_by_id[left] & sets_by_id[right]
+            short = (len(sets_by_id[left]) <= _SIMILAR_SHORT_TOKENS
+                     and len(sets_by_id[right]) <= _SIMILAR_SHORT_TOKENS)
+            threshold = 1 if short else _SIMILAR_MIN_SHARED
+            if len(shared) >= threshold:
+                candidates.append({
+                    "source": left, "target": right,
+                    "kind": "similar_to", "weight": len(shared),
+                })
+    candidates.sort(key=lambda e: (
+        -e["weight"], e["source"], e["target"]))
+    degree: dict[str, int] = {}
+    edges: list[dict] = []
+    for edge in candidates:
+        if len(edges) >= _SIMILAR_MAX_TOTAL:
+            break
+        if (degree.get(edge["source"], 0) >= _SIMILAR_MAX_PER_NODE
+                or degree.get(edge["target"], 0) >= _SIMILAR_MAX_PER_NODE):
+            continue
+        degree[edge["source"]] = degree.get(edge["source"], 0) + 1
+        degree[edge["target"]] = degree.get(edge["target"], 0) + 1
+        edges.append(edge)
+    return edges
 
 
 def _layout(nodes: list[dict], edges: list[dict]) -> dict:
@@ -159,11 +221,14 @@ async def build_memory_projection(
     source_counts: dict[str, int] = {}
     kind_counts: dict[str, int] = {}
     layer_counts: dict[str, int] = {}
+    tokens_by_id: dict[str, list[str]] = {}
     oldest = newest = None
 
     for row in rows:
         mem_id = f"memory:{row['id']}"
         source = classify_source(row.get("provenance"))
+        tokens = content_tokens(row["content"])
+        tokens_by_id[mem_id] = tokens
         if row.get("project_id") is not None:
             proj_node = f"project:{row['project_id']}"
         else:
@@ -184,6 +249,7 @@ async def build_memory_projection(
             "layer": row["layer"],
             "project_id": row.get("project_id"),
             "confidence": row["confidence"],
+            "keywords": tokens[:6],
             "ts": ts,
         })
         edges.append({"source": mem_id, "target": proj_node,
@@ -211,6 +277,8 @@ async def build_memory_projection(
             "label": source,
             "count": source_counts[source],
         })
+
+    edges.extend(similar_edges(tokens_by_id))
 
     timeline = [
         n["id"] for n in sorted(
