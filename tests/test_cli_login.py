@@ -203,10 +203,12 @@ def test_login_command_reports_failure(monkeypatch):
     assert "denied" in result.output
 
 
-def test_login_defaults_to_hosted_service(monkeypatch):
+def test_login_defaults_to_hosted_service(monkeypatch, tmp_path):
     """Phase 11: the flexx-style default - plain `invincible login`
     pairs with the hosted service, no URL, no questions. Self-hosters
-    opt out with --server (pinned separately by every other test)."""
+    opt out with --server (pinned separately by every other test).
+    --config stays on tmp_path so the suite never overwrites the real
+    ~/.invincible/config.json with the fake key."""
     captured: dict = {}
 
     async def _fake_pair(base_url, **kwargs):
@@ -216,7 +218,8 @@ def test_login_defaults_to_hosted_service(monkeypatch):
     monkeypatch.setattr("invincible.cli._pair_device", _fake_pair)
     monkeypatch.setattr("invincible.cli._open_browser", lambda url: None)
     runner = CliRunner()
-    result = runner.invoke(login, [])
+    result = runner.invoke(login, ["--config",
+                                   str(tmp_path / "config.json")])
     assert result.exit_code == 0, result.output
     assert captured["base_url"] == "https://invincible-ai.me"
 
