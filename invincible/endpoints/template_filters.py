@@ -6,7 +6,10 @@ register these through register_template_filters so every page sees the
 same presentation helpers. Filters are presentation-only: they never
 touch stored values, they just render them.
 """
+import hashlib
 import time
+from functools import lru_cache
+from pathlib import Path
 
 from invincible.core.memory_projection import source_color as _source_color
 
@@ -14,6 +17,22 @@ _MINUTE = 60
 _HOUR = 60 * _MINUTE
 _DAY = 24 * _HOUR
 _MONTH = 30 * _DAY
+
+
+@lru_cache(maxsize=16)
+def _asset_rev(filename: str) -> str:
+    """Content hash of a vendored static asset, for cache-busting URLs.
+
+    StaticFiles sends no Cache-Control, so browsers heuristically cache
+    /static/* across deploys; a ``?v=<hash>`` query changes the cache
+    key exactly when the file content changes. Computed once at import.
+    """
+    path = (Path(__file__).resolve().parent.parent
+            / "templates" / "static" / filename)
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:10]
+    except OSError:  # packaged without the asset: any stable value
+        return "0"
 
 
 def timeago(value) -> str:
@@ -82,3 +101,5 @@ def register_template_filters(templates) -> None:
     templates.env.filters["absdate"] = absdate
     templates.env.filters["compactnum"] = compactnum
     templates.env.filters["source_color"] = source_color
+    # Cache-busting revision for vendored assets the templates reference.
+    templates.env.globals["asset_rev"] = lambda name: _asset_rev(name)

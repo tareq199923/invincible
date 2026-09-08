@@ -245,7 +245,8 @@ async def test_memory_page_renders_rows_search_and_delete_buttons(client):
     assert 'id="memgraph"' in page.text
     assert 'aria-label="Memory graph' in page.text
     assert 'data-graph-src="/memories/graph"' in page.text
-    assert 'src="/static/graph.js"' in page.text
+    # Cache-busted asset URL: graph.js changes bust browser caches.
+    assert 'src="/static/graph.js?v=' in page.text
 
     # View toggle: the driving selectors must hang off .memview-toggle
     # (:has) — the radios are nested inside it, so bare
