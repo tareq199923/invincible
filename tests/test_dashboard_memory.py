@@ -247,6 +247,17 @@ async def test_memory_page_renders_rows_search_and_delete_buttons(client):
     assert 'data-graph-src="/memories/graph"' in page.text
     assert 'src="/static/graph.js"' in page.text
 
+    # The filter form's "any layer"/"any kind" options submit empty
+    # strings; the page must treat them as no-filter, not 400 (layer)
+    # or a silently-empty table (kind).
+    any_all = await client.get(
+        "/dashboard/memory", params={"q": "", "layer": "", "kind": ""})
+    assert any_all.status_code == 200
+    assert "visible on the page" in any_all.text
+    api = await client.get("/memories", params={"layer": "", "kind": ""})
+    assert api.status_code == 200
+    assert api.json()["total"] == 3
+
     searched = await client.get(
         "/dashboard/memory", params={"q": "postgres"})
     assert "No memories matching your search." in searched.text

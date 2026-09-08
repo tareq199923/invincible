@@ -90,14 +90,16 @@ def _state(request: Request, attr: str):
 
 
 def _checked_layer(layer: str | None) -> str | None:
-    if layer is not None and layer not in _MEMORY_LAYERS:
+    # "" is the form's "any layer" option, not an invalid value - treat
+    # it as no-filter and collapse to None so the store never sees it.
+    if layer and layer not in _MEMORY_LAYERS:
         raise HTTPException(
             status_code=400,
             detail={"error": {"message": "layer must be 'explicit' or "
                                          "'auto'.",
                               "type": "invalid_request_error"}},
         )
-    return layer
+    return layer or None
 
 
 async def _email(engine, principal: Principal) -> str:
@@ -290,6 +292,7 @@ async def memory_page(
     same pair, which is what graph.js re-fetches on filter changes)."""
     store = _state(request, "memory")
     layer = _checked_layer(layer)
+    kind = kind or None  # "" is the form's "any kind" option
     query = q.strip()
     if query:
         rows = await store.search_for_user(
@@ -399,6 +402,7 @@ async def list_memories(
 ):
     store = _state(request, "memory")
     layer = _checked_layer(layer)
+    kind = kind or None  # "" is the form's "any kind" option
     query = q.strip()
     if query:
         # Lexical search: single ranked page, no offset pagination.
