@@ -247,6 +247,12 @@ async def test_memory_page_renders_rows_search_and_delete_buttons(client):
     assert 'data-graph-src="/memories/graph"' in page.text
     assert 'src="/static/graph.js"' in page.text
 
+    # View toggle: the driving selectors must hang off .memview-toggle
+    # (:has) — the radios are nested inside it, so bare
+    # "#memview-...:checked ~ ..." sibling selectors match nothing.
+    assert 'class="memview-toggle"' in page.text
+    assert ".memview-toggle:has(" in page.text
+
     # The filter form's "any layer"/"any kind" options submit empty
     # strings; the page must treat them as no-filter, not 400 (layer)
     # or a silently-empty table (kind).

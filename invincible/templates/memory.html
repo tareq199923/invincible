@@ -192,11 +192,15 @@
   }
   /* the toggle drives the two views without any JS: graph view when
      the graph radio is checked, table view when the table radio is.
-     The radios precede both views in the DOM so ~ sibling selectors
-     can see them. */
-  #memview-graph:checked ~ .memgraph-layout { display: grid; }
-  #memview-graph:not(:checked) ~ .memgraph-layout { display: none; }
-  #memview-table:not(:checked) ~ .memtable { display: none; }
+     The radios sit INSIDE .memview-toggle, so the ~ sibling selectors
+     hang off the wrapper (a true sibling of both views) combined with
+     :has() to look at its checked radio. */
+  .memview-toggle:has(#memview-graph:not(:checked)) ~ .memgraph-layout {
+    display: none;
+  }
+  .memview-toggle:has(#memview-table:not(:checked)) ~ .memtable {
+    display: none;
+  }
   .memgraph-filters button { margin-left: 0.5rem; }
   .memgraph-reset { margin-left: 0.5rem; }
 
