@@ -27,6 +27,7 @@ from invincible.core.accounts import (
 )
 from invincible.core.identity import ApiKeyStore
 from invincible.core.memory import MAX_CONTENT_CHARS, MEMORY_KINDS
+from invincible.core.memory_projection import classify_source
 from invincible.core.principal import Principal
 from invincible.core.projection import (
     build_session_projection,
@@ -302,6 +303,8 @@ async def memory_page(
         rows = await store.list_for_user(
             principal.user_id, layer=layer, kind=kind,
             limit=_MEMORY_PAGE_SIZE, offset=max(0, offset))
+    for row in rows:  # display-only: collapse provenance for the table
+        row["source"] = classify_source(row.get("provenance"))
     graph = await _memory_graph_payload(request, principal, kind=kind,
                                         project_id=project_id)
     projects = await ProjectService(_engine(request)).list(

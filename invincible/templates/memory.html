@@ -200,6 +200,36 @@
   .memgraph-filters button { margin-left: 0.5rem; }
   .memgraph-reset { margin-left: 0.5rem; }
 
+  /* table pass: content previews, source dots (same palette hash as
+     the graph/legend), and a real-looking delete button */
+  .memtable .memory-content { overflow-wrap: anywhere; }
+  .memtable .src-pill {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    font-size: 0.82rem; color: var(--muted);
+    white-space: nowrap;
+  }
+  .memtable .src-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    display: inline-block; flex: none;
+    box-shadow: 0 0 0 1px var(--border);
+  }
+  .memtable .btn-danger-sm {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: var(--radius);
+    padding: 0.25rem 0.8rem;
+    cursor: pointer;
+    font-size: 0.78rem;
+    margin: 0;
+    transition: border-color 0.12s, color 0.12s, background 0.12s;
+  }
+  .memtable .btn-danger-sm:hover {
+    border-color: var(--err);
+    color: var(--err);
+    background: color-mix(in srgb, var(--err) 8%, transparent);
+  }
+
   @media (max-width: 920px) {
     .memgraph-layout { grid-template-columns: 1fr; }
     .memdetail { position: static; }

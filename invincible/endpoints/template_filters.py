@@ -8,6 +8,8 @@ touch stored values, they just render them.
 """
 import time
 
+from invincible.core.memory_projection import source_color as _source_color
+
 _MINUTE = 60
 _HOUR = 60 * _MINUTE
 _DAY = 24 * _HOUR
@@ -67,8 +69,16 @@ def compactnum(value) -> str:
     return f"{sign}{n / 1_000_000:.1f}M"
 
 
+def source_color(value) -> str:
+    """Source label -> the graph palette color: the memory table's dot
+    uses the same ord-sum hash as the graph nodes and the legend, so a
+    source is the same color everywhere it renders."""
+    return _source_color(str(value or "dashboard"))
+
+
 def register_template_filters(templates) -> None:
     """Attach the shared filter set to a Jinja2Templates instance."""
     templates.env.filters["timeago"] = timeago
     templates.env.filters["absdate"] = absdate
     templates.env.filters["compactnum"] = compactnum
+    templates.env.filters["source_color"] = source_color

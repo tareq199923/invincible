@@ -213,6 +213,8 @@ async def test_memory_page_renders_rows_search_and_delete_buttons(client):
     await app.state.memory.save_memory(
         user_id=uid, content="quiet auto row", layer="auto",
         confidence=0.6)
+    long = ("portfolio roadmap discussion " * 5).strip()  # > 80 chars
+    await add_memory(client, long)
 
     page = await client.get("/dashboard/memory")
     assert page.status_code == 200
@@ -220,6 +222,20 @@ async def test_memory_page_renders_rows_search_and_delete_buttons(client):
     assert "quiet auto row" in page.text
     assert 'hx-delete="/memories/' in page.text
     assert 'data-card' not in page.text  # page, not overview
+
+    # Content column truncates long rows: the visible cell is the
+    # 80-char prefix + entity ellipsis; the full text appears only
+    # once (the hover title), the prefix twice (cell + title).
+    assert long[:80] + "&hellip;" in page.text
+    assert page.text.count(long) == 1
+
+    # Source column: colored dot + label, same source as the save form.
+    assert 'class="src-dot"' in page.text
+    assert "dashboard" in page.text
+
+    # Delete is a compact outline button now, not a text link.
+    assert 'class="btn-danger-sm delete-memory"' in page.text
+    assert "linklike delete-memory" not in page.text
 
     # The merged page carries the graph alongside the table.
     assert 'id="memgraph"' in page.text
