@@ -19,11 +19,14 @@
 <table>
   <thead><tr><th>Content</th><th>Kind</th><th>Layer</th><th>Source</th>
       <th>Saved</th><th></th></tr></thead>
-  <tbody>
+  <tbody id="memtable-body">
   {% for m in memories %}
   <tr class="memory-row" data-memory-id="{{ m.id }}">
-    <td class="memory-content" title="{{ m.content }}">{{
-        m.content[:80] }}{% if m.content | length > 80 %}&hellip;{% endif %}</td>
+    <td class="memory-content" title="Click to expand/collapse"><div
+        class="mem-preview" aria-expanded="false">{{
+        m.content[:80] }}{% if m.content | length > 80 %}&hellip;{% endif
+        %}</div>{% if m.content | length > 80 %}<div class="mem-full"
+        hidden>{{ m.content }}</div>{% endif %}</td>
     <td>{{ m.kind }}</td>
     <td class="muted">{{ m.layer }}</td>
     <td><span class="src-pill"><span class="src-dot"

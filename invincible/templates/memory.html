@@ -202,7 +202,12 @@
 
   /* table pass: content previews, source dots (same palette hash as
      the graph/legend), and a real-looking delete button */
-  .memtable .memory-content { overflow-wrap: anywhere; }
+  .memtable .memory-content { overflow-wrap: anywhere; cursor: pointer; }
+  .memtable .mem-full {
+    white-space: pre-wrap;
+    color: var(--ink);
+    margin-top: 0.3rem;
+  }
   .memtable .src-pill {
     display: inline-flex; align-items: center; gap: 0.35rem;
     font-size: 0.82rem; color: var(--muted);
@@ -238,4 +243,21 @@
     #memgraph .mg-node, #memgraph .mg-edge { transition: none; }
   }
 </style>
+
+<script>
+  // click-to-expand for long memory rows: delegated on the tbody so it
+  // covers every row; short rows have no .mem-full and are inert. The
+  // Delete button sits in a different td, outside .memory-content, so
+  // it never triggers a toggle.
+  document.getElementById("memtable-body")?.addEventListener("click", (e) => {
+    const cell = e.target.closest(".memory-content");
+    if (!cell) return;
+    const full = cell.querySelector(".mem-full");
+    if (!full) return;
+    const preview = cell.querySelector(".mem-preview");
+    full.hidden = !full.hidden;
+    preview.hidden = !full.hidden;
+    preview.setAttribute("aria-expanded", String(!full.hidden));
+  });
+</script>
 {% endblock content %}

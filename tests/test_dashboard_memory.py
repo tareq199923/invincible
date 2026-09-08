@@ -223,11 +223,15 @@ async def test_memory_page_renders_rows_search_and_delete_buttons(client):
     assert 'hx-delete="/memories/' in page.text
     assert 'data-card' not in page.text  # page, not overview
 
-    # Content column truncates long rows: the visible cell is the
-    # 80-char prefix + entity ellipsis; the full text appears only
-    # once (the hover title), the prefix twice (cell + title).
+    # Content column: long rows carry a preview + a hidden full-text
+    # div (click-to-expand); short rows render plainly. The full text
+    # appears exactly once (the hidden .mem-full div — the hover title
+    # is now just an expand hint, so no tooltip duplicate).
     assert long[:80] + "&hellip;" in page.text
     assert page.text.count(long) == 1
+    assert 'class="mem-preview"' in page.text
+    assert 'class="mem-full"' in page.text
+    assert f'title="{long}"' not in page.text
 
     # Source column: colored dot + label, same source as the save form.
     assert 'class="src-dot"' in page.text
