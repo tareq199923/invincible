@@ -153,6 +153,23 @@ async def test_multi_project_multi_source_shapes(client):
         mem["source"])
 
 
+async def test_memory_nodes_carry_full_content(client):
+    """Hover preview cards need the full text; the display label stays
+    the 80-char prefix the table also uses."""
+    from invincible.main import app
+
+    made, _ = await register_account(client, "hoverer@example.com")
+    uid = made.json()["id"]
+    long = ("portfolio roadmap discussion " * 5).strip()  # > 80 chars
+    store = MemoryStore(app.state.engine)
+    await store.save_memory(user_id=uid, content=long)
+    payload = await build_memory_projection(
+        store, ProjectService(app.state.engine), user_id=uid)
+    mem = next(n for n in payload["nodes"] if n["kind"] == "memory")
+    assert mem["content"] == long       # full text for the preview card
+    assert mem["label"] == long[:80]    # display string stays truncated
+
+
 async def test_cross_user_isolation(client):
     from invincible.main import app
 

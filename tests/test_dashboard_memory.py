@@ -289,3 +289,8 @@ async def test_graph_js_is_served_vendored(client):
     assert resp.status_code == 200
     assert "javascript" in resp.headers["content-type"]
     assert "MemoryGraph" in resp.text  # not a stub, the real renderer
+    # Obsidian-style behaviors: hover preview card, local graph mode,
+    # zoom-faded memory labels.
+    assert "memgraph-tip" in resp.text
+    assert "local-hidden" in resp.text
+    assert "mem-label" in resp.text

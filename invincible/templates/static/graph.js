@@ -9,10 +9,13 @@
 // of the console.
 //
 // Interaction: drag nodes, drag the canvas to pan, wheel to zoom,
-// hover highlights the neighborhood, click (or keyboard-select) a
-// node to inspect it in the side panel, Esc clears the selection.
-// prefers-reduced-motion skips the animation loop: the simulation
-// still runs, but synchronously and without tweening.
+// hover a memory node for a full-content preview card, click (or
+// keyboard-select) a node to inspect it in the side panel AND collapse
+// the graph to its local neighborhood (Obsidian-style local graph;
+// Esc, Clear, or Reset view returns to the global graph). Memory node
+// labels fade in as you zoom in. prefers-reduced-motion skips the
+// animation loop: the simulation still runs, but synchronously and
+// without tweening.
 (function () {
   "use strict";
 
@@ -81,8 +84,8 @@
       n = payload.nodes[i];
       var extra = 0;
       this.nodes.push({
-        id: n.id, kind: n.kind, label: n.label, source: n.source,
-        memory_kind: n.memory_kind, layer: n.layer,
+        id: n.id, kind: n.kind, label: n.label, content: n.content,
+        source: n.source, memory_kind: n.memory_kind, layer: n.layer,
         confidence: n.confidence, keywords: n.keywords, count: n.count,
         ts: n.ts, similar: extra, vx: 0, vy: 0, el: null, labelEl: null
       });
@@ -179,6 +182,13 @@
         n.labelEl.textContent = n.label + (
           n.kind === "project" ? " (" + n.count + ")" : "");
         g.appendChild(n.labelEl);
+      } else if (n.kind === "memory") {
+        // Always-on label (Obsidian-style): content prefix that fades
+        // in with zoom via the --mem-label-opacity custom property.
+        n.labelEl = el("text", { "class": "mem-label", y: r + 12 });
+        n.labelEl.textContent = (n.content || n.label).slice(0, 26) +
+          ((n.content || n.label).length > 26 ? "…" : "");
+        g.appendChild(n.labelEl);
       }
       n.el = g;
       this.root.appendChild(g);
@@ -263,6 +273,12 @@
     this.root.setAttribute(
       "transform",
       "translate(" + v.x + "," + v.y + ") scale(" + v.k + ")");
+    // Obsidian-style label fade: memory labels appear as you zoom in
+    // (0 at default zoom, fully visible at ~2.5x). Project/user labels
+    // are always on.
+    this.root.style.setProperty(
+      "--mem-label-opacity",
+      String(Math.max(0, Math.min(1, (v.k - 1) / 1.5))));
     for (var i = 0; i < this.edges.length; i++) {
       var e = this.edges[i];
       e.el.setAttribute("x1", e.source.x); e.el.setAttribute("y1", e.source.y);
@@ -285,18 +301,73 @@
     var focus = this._focusId();
     var keep = null;
     if (focus) keep = this.adj[focus] || {};
+    // Local graph mode (Obsidian-style): when a node is selected, only
+    // it and its direct neighbors stay visible; the rest hide. Cleared
+    // by Esc / Clear / Reset view via select(null).
+    var local = this.local;
+    var localKeep = local ? this.adj[local] || {} : null;
     var i;
     for (i = 0; i < this.nodes.length; i++) {
       var n = this.nodes[i];
       var dim = focus && n.id !== focus && !keep[n.id];
       n.el.classList.toggle("dimmed", !!dim);
       n.el.classList.toggle("selected", n.id === focus);
+      n.el.classList.toggle(
+        "local-hidden",
+        !!(localKeep && n.id !== local && !localKeep[n.id]));
     }
     for (i = 0; i < this.edges.length; i++) {
       var e = this.edges[i];
       var on = !focus || e.source.id === focus || e.target.id === focus;
       e.el.classList.toggle("dimmed", !on);
+      e.el.classList.toggle(
+        "local-hidden",
+        !!(local && e.source.id !== local && e.target.id !== local));
     }
+  };
+
+  // --- hover preview card (Obsidian page preview) ---------------------------
+
+  MemoryGraph.prototype._tipEl = function () {
+    if (this.tip) return this.tip;
+    var stage = this.svg.closest(".memgraph-stage");
+    if (!stage) return null;
+    var tip = document.createElement("div");
+    tip.id = "memgraph-tip";
+    tip.hidden = true;
+    var body = document.createElement("div");
+    body.className = "tip-content";
+    var meta = document.createElement("div");
+    meta.className = "tip-meta";
+    tip.appendChild(body);
+    tip.appendChild(meta);
+    stage.appendChild(tip);
+    this.tip = tip;
+    this.tipBody = body;
+    this.tipMeta = meta;
+    return tip;
+  };
+
+  MemoryGraph.prototype._showTip = function (n, clientX, clientY) {
+    if (!n || n.kind !== "memory") {
+      if (this.tip) this.tip.hidden = true;
+      return;
+    }
+    var tip = this._tipEl();
+    if (!tip) return;
+    // textContent only - saved memory text is never trusted markup.
+    this.tipBody.textContent = n.content || n.label;
+    this.tipMeta.textContent =
+      n.memory_kind + " · " + n.layer + " · " + n.source;
+    tip.hidden = false;
+    var rect = tip.parentNode.getBoundingClientRect();
+    var left = clientX - rect.left + 14;
+    var top = clientY - rect.top + 14;
+    // Keep the card inside the stage box.
+    tip.style.left =
+      Math.max(4, Math.min(left, rect.width - tip.offsetWidth - 4)) + "px";
+    tip.style.top =
+      Math.max(4, Math.min(top, rect.height - tip.offsetHeight - 4)) + "px";
   };
 
   // --- interaction ------------------------------------------------------------
@@ -334,6 +405,7 @@
 
     this.svg.addEventListener("pointermove", function (evt) {
       if (self.drag) {
+        self._showTip(null);
         // Screen -> viewBox coords (approximate: scale by the ratio of
         // viewBox width to client width, then undo the view transform).
         var rect = self.svg.getBoundingClientRect();
@@ -347,6 +419,7 @@
         return;
       }
       if (self.panning) {
+        self._showTip(null);
         var r2 = self.svg.getBoundingClientRect();
         var kx = 800 / r2.width, ky = 560 / r2.height;
         self.view.x = self.panFrom.vx + (evt.clientX - self.panFrom.x) * kx;
@@ -359,6 +432,7 @@
         self.hovered = hov;
         self._highlight();
       }
+      self._showTip(hov, evt.clientX, evt.clientY);
     });
 
     function endDrag() {
@@ -393,6 +467,23 @@
       var n = nodeFor(evt);
       if (n) self.select(n);
     });
+    this.svg.addEventListener("pointerleave", function () {
+      self._showTip(null);
+    });
+    // Keyboard: show the preview card anchored to the focused node.
+    this.svg.addEventListener("focusin", function (evt) {
+      var n = nodeFor(evt);
+      if (!n) return;
+      var rect = self.svg.getBoundingClientRect();
+      var px = rect.left +
+        (n.x * self.view.k + self.view.x) / 800 * rect.width;
+      var py = rect.top +
+        (n.y * self.view.k + self.view.y) / 560 * rect.height;
+      self._showTip(n, px, py);
+    });
+    this.svg.addEventListener("focusout", function () {
+      self._showTip(null);
+    });
     this.svg.addEventListener("keydown", function (evt) {
       if (evt.key === "Escape") {
         self.select(null);
@@ -404,6 +495,7 @@
 
     var reset = document.getElementById("memgraph-reset");
     if (reset) reset.addEventListener("click", function () {
+      self.select(null);  // exits local graph mode + clears the panel
       self.view = { x: 0, y: 0, k: 1 };
       self._seedPositions();
       self._tick(300);
@@ -416,6 +508,8 @@
 
   MemoryGraph.prototype.select = function (n) {
     this.selected = n;
+    this.local = n ? n.id : null;  // local graph mode follows selection
+    this._showTip(null);
     this._highlight();
     var body = document.getElementById("memdetail-body");
     var clear = document.getElementById("memdetail-clear");

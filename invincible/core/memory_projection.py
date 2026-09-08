@@ -246,6 +246,7 @@ async def build_memory_projection(
             "id": mem_id,
             "kind": "memory",
             "label": row["content"][:80],
+            "content": row["content"],  # full text for hover previews
             "source": source,
             "memory_kind": row["kind"],
             "layer": row["layer"],

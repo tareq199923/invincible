@@ -117,7 +117,7 @@
     align-items: start;
     margin: 1.3rem 0;
   }
-  .memgraph-layout .memgraph-stage { min-width: 0; }
+  .memgraph-layout .memgraph-stage { min-width: 0; position: relative; }
   #memgraph {
     background: var(--bg-raise);
     border: 1px solid var(--border);
@@ -138,6 +138,32 @@
   #memgraph .mg-node text {
     font-size: 11px; fill: var(--muted);
     text-anchor: middle; pointer-events: none;
+  }
+  /* Obsidian-style: memory node labels fade in with zoom (the renderer
+     sets --mem-label-opacity from the view scale); project/user labels
+     stay always-on. */
+  #memgraph .mg-node text.mem-label {
+    font-size: 10px;
+    opacity: var(--mem-label-opacity, 0);
+    transition: opacity 0.15s;
+  }
+  /* Local graph mode: nodes/edges outside the selected neighborhood
+     hide entirely (not just dim). */
+  #memgraph .local-hidden { display: none; }
+  /* Hover preview card for memory nodes (Obsidian page preview). */
+  #memgraph-tip {
+    position: absolute; z-index: 5; max-width: 22rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.7rem;
+    font-size: 0.78rem; color: var(--ink);
+    white-space: pre-wrap; overflow-wrap: anywhere;
+    pointer-events: none;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  }
+  #memgraph-tip .tip-meta {
+    color: var(--muted); font-size: 0.68rem; margin-top: 0.25rem;
   }
   #memgraph .mg-node.dimmed { opacity: 0.18; }
   #memgraph .mg-edge.dimmed { opacity: 0.08; }
@@ -245,6 +271,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     #memgraph .mg-node, #memgraph .mg-edge { transition: none; }
+    #memgraph .mg-node text.mem-label { transition: none; }
   }
 </style>
 
