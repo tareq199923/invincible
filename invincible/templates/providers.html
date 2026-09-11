@@ -34,7 +34,10 @@
 </style>
 
 <h2>Provider connections</h2>
-<p class="muted">Chat requests route only through providers you connect here.</p>
+<p class="muted">Chat requests route only through providers you connect
+here. The model you save per connection is just the default &mdash; any
+request that names a <code>model</code> is routed with that model
+instead, so you can use any model your provider offers.</p>
 
 {% if connected %}<p class="banner-ok">Provider connected.</p>{% endif %}
 {% if tested == 'ok' %}<p class="banner-ok">Connection test passed.</p>
@@ -64,7 +67,8 @@ longer resolves to a public address.</p>{% endif %}
       <input type="text" name="provider_name" value="{{ c.label }}"
              maxlength="80" aria-label="Connection name" required>
       <input type="text" name="model_id" value="{{ c.model_id }}"
-             aria-label="Model id" required>
+             aria-label="Model id" title="Default model - requests naming a model override this"
+             required>
       <input type="text" name="base_url" value="{{ c.base_url }}"
              aria-label="Base URL" required>
       <input type="password" name="api_key" placeholder="API key"
@@ -83,7 +87,9 @@ longer resolves to a public address.</p>{% endif %}
            maxlength="80" required>
     <input type="text" name="base_url" placeholder="https://api.example.com/v1"
            required>
-    <input type="text" name="model_id" placeholder="model id" required>
+    <input type="text" name="model_id" placeholder="default model id"
+           title="Default model - requests naming a model override this"
+           required>
     <input type="password" name="api_key" placeholder="API key"
            autocomplete="off" required>
     <button type="submit">Connect</button>

@@ -510,6 +510,14 @@ class Router:
         list raises :class:`NoCredentialsConfiguredError` - connecting a
         provider is expected of the user, not an operator emergency.
 
+        BYOK model override: a request whose ``model`` is set sends that
+        model to every credential in the user's chain, overriding each
+        stored ``model_id`` (the stored value remains the default when the
+        request omits ``model``). A provider without the model 404s and
+        failover moves on - no silent substitution. The operator pool
+        path keeps its historical semantics: ``model`` is a soft ordering
+        hint only.
+
         Yields ``(result, route_info)`` where ``result`` is the parsed JSON
         body (``stream=False``) or ``(first_chunk, tail)`` (``stream=True``)
         and ``route_info`` describes the winning attempt (request_id,
@@ -527,6 +535,11 @@ class Router:
                     byok_candidates, self.health_tracker, AUTO_ROUTING, model)
             except PinnedUnavailableError as e:
                 raise AllProvidersFailedError(str(e)) from None
+            if model:
+                # BYOK per-request model override: the client's requested
+                # model, when present, wins over each credential's stored
+                # default for every candidate in the chain.
+                candidates = [{**c, "model_id": model} for c in candidates]
         else:
             candidates = self._candidates(model)
         for provider in candidates:

@@ -6,8 +6,11 @@ that user's connected credentials - the operator's shared registry
 providers are provably never called (counting MockTransport handlers).
 Zero connected credentials fail fast with a clean 400. The legacy
 gateway-key flow is completely unaffected. Both /v1/chat/completions
-and /v1/messages are covered.
+and /v1/messages are covered. The request's model overrides the
+credential's stored default on both surfaces.
 """
+import json
+
 import httpx
 import pytest
 from cryptography.fernet import Fernet
@@ -51,6 +54,21 @@ def counting(response):
 
     def handler(request):
         calls.append(str(request.url))
+        if isinstance(response, httpx.Response):
+            return response
+        return httpx.Response(200, json=response)
+
+    return calls, handler
+
+
+def capturing(response):
+    """Body-capturing MockTransport handler: records the parsed JSON body
+    of each request, for asserting which model the gateway sent upstream.
+    Same response semantics as :func:`counting`."""
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content))
         if isinstance(response, httpx.Response):
             return response
         return httpx.Response(200, json=response)
@@ -284,4 +302,76 @@ async def test_anthropic_zero_credentials_fail_fast_clean_400(
     assert body["type"] == "error"
     assert body["error"]["type"] == "invalid_request_error"
     assert "No AI provider" in body["error"]["message"]
+    assert_operator_pool_untouched(counters)
+
+
+# --- per-request model override -------------------------------------------------
+
+
+async def test_byok_chat_model_overrides_stored_default(
+    client, router_setter
+):
+    """A model in the request reaches the upstream provider verbatim and
+    is reported back via x-invincible-model - the stored u1-model is
+    only the default."""
+    handlers, counters = transport_handlers()
+    calls, handler = capturing(provider_body("u1"))
+    handlers[U1] = handler
+    counters[U1] = calls
+    router_setter(handlers)
+    _uid, raw = await byok_user(client, "ovr@example.com",
+                                credential_count=1)
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={"model": "llama-3.3-70b-versatile",
+              "messages": [{"role": "user", "content": "hi"}]},
+        headers=chat_headers(raw))
+    assert resp.status_code == 200, resp.text
+    assert calls[0]["model"] == "llama-3.3-70b-versatile"
+    assert resp.headers["x-invincible-model"] == "llama-3.3-70b-versatile"
+    assert_operator_pool_untouched(counters)
+
+
+async def test_byok_chat_without_model_uses_stored_default(
+    client, router_setter
+):
+    """model is optional on /v1/chat/completions; omitting it routes
+    with the credential's stored default."""
+    handlers, counters = transport_handlers()
+    calls, handler = capturing(provider_body("u1"))
+    handlers[U1] = handler
+    counters[U1] = calls
+    router_setter(handlers)
+    _uid, raw = await byok_user(client, "dflt@example.com",
+                                credential_count=1)
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json=CHAT_BODY, headers=chat_headers(raw))
+    assert resp.status_code == 200, resp.text
+    assert calls[0]["model"] == "u1-model"
+    assert resp.headers["x-invincible-model"] == "u1-model"
+
+
+async def test_anthropic_messages_model_overrides_stored_default(
+    client, router_setter
+):
+    """The anthropic-compat surface honors the request model too - the
+    client's choice wins over the credential's stored default."""
+    handlers, counters = transport_handlers()
+    calls, handler = capturing(provider_body("u1"))
+    handlers[U1] = handler
+    counters[U1] = calls
+    router_setter(handlers)
+    _uid, raw = await byok_user(client, "anthovr@example.com",
+                                credential_count=1)
+
+    resp = await client.post(
+        "/v1/messages",
+        json={"model": "custom-anthropic-model", "max_tokens": 16,
+              "messages": [{"role": "user", "content": "hi"}]},
+        headers=chat_headers(raw))
+    assert resp.status_code == 200, resp.text
+    assert calls[0]["model"] == "custom-anthropic-model"
     assert_operator_pool_untouched(counters)

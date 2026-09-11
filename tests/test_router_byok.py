@@ -8,7 +8,12 @@ clean NoCredentialsConfiguredError; failover still works across the
 user's own set; cooldown state is scoped per-credential (same-label
 providers never share it); an unusable credential skips like a missing
 key; the legacy (no-byok-args) path is byte-for-byte the old behavior.
+The request's ``model`` overrides each credential's stored default for
+BYOK requests (applied to every failover candidate), while the operator
+pool keeps model-as-ordering-hint only.
 """
+import json
+
 import httpx
 import pytest
 
@@ -39,6 +44,21 @@ def counting(response):
 
     def handler(request):
         calls.append(str(request.url))
+        if isinstance(response, httpx.Response):
+            return response
+        return httpx.Response(200, json=response)
+
+    return calls, handler
+
+
+def capturing(response):
+    """Body-capturing MockTransport handler: records the parsed JSON body
+    of each request, for asserting which model the gateway actually sent
+    upstream. Same response semantics as :func:`counting`."""
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content))
         if isinstance(response, httpx.Response):
             return response
         return httpx.Response(200, json=response)
@@ -171,3 +191,73 @@ async def test_streaming_routes_through_user_provider(make_router):
     )
     assert "hey" in text
     assert len(by_calls) == 1
+
+
+# --- per-request model override -------------------------------------------------
+
+
+async def test_byok_model_override_reaches_upstream_payload(make_router):
+    """The request's model wins over the credential's stored default:
+    the upstream payload and route info both carry the requested model."""
+    calls, handler = capturing(provider_body("mine"))
+    router = make_router(handlers={"byok1.example.com": handler})
+    result, info = await router.route_request_detailed(
+        [{"role": "user", "content": "hi"}],
+        model="custom-model-x",
+        byok_candidates=[byok_candidate(0, "byok1.example.com")],
+        byok_key_resolver=accept_key,
+    )
+    assert result["choices"][0]["message"]["content"] == "hello"
+    assert calls[0]["model"] == "custom-model-x"
+    assert info["model_id"] == "custom-model-x"
+
+
+async def test_byok_without_model_uses_stored_default(make_router):
+    """No model in the request = the credential's stored default serves
+    it, exactly as before the override existed."""
+    calls, handler = capturing(provider_body("mine"))
+    router = make_router(handlers={"byok1.example.com": handler})
+    _result, info = await router.route_request_detailed(
+        [{"role": "user", "content": "hi"}],
+        byok_candidates=[byok_candidate(0, "byok1.example.com")],
+        byok_key_resolver=accept_key,
+    )
+    assert calls[0]["model"] == "byok-model-0"
+    assert info["model_id"] == "byok-model-0"
+
+
+async def test_byok_model_override_applies_across_failover(make_router):
+    """Apply-to-all: a failover candidate that never saw the requested
+    model still gets it (first host 404s, second one serves)."""
+    c1, h1 = capturing(httpx.Response(404, json={"error": {}}))
+    c2, h2 = capturing(provider_body("second"))
+    router = make_router(handlers={
+        "u1.example.com": h1, "u2.example.com": h2,
+    })
+    result, info = await router.route_request_detailed(
+        [{"role": "user", "content": "hi"}],
+        model="custom-model-x",
+        byok_candidates=[
+            byok_candidate(0, "u1.example.com"),
+            byok_candidate(1, "u2.example.com"),
+        ],
+        byok_key_resolver=accept_key,
+    )
+    assert result["choices"][0]["message"]["content"] == "hello"
+    assert c1[0]["model"] == "custom-model-x"
+    assert c2[0]["model"] == "custom-model-x"
+    assert info["model_id"] == "custom-model-x"
+
+
+async def test_operator_pool_model_hint_does_not_override(make_router):
+    """The legacy path keeps its historical semantics: the model hint
+    may reorder candidates but never replaces the operator-configured
+    model_id in the upstream payload."""
+    calls, handler = capturing(provider_body("alpha"))
+    router = make_router(handlers={"alpha.example.com": handler})
+    _result, info = await router.route_request_detailed(
+        [{"role": "user", "content": "hi"}],
+        model="custom-model-x",
+    )
+    assert calls[0]["model"] == "alpha-model"
+    assert info["model_id"] == "alpha-model"
