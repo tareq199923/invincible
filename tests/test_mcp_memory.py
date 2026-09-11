@@ -1,5 +1,6 @@
 # tests/test_mcp_memory.py
-"""MCP memory tools: memory_save / memory_search / memory_list.
+"""MCP memory tools: memory_save / memory_search / memory_list, plus the
+project_create / project_list tools that feed them valid project names.
 
 Data-plane tools over the shared memories store: saves land under the
 OAuth subject with mcp:<client> provenance and 0.9 confidence, search
@@ -8,6 +9,7 @@ query is ownership-predicated (a foreign user's rows are
 indistinguishable from absent ones). No confirm_action gate applies -
 rows are user-owned data, reversible from the dashboard.
 """
+import asyncio
 import json
 import time
 
@@ -322,3 +324,178 @@ async def test_memory_list_limit_capped(client, bearer_headers):
         "limit": 999,  # hard cap wins over the caller's ask
     }))
     assert listed["count"] == 20
+
+
+# --- project_create / project_list -----------------------------------------
+
+
+async def test_project_create_then_memory_save_to_project(
+        client, bearer_headers):
+    """The end-to-end gap this tool closes: create a project over MCP,
+    then immediately use its name as memory_save's project argument."""
+    made = _tool_json(await _call_tool(client, bearer_headers,
+                                       "project_create", {
+        "name": "invincible",
+    }))
+    assert made["created"] is True
+    assert made["name"] == "invincible"
+
+    saved = _tool_json(await _call_tool(client, bearer_headers,
+                                        "memory_save", {
+        "content": "invincible gateway runs on railway",
+        "project": "invincible",
+    }))
+    assert saved["saved"] is True
+    assert saved["scope"] == "project"
+
+
+async def test_project_create_requires_name(client, bearer_headers):
+    result = await _call_tool(client, bearer_headers, "project_create", {})
+    assert result["isError"] is True
+    assert "name" in result["content"][0]["text"]
+
+
+async def test_project_create_rejects_blank_after_trim(
+        client, bearer_headers):
+    result = await _call_tool(client, bearer_headers, "project_create", {
+        "name": "   ",
+    })
+    assert result["isError"] is True
+    assert "name" in result["content"][0]["text"]
+
+
+async def test_project_create_rejects_oversized_name(client, bearer_headers):
+    result = await _call_tool(client, bearer_headers, "project_create", {
+        "name": "x" * 101,
+    })
+    assert result["isError"] is True
+    assert "100" in result["content"][0]["text"]
+
+
+async def test_project_create_duplicate_rejected(client, bearer_headers):
+    first = _tool_json(await _call_tool(client, bearer_headers,
+                                        "project_create", {
+        "name": "solo",
+    }))
+    assert first["created"] is True
+
+    dup = await _call_tool(client, bearer_headers, "project_create", {
+        "name": "solo",
+    })
+    assert dup["isError"] is True
+    assert "already have a project" in dup["content"][0]["text"]
+
+
+async def test_project_create_concurrent_same_name_one_wins(
+        client, bearer_headers):
+    """Two creates racing on the same name: the (user_id, name) unique
+    constraint is the arbiter, so exactly one succeeds."""
+    results = await asyncio.gather(
+        _call_tool(client, bearer_headers, "project_create",
+                   {"name": "raced"}),
+        _call_tool(client, bearer_headers, "project_create",
+                   {"name": "raced"}),
+    )
+    outcomes = [r["isError"] for r in results]
+    assert outcomes.count(False) == 1
+    assert outcomes.count(True) == 1
+
+
+async def test_project_create_cap_enforced(client, bearer_headers,
+                                           monkeypatch):
+    from invincible.endpoints import mcp as mcp_module
+    monkeypatch.setattr(mcp_module, "_PROJECT_CAP", 3)
+
+    # Earlier tests in this run may have left projects on the shared
+    # local-owner account, so the baseline is whatever exists now.
+    listing = _tool_json(await _call_tool(client, bearer_headers,
+                                          "project_list", {}))
+    existing = listing["count"]
+    for i in range(existing, 3):  # fill up to the cap (no-op when at it)
+        _tool_json(await _call_tool(client, bearer_headers,
+                                    "project_create", {
+            "name": f"filler-{i}",
+        }))
+
+    over = await _call_tool(client, bearer_headers, "project_create", {
+        "name": "one-too-many",
+    })
+    assert over["isError"] is True
+    assert "limit" in over["content"][0]["text"]
+
+    # The over-cap create was rolled back: the count never grows past the
+    # cap and the row is gone.
+    after = _tool_json(await _call_tool(client, bearer_headers,
+                                        "project_list", {}))
+    assert after["count"] == max(existing, 3)
+    assert all(p["name"] != "one-too-many" for p in after["projects"])
+
+
+async def test_project_list_shows_only_callers_projects(
+        client, bearer_headers):
+    _tool_json(await _call_tool(client, bearer_headers, "project_create", {
+        "name": "mine-only",
+    }))
+
+    # A second user's project, inserted directly - must never appear.
+    async with app.state.engine.begin() as conn:
+        other_id = int((await conn.execute(
+            text(
+                "INSERT INTO users (email, created_at)"
+                " VALUES ('other-projects@example.com', :t) RETURNING id"
+            ),
+            {"t": time.time()},
+        )).scalar_one())
+        await conn.execute(
+            text(
+                "INSERT INTO projects (user_id, name, is_default,"
+                " created_at) VALUES (:u, 'secret kiwi orchard', false,"
+                " :t)"
+            ),
+            {"u": other_id, "t": time.time()},
+        )
+
+    listed = _tool_json(await _call_tool(client, bearer_headers,
+                                         "project_list", {}))
+    names = [p["name"] for p in listed["projects"]]
+    assert "mine-only" in names
+    # The auto-created default project (named "local" for the test
+    # suite's local-owner subject, "personal" for normal accounts).
+    assert any(p["is_default"] for p in listed["projects"])
+    assert "secret kiwi orchard" not in names
+
+
+async def test_project_list_hides_archived_by_default(
+        client, bearer_headers):
+    made = _tool_json(await _call_tool(client, bearer_headers,
+                                       "project_create", {
+        "name": "to-archive",
+    }))
+    async with app.state.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE projects SET archived_at = :t"
+                 " WHERE id = :id"),
+            {"t": time.time(), "id": made["id"]},
+        )
+
+    hidden = _tool_json(await _call_tool(client, bearer_headers,
+                                         "project_list", {}))
+    assert all(p["name"] != "to-archive" for p in hidden["projects"])
+
+    shown = _tool_json(await _call_tool(client, bearer_headers,
+                                        "project_list", {
+        "include_archived": True,
+    }))
+    assert any(p["name"] == "to-archive" and p["archived_at"]
+               for p in shown["projects"])
+
+
+async def test_project_tools_in_tools_list(client, bearer_headers):
+    response = await client.post(
+        "/mcp",
+        headers=bearer_headers,
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+    )
+    names = [t["name"] for t in response.json()["result"]["tools"]]
+    assert "project_create" in names
+    assert "project_list" in names

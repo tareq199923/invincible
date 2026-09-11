@@ -268,3 +268,75 @@ async def test_device_fingerprint_identifies_the_request(client):
     assert _fingerprint_of(first["device_code"]) not in pages[1].text
     assert _fingerprint_of(second["device_code"]) in pages[1].text
     assert _fingerprint_of(second["device_code"]) not in pages[0].text
+
+
+# --- project create form -----------------------------------------------------
+
+
+async def test_account_page_shows_project_create_form(client):
+    await register_account(client, "projects@device.example")
+    page = await client.get("/account")
+    assert page.status_code == 200
+    assert 'action="/projects"' in page.text
+
+
+async def test_form_create_project_redirects_to_account(client):
+    await register_account(client, "form-create@example.com")
+    made = await client.post(
+        "/projects",
+        content="name=Blog Redesign",
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+    assert made.status_code == 303
+    assert made.headers["location"] == "/account"
+    # The new project is in the listing after the bounce.
+    account = await client.get("/account")
+    assert "Blog Redesign" in account.text
+
+
+async def test_form_create_project_duplicate_bounces_error(client):
+    await register_account(client, "form-dup@example.com")
+    first = await client.post(
+        "/projects",
+        content="name=Same Name",
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+    assert first.status_code == 303
+    dup = await client.post(
+        "/projects",
+        content="name=Same Name",
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+    assert dup.status_code == 303
+    assert dup.headers["location"].startswith("/account")
+    assert "project_error=duplicate_project" in dup.headers["location"]
+    # Following the bounce renders the fixed banner message.
+    page = await client.get(dup.headers["location"])
+    assert "You already have a project with that name." in page.text
+
+
+async def test_form_create_project_rejects_blank_name(client):
+    await register_account(client, "form-blank@example.com")
+    blank = await client.post(
+        "/projects",
+        content="name=",
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+    assert blank.status_code == 303
+    assert "project_error=invalid_name" in blank.headers["location"]
+
+
+async def test_json_create_project_still_returns_201(client):
+    """JSON callers (scripts, the existing API surface) keep structured
+    responses - the form-mode redirects must not change that path."""
+    await register_account(client, "json-create@example.com")
+    made = await client.post("/projects", json={"name": "JSON Project"})
+    assert made.status_code == 201
+    assert made.json()["name"] == "JSON Project"
+    dup = await client.post("/projects", json={"name": "JSON Project"})
+    assert dup.status_code == 409
+    assert dup.json()["error"]["code"] == "duplicate_project"

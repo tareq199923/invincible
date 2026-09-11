@@ -457,7 +457,17 @@ async def account_page(
     request: Request,
     principal: Principal = Depends(require_user_session),
 ):
-    return await _account_page(request, principal)
+    # The create form's 303 bounce carries an error CODE (not a message) so
+    # a crafted URL can't render an arbitrary fake banner here.
+    code = request.query_params.get("project_error")
+    messages = {
+        "invalid_name": "Project name must be 1-100 characters.",
+        "duplicate_project": "You already have a project with that name.",
+    }
+    return await _account_page(
+        request, principal,
+        project_error=messages.get(code),
+    )
 
 
 @router.get("/auth/me")
@@ -495,13 +505,25 @@ async def create_project(
     principal: Principal = Depends(require_user_session),
 ):
     body = await _payload(request)
+    # HTML form posts (the Account page's create form) bounce back to the
+    # page; errors ride along as a query param since there is no flash
+    # system. JSON callers keep the structured responses.
+    wants_html = _wants_html(request)
     try:
         made = await ProjectService(_engine(request)).create(
             principal.user_id, str(body.get("name", "")))
     except AccountError as exc:
+        if wants_html:
+            from urllib.parse import urlencode
+            return RedirectResponse(
+                "/account?" + urlencode({"project_error": exc.code}),
+                status_code=303,
+            )
         return _error_response(exc)
     await _audit(request, "project.created", actor_user_id=principal.user_id,
                  resource_type="project", resource_id=str(made["id"]))
+    if wants_html:
+        return RedirectResponse("/account", status_code=303)
     return JSONResponse(made, status_code=201)
 
 

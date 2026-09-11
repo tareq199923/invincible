@@ -30,9 +30,11 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from invincible import __version__
 from invincible.core import tool_executor
+from invincible.core.accounts import AccountError, ProjectService
 from invincible.core.continuity import ContinuityConflictError
 from invincible.core.identity import resolve_project_by_name
 from invincible.core.memory import (
@@ -52,6 +54,11 @@ _MEMORY_SEARCH_DEFAULT = 5
 _MEMORY_SEARCH_MAX = 10
 _MEMORY_LIST_DEFAULT = 10
 _MEMORY_LIST_MAX = 20
+
+# Ceiling on projects per user via the project_create tool: enough for any
+# real workspace, low enough that a runaway agent loop can't bloat the
+# projects table before a human notices.
+_PROJECT_CAP = 50
 
 TOOLS = [
     {
@@ -270,6 +277,48 @@ TOOLS = [
                     "type": "string",
                     "description": "that project's memories plus "
                                    "user-scope ones",
+                },
+            },
+        },
+    },
+    {
+        "name": "project_create",
+        "description": (
+            "Create a new project for the user. Projects scope memories: "
+            "a memory saved with project=<name> is only retrieved when "
+            "working in that project. Useful when the user starts a "
+            "distinct piece of work (\"new project for the blog redesign\") "
+            "or when memory_save rejects an unknown project name. Names "
+            "are 1-100 characters, unique per user (case-sensitive), and "
+            "capped at "
+            f"{_PROJECT_CAP} projects per user."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "the project name, 1-100 characters",
+                },
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "project_list",
+        "description": (
+            "List the user's projects (id, name, is_default, "
+            "archived_at). Call this before project-scoped memory_save to "
+            "discover valid project names instead of guessing. Archived "
+            "projects are hidden unless include_archived=true."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "include_archived": {
+                    "type": "boolean",
+                    "description": "include soft-archived projects "
+                                   "(default false)",
                 },
             },
         },
@@ -760,6 +809,93 @@ async def _dispatch(method, rpc_id, params, request,
                 )
                 return _result(rpc_id, _tool_content(json.dumps({
                     "memories": rows, "count": len(rows),
+                })))
+
+            if name in ("project_create", "project_list"):
+                # Data-plane like the memory tools: they shape the
+                # caller's own project list, never touch the host, so no
+                # confirm_action gate. Known limitation (deliberate, not
+                # an oversight): API-key (non-OAuth) principals cannot
+                # reach here - the /mcp endpoint only accepts OAuth
+                # bearers. API-key project creation is a future pass.
+                if principal is None:
+                    return _result(rpc_id, _tool_content(
+                        "Project tools are not available on this server.",
+                        is_error=True,
+                    ))
+                engine = getattr(request.app.state, "engine", None)
+                if engine is None:
+                    return _result(rpc_id, _tool_content(
+                        "Project tools are not available on this server.",
+                        is_error=True,
+                    ))
+                service = ProjectService(engine)
+
+                if name == "project_create":
+                    project_name = str(args.get("name") or "").strip()
+                    if not project_name:
+                        return _result(rpc_id, _tool_content(
+                            "project_create requires non-empty 'name'.",
+                            is_error=True,
+                        ))
+                    if len(project_name) > 100:
+                        return _result(rpc_id, _tool_content(
+                            "Project name must be at most 100 characters.",
+                            is_error=True,
+                        ))
+                    try:
+                        made = await service.create(
+                            principal.user_id, project_name)
+                    except AccountError as exc:
+                        # Duplicate names hit the (user_id, name) unique
+                        # constraint; the service maps that IntegrityError
+                        # to this error code.
+                        if exc.code == "duplicate_project":
+                            return _result(rpc_id, _tool_content(
+                                "You already have a project with that "
+                                "name.", is_error=True))
+                        return _result(rpc_id, _tool_content(
+                            exc.message, is_error=True))
+                    # Cap check AFTER create, same transaction discipline:
+                    # if this create pushed past the cap, roll it back and
+                    # report. The unique constraint handles name races; the
+                    # cap is best-effort (a burst of distinct-name creates
+                    # can overshoot by a few rows, which is acceptable -
+                    # the cap exists to stop unbounded agent-loop spam,
+                    # not to be a hard invariant).
+                    listing = await service.list(principal.user_id)
+                    if len(listing) > _PROJECT_CAP:
+                        async with engine.begin() as conn:
+                            await conn.execute(text(
+                                "DELETE FROM projects WHERE id = :id"
+                            ), {"id": made["id"]})
+                        return _result(rpc_id, _tool_content(
+                            f"Project limit reached ({_PROJECT_CAP} "
+                            "projects). Archive or rename existing ones "
+                            "from the dashboard first.", is_error=True))
+                    log = getattr(request.app.state, "audit_log", None)
+                    if log is not None:
+                        with contextlib.suppress(Exception):
+                            await log.record(
+                                "project.created",
+                                actor_user_id=principal.user_id,
+                                actor_kind="mcp",
+                                resource_type="project",
+                                resource_id=str(made["id"]),
+                            )
+                    return _result(rpc_id, _tool_content(json.dumps({
+                        "created": True,
+                        "id": made["id"],
+                        "name": made["name"],
+                    })))
+
+                # project_list: read-only browse for name discovery.
+                include_archived = args.get("include_archived") is True
+                listing = await service.list(
+                    principal.user_id,
+                    include_archived=include_archived)
+                return _result(rpc_id, _tool_content(json.dumps({
+                    "projects": listing, "count": len(listing),
                 })))
 
             return _error(rpc_id, -32601, f"Unknown tool: {name}")

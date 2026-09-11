@@ -13,6 +13,16 @@
 {% if github_linked %}<span class="muted">(GitHub linked)</span>{% endif %}</p>
 
 <h3>Projects</h3>
+<form method="post" action="/projects" class="inline-form">
+  <input type="text" name="name" placeholder="project name"
+         maxlength="100" required>
+  <button type="submit">Create project</button>
+</form>
+{% if project_error %}
+<div class="banner">
+  <p>{{ project_error }}</p>
+</div>
+{% endif %}
 <ul class="plain">
   {% for project in projects %}
   <li>{{ project.name }}{% if project.is_default %}
