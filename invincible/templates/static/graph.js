@@ -374,6 +374,10 @@
 
   MemoryGraph.prototype._bind = function () {
     var self = this;
+    // Press bookkeeping for click detection: pointerdown records the
+    // node and screen point; pointerup selects when the press barely
+    // moved (a click), pointerup after a real drag does not.
+    var pressNode = null, pressX = 0, pressY = 0;
 
     function nodeFor(evt) {
       var target = evt.target;
@@ -389,6 +393,8 @@
 
     this.svg.addEventListener("pointerdown", function (evt) {
       var n = nodeFor(evt);
+      pressNode = n;  // remembered for click-detection on release
+      pressX = evt.clientX; pressY = evt.clientY;
       if (n) {
         self.drag = n;
         n.pinned = true;
@@ -435,7 +441,7 @@
       self._showTip(hov, evt.clientX, evt.clientY);
     });
 
-    function endDrag() {
+    function endDrag(evt, selectOnRelease) {
       if (self.drag) {
         self.drag.x = self.drag.dragX; self.drag.y = self.drag.dragY;
         self.drag.dragX = self.drag.dragY = null;
@@ -445,9 +451,23 @@
       }
       self.panning = false;
       self.svg.classList.remove("panning");
+      // A press-release on a node with <5px movement is a click.
+      // Selection is detected here instead of via the click event
+      // because pointer capture (set on every press) retargets click
+      // to the svg - the node never sees it, so the panel never fills.
+      if (selectOnRelease && pressNode &&
+          Math.abs(evt.clientX - pressX) < 5 &&
+          Math.abs(evt.clientY - pressY) < 5) {
+        self.select(pressNode);
+      }
+      pressNode = null;
     }
-    this.svg.addEventListener("pointerup", endDrag);
-    this.svg.addEventListener("pointercancel", endDrag);
+    this.svg.addEventListener("pointerup", function (evt) {
+      endDrag(evt, true);
+    });
+    this.svg.addEventListener("pointercancel", function (evt) {
+      endDrag(evt, false);  // cancelled: coords may be stale, never select
+    });
 
     this.svg.addEventListener("wheel", function (evt) {
       evt.preventDefault();
@@ -463,10 +483,8 @@
       self._render();
     }, { passive: false });
 
-    this.svg.addEventListener("click", function (evt) {
-      var n = nodeFor(evt);
-      if (n) self.select(n);
-    });
+    // No click listener here: selection is detected in endDrag (see
+    // pointerup above) - pointer capture swallows click for the node.
     this.svg.addEventListener("pointerleave", function () {
       self._showTip(null);
     });

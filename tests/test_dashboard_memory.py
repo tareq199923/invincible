@@ -295,3 +295,7 @@ async def test_graph_js_is_served_vendored(client):
     assert "memgraph-tip" in resp.text
     assert "local-hidden" in resp.text
     assert "mem-label" in resp.text
+    # Node selection is detected on pointerup (press-release within a
+    # small movement threshold), not via the click event - pointer
+    # capture retargets click to the svg, so it never reaches the node.
+    assert "pressNode" in resp.text
