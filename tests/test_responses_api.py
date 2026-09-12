@@ -195,6 +195,28 @@ async def test_function_call_items_round_trip(client, router_setter):
     ]
 
 
+async def test_tool_choice_without_tools_is_dropped(client, router_setter):
+    """Codex occasionally sends tool_choice on a turn with no tools; every
+    OpenAI-compatible upstream 400s on that pair, so the router must drop
+    tool_choice when the tools list is empty."""
+    captured = []
+
+    def alpha_handler(request: httpx.Request):
+        captured.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("alpha", content="ok"))
+
+    router_setter({"alpha.example.com": alpha_handler})
+    response = await client.post(
+        "/v1/responses",
+        headers=AUTH,
+        json={"model": "m", "input": "hi",
+              "tools": [], "tool_choice": "auto"},
+    )
+    assert response.status_code == 200
+    assert "tool_choice" not in captured[0]
+    assert "tools" not in captured[0]
+
+
 async def test_tools_and_tool_choice_translate(client, router_setter):
     captured = []
 

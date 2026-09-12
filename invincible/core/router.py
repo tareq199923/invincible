@@ -619,7 +619,11 @@ class Router:
                         exc_info=True,
                     )
                     payload["tools"] = tools
-            if tool_choice is not None:
+            if tools and tool_choice is not None:
+                # tool_choice without tools is rejected by every
+                # OpenAI-compatible upstream ("only allowed when 'tools'
+                # are specified") - clients like Codex occasionally send
+                # the pair that way on follow-up turns.
                 payload["tool_choice"] = tool_choice
 
             payload_bytes = len(json.dumps(payload, ensure_ascii=False))
