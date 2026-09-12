@@ -126,6 +126,7 @@ async def test_setup_page_shows_both_steps_pending(client):
     assert "Create your API key" in page.text
     # No key yet -> the copy-paste config block is withheld.
     assert "ANTHROPIC_BASE_URL" not in page.text
+    assert "model_providers.invincible" not in page.text
     # The dashboard carries the matching first-run signpost.
     overview = await client.get("/dashboard")
     assert "You're 2 steps away" in overview.text
@@ -161,10 +162,16 @@ async def test_setup_page_unlocks_config_once_key_exists(
     assert "ANTHROPIC_BASE_URL" in page.text
     assert "OPENAI_BASE_URL" in page.text
     assert "/mcp" in page.text
+    # The Codex snippet is the config.toml approach (the env-var recipe
+    # alone doesn't configure the Codex CLI) and pre-fills the user's
+    # first connected model.
+    assert 'wire_api = "chat"' in page.text
+    assert 'model = "alpha-model"' in page.text
     # T0-1: copy buttons carry their text in data-copy (no
     # regex-on-innerText, which copied the button label with the config).
     assert page.text.count('data-copy="export ANTHROPIC_BASE_URL=') == 1
     assert page.text.count('data-copy="OPENAI_BASE_URL=') == 1
+    assert page.text.count('data-copy="model = &quot;alpha-model&quot;') == 1
     assert "innerText" not in page.text
     # The RAW key never renders on this page - only Account shows it once.
     assert key["raw"] not in page.text

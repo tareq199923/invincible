@@ -701,6 +701,11 @@ async def setup_page(
         has_key=bool(active_keys),
         api_key_prefix=(active_keys[0]["prefix"] if active_keys else None),
         base_url=base_url,
+        # Pre-fills the Codex config snippet so it's copy-paste ready;
+        # placeholder until the first provider exists.
+        codex_model=(
+            provider_rows[0]["model_id"] if provider_rows
+            else "model-id-from-providers"),
         catalog_keys=[
             {"key": key, "label": entry["label"]}
             for key, entry in sorted(

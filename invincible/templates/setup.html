@@ -102,8 +102,34 @@ export ANTHROPIC_AUTH_TOKEN="&lt;your inv_ key from Account&gt;"<button class="c
 export ANTHROPIC_AUTH_TOKEN=&quot;&lt;your inv_ key from Account&gt;&quot;"
   onclick="navigator.clipboard.writeText(this.dataset.copy)">Copy</button></div>
 
-    <p class="client-tab-note"><strong>Codex / OpenAI SDK</strong> — config
-       or environment:</p>
+    <p class="client-tab-note"><strong>Codex CLI</strong> — paste into
+       <code>~/.codex/config.toml</code>:</p>
+    <div class="config-block">model = "{{ codex_model }}"
+model_provider = "invincible"
+
+[model_providers.invincible]
+name = "Invincible"
+base_url = "{{ base_url }}/v1"
+env_key = "INVINCIBLE_API_KEY"
+wire_api = "chat"<button class="copy-btn" type="button"
+  data-copy="model = &quot;{{ codex_model }}&quot;
+model_provider = &quot;invincible&quot;
+
+[model_providers.invincible]
+name = &quot;Invincible&quot;
+base_url = &quot;{{ base_url }}/v1&quot;
+env_key = &quot;INVINCIBLE_API_KEY&quot;
+wire_api = &quot;chat&quot;"
+  onclick="navigator.clipboard.writeText(this.dataset.copy)">Copy</button></div>
+    <p class="muted">Codex reads the key from that env var — set it before
+       launching (<code>export INVINCIBLE_API_KEY=…</code>, or on Windows
+       <code>setx INVINCIBLE_API_KEY "…"</code> then open a new terminal),
+       and restart Codex after editing the config. The
+       <code>model</code> line is just a default — switch anytime with
+       <code>/model</code>.</p>
+
+    <p class="client-tab-note"><strong>OpenAI SDK</strong> (Python etc.) —
+       config or environment:</p>
     <div class="config-block">OPENAI_BASE_URL={{ base_url }}/v1
 OPENAI_API_KEY=&lt;your inv_ key from Account&gt;<button class="copy-btn" type="button"
   data-copy="OPENAI_BASE_URL={{ base_url }}/v1
