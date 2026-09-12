@@ -37,6 +37,31 @@ def estimate_token_sum(messages: list) -> int:
     return sum(estimate_tokens(m) for m in messages)
 
 
+def upstream_error_detail(body: object, limit: int = 300) -> str | None:
+    """Extract a human-readable message from an upstream error body.
+
+    Recognizes the common provider shapes — OpenAI-style
+    ``{"error": {"message": ...}}``, plain ``{"error": "..."}``,
+    ``{"message": ...}`` / ``{"detail": ...}`` — and returns the text
+    capped at ``limit`` characters. Returns ``None`` when nothing
+    recognizable is present so the caller keeps its generic message.
+    The body comes from a provider API (never internal state), so
+    echoing it matches the OpenAI endpoint's verbatim passthrough.
+    """
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if isinstance(error, dict):
+        message = error.get("message") or error.get("type")
+    elif isinstance(error, str):
+        message = error
+    else:
+        message = body.get("message") or body.get("detail")
+    if not isinstance(message, str) or not message.strip():
+        return None
+    return message[:limit]
+
+
 def route_headers(route_info: dict | None) -> dict:
     """``x-invincible-*`` response headers describing the attempt that
     actually served the request (Phase 13.5): provider, model, attempt

@@ -1071,11 +1071,14 @@ async def test_all_providers_fail_returns_overloaded(client, router_setter):
     }
 
 
-async def test_upstream_400_is_mapped_and_sanitized(client, router_setter):
+async def test_upstream_400_is_mapped_with_detail(client, router_setter):
+    """The upstream provider's own error message is surfaced inside the
+    Anthropic error shape (matching the OpenAI endpoint's verbatim
+    passthrough); only gateway-internal exception text stays hidden."""
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(
-                400, json={"error": {"message": "internal secret"}}
+                400, json={"error": {"message": "model id is not valid"}}
             )
         }
     )
@@ -1084,7 +1087,7 @@ async def test_upstream_400_is_mapped_and_sanitized(client, router_setter):
     body = response.json()
     assert body["type"] == "error"
     assert body["error"]["type"] == "invalid_request_error"
-    assert "internal secret" not in json.dumps(body)
+    assert "model id is not valid" in body["error"]["message"]
 
 
 # ------------------------------------------------------------------- auth

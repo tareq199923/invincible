@@ -11,6 +11,7 @@ import httpx
 import pytest
 from cryptography.fernet import Fernet
 
+from invincible.compat.common import upstream_error_detail
 from invincible.compat.responses import responses_to_internal
 from invincible.main import app
 from tests.conftest import (
@@ -605,6 +606,27 @@ async def test_invalid_input_is_400_openai_error(client, router_setter):
     assert error["message"]
 
 
+async def test_upstream_error_detail_is_surfaced(client, router_setter):
+    """A non-failover upstream 400 carries the provider's own message in
+    the protocol-correct error shape (the generic "Upstream request
+    failed" masked the real cause during Codex debugging)."""
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(
+            400,
+            json={"error": {"message": "z-ai/glm-5.3-free is not a valid "
+                                       "model ID",
+                            "type": "invalid_request_error"}},
+        ),
+    })
+    response = await client.post(
+        "/v1/responses", headers=AUTH, json={"model": "m", "input": "hi"},
+    )
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert "not a valid model ID" in error["message"]
+    assert error["type"] == "invalid_request_error"
+
+
 async def test_all_providers_failed_is_503(client, router_setter):
     router_setter(handlers={
         "alpha.example.com": httpx.Response(500, json={"error": "boom"}),
@@ -637,3 +659,33 @@ def test_default_providers_fixture_hosts():
              for p in default_providers()}
     assert hosts == {
         "alpha.example.com", "beta.example.com", "gamma.example.com"}
+
+
+# ------------------------------------------------- upstream_error_detail
+
+
+def test_upstream_error_detail_openai_shape():
+    assert upstream_error_detail(
+        {"error": {"message": "not a valid model ID",
+                   "type": "invalid_request_error"}}
+    ) == "not a valid model ID"
+
+
+def test_upstream_error_detail_plain_shapes():
+    assert upstream_error_detail({"error": "plain error"}) == "plain error"
+    assert upstream_error_detail({"message": "msg"}) == "msg"
+    assert upstream_error_detail({"detail": "detail text"}) == "detail text"
+
+
+def test_upstream_error_detail_unrecognized_returns_none():
+    assert upstream_error_detail({"status": 400}) is None
+    assert upstream_error_detail({"error": 123}) is None
+    assert upstream_error_detail({"error": {"message": "  "}}) is None
+    assert upstream_error_detail("not a dict") is None
+    assert upstream_error_detail(None) is None
+
+
+def test_upstream_error_detail_is_capped():
+    long_message = "x" * 500
+    assert len(upstream_error_detail(
+        {"error": {"message": long_message}})) == 300

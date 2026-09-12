@@ -21,7 +21,11 @@ from invincible.compat.anthropic import (
     internal_to_anthropic,
     translate_tool_choice,
 )
-from invincible.compat.common import estimate_token_sum, route_headers
+from invincible.compat.common import (
+    estimate_token_sum,
+    route_headers,
+    upstream_error_detail,
+)
 from invincible.core.compression import compress_messages, compression_enabled
 from invincible.core.context_builder import build_context_messages
 from invincible.core.memory import MemoryStore
@@ -176,7 +180,10 @@ async def anthropic_messages(
             # Defensive: the pre-router check above normally catches this.
             return _error_message(400, NO_CREDENTIALS_MESSAGE)
         except UpstreamClientError as e:
-            return _error_message(e.status_code, "Upstream request failed")
+            return _error_message(
+                e.status_code,
+                upstream_error_detail(e.body) or "Upstream request failed",
+            )
         except AllProvidersFailedError:
             return _error_message(503, "All providers failed or are in cooldown.")
 
@@ -225,7 +232,10 @@ async def anthropic_messages(
     except NoCredentialsConfiguredError:
         return _error_message(400, NO_CREDENTIALS_MESSAGE)
     except UpstreamClientError as e:
-        return _error_message(e.status_code, "Upstream request failed")
+        return _error_message(
+            e.status_code,
+            upstream_error_detail(e.body) or "Upstream request failed",
+        )
     except AllProvidersFailedError:
         return _error_message(503, "All providers failed or are in cooldown.")
     except Exception:

@@ -20,7 +20,11 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from invincible.compat.common import estimate_token_sum, route_headers
+from invincible.compat.common import (
+    estimate_token_sum,
+    route_headers,
+    upstream_error_detail,
+)
 from invincible.compat.responses import (
     build_error,
     build_stream_events,
@@ -205,7 +209,10 @@ async def create_response(
             # Defensive: the pre-router check above normally catches this.
             return _error_response(400, NO_CREDENTIALS_MESSAGE)
         except UpstreamClientError as e:
-            return _error_response(e.status_code, "Upstream request failed")
+            return _error_response(
+                e.status_code,
+                upstream_error_detail(e.body) or "Upstream request failed",
+            )
         except AllProvidersFailedError:
             return _error_response(
                 503, "All providers failed or are in cooldown.")
@@ -257,7 +264,10 @@ async def create_response(
     except NoCredentialsConfiguredError:
         return _error_response(400, NO_CREDENTIALS_MESSAGE)
     except UpstreamClientError as e:
-        return _error_response(e.status_code, "Upstream request failed")
+        return _error_response(
+            e.status_code,
+            upstream_error_detail(e.body) or "Upstream request failed",
+        )
     except AllProvidersFailedError:
         return _error_response(
             503, "All providers failed or are in cooldown.")
