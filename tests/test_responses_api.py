@@ -195,6 +195,118 @@ async def test_function_call_items_round_trip(client, router_setter):
     ]
 
 
+async def test_parallel_function_calls_merge_into_one_assistant(
+    client, router_setter,
+):
+    """Responses renders parallel tool calls as sibling function_call
+    items followed by their outputs. Each must NOT become its own
+    assistant message: strict chat-completions validators require every
+    tool message's id to appear in the IMMEDIATELY preceding assistant's
+    tool_calls (upstream 400: "tool message must follow assistant tool
+    calls")."""
+    captured = []
+
+    def alpha_handler(request: httpx.Request):
+        captured.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("alpha", content="ok"))
+
+    router_setter({"alpha.example.com": alpha_handler})
+    response = await client.post(
+        "/v1/responses",
+        headers=AUTH,
+        json={
+            "model": "m",
+            "input": [
+                {"type": "message", "role": "user",
+                 "content": "run both tools"},
+                {"type": "function_call", "call_id": "call_A",
+                 "name": "search", "arguments": '{"query": "x"}'},
+                {"type": "function_call", "call_id": "call_B",
+                 "name": "shell", "arguments": '{"cmd": "ls"}'},
+                {"type": "function_call_output", "call_id": "call_A",
+                 "output": "result A"},
+                {"type": "function_call_output", "call_id": "call_B",
+                 "output": "result B"},
+                {"type": "message", "role": "user", "content": "thanks"},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    outgoing = captured[0]["messages"]
+    assert outgoing == [
+        {"role": "user", "content": "run both tools"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_A",
+                    "type": "function",
+                    "function": {"name": "search",
+                                 "arguments": '{"query": "x"}'},
+                },
+                {
+                    "id": "call_B",
+                    "type": "function",
+                    "function": {"name": "shell",
+                                 "arguments": '{"cmd": "ls"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_A", "content": "result A"},
+        {"role": "tool", "tool_call_id": "call_B", "content": "result B"},
+        {"role": "user", "content": "thanks"},
+    ]
+
+
+async def test_assistant_text_joins_following_function_calls(
+    client, router_setter,
+):
+    """An assistant message item directly before function_call items is
+    the same turn: one assistant message with content AND tool_calls."""
+    captured = []
+
+    def alpha_handler(request: httpx.Request):
+        captured.append(json.loads(request.read()))
+        return httpx.Response(200, json=provider_body("alpha", content="ok"))
+
+    router_setter({"alpha.example.com": alpha_handler})
+    response = await client.post(
+        "/v1/responses",
+        headers=AUTH,
+        json={
+            "model": "m",
+            "input": [
+                {"type": "message", "role": "user", "content": "go"},
+                {"type": "message", "role": "assistant",
+                 "content": "I'll search for that."},
+                {"type": "function_call", "call_id": "call_1",
+                 "name": "search", "arguments": '{"query": "x"}'},
+                {"type": "function_call_output", "call_id": "call_1",
+                 "output": "found it"},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    outgoing = captured[0]["messages"]
+    assert outgoing == [
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "content": "I'll search for that.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "search",
+                                 "arguments": '{"query": "x"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "found it"},
+    ]
+
+
 async def test_tool_choice_without_tools_is_dropped(client, router_setter):
     """Codex occasionally sends tool_choice on a turn with no tools; every
     OpenAI-compatible upstream 400s on that pair, so the router must drop

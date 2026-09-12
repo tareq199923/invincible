@@ -20,9 +20,12 @@ Responses input items map onto that model:
     {type: "message", role, content[] | str}
         -> one internal message (input_text/output_text blocks join)
     {type: "function_call", call_id, name, arguments}
-        -> assistant message with tool_calls (call_id kept verbatim)
+        -> consecutive function_call items (Responses renders parallel
+           tool calls as sibling items) fold into ONE assistant message
+           whose tool_calls array holds them all; an assistant message
+           item in the same turn joins it (content + tool_calls)
     {type: "function_call_output", call_id, output}
-        -> {"role": "tool", "tool_call_id": call_id, ...}
+        -> {"role": "tool", "tool_call_id": call_id, "content": ...}
     {type: "reasoning"} and unknown types
         -> skipped (chat-completions upstreams have no channel for them)
 """
@@ -106,7 +109,10 @@ def _message_item_to_internal(item: dict) -> dict | None:
 
 
 def _function_call_to_internal(item: dict) -> dict | None:
-    """Translate one ``{type: "function_call"}`` input item.
+    """Translate one ``{type: "function_call"}`` input item into an
+    OpenAI ``tool_calls`` entry (NOT an assistant message on its own -
+    consecutive entries are folded into one assistant message by the
+    caller).
 
     The Responses ``call_id`` is kept verbatim as the OpenAI tool call id
     so the following ``function_call_output`` (which references it via the
@@ -121,15 +127,9 @@ def _function_call_to_internal(item: dict) -> dict | None:
     if not isinstance(arguments, str):
         arguments = json.dumps(arguments or {})
     return {
-        "role": "assistant",
-        "content": None,
-        "tool_calls": [
-            {
-                "id": item.get("call_id") or _new_id("call"),
-                "type": "function",
-                "function": {"name": name, "arguments": arguments},
-            }
-        ],
+        "id": item.get("call_id") or _new_id("call"),
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
     }
 
 
@@ -169,21 +169,70 @@ def responses_to_internal(input_value, instructions=None) -> list:
         if input_value:
             internal.append(build_message("user", input_value))
     elif isinstance(input_value, list):
+        # Consecutive function_call items (Responses renders parallel
+        # tool calls as sibling items, e.g. [fc(A), fc(B), fco(A),
+        # fco(B)]) fold into ONE assistant message: strict chat-
+        # completions validators require every tool message's id to
+        # appear in the IMMEDIATELY preceding assistant's tool_calls.
+        # An assistant message item directly before them joins the same
+        # turn (content + tool_calls on one assistant message is valid
+        # chat-completions shape). Any other item flushes the pending
+        # turn; the fold is a pure left-to-right pass, so the same input
+        # always yields the same output (the endpoint's prefix-dedupe
+        # compares translated messages across turns).
+        pending_calls: list = []
+        pending_content: str | None = None
+
+        def _flush_pending():
+            nonlocal pending_calls, pending_content
+            if pending_calls:
+                internal.append({
+                    "role": "assistant",
+                    "content": pending_content,
+                    "tool_calls": pending_calls,
+                })
+            elif pending_content is not None:
+                internal.append({
+                    "role": "assistant",
+                    "content": pending_content,
+                })
+            pending_calls = []
+            pending_content = None
+
         for item in input_value:
             if not isinstance(item, dict):
                 raise ValueError("Each input item must be an object")
             item_type = item.get("type")
             if item_type == "message":
                 translated = _message_item_to_internal(item)
+                if translated is None:
+                    # An unusable message still ends the pending turn.
+                    _flush_pending()
+                    continue
+                if translated.get("role") == "assistant":
+                    # Hold it: a following function_call run may join
+                    # the same assistant turn.
+                    _flush_pending()
+                    pending_content = translated.get("content")
+                    continue
+                _flush_pending()
+                internal.append(translated)
             elif item_type == "function_call":
                 translated = _function_call_to_internal(item)
+                if translated is not None:
+                    pending_calls.append(translated)
             elif item_type == "function_call_output":
+                _flush_pending()
                 translated = _function_call_output_to_internal(item)
+                if translated is not None:
+                    internal.append(translated)
             else:
-                # "reasoning", "web_search_call", … - nothing to route.
+                # "reasoning", "web_search_call", … - nothing to route,
+                # and nothing that breaks a pending function_call run.
                 continue
-            if translated is not None:
-                internal.append(translated)
+        # A trailing run of function_call items (client sent calls with
+        # no outputs yet) still becomes its assistant turn.
+        _flush_pending()
     else:
         raise ValueError("input must be a string or a list of items")
 
