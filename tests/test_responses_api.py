@@ -490,6 +490,35 @@ async def test_resent_conversation_does_not_duplicate(client, router_setter):
     assert contents == ["hi", "ok", "again", "ok"]
 
 
+async def test_codex_session_id_header_creates_its_own_session(
+    client, router_setter,
+):
+    """Codex CLI (>=0.154) stamps requests with a bare `session-id` header
+    (no x- prefix). It must key its own session - falling through to
+    "default" would mix Codex traffic with every other headerless
+    client and break the stored-history prefix match."""
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(
+            200, json=provider_body("alpha", content="ok"))
+    })
+    headers = {**AUTH, "session-id": "codex-conv-1",
+               "originator": "codex_cli"}
+
+    await client.post(
+        "/v1/responses", headers=headers,
+        json={"model": "m",
+              "input": [{"type": "message", "role": "user",
+                         "content": "hi"}]},
+    )
+
+    # The user turn landed under the Codex session key, not "default".
+    owner = await local_owner_kwargs(app.state.engine)
+    history = await app.state.sessions.load("codex-conv-1", **owner)
+    assert [m.get("content") for m in history] == ["hi", "ok"]
+    default_history = await app.state.sessions.load("default", **owner)
+    assert not default_history
+
+
 async def test_diverged_history_persists_reply_only(client, router_setter):
     """When the resent conversation does not start with the stored
     history (client compacted/rewound), only the assistant reply is

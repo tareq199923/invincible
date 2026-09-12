@@ -121,6 +121,12 @@ async def create_response(
 ):
     session_id = (
         request.headers.get("x-claude-code-session-id")
+        # Codex CLI (>=0.154) stamps every request with a `session-id`
+        # header - a fresh UUID per conversation. Without this fallback
+        # all Codex traffic shares one "default" session with every
+        # other headerless Responses client, which breaks the
+        # stored-history prefix match and silently drops the user turns.
+        or request.headers.get("session-id")
         or request.headers.get("X-Session-Id")
         or "default"
     )
