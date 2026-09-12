@@ -42,6 +42,7 @@ from invincible.endpoints.mcp import require_mcp_auth
 from invincible.endpoints.mcp import router as mcp_router
 from invincible.endpoints.oauth import router as oauth_router
 from invincible.endpoints.openai_compat import router as openai_router
+from invincible.endpoints.responses_compat import router as responses_router
 from invincible.endpoints.template_filters import register_template_filters
 
 # R5 (rehearsal): bare load_dotenv() resolves the .env by walking up from
@@ -200,6 +201,9 @@ async def _browser_login_redirect(request: Request, exc: StarletteHTTPException)
 
 app.include_router(openai_router, dependencies=[Depends(require_auth)])
 app.include_router(anthropic_router, dependencies=[Depends(require_auth)])
+# Responses surface (Codex CLI et al.): same dual-realm auth as the other
+# /v1/* chat endpoints.
+app.include_router(responses_router, dependencies=[Depends(require_auth)])
 app.include_router(oauth_router)
 app.include_router(mcp_router, dependencies=[Depends(require_mcp_auth)])
 # Account surface (browser sessions + per-user management) carries its own

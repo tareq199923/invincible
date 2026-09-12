@@ -165,7 +165,7 @@ async def test_setup_page_unlocks_config_once_key_exists(
     # The Codex snippet is the config.toml approach (the env-var recipe
     # alone doesn't configure the Codex CLI) and pre-fills the user's
     # first connected model.
-    assert 'wire_api = "chat"' in page.text
+    assert 'wire_api = "responses"' in page.text
     assert 'model = "alpha-model"' in page.text
     # T0-1: copy buttons carry their text in data-copy (no
     # regex-on-innerText, which copied the button label with the config).
