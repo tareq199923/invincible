@@ -154,6 +154,15 @@ The router (`invincible/core/router.py::route_request`) tries providers in
 
 Exhausted all providers (including all in cooldown) → the `503` above.
 
+**Exception — BYOK model override:** a BYOK request whose `model` field
+overrides the credential's stored default sends that model to every
+credential in the user's chain, where it may legitimately exist on some
+and not others. For those requests, a `400` whose body reads as a
+model-availability complaint ("not a valid model ID", "model not found",
+…) skips to the next credential **without a health/cooldown hit**. If
+every credential rejects the model that way, the last provider's own
+error body surfaces (the `4xx` row above) instead of the `503`.
+
 ### Cooldown curve
 
 `record_failure` sets `cooldown_until = now + min(30 * 2**(failures-1), 300)`:

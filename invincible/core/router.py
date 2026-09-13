@@ -206,12 +206,20 @@ class _Failover(Exception):
     failover decision was made, logged, and recorded in the health tracker.
     ``_iter_attempts`` catches it and moves on to the next provider; it
     never escapes the Router. Carries the failing attempt's identity so
-    post-failover actions (reactive checkpoints) can describe what broke."""
+    post-failover actions (reactive checkpoints) can describe what broke.
+
+    ``client_error`` (optional) is an :class:`UpstreamClientError` the
+    failover decision superseded - a model-not-served 400 under a BYOK
+    model override. If EVERY candidate fails that way, ``_iter_attempts``
+    re-raises it instead of the generic exhaustion error so the client
+    still sees the provider's own "not a valid model ID" message."""
 
     def __init__(self, provider_name: str | None = None,
-                 error_class: str | None = None):
+                 error_class: str | None = None,
+                 client_error: "UpstreamClientError | None" = None):
         self.provider_name = provider_name
         self.error_class = error_class
+        self.client_error = client_error
         super().__init__(f"failover from {provider_name} ({error_class})")
 
 
@@ -251,6 +259,35 @@ def _status_wants_failover(provider: dict, status_code: int) -> bool:
             and provider.get("failover_on_400", False)
         )
     )
+
+
+# Upstream 400-body phrasings that mean "this model does not exist HERE"
+# rather than "your request is malformed". Providers are inconsistent about
+# status codes for this (404, 400, even 403), so the body text is the only
+# reliable signal. Matched case-insensitively against the whole rendered
+# JSON body so any nesting shape ({"error": {"message": ...}}, {"message":
+# ...}, {"detail": ...}) hits.
+_MODEL_NOT_SERVED_MARKERS = (
+    "not a valid model",
+    "invalid model",
+    "unknown model",
+    "model not found",
+    "model_not_found",
+    "model does not exist",
+    "no access to model",
+)
+
+
+def _is_model_not_served(parsed_body: dict) -> bool:
+    """True when an upstream error body reads as a model-availability
+    complaint (see ``_MODEL_NOT_SERVED_MARKERS``). Used only under a BYOK
+    per-request model override, where the client's model is expected to
+    exist on some credentials and not others."""
+    try:
+        rendered = json.dumps(parsed_body, ensure_ascii=False).lower()
+    except (TypeError, ValueError):
+        return False
+    return any(marker in rendered for marker in _MODEL_NOT_SERVED_MARKERS)
 
 
 def _parse_json_or_raw(body: bytes) -> dict:
@@ -513,10 +550,12 @@ class Router:
         BYOK model override: a request whose ``model`` is set sends that
         model to every credential in the user's chain, overriding each
         stored ``model_id`` (the stored value remains the default when the
-        request omits ``model``). A provider without the model 404s and
-        failover moves on - no silent substitution. The operator pool
-        path keeps its historical semantics: ``model`` is a soft ordering
-        hint only.
+        request omits ``model``). A provider without the model fails over
+        (404 always; a 400 whose body reads as "model not served here"
+        too) - no silent substitution. If EVERY credential rejects the
+        model that way, the last provider's own error surfaces instead of
+        the generic exhaustion message. The operator pool path keeps its
+        historical semantics: ``model`` is a soft ordering hint only.
 
         Yields ``(result, route_info)`` where ``result`` is the parsed JSON
         body (``stream=False``) or ``(first_chunk, tail)`` (``stream=True``)
@@ -527,6 +566,7 @@ class Router:
         request_id = uuid.uuid4().hex
         attempt_index = 0
         checkpoint_fired = False
+        last_model_error: UpstreamClientError | None = None
         if byok_candidates is not None:
             if not byok_candidates:
                 raise NoCredentialsConfiguredError()
@@ -538,8 +578,15 @@ class Router:
             if model:
                 # BYOK per-request model override: the client's requested
                 # model, when present, wins over each credential's stored
-                # default for every candidate in the chain.
-                candidates = [{**c, "model_id": model} for c in candidates]
+                # default for every candidate in the chain. The
+                # ``model_override`` tag tells the transports that a 400
+                # reading as "model not served here" is expected variance
+                # across the chain (skip to the next credential) rather
+                # than a client error to surface.
+                candidates = [
+                    {**c, "model_id": model, "model_override": True}
+                    for c in candidates
+                ]
         else:
             candidates = self._candidates(model)
         for provider in candidates:
@@ -685,6 +732,13 @@ class Router:
                         "attempts": attempt_index,
                     }
             except _Failover as f:
+                # A model-not-served skip under a BYOK model override
+                # carries the superseded client error: if the WHOLE chain
+                # rejects the model, the last one is re-raised after the
+                # loop so the client sees the provider's own message
+                # instead of a generic exhaustion 503.
+                if f.client_error is not None:
+                    last_model_error = f.client_error
                 # Reactive failover checkpoint (Phase 4): snapshot task
                 # state BEFORE the next provider attempt, once per request
                 # - the "why did work move" story stays recoverable. The
@@ -709,6 +763,8 @@ class Router:
                         )
                 continue
 
+        if last_model_error is not None:
+            raise last_model_error
         raise _all_providers_failed()
 
     async def _attempt_nonstreaming(
@@ -857,6 +913,31 @@ class Router:
             body = await e.response.aread()
             parsed_body = _parse_json_or_raw(body)
             _log_upstream_error_body(name, status, parsed_body)
+            if (
+                status == 400
+                and provider.get("model_override")
+                and _is_model_not_served(parsed_body)
+            ):
+                # BYOK model override: this credential simply does not
+                # serve the requested model - expected variance across
+                # the chain, not a client error. Skip WITHOUT a health
+                # hit (the credential is fine for its own models); if
+                # every candidate rejects the model, the carried error
+                # surfaces after the loop.
+                await self._record_run(
+                    provider, attempt_index, time.time(), "failover",
+                    error_class="model_not_served",
+                    request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
+                    started_at=attempt_started,
+                )
+                raise _Failover(
+                    provider_name=name,
+                    error_class="model_not_served",
+                    client_error=UpstreamClientError(
+                        status_code=status, body=parsed_body
+                    ),
+                ) from None
             if status == 400:
                 _dump_debug_payload(name, status, payload)
             await self._record_run(
@@ -980,6 +1061,27 @@ class Router:
                 await resp.aclose()
                 parsed_body = _parse_json_or_raw(body)
                 _log_upstream_error_body(name, resp.status_code, parsed_body)
+                if (
+                    resp.status_code == 400
+                    and provider.get("model_override")
+                    and _is_model_not_served(parsed_body)
+                ):
+                    # Same model-not-served skip as the non-streaming
+                    # transport (see _attempt_nonstreaming).
+                    await self._record_run(
+                        provider, attempt_index, time.time(), "failover",
+                        error_class="model_not_served",
+                        request_id=request_id, session_id=session_id,
+                        session_pk=session_pk,
+                        started_at=attempt_started,
+                    )
+                    raise _Failover(
+                        provider_name=name,
+                        error_class="model_not_served",
+                        client_error=UpstreamClientError(
+                            status_code=resp.status_code, body=parsed_body
+                        ),
+                    )
                 if resp.status_code == 400:
                     _dump_debug_payload(name, resp.status_code, payload)
                 await self._record_run(
