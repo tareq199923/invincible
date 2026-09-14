@@ -290,6 +290,17 @@ def _is_model_not_served(parsed_body: dict) -> bool:
     return any(marker in rendered for marker in _MODEL_NOT_SERVED_MARKERS)
 
 
+def _has_completion_choice(parsed: object) -> bool:
+    """True when a parsed chat-completions body carries at least one choice.
+    Some upstreams under load answer a failure with HTTP 200 and a body that
+    is not a completion at all (seen in production: NVIDIA rate limiting
+    returns ``{"status": 429, "title": "Too Many Requests"}`` with a 200) -
+    those bodies have no choices and must fail over, not surface as an
+    empty completion."""
+    choices = parsed.get("choices") if isinstance(parsed, dict) else None
+    return isinstance(choices, list) and len(choices) > 0
+
+
 def _parse_json_or_raw(body: bytes) -> dict:
     """Parse an upstream error body, degrading to a ``{"raw": ...}`` mapping
     for non-JSON payloads so UpstreamClientError always carries a dict."""
@@ -475,9 +486,9 @@ class Router:
         alias preference, cooldowns, missing keys, 429/402/404/408/413/5xx
         and opt-in 400 failover, 401/403 disabling) and differs only in
         transport. Returns once a provider's stream is live:
-        ``(first_chunk, tail)``. ``first_chunk`` is ``None`` for a clean but
-        empty stream. Connection-stage failures - including a failure while
-        fetching the first chunk - fail over to the next provider; a
+        ``(first_chunk, tail)``; the first chunk is always a real event -
+        a 200 stream that yields no events at all is a failed upstream
+        and fails over like any other connection-stage failure. A
         mid-stream error after the first chunk propagates to the caller so
         it can terminate the response cleanly.
         """
@@ -848,6 +859,33 @@ class Router:
                 raise _Failover(
                     provider_name=name, error_class="malformed_json"
                 ) from None
+            if not _has_completion_choice(parsed):
+                logger.warning(
+                    f"Empty completion body (200 without choices) from "
+                    f"{name}: {body[:200]!r}. Triggering failover."
+                )
+                _log_attempt(
+                    name,
+                    provider["model_id"],
+                    payload_bytes,
+                    estimated_tokens,
+                    "empty_body",
+                    True,
+                    level=logging.WARNING,
+                    **(pipeline_extra or {}),
+                )
+                self.health_tracker.record_failure(_health_key(provider))
+                await resp.aclose()
+                await self._record_run(
+                    provider, attempt_index, time.time(), "failover",
+                    error_class="empty_body",
+                    request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
+                    started_at=attempt_started,
+                )
+                raise _Failover(
+                    provider_name=name, error_class="empty_body"
+                ) from None
             self.health_tracker.record_success(_health_key(provider))
             _log_attempt(
                 name,
@@ -1100,6 +1138,36 @@ class Router:
                 first = await anext(tail)
             except StopAsyncIteration:
                 first = None
+            if first is None:
+                # A live stream always carries at least one event; zero
+                # events means the upstream answered 200 but delivered
+                # nothing (rate-limit edge behavior) - fail over rather
+                # than emit an empty completion.
+                logger.warning(
+                    f"Empty SSE stream (200 with no events) from {name}. "
+                    f"Triggering failover."
+                )
+                _log_attempt(
+                    name,
+                    provider["model_id"],
+                    payload_bytes,
+                    estimated_tokens,
+                    "empty_stream",
+                    True,
+                    level=logging.WARNING,
+                    **(pipeline_extra or {}),
+                )
+                self.health_tracker.record_failure(_health_key(provider))
+                await self._record_run(
+                    provider, attempt_index, time.time(), "failover",
+                    error_class="empty_stream",
+                    request_id=request_id, session_id=session_id,
+                    session_pk=session_pk,
+                    started_at=attempt_started,
+                )
+                raise _Failover(
+                    provider_name=name, error_class="empty_stream"
+                ) from None
             self.health_tracker.record_success(_health_key(provider))
             _log_attempt(
                 name,

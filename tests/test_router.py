@@ -761,6 +761,47 @@ async def test_stream_open_failover_before_first_chunk(make_router):
     await router.close()
 
 
+async def test_stream_open_failover_on_empty_sse_stream(make_router):
+    """A 200 stream that yields zero events is a failed upstream (seen in
+    production: rate-limited upstreams sometimes answer 200 and deliver
+    nothing), not a clean empty completion - it must fail over and damage
+    health like any other failure."""
+    router = make_router(
+        handlers={
+            "alpha.example.com": httpx.Response(
+                200, content=": keep-alive\n\ndata: [DONE]\n\n"
+            ),
+            "beta.example.com": httpx.Response(
+                200,
+                content=sse_body(stream_chunk("beta", {"role": "assistant"})),
+            ),
+        }
+    )
+    first, tail = await router.stream_open(MESSAGES)
+    assert first["model"] == "beta-model"
+    assert not router.health_tracker.is_available("alpha")
+    await router.close()
+
+
+async def test_failover_on_200_body_without_choices(make_router):
+    """A 200 whose JSON body carries no choices is a failure wearing a
+    success status (production case: NVIDIA rate limiting returns
+    {"status": 429, "title": "Too Many Requests"} with HTTP 200) - it must
+    fail over instead of surfacing an empty completion."""
+    router = make_router(
+        handlers={
+            "alpha.example.com": httpx.Response(
+                200, json={"status": 429, "title": "Too Many Requests"}
+            ),
+            "beta.example.com": httpx.Response(200, json=provider_body("beta")),
+        }
+    )
+    result = await router.route_request(MESSAGES)
+    assert result["choices"][0]["message"]["content"] == "hello"
+    assert not router.health_tracker.is_available("alpha")
+    await router.close()
+
+
 @pytest.mark.parametrize("status", [402, 404, 408, 413])
 async def test_stream_open_failover_on_limit_and_transient_statuses(
     make_router, status

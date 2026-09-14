@@ -5,7 +5,7 @@ import json
 
 import httpx
 
-from tests.conftest import provider_body
+from tests.conftest import provider_body, sse_body, stream_chunk
 
 
 async def test_openai_nonstreaming_headers_report_actual_route(client, router_setter):
@@ -46,11 +46,7 @@ async def test_openai_streaming_headers_present_before_body(client, router_sette
         "alpha.example.com": lambda r: httpx.Response(500, json={"error": "down"}),
         "beta.example.com": lambda r: httpx.Response(
             200,
-            json={
-                "choices": [
-                    {"delta": {"content": "hey"}, "finish_reason": None}
-                ]
-            },
+            content=sse_body(stream_chunk("beta", {"content": "hey"})),
         ),
     })
     req = client.build_request(
@@ -105,7 +101,7 @@ async def test_anthropic_streaming_headers(client, router_setter):
         "alpha.example.com": lambda r: httpx.Response(500, json={"error": "down"}),
         "beta.example.com": lambda r: httpx.Response(
             200,
-            json={"choices": [{"delta": {"content": "hey"}, "finish_reason": None}]},
+            content=sse_body(stream_chunk("beta", {"content": "hey"})),
         ),
     })
     req = client.build_request(

@@ -150,6 +150,7 @@ The router (`invincible/core/router.py::route_request`) tries providers in
 | `401` / `403` | `disable` (permanent for process lifetime) → **try next provider** |
 | Other `4xx` (e.g. `400`) | **Abort immediately** — raise `UpstreamClientError`, which the endpoint forwards with the provider's status and body. No failover. |
 | Network error (`httpx.RequestError`) | `record_failure` → cooldown → **try next provider** |
+| `200` with no completion in it (empty SSE stream, or a JSON body with no `choices` — e.g. an error payload wearing a success status) | `record_failure` → cooldown → **try next provider** |
 | Provider in cooldown / no API key | Skipped silently (log only) |
 
 Exhausted all providers (including all in cooldown) → the `503` above.
