@@ -307,6 +307,40 @@ async def test_probe_failure_marks_failed(
     assert listed.json()["providers"][0]["status"] == "failed"
 
 
+async def test_probe_rejects_html_200_as_not_an_api(
+    credential_key, client, public_dns
+):
+    """A base URL pointing at a provider's homepage (or a WAF challenge
+    page) answers 200 HTML - that is not a working API, and the badge
+    must not claim "ok" for it (seen in production with AgentRouter)."""
+    await logged_in(client)
+    made = await connect(
+        client, catalog_key=None, provider_name="Mock",
+        base_url="https://mockprov.test/v1", model_id="mock-model")
+    cred_id = made.json()["id"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, text="<!doctype html><html></html>",
+            headers={"content-type": "text/html; charset=utf-8"},
+        )
+
+    app.state.byok_http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler))
+    try:
+        report = await client.post(f"/providers/mine/{cred_id}/test")
+    finally:
+        await app.state.byok_http_client.aclose()
+        app.state.byok_http_client = None
+    assert report.status_code == 200
+    body = report.json()
+    assert body["ok"] is False
+    assert body["status"] == 200
+    assert "not an API" in body["detail"]
+    listed = await client.get("/providers/mine")
+    assert listed.json()["providers"][0]["status"] == "failed"
+
+
 async def test_probe_url_rebound_to_private_is_blocked(
     credential_key, client, monkeypatch
 ):

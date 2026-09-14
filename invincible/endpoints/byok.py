@@ -170,8 +170,19 @@ async def _probe(request: Request, base_url: str, api_key: str) -> dict:
         )
         latency_ms = round((time.monotonic() - started) * 1000)
         detail = "" if resp.status_code == 200 else f"HTTP {resp.status_code}"
+        ok = resp.status_code == 200
+        if ok:
+            # A 200 that is not JSON is a website/WAF page, not an API
+            # (seen in production: a base URL pointing at the provider's
+            # homepage, and an Aliyun WAF challenge, both answered 200
+            # HTML). Without this check the badge said "ok" for a
+            # credential that could never serve a completion.
+            ctype = (resp.headers.get("content-type") or "").split(";")[0]
+            if ctype != "application/json":
+                ok = False
+                detail = f"not an API (content-type {ctype or 'unknown'})"
         return {
-            "ok": resp.status_code == 200,
+            "ok": ok,
             "status": resp.status_code,
             "latency_ms": latency_ms,
             "detail": detail,
