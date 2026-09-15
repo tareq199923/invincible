@@ -15,6 +15,12 @@ from sqlalchemy.exc import IntegrityError
 from invincible.core.credential_crypto import encrypt
 from invincible.core.db import user_provider_credentials
 
+
+class UnknownCredentialError(Exception):
+    """A reorder payload referenced ids that are not exactly the user's
+    own credential set (foreign id, stale id, or an incomplete list)."""
+
+
 # Columns safe to hand to a response body / template. encrypted_api_key
 # is deliberately absent.
 PUBLIC_COLUMNS = (
@@ -87,13 +93,13 @@ class ByokCredentialStore:
         return dict(row)
 
     async def list_for_user(self, user_id: int) -> list[dict]:
-        """Public rows for one user, oldest first (routing order)."""
+        """Public rows for one user in the user's chosen order."""
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 select(*PUBLIC_COLUMNS)
                 .where(user_provider_credentials.c.user_id == user_id)
                 .order_by(
-                    user_provider_credentials.c.created_at,
+                    user_provider_credentials.c.sort_order,
                     user_provider_credentials.c.id,
                 )
             )).mappings().all()
@@ -143,8 +149,38 @@ class ByokCredentialStore:
                 user_provider_credentials.select()
                 .where(user_provider_credentials.c.user_id == user_id)
                 .order_by(
-                    user_provider_credentials.c.created_at,
+                    user_provider_credentials.c.sort_order,
                     user_provider_credentials.c.id,
                 )
             )).mappings().all()
         return [dict(r) for r in rows]
+
+    async def reorder(self, user_id: int, ordered_ids: list[int]) -> None:
+        """Rewrite the user's credential order in one transaction.
+
+        ``ordered_ids`` must be EXACTLY the user's own credential ids -
+        foreign ids, vanished ids, or a partial list all raise
+        :class:`UnknownCredentialError` so a reorder can never silently
+        drop or expose someone else's row. The write itself bumps
+        ``updated_at`` on every moved row."""
+        now = time.time()
+        async with self.engine.begin() as conn:
+            rows = (await conn.execute(
+                select(user_provider_credentials.c.id)
+                .where(user_provider_credentials.c.user_id == user_id)
+            )).scalars().all()
+            owned = {int(r) for r in rows}
+            if set(ordered_ids) != owned or len(ordered_ids) != len(owned):
+                raise UnknownCredentialError(
+                    "The ordered id list must match your connected "
+                    "providers exactly"
+                )
+            for index, credential_id in enumerate(ordered_ids):
+                await conn.execute(
+                    update(user_provider_credentials)
+                    .where(
+                        user_provider_credentials.c.id == credential_id,
+                        user_provider_credentials.c.user_id == user_id,
+                    )
+                    .values(sort_order=index, updated_at=now)
+                )

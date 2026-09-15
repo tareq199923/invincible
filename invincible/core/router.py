@@ -21,11 +21,12 @@ from invincible.core.config import (  # noqa: F401 - re-exports
     validate_providers_config,
 )
 from invincible.core.provider_health import HealthTracker
-from invincible.core.relay import relay_messages
+from invincible.core.relay import relay_enabled, relay_messages
 from invincible.core.run_store import new_run_entry
 from invincible.core.selection import (
     AUTO_ROUTING,
     PinnedUnavailableError,
+    RoutingConfig,
     attempt_order,
     routing_from_config,
 )
@@ -38,6 +39,7 @@ from invincible.core.trimming import (  # noqa: F401 - re-exports
     group_into_turns,
     trim_messages,
 )
+from invincible.core.user_settings_store import override_flag
 
 logger = logging.getLogger("invincible.router")
 
@@ -415,6 +417,8 @@ class Router:
         session_pk: int | None = None,
         byok_candidates: list[dict] | None = None,
         byok_key_resolver=None,
+        byok_routing: RoutingConfig | None = None,
+        overrides: dict | None = None,
     ) -> dict:
         """Non-streaming chat completion through the provider tiers.
 
@@ -428,7 +432,9 @@ class Router:
         BYOK (Platform Phase 9): when ``byok_candidates`` is not None, the
         attempt list comes ENTIRELY from that list (the caller's per-user
         credential rows) and ``byok_key_resolver(provider)`` resolves each
-        attempt's key lazily - never the operator registry.
+        attempt's key lazily - never the operator registry. ``byok_routing``
+        (Phase 1) is the user's own routing mode over those candidates;
+        ``overrides`` are their per-user pipeline toggles.
         """
         result, _info = await self.route_request_detailed(
             messages,
@@ -439,6 +445,8 @@ class Router:
             session_pk=session_pk,
             byok_candidates=byok_candidates,
             byok_key_resolver=byok_key_resolver,
+            byok_routing=byok_routing,
+            overrides=overrides,
         )
         return result
 
@@ -453,6 +461,8 @@ class Router:
         session_pk: int | None = None,
         byok_candidates: list[dict] | None = None,
         byok_key_resolver=None,
+        byok_routing: RoutingConfig | None = None,
+        overrides: dict | None = None,
     ) -> tuple[dict, dict]:
         """Like :meth:`route_request` but also returns route metadata:
         ``(parsed_body, {request_id, provider_name, model_id, attempts})``.
@@ -462,6 +472,8 @@ class Router:
             session_id=session_id, session_pk=session_pk,
             byok_candidates=byok_candidates,
             byok_key_resolver=byok_key_resolver,
+            byok_routing=byok_routing,
+            overrides=overrides,
         ):
             return result, info
         # Unreachable: _iter_attempts terminates by raising instead.
@@ -478,6 +490,8 @@ class Router:
         session_pk: int | None = None,
         byok_candidates: list[dict] | None = None,
         byok_key_resolver=None,
+        byok_routing: RoutingConfig | None = None,
+        overrides: dict | None = None,
     ) -> tuple[dict | None, AsyncIterator[dict]]:
         """Open a streaming chat-completions response through the providers.
 
@@ -501,6 +515,8 @@ class Router:
             session_pk=session_pk,
             byok_candidates=byok_candidates,
             byok_key_resolver=byok_key_resolver,
+            byok_routing=byok_routing,
+            overrides=overrides,
         )
         return result
 
@@ -515,6 +531,8 @@ class Router:
         session_pk: int | None = None,
         byok_candidates: list[dict] | None = None,
         byok_key_resolver=None,
+        byok_routing: RoutingConfig | None = None,
+        overrides: dict | None = None,
     ) -> tuple[tuple[dict | None, AsyncIterator[dict]], dict]:
         """Like :meth:`stream_open` but also returns route metadata:
         ``((first_chunk, tail), {request_id, provider_name, model_id,
@@ -525,6 +543,8 @@ class Router:
             session_id=session_id, session_pk=session_pk,
             byok_candidates=byok_candidates,
             byok_key_resolver=byok_key_resolver,
+            byok_routing=byok_routing,
+            overrides=overrides,
         ):
             return result, info
         # Unreachable: _iter_attempts terminates by raising instead.
@@ -541,6 +561,8 @@ class Router:
         session_pk: int | None = None,
         byok_candidates: list[dict] | None = None,
         byok_key_resolver=None,
+        byok_routing: RoutingConfig | None = None,
+        overrides: dict | None = None,
     ) -> AsyncIterator[tuple[dict | tuple[dict | None, AsyncIterator[dict]], dict]]:
         """The single failover policy loop behind both public entry points
         (Phase 13): provider ordering, cooldown and missing-key skips,
@@ -558,15 +580,28 @@ class Router:
         list raises :class:`NoCredentialsConfiguredError` - connecting a
         provider is expected of the user, not an operator emergency.
 
-        BYOK model override: a request whose ``model`` is set sends that
-        model to every credential in the user's chain, overriding each
-        stored ``model_id`` (the stored value remains the default when the
-        request omits ``model``). A provider without the model fails over
-        (404 always; a 400 whose body reads as "model not served here"
-        too) - no silent substitution. If EVERY credential rejects the
-        model that way, the last provider's own error surfaces instead of
-        the generic exhaustion message. The operator pool path keeps its
-        historical semantics: ``model`` is a soft ordering hint only.
+        BYOK routing modes (Phase 1 self-service): ``byok_routing`` is the
+        user's own auto/pinned/chain config over their candidates. In
+        **auto** (the default) the per-request model override below applies
+        to every credential. In **chain** mode each step carries its own
+        final ``model_id`` from the user's config (the matching step was
+        floated to the front where the config was built) - no blanket
+        override, so steps fall back across MODELS, not just providers. In
+        **pinned** mode the pinned model wins and failures surface raw.
+
+        ``overrides`` (Phase 1) are the user's per-user pipeline toggles,
+        consulted before the env defaults for compression and relay.
+
+        BYOK model override (auto mode only): a request whose ``model`` is
+        set sends that model to every credential in the user's chain,
+        overriding each stored ``model_id`` (the stored value remains the
+        default when the request omits ``model``). A provider without the
+        model fails over (404 always; a 400 whose body reads as "model not
+        served here" too) - no silent substitution. If EVERY credential
+        rejects the model that way, the last provider's own error surfaces
+        instead of the generic exhaustion message. The operator pool path
+        keeps its historical semantics: ``model`` is a soft ordering hint
+        only.
 
         Yields ``(result, route_info)`` where ``result`` is the parsed JSON
         body (``stream=False``) or ``(first_chunk, tail)`` (``stream=True``)
@@ -583,17 +618,20 @@ class Router:
                 raise NoCredentialsConfiguredError()
             try:
                 candidates = attempt_order(
-                    byok_candidates, self.health_tracker, AUTO_ROUTING, model)
+                    byok_candidates, self.health_tracker,
+                    byok_routing or AUTO_ROUTING, model)
             except PinnedUnavailableError as e:
                 raise AllProvidersFailedError(str(e)) from None
-            if model:
-                # BYOK per-request model override: the client's requested
-                # model, when present, wins over each credential's stored
-                # default for every candidate in the chain. The
-                # ``model_override`` tag tells the transports that a 400
-                # reading as "model not served here" is expected variance
-                # across the chain (skip to the next credential) rather
-                # than a client error to surface.
+            if model and (byok_routing or AUTO_ROUTING).mode == "auto":
+                # BYOK per-request model override (auto mode only): the
+                # client's requested model, when present, wins over each
+                # credential's stored default for every candidate in the
+                # chain. The ``model_override`` tag tells the transports
+                # that a 400 reading as "model not served here" is
+                # expected variance across the chain (skip to the next
+                # credential) rather than a client error to surface.
+                # Chain/pinned modes skip this: their candidates already
+                # carry the user-configured final model per step.
                 candidates = [
                     {**c, "model_id": model, "model_override": True}
                     for c in candidates
@@ -637,7 +675,7 @@ class Router:
             raw_tokens = sum(estimate_tokens(m) for m in messages) + (
                 sum(estimate_tokens(t) for t in tools) if tools else 0
             )
-            if compression_enabled():
+            if override_flag(overrides, "compression", compression_enabled):
                 try:
                     send_messages = compress_messages(messages)
                 except Exception:
@@ -650,14 +688,15 @@ class Router:
             else:
                 send_messages = messages
             relay_applied = False
-            try:
-                send_messages, relay_stats = relay_messages(send_messages)
-                relay_applied = relay_stats.applied
-            except Exception:
-                logger.warning(
-                    "Context relay failed; sending full history",
-                    exc_info=True,
-                )
+            if override_flag(overrides, "relay", relay_enabled):
+                try:
+                    send_messages, relay_stats = relay_messages(send_messages)
+                    relay_applied = relay_stats.applied
+                except Exception:
+                    logger.warning(
+                        "Context relay failed; sending full history",
+                        exc_info=True,
+                    )
             trimmed_messages = trim_messages(
                 send_messages, provider.get("max_context", DEFAULT_MAX_CONTEXT)
             )

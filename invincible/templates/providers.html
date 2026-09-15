@@ -31,6 +31,19 @@
                                     font-size: 0.88rem; }
   details.custom-provider summary:hover { color: var(--accent-ink); }
   details.custom-provider[open] summary { margin-bottom: 0.7rem; }
+  .routing-form { display: flex; flex-direction: column; gap: 0.55rem;
+                  max-width: 46rem; }
+  .routing-form label.radio { display: flex; gap: 0.5rem; align-items: baseline;
+                              color: var(--ink); cursor: pointer; }
+  .routing-form label.radio input { flex-shrink: 0; }
+  .chain-steps, .pinned-row { margin-left: 1.4rem; display: flex;
+                              flex-direction: column; gap: 0.4rem; }
+  .pinned-row { flex-direction: row; align-items: center; gap: 0.6rem; }
+  .chain-step { display: flex; align-items: center; gap: 0.5rem; }
+  .chain-step .chain-name { min-width: 8rem; }
+  .chain-step input[type="text"], .pinned-row input[type="text"] {
+    flex: 0 1 16rem; }
+  .pinned-row select { flex: 0 1 12rem; }
 </style>
 
 <h2>Provider connections</h2>
@@ -102,15 +115,68 @@ longer resolves to a public address.</p>{% endif %}
 <table>
   <thead><tr><th></th><th>Name</th><th>Model</th><th>Base URL</th>
       <th>Key</th><th>Status</th><th></th></tr></thead>
-  <tbody>
-  {% for r in rows %}
-  {% include "_provider_row.html" %}
-  {% endfor %}
-  </tbody>
+  {% include "_provider_rows.html" %}
 </table>
 </div>
 {% else %}
 <p class="muted empty">No providers connected yet. <a href="#connect">Connect
 your first provider &rarr;</a></p>
+{% endif %}
+
+{% if rows %}
+<h3 id="routing">Routing</h3>
+<p class="muted">How requests pick among your connected providers.</p>
+{% if routing_saved %}<p class="banner-ok">Routing saved.</p>{% endif %}
+<form method="post" action="/routing/mine" class="routing-form">
+  <label class="radio"><input type="radio" name="mode" value="auto"
+    {% if routing_mode != 'chain' and routing_mode != 'pinned' %}checked{% endif %}>
+    <span><strong>Auto</strong> &mdash; try my providers in order, using the
+    model each request names.</span></label>
+  <label class="radio"><input type="radio" name="mode" value="chain"
+    {% if routing_mode == 'chain' %}checked{% endif %}>
+    <span><strong>Chain</strong> &mdash; try each provider in my order with
+    the model I set per step. A request naming a step's model starts there;
+    the rest follow as cross-model fallbacks.</span></label>
+  <div class="chain-steps">
+    {% for r in rows %}
+    <div class="chain-step">
+      {# formaction rides the routing form's submit to the move endpoint
+         (nested <form> would be invalid HTML); the endpoint ignores the
+         routing fields and only reads direction. #}
+      <button type="submit" class="linklike move-provider" title="Move earlier"
+              formaction="/providers/mine/{{ r.id }}/move"
+              name="direction" value="up"
+              {% if loop.first %}disabled{% endif %}>&#9650;</button>
+      <button type="submit" class="linklike move-provider" title="Move later"
+              formaction="/providers/mine/{{ r.id }}/move"
+              name="direction" value="down"
+              {% if loop.last %}disabled{% endif %}>&#9660;</button>
+      <span class="prov-mark prov-mark-sm" style="--mark: {{ r.color }}">{{ r.provider_name[0] | upper }}</span>
+      <span class="chain-name">{{ r.provider_name }}</span>
+      <input type="hidden" name="chain_{{ loop.index0 }}_credential_id"
+             value="{{ r.id }}">
+      <input type="text" name="chain_{{ loop.index0 }}_model"
+             value="{{ chain_prefill.get(r.id, r.model_id) }}" maxlength="200"
+             aria-label="Model for {{ r.provider_name }}"
+             title="Model to request from this provider">
+    </div>
+    {% endfor %}
+  </div>
+  <label class="radio"><input type="radio" name="mode" value="pinned"
+    {% if routing_mode == 'pinned' %}checked{% endif %}>
+    <span><strong>Pinned</strong> &mdash; always this provider and model;
+    failures surface as-is, with no fallback.</span></label>
+  <div class="pinned-row">
+    <select name="pinned_credential_id" aria-label="Pinned provider">
+      {% for r in rows %}
+      <option value="{{ r.id }}" {% if r.id == pinned_credential_id %}selected{% endif %}>{{ r.provider_name }}</option>
+      {% endfor %}
+    </select>
+    <input type="text" name="pinned_model" value="{{ pinned_model }}"
+           maxlength="200" placeholder="model id"
+           aria-label="Pinned model">
+  </div>
+  <div><button type="submit">Save routing</button></div>
+</form>
 {% endif %}
 {% endblock content %}

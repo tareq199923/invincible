@@ -26,6 +26,47 @@
 <p class="muted">Minimum {{ min_password_len }} characters.</p>
 </div>
 
+<h3>Your request settings</h3>
+{% if settings_saved %}<p class="banner-ok">Request settings saved.</p>{% endif %}
+<form method="post" action="/dashboard/settings">
+  <table>
+    <tr><th>Memory injection</th>
+      <td><select name="memory">
+        <option value="default" {% if user_overrides.memory is not boolean %}selected{% endif %}>Server default</option>
+        <option value="on" {% if user_overrides.memory is true %}selected{% endif %}>On</option>
+        <option value="off" {% if user_overrides.memory is false %}selected{% endif %}>Off</option>
+      </select></td>
+      <td class="muted">Server default: {{ "on" if defaults.memory else "off" }}</td></tr>
+    <tr><th>Continuity engine</th>
+      <td><select name="continuity">
+        <option value="default" {% if user_overrides.continuity is not boolean %}selected{% endif %}>Server default</option>
+        <option value="on" {% if user_overrides.continuity is true %}selected{% endif %}>On</option>
+        <option value="off" {% if user_overrides.continuity is false %}selected{% endif %}>Off</option>
+      </select></td>
+      <td class="muted">Server default: {{ "on" if defaults.continuity else "off" }}</td></tr>
+    <tr><th>Send-time compression</th>
+      <td><select name="compression">
+        <option value="default" {% if user_overrides.compression is not boolean %}selected{% endif %}>Server default</option>
+        <option value="on" {% if user_overrides.compression is true %}selected{% endif %}>On</option>
+        <option value="off" {% if user_overrides.compression is false %}selected{% endif %}>Off</option>
+      </select></td>
+      <td class="muted">Server default: {{ "on" if defaults.compression else "off" }}</td></tr>
+    <tr><th>Context relay</th>
+      <td><select name="relay">
+        <option value="default" {% if user_overrides.relay is not boolean %}selected{% endif %}>Server default</option>
+        <option value="on" {% if user_overrides.relay is true %}selected{% endif %}>On</option>
+        <option value="off" {% if user_overrides.relay is false %}selected{% endif %}>Off</option>
+      </select></td>
+      <td class="muted">Server default: {{ "on" if defaults.relay else "off" }}</td></tr>
+    <tr><th>History turn cap</th>
+      <td><input type="number" name="history_max_turns" min="0"
+        value="{{ user_overrides.history_max_turns if user_overrides.history_max_turns is number else '' }}"
+        aria-label="History turn cap"></td>
+      <td class="muted">Empty = server default ({{ defaults.history_max_turns if defaults.history_max_turns is number else "no cap" }}); 0 = no cap</td></tr>
+  </table>
+  <button type="submit">Save settings</button>
+</form>
+
 <h3>System <span class="muted">(read-only)</span></h3>
 <table>
   <tr><th>Providers configured</th><td>{{ provider_rows | length }}</td></tr>

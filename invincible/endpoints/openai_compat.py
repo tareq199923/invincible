@@ -18,6 +18,8 @@ from invincible.core.router import (
     NoCredentialsConfiguredError,
     UpstreamClientError,
 )
+from invincible.core.settings import settings
+from invincible.core.user_settings_store import override_flag, override_int
 from invincible.endpoints.auth import require_auth
 from invincible.endpoints.byok import byok_attempt_source
 
@@ -102,6 +104,7 @@ def _stream_assistant_message(content: str, states: dict) -> dict:
 async def _persist_new_turns(
     new_turns, store, session_id, memory: MemoryStore | None,
     principal: Principal, *, runs_store=None, request_id: str | None = None,
+    max_turns: int | None = None,
 ):
     try:
         await store.append(
@@ -109,6 +112,7 @@ async def _persist_new_turns(
             new_turns,
             user_id=principal.user_id,
             project_id=principal.project_id,
+            max_turns=max_turns,
         )
     except Exception:
         logger.exception("Failed to persist session history for %s", session_id)
@@ -137,6 +141,7 @@ async def _persist_new_turns(
 async def _stream_body(
     first, tail, store, session_id, to_persist, memory: MemoryStore | None,
     *, principal: Principal, runs_store=None, request_id: str | None = None,
+    max_turns: int | None = None,
 ):
     content = ""
     tool_states = {}
@@ -164,11 +169,13 @@ async def _stream_body(
         await _persist_new_turns(
             new_turns(), store, session_id, memory, principal,
             runs_store=runs_store, request_id=request_id,
+            max_turns=max_turns,
         )
         return
     await _persist_new_turns(
         new_turns(), store, session_id, memory, principal,
         runs_store=runs_store, request_id=request_id,
+        max_turns=max_turns,
     )
     yield "data: [DONE]\n\n"
 
@@ -244,12 +251,28 @@ async def chat_completions(
         user_id=principal.user_id,
         project_id=principal.project_id,
     )
+    # Phase 9 BYOK: api_key-realm principals route ONLY through their own
+    # connected credentials (never the operator's shared pool - the product
+    # decision pins this); legacy/anonymous keep the operator pool as-is.
+    # Loaded before the injections so the user's per-user overrides
+    # (Phase 1) can gate memory/continuity for this request.
+    byok = await byok_attempt_source(request, principal, model=body.model)
+    user_overrides = {} if byok is None else byok[3]
     # Phase 4: memory + continuity injections share one budget via the
     # ContextBuilder. Injected system messages are routed but never
     # persisted (system role is excluded below), so they never accumulate.
     injections = await build_context_messages(
-        retrieval=getattr(request.app.state, "retrieval", None),
-        continuity_engine=getattr(request.app.state, "continuity", None),
+        retrieval=(
+            getattr(request.app.state, "retrieval", None)
+            if override_flag(user_overrides, "memory", settings.memory_enabled)
+            else None
+        ),
+        continuity_engine=(
+            getattr(request.app.state, "continuity", None)
+            if override_flag(
+                user_overrides, "continuity", settings.continuity_enabled)
+            else None
+        ),
         user_id=principal.user_id,
         project_id=principal.project_id,
         session_id=session_id,
@@ -261,11 +284,6 @@ async def chat_completions(
     # accumulate duplicates that trimming never removes (system messages are
     # always kept). Route with it, but only persist the new turns.
     to_persist = [m for m in body.messages if m.get("role") != "system"]
-
-    # Phase 9 BYOK: api_key-realm principals route ONLY through their own
-    # connected credentials (never the operator's shared pool - the product
-    # decision pins this); legacy/anonymous keep the operator pool as-is.
-    byok = await byok_attempt_source(request, principal)
     if byok is not None and not byok[0]:
         return JSONResponse(
             content={"error": {"message": NO_CREDENTIALS_MESSAGE,
@@ -274,8 +292,16 @@ async def chat_completions(
         )
     byok_kwargs = (
         {} if byok is None
-        else {"byok_candidates": byok[0], "byok_key_resolver": byok[1]}
+        else {
+            "byok_candidates": byok[0],
+            "byok_key_resolver": byok[1],
+            "byok_routing": byok[2],
+            "overrides": byok[3],
+        }
     )
+    # Phase 1: this user's history turn cap (None = server default).
+    max_turns = override_int(
+        user_overrides, "history_max_turns", settings.history_max_turns)
 
     if body.stream:
         try:
@@ -301,7 +327,8 @@ async def chat_completions(
             _stream_body(first, tail, store, session_id, to_persist, memory,
                          principal=principal,
                          runs_store=getattr(request.app.state, "runs", None),
-                         request_id=info["request_id"]),
+                         request_id=info["request_id"],
+                         max_turns=max_turns),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -323,6 +350,7 @@ async def chat_completions(
                 new_turns,
                 user_id=principal.user_id,
                 project_id=principal.project_id,
+                max_turns=max_turns,
             )
             try:
                 if memory is not None:

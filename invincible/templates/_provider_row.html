@@ -10,6 +10,18 @@
   <td class="muted">{{ r.key_masked }}</td>
   <td><span class="status-badge status-{{ r.status }}">{{ r.status }}</span></td>
   <td>
+    <button class="linklike move-provider" title="Move earlier"
+            hx-post="/providers/mine/{{ r.id }}/move"
+            hx-vals='{"direction": "up"}'
+            hx-target="closest tbody" hx-swap="outerHTML"
+            hx-disabled-elt="this"
+            {% if loop is defined and loop.first %}disabled{% endif %}>&#9650;</button>
+    <button class="linklike move-provider" title="Move later"
+            hx-post="/providers/mine/{{ r.id }}/move"
+            hx-vals='{"direction": "down"}'
+            hx-target="closest tbody" hx-swap="outerHTML"
+            hx-disabled-elt="this"
+            {% if loop is defined and loop.last %}disabled{% endif %}>&#9660;</button>
     <button class="linklike test-provider"
             hx-post="/providers/mine/{{ r.id }}/test"
             hx-target="closest tr" hx-swap="outerHTML"

@@ -34,6 +34,11 @@ from invincible.core.projection import (
     fetch_session_view,
 )
 from invincible.core.settings import settings
+from invincible.core.user_settings_store import (
+    UnknownOverrideKeyError,
+    UserSettingsStore,
+    clean_overrides,
+)
 from invincible.endpoints.accounts import (
     _audit,
     _page,
@@ -658,6 +663,10 @@ async def settings_page(
         ("Continuity engine", settings.continuity_enabled()),
         ("Send-time compression", settings.compression_enabled()),
     ]
+    # Phase 1 self-service: the user's own request-shaping overrides plus
+    # the server defaults they fall through to (shown as hints).
+    user_overrides = await UserSettingsStore(engine).overrides_for(
+        principal.user_id)
     return _page(
         "settings.html", request,
         user_email=await _email(engine, principal),
@@ -669,7 +678,70 @@ async def settings_page(
         provider_rows=provider_rows,
         routing_mode=routing_mode,
         flags=flags,
+        user_overrides=user_overrides,
+        defaults={
+            "memory": settings.memory_enabled(),
+            "continuity": settings.continuity_enabled(),
+            "compression": settings.compression_enabled(),
+            "relay": settings.relay_enabled(),
+            "history_max_turns": settings.history_max_turns(),
+        },
+        settings_saved=request.query_params.get("saved") == "1",
     )
+
+
+@router.post("/dashboard/settings")
+async def save_request_settings(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    """Save the per-user request-shaping overrides (Phase 1 self-service).
+
+    Each toggle posts ``on`` / ``off`` / anything-else (= follow the server
+    default, key omitted from storage); ``history_max_turns`` empty means
+    default and ``0`` means no cap. Validation is save-time only
+    (:func:`clean_overrides`, 400-class) - the request path degrades
+    defensively."""
+    body = await _payload(request)
+    overrides = {}
+    for key in ("memory", "continuity", "compression", "relay"):
+        value = str(body.get(key) or "").strip().lower()
+        if value == "on":
+            overrides[key] = True
+        elif value == "off":
+            overrides[key] = False
+    raw_cap = str(body.get("history_max_turns") or "").strip()
+    if raw_cap:
+        try:
+            overrides["history_max_turns"] = int(raw_cap)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": {
+                    "message": "History turn cap must be a whole number "
+                               "(0 = no cap).",
+                    "type": "invalid_request_error"}},
+            ) from None
+    try:
+        cleaned = clean_overrides(overrides)
+    except (ValueError, UnknownOverrideKeyError) as e:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"message": str(e),
+                              "type": "invalid_request_error"}},
+        ) from None
+    await UserSettingsStore(_engine(request)).save_overrides(
+        principal.user_id, cleaned)
+    await _audit(
+        request, "settings.overrides.updated",
+        actor_user_id=principal.user_id,
+        resource_type="user_settings",
+        resource_id=str(principal.user_id),
+        meta={"keys": sorted(cleaned)},
+    )
+    if _wants_html(request):
+        return RedirectResponse("/dashboard/settings?saved=1", status_code=303)
+    return {"ok": True, "overrides": cleaned}
 
 
 # ---------------------------------------------------------------------------

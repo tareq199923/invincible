@@ -38,6 +38,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -649,6 +650,11 @@ user_provider_credentials = Table(
     Column("last_tested_at", Float),
     Column("created_at", Float, nullable=False),
     Column("updated_at", Float, nullable=False),
+    # Phase 1 self-service routing: the user's own ordering of their
+    # credentials (0 = first). Backfilled to the pre-existing
+    # (created_at, id) order by revision 0009; new rows default to 0 and
+    # take their place from the create-time position.
+    Column("sort_order", Integer, nullable=False, server_default="0"),
     UniqueConstraint(
         "user_id", "provider_name",
         name="uq_user_provider_credentials_user_name",
@@ -658,6 +664,25 @@ user_provider_credentials = Table(
 Index(
     "idx_user_provider_credentials_user",
     user_provider_credentials.c.user_id,
+)
+
+
+# Phase 1 self-service gateway: one row per user holding THEIR routing
+# mode + request-shaping overrides. ``routing`` mirrors the operator
+# registry's shape but references BYOK credential ids instead of provider
+# names: {"mode": "auto"} | {"mode": "pinned", "pinned":
+# {"credential_id", "model"}} | {"mode": "chain", "chain":
+# [{"credential_id", "model"}, ...]}. ``overrides`` keys (memory,
+# continuity, compression, relay, history_max_turns) each fall through to
+# the env default when absent - the row never overrides server secrets.
+user_settings = Table(
+    "user_settings", metadata,
+    Column("user_id", BigInteger, ForeignKey("users.id"), primary_key=True),
+    # text() so the quoted literal reaches the DDL verbatim; a plain
+    # string would be quoted again ("'''{}'''") and fail to parse as json.
+    Column("routing", JSONB, nullable=False, server_default=text("'{}'")),
+    Column("overrides", JSONB, nullable=False, server_default=text("'{}'")),
+    Column("updated_at", Float, nullable=False),
 )
 
 

@@ -43,6 +43,8 @@ from invincible.core.router import (
     NoCredentialsConfiguredError,
     UpstreamClientError,
 )
+from invincible.core.settings import settings
+from invincible.core.user_settings_store import override_flag, override_int
 from invincible.endpoints.auth import require_auth
 from invincible.endpoints.byok import byok_attempt_source
 from invincible.models.responses import ResponsesRequest
@@ -78,7 +80,7 @@ def _suffix_after_history(history: list, incoming: list) -> list:
 
 async def _persist(store, session_id, new_messages: list,
                    assistant_message: dict, memory: MemoryStore | None,
-                   principal: Principal):
+                   principal: Principal, *, max_turns: int | None = None):
     """Append this request's genuinely-new turns (system role excluded -
     Responses clients resend ``instructions`` every request and system
     messages must never accumulate) plus the assistant reply. Memories
@@ -86,6 +88,7 @@ async def _persist(store, session_id, new_messages: list,
 
     ``principal`` is required (multi-tenant audit Step 2): persistence
     must land under the caller's own session, never a fallback owner.
+    ``max_turns`` (Phase 1) is the caller's per-user history cap.
     """
     saved = [m for m in new_messages if m.get("role") != "system"]
     new_turns = saved + [assistant_message]
@@ -97,6 +100,7 @@ async def _persist(store, session_id, new_messages: list,
             new_turns,
             user_id=principal.user_id,
             project_id=principal.project_id,
+            max_turns=max_turns,
         )
     except Exception:
         logger.exception("Failed to persist session history for %s",
@@ -154,12 +158,28 @@ async def create_response(
         user_id=principal.user_id,
         project_id=principal.project_id,
     )
+    # BYOK: api_key-realm principals route ONLY through their own
+    # connected credentials (never the operator's shared pool);
+    # legacy/anonymous keep the operator pool as-is. Loaded before the
+    # injections so the user's per-user overrides (Phase 1) can gate
+    # memory/continuity/compression for this request.
+    byok = await byok_attempt_source(request, principal, model=body.model)
+    user_overrides = {} if byok is None else byok[3]
     # Memory + continuity injections share one budget via the
     # ContextBuilder. Injected system messages are routed but never
     # persisted (system role), so they never accumulate.
     injections = await build_context_messages(
-        retrieval=getattr(request.app.state, "retrieval", None),
-        continuity_engine=getattr(request.app.state, "continuity", None),
+        retrieval=(
+            getattr(request.app.state, "retrieval", None)
+            if override_flag(user_overrides, "memory", settings.memory_enabled)
+            else None
+        ),
+        continuity_engine=(
+            getattr(request.app.state, "continuity", None)
+            if override_flag(
+                user_overrides, "continuity", settings.continuity_enabled)
+            else None
+        ),
         user_id=principal.user_id,
         project_id=principal.project_id,
         session_id=session_id,
@@ -180,23 +200,28 @@ async def create_response(
     # Estimate on the compressed messages so reported usage tracks what
     # is actually sent. Per-provider trimming still makes this an upper
     # bound when a small-context provider wins the route.
-    if compression_enabled():
+    if override_flag(
+            user_overrides, "compression", compression_enabled):
         input_tokens = estimate_token_sum(compress_messages(full_messages))
     else:
         input_tokens = estimate_token_sum(full_messages)
     tools = responses_tools_to_openai(body.tools)
     tool_choice = translate_tool_choice(body.tool_choice)
 
-    # BYOK: api_key-realm principals route ONLY through their own
-    # connected credentials (never the operator's shared pool);
-    # legacy/anonymous keep the operator pool as-is.
-    byok = await byok_attempt_source(request, principal)
     if byok is not None and not byok[0]:
         return _error_response(400, NO_CREDENTIALS_MESSAGE)
     byok_kwargs = (
         {} if byok is None
-        else {"byok_candidates": byok[0], "byok_key_resolver": byok[1]}
+        else {
+            "byok_candidates": byok[0],
+            "byok_key_resolver": byok[1],
+            "byok_routing": byok[2],
+            "overrides": byok[3],
+        }
     )
+    # Phase 1: this user's history turn cap (None = server default).
+    max_turns = override_int(
+        user_overrides, "history_max_turns", settings.history_max_turns)
 
     if body.stream:
         try:
@@ -230,7 +255,7 @@ async def create_response(
         async def save_complete(accumulated: dict):
             await _persist(
                 store, session_id, new_turns, accumulated, memory,
-                principal,
+                principal, max_turns=max_turns,
             )
             if runs_store is not None:
                 try:
@@ -297,6 +322,7 @@ async def create_response(
             assistant_message,
             memory,
             principal,
+            max_turns=max_turns,
         )
 
     responses_response = internal_to_responses(

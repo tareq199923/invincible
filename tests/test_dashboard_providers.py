@@ -17,6 +17,7 @@ from cryptography.fernet import Fernet
 from invincible.core.accounts import SESSION_COOKIE
 from invincible.core.identity import ApiKeyStore
 from invincible.core.provider_catalog import CATALOG
+from invincible.core.user_settings_store import UserSettingsStore
 from invincible.main import app
 from tests.conftest import register_account
 
@@ -258,3 +259,251 @@ async def test_json_connect_keeps_201_row_shape(credential_key, client):
     assert row["catalog_key"] == "groq"
     assert row["status"] == "untested"
     assert RAW_KEY not in made.text
+
+
+# --- Phase 1: provider ordering + routing mode + request settings ----------------
+
+
+@pytest.fixture
+def public_dns(monkeypatch):
+    """Custom base URLs go through the SSRF guard (DNS-resolving); fake it
+    so the mock hosts never touch a real resolver - also for the per-use
+    re-check on the chat path."""
+    import invincible.core.url_safety as url_safety
+
+    monkeypatch.setattr(
+        url_safety, "_default_resolve", lambda host: ["93.184.216.34"])
+
+
+async def _connect_custom(client, name, model_id):
+    made = await client.post("/providers/mine", json={
+        "provider_name": name,
+        "base_url": f"https://{name.lower()}.example.com/v1",
+        "model_id": model_id,
+        "api_key": RAW_KEY,
+    })
+    assert made.status_code == 201, made.text
+    return made.json()
+
+
+async def test_move_swaps_order_and_next_request_routes_first(
+    credential_key, public_dns, client, router_setter
+):
+    """▲ on Second swaps the stored order; the swapped <tbody> re-renders
+    in the new order, and the user's NEXT chat request now starts from
+    the moved-up provider (auto mode = sort order)."""
+    uid = await logged_in(client)
+    await _connect_custom(client, "First", "first-model")
+    second = await _connect_custom(client, "Second", "second-model")
+
+    page = await client.get("/dashboard/providers")
+    assert f'hx-post="/providers/mine/{second["id"]}/move"' in page.text
+
+    moved = await client.post(
+        f"/providers/mine/{second['id']}/move",
+        data={"direction": "up"}, headers={"HX-Request": "true"})
+    assert moved.status_code == 200
+    # The re-rendered tbody lists Second before First now.
+    assert moved.text.index("Second") < moved.text.index("First")
+    listed = await client.get("/providers/mine")
+    assert [p["provider_name"] for p in listed.json()["providers"]] == [
+        "Second", "First"]
+
+    # The next request routes through the moved-up provider first (no
+    # request model, so nothing reorders the auto-mode tier order).
+    calls = {}
+
+    def handler(host):
+        def h(request):
+            calls.setdefault(host, []).append(str(request.url))
+            return httpx.Response(200, json={"choices": [{"message": {
+                "role": "assistant", "content": "hello"}}]})
+        return h
+
+    router_setter({
+        "first.example.com": handler("first"),
+        "second.example.com": handler("second"),
+    })
+    key = await ApiKeyStore(app.state.engine).create(uid, label="t")
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key['raw']}"},
+        json={"messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-invincible-provider"] == "Second"
+    assert resp.headers["x-invincible-model"] == "second-model"
+    assert len(calls.get("second", [])) == 1
+    assert calls.get("first") is None  # never needed - no failover
+
+
+async def test_move_redirects_without_htmx_and_404s_foreign_ids(
+    credential_key, public_dns, client
+):
+    # The foreign user is registered FIRST: /auth/register auto-logs-in
+    # and would otherwise switch this client's session away from the
+    # user under test.
+    other, _ = await register_account(client, "move-other@example.com")
+    other_cred = await _connect_custom_for(client, other.json()["id"])
+
+    await logged_in(client)
+    first = await _connect_custom(client, "First", "first-model")
+    # Plain (routing-form button) posts redirect back to the page.
+    moved = await client.post(
+        f"/providers/mine/{first['id']}/move", data={"direction": "up"})
+    assert moved.status_code == 303
+    assert moved.headers["location"] == "/dashboard/providers#routing"
+
+    # Unknown and foreign ids are indistinguishable 404s. Foreign: the
+    # other user's credential must not be movable from this session.
+    for bad_id in (999999, other_cred["id"]):
+        resp = await client.post(
+            f"/providers/mine/{bad_id}/move", data={"direction": "up"})
+        assert resp.status_code == 404
+    # And a bogus direction is a 400, not a silent success.
+    resp = await client.post(
+        f"/providers/mine/{first['id']}/move", data={"direction": "sideways"})
+    assert resp.status_code == 400
+
+
+async def _connect_custom_for(client, uid):
+    """Connect a credential directly through the store for a given user
+    (the OTHER user in cross-user tests - no session juggling). The
+    credential_key fixture has already set the encryption master key."""
+    from invincible.core.credential_store import ByokCredentialStore
+
+    return await ByokCredentialStore(app.state.engine).create(
+        user_id=uid, provider_name="Other",
+        model_id="other-model",
+        base_url="https://other.example.com/v1",
+        api_key="other-key-1234567890")
+
+
+async def test_routing_form_saves_chain_and_prefills(
+    credential_key, public_dns, client
+):
+    await logged_in(client)
+    first = await _connect_custom(client, "First", "first-model")
+    second = await _connect_custom(client, "Second", "second-model")
+
+    saved = await client.post("/routing/mine", data={
+        "mode": "chain",
+        "chain_0_credential_id": second["id"],
+        "chain_0_model": "kimi-step",
+        "chain_1_credential_id": first["id"],
+        "chain_1_model": "glm-step",
+    })
+    assert saved.status_code == 303, saved.text
+    assert saved.headers["location"] == "/dashboard/providers?routing_saved=1"
+
+    stored = await client.get("/routing/mine")
+    assert stored.status_code == 200
+    assert stored.json()["routing"] == {"mode": "chain", "chain": [
+        {"credential_id": second["id"], "model": "kimi-step"},
+        {"credential_id": first["id"], "model": "glm-step"},
+    ]}
+
+    # The page re-renders the saved chain: banner, checked mode radio,
+    # and the stored step models pre-filled (not the stored defaults).
+    page = await client.get("/dashboard/providers?routing_saved=1")
+    assert "Routing saved." in page.text
+    assert 'value="chain"' in page.text
+    assert 'value="kimi-step"' in page.text
+    assert 'value="glm-step"' in page.text
+    assert 'value="first-model"' not in page.text
+
+
+async def test_routing_save_validates_ownership_and_shape(
+    credential_key, public_dns, client
+):
+    # Foreign user first (registration auto-logs-in and would switch the
+    # session away from the user under test).
+    other, _ = await register_account(client, "routing-other@example.com")
+    other_cred = await _connect_custom_for(client, other.json()["id"])
+
+    await logged_in(client)
+    first = await _connect_custom(client, "First", "first-model")
+
+    # Foreign credential id: rejected (and indistinguishable from stale).
+    resp = await client.post("/routing/mine", data={
+        "mode": "chain",
+        "chain_0_credential_id": other_cred["id"],
+        "chain_0_model": "x",
+    })
+    assert resp.status_code == 400
+    # Empty chain.
+    resp = await client.post("/routing/mine", data={"mode": "chain"})
+    assert resp.status_code == 400
+    # Blank step model.
+    resp = await client.post("/routing/mine", data={
+        "mode": "chain",
+        "chain_0_credential_id": first["id"], "chain_0_model": "  "})
+    assert resp.status_code == 400
+    # Unknown mode.
+    resp = await client.post("/routing/mine", data={"mode": "chaos"})
+    assert resp.status_code == 400
+    # Pinned without a provider.
+    resp = await client.post("/routing/mine", data={
+        "mode": "pinned", "pinned_model": "m"})
+    assert resp.status_code == 400
+    # Nothing was stored by the rejected attempts.
+    assert (await client.get("/routing/mine")).json()["routing"] == {}
+
+
+async def test_routing_json_body_round_trip(credential_key, public_dns, client):
+    """JSON clients (scripts) get the same validation + a JSON response."""
+    await logged_in(client)
+    first = await _connect_custom(client, "First", "first-model")
+    saved = await client.post("/routing/mine", json={
+        "mode": "pinned",
+        "pinned": {"credential_id": first["id"], "model": "pinned-model"},
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["routing"] == {
+        "mode": "pinned",
+        "pinned": {"credential_id": first["id"], "model": "pinned-model"},
+    }
+    assert (await client.get("/routing/mine")).json()["routing"] == (
+        saved.json()["routing"])
+
+
+async def test_settings_form_saves_overrides(client):
+    """The tri-state request settings round-trip: on/off persist, default
+    is omitted, 0 = no cap."""
+    uid = await logged_in(client)
+    saved = await client.post("/dashboard/settings", data={
+        "memory": "off",
+        "compression": "on",
+        "continuity": "default",
+        "relay": "",
+        "history_max_turns": "0",
+    })
+    assert saved.status_code == 303, saved.text
+    assert saved.headers["location"] == "/dashboard/settings?saved=1"
+    stored = await UserSettingsStore(app.state.engine).overrides_for(uid)
+    assert stored == {"memory": False, "compression": True,
+                      "history_max_turns": 0}
+
+    page = await client.get("/dashboard/settings?saved=1")
+    assert page.status_code == 200
+    assert "Request settings saved." in page.text
+    # The saved values re-render as the selected options.
+    assert '<option value="off" selected' in page.text
+    assert '<option value="on" selected' in page.text
+    assert 'value="0"' in page.text
+
+    # "default" selections stay omitted on a re-save.
+    await client.post("/dashboard/settings", data={
+        "memory": "default", "compression": "on",
+        "history_max_turns": ""})
+    stored = await UserSettingsStore(app.state.engine).overrides_for(uid)
+    assert stored == {"compression": True}
+
+
+async def test_settings_rejects_bad_values(client):
+    uid = await logged_in(client)
+    resp = await client.post("/dashboard/settings", data={
+        "history_max_turns": "not-a-number"})
+    assert resp.status_code == 400
+    # Nothing was stored by the rejected attempt.
+    assert await UserSettingsStore(
+        app.state.engine).overrides_for(uid) == {}

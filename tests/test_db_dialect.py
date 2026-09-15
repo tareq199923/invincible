@@ -215,6 +215,8 @@ def test_metadata_covers_all_expected_tables():
         "user_identities", "device_codes",
         # Phase 9 BYOK provider connections
         "user_provider_credentials",
+        # Phase 1 self-service: per-user routing + request settings
+        "user_settings",
     }
     assert set(metadata.tables) == expected
 

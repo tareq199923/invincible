@@ -24,12 +24,17 @@ from invincible.core.config import resolve_timeout
 from invincible.core.credential_store import (
     ByokCredentialStore,
     DuplicateCredentialError,
+    UnknownCredentialError,
 )
 from invincible.core.memory_projection import source_color
 from invincible.core.principal import Principal
 from invincible.core.provider_catalog import CATALOG, catalog_entry
 from invincible.core.trimming import DEFAULT_MAX_CONTEXT
 from invincible.core.url_safety import UnsafeUrlError, validate_public_https_url
+from invincible.core.user_settings_store import (
+    UserSettingsStore,
+    routing_config_from_user,
+)
 from invincible.endpoints.accounts import (
     _audit,
     _page,
@@ -89,17 +94,27 @@ def _audit_meta(row: dict) -> dict:
     return meta
 
 
-async def byok_attempt_source(request: Request, principal: Principal):
-    """Candidate pool + key resolver for a BYOK-scoped chat request
-    (Platform Phase 9, PR-C).
+async def byok_attempt_source(
+    request: Request, principal: Principal, model: str | None = None,
+):
+    """Candidate pool + key resolver + routing config + overrides for a
+    BYOK-scoped chat request (Platform Phase 9, PR-C; Phase 1 grew the
+    tuple with the user's own routing mode and pipeline overrides).
 
     Returns ``None`` when the principal rides the operator pool unchanged
     (legacy gateway key / anonymous local identity). Otherwise returns
-    ``(candidates, key_resolver)`` built entirely from this user's
-    ``user_provider_credentials`` rows - an EMPTY candidate list means the
-    user has connected nothing, and callers must fail fast with a clear
-    400-class response. There is no fallback to the operator's shared
+    ``(candidates, key_resolver, routing_config, overrides)`` built
+    entirely from this user's ``user_provider_credentials`` +
+    ``user_settings`` rows - an EMPTY candidate list means the user has
+    connected nothing, and callers must fail fast with a clear 400-class
+    response. There is no fallback to the operator's shared
     ProviderRegistry in either direction.
+
+    ``routing_config`` is the user's auto/pinned/chain mode over those
+    candidates, with the request's ``model`` already applied (a chain
+    step naming that model floats to the front, so the client's model
+    choice still picks the entry point). Malformed stored settings
+    degrade to auto - never raise on the request path.
 
     ``key_resolver(provider)`` is awaited once per attempt by the Router
     (lazy decryption - never eagerly for the whole list): it re-fetches
@@ -114,6 +129,10 @@ async def byok_attempt_source(request: Request, principal: Principal):
     store = ByokCredentialStore(request.app.state.engine)
     rows = await store.routing_rows(principal.user_id)
     user_id = principal.user_id
+    stored = await UserSettingsStore(request.app.state.engine).get(user_id)
+    routing = routing_config_from_user(
+        stored["routing"], rows, model)
+    overrides = stored["overrides"]
 
     async def resolve_key(provider: dict) -> str | None:
         row = await store.get_for_user(
@@ -150,7 +169,7 @@ async def byok_attempt_source(request: Request, principal: Principal):
             "health_id": f"byok:{row['id']}",
             "byok_credential_id": row["id"],
         })
-    return candidates, resolve_key
+    return candidates, resolve_key, routing, overrides
 
 
 async def _probe(request: Request, base_url: str, api_key: str) -> dict:
@@ -225,6 +244,28 @@ async def providers_page(
     rows = await _store(request).list_for_user(principal.user_id)
     for r in rows:
         r["color"] = source_color(r.get("catalog_key") or r["provider_name"])
+    # Phase 1 self-service routing: the stored auto/chain/pinned mode plus
+    # per-step model pre-fills for the routing form. Stored JSON is never
+    # trusted for shape - anything malformed renders as the auto default.
+    stored = await UserSettingsStore(
+        request.app.state.engine).routing_for(principal.user_id)
+    routing_mode = stored.get("mode") if isinstance(stored, dict) else None
+    if routing_mode not in ("auto", "chain", "pinned"):
+        routing_mode = "auto"
+    chain_prefill = {}
+    if isinstance(stored.get("chain"), list):
+        for step in stored["chain"]:
+            if (isinstance(step, dict)
+                    and isinstance(step.get("credential_id"), int)
+                    and isinstance(step.get("model"), str)
+                    and step["model"].strip()):
+                chain_prefill[step["credential_id"]] = step["model"]
+    pinned = stored.get("pinned") if isinstance(stored.get("pinned"), dict) else {}
+    pinned_credential_id = (
+        pinned.get("credential_id")
+        if isinstance(pinned.get("credential_id"), int) else None)
+    pinned_model = (
+        pinned.get("model") if isinstance(pinned.get("model"), str) else "")
     # Phase 9 PR-D: the catalog renders as connect cards over the
     # operator-supplied constants; a card whose catalog_key is already
     # connected shows a connected state instead of a blank form. The
@@ -245,6 +286,11 @@ async def providers_page(
         connected=request.query_params.get("connected") == "1",
         tested=request.query_params.get("tested"),
         test_error=request.query_params.get("test_error") == "1",
+        routing_mode=routing_mode,
+        chain_prefill=chain_prefill,
+        pinned_credential_id=pinned_credential_id,
+        pinned_model=pinned_model,
+        routing_saved=request.query_params.get("routing_saved") == "1",
     )
 
 
@@ -398,6 +444,57 @@ async def test_provider(
     return {**report, "credential_status": credential_status}
 
 
+@router.post("/providers/mine/{credential_id}/move")
+async def move_provider(
+    credential_id: int,
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    """Swap a credential with its neighbor in the user's order (Phase 1
+    self-service). Two callers, both form-encoded: the HTMX ▲/▼ buttons in
+    the connected-providers table (hx-vals ``direction``; the response
+    re-renders the whole ``<tbody>`` partial), and the chain-step buttons in
+    the routing form, which ride the form's submit via ``formaction`` (the
+    endpoint ignores the extra routing fields). Non-HTMX callers get a
+    redirect back to the routing section."""
+    store = _store(request)
+    rows = await store.list_for_user(principal.user_id)
+    ids = [r["id"] for r in rows]
+    if credential_id not in ids:
+        raise _not_found()
+    body = await _payload(request)
+    direction = str(body.get("direction") or "").strip().lower()
+    if direction not in ("up", "down"):
+        raise _bad_request("direction must be 'up' or 'down'")
+    index = ids.index(credential_id)
+    if direction == "up" and index > 0:
+        ids[index - 1], ids[index] = ids[index], ids[index - 1]
+    elif direction == "down" and index < len(ids) - 1:
+        ids[index], ids[index + 1] = ids[index + 1], ids[index]
+    try:
+        await store.reorder(principal.user_id, ids)
+    except UnknownCredentialError:
+        # A credential vanished between the list and the write.
+        raise _not_found() from None
+    row = next(r for r in rows if r["id"] == credential_id)
+    await _audit(
+        request, "byok.credential.moved",
+        actor_user_id=principal.user_id,
+        resource_type="user_provider_credential",
+        resource_id=str(credential_id),
+        meta={**_audit_meta(row), "direction": direction},
+    )
+    if request.headers.get("HX-Request") == "true":
+        # Wholesale tbody swap: every row re-renders in its new order, so
+        # the ▲/▼ edge-disabled states stay correct too.
+        rows = await store.list_for_user(principal.user_id)
+        for r in rows:
+            r["color"] = source_color(r.get("catalog_key") or r["provider_name"])
+        return templates.TemplateResponse(
+            request, "_provider_rows.html", {"rows": rows})
+    return RedirectResponse("/dashboard/providers#routing", status_code=303)
+
+
 @router.delete("/providers/mine/{credential_id}")
 async def delete_provider(
     credential_id: int,
@@ -418,3 +515,117 @@ async def delete_provider(
         # HTMX row removal: empty 204 lets hx-swap="delete" drop the row.
         return Response(status_code=204)
     return {"deleted": True}
+
+
+# ---------------------------------------------------------------------------
+# Per-user routing mode (Phase 1 self-service): auto / chain / pinned over
+# the user's OWN connected credentials. Mirrors the operator registry's
+# routing shape but references credential ids.
+
+
+def _routing_model(value) -> str:
+    model = str(value or "").strip()
+    if not model:
+        raise _bad_request("every routing step needs a model")
+    if len(model) > 200:
+        raise _bad_request("Routing step models must be at most 200 characters.")
+    return model
+
+
+def _routing_credential_id(value, owned: set[int]) -> int:
+    try:
+        credential_id = int(value)
+    except (TypeError, ValueError):
+        raise _bad_request("Routing step credential ids must be numbers") from None
+    if credential_id not in owned:
+        # Not a distinguishing message: foreign and unknown ids render the
+        # same as "you disconnected that provider" (anti-enumeration).
+        raise _bad_request(
+            "Routing step references a provider that is not connected")
+    return credential_id
+
+
+def _chain_steps(body: dict, owned: set[int]) -> list[dict]:
+    """Chain steps from a JSON body (``chain`` list) or the routing form
+    (``chain_{i}_credential_id`` / ``chain_{i}_model`` pairs, rendered in
+    the user's sort order)."""
+    raw = body.get("chain")
+    if isinstance(raw, list):
+        steps = [
+            {"credential_id": _routing_credential_id(s.get("credential_id"), owned),
+             "model": _routing_model(s.get("model"))}
+            for s in raw if isinstance(s, dict)
+        ]
+    else:
+        steps = []
+        index = 0
+        while f"chain_{index}_credential_id" in body:
+            steps.append({
+                "credential_id": _routing_credential_id(
+                    body[f"chain_{index}_credential_id"], owned),
+                "model": _routing_model(body.get(f"chain_{index}_model")),
+            })
+            index += 1
+    if not steps:
+        raise _bad_request("A chain needs at least one step")
+    return steps
+
+
+def _pinned_step(body: dict, owned: set[int]) -> dict:
+    if isinstance(body.get("pinned"), dict):
+        pinned = body["pinned"]
+        return {
+            "credential_id": _routing_credential_id(
+                pinned.get("credential_id"), owned),
+            "model": _routing_model(pinned.get("model")),
+        }
+    if not body.get("pinned_credential_id"):
+        raise _bad_request("Pinned routing needs a provider and a model")
+    return {
+        "credential_id": _routing_credential_id(
+            body.get("pinned_credential_id"), owned),
+        "model": _routing_model(body.get("pinned_model")),
+    }
+
+
+@router.get("/routing/mine")
+async def get_routing(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    stored = await UserSettingsStore(
+        request.app.state.engine).routing_for(principal.user_id)
+    return {"routing": stored}
+
+
+@router.post("/routing/mine")
+async def save_routing(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    body = await _payload(request)
+    mode = str(body.get("mode") or "").strip()
+    if mode not in ("auto", "pinned", "chain"):
+        raise _bad_request("mode must be one of auto, pinned, chain")
+    owned = {
+        r["id"] for r in await _store(request).list_for_user(principal.user_id)
+    }
+    if mode == "auto":
+        routing = {"mode": "auto"}
+    elif mode == "pinned":
+        routing = {"mode": "pinned", "pinned": _pinned_step(body, owned)}
+    else:
+        routing = {"mode": "chain", "chain": _chain_steps(body, owned)}
+    await UserSettingsStore(request.app.state.engine).save_routing(
+        principal.user_id, routing)
+    await _audit(
+        request, "routing.updated",
+        actor_user_id=principal.user_id,
+        resource_type="user_settings",
+        resource_id=str(principal.user_id),
+        meta={"mode": mode},
+    )
+    if _wants_html(request):
+        return RedirectResponse(
+            "/dashboard/providers?routing_saved=1", status_code=303)
+    return {"routing": routing}

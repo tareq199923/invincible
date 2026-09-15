@@ -65,6 +65,31 @@ def routing_from_config(config: dict) -> RoutingConfig:
     return RoutingConfig(mode=mode, pinned=pinned, chain=chain)
 
 
+def chain_with_model_hint(chain: list[dict], model: str | None) -> list[dict]:
+    """Float the chain step(s) whose ``model`` equals the requested model
+    to the front, preserving the rest of the order.
+
+    This is the BYOK chain's entry-point semantics (Phase 1 self-service,
+    option A): the client's requested model names the step to START from
+    (so Codex's ``/model`` still picks the entry point), and the
+    remaining steps follow in the user's order as cross-model fallbacks.
+    Duplicates float together, keeping their relative order. ``model``
+    None/empty or a matching-free chain returns the input order as-is.
+    The input is never mutated."""
+    if not model:
+        return list(chain)
+
+    def _hint_model(step) -> object:
+        # Malformed steps (a corrupt stored chain can hold non-dicts)
+        # never match - and never raise - here.
+        return step.get("model") if isinstance(step, dict) else None
+
+    matching = [step for step in chain if _hint_model(step) == model]
+    if not matching:
+        return list(chain)
+    return matching + [s for s in chain if _hint_model(s) != model]
+
+
 def attempt_order(
     providers: list[dict],
     health_tracker,

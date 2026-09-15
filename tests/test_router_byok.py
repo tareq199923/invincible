@@ -22,9 +22,15 @@ import httpx
 import pytest
 
 from invincible.core.router import (
+    AllProvidersFailedError,
     NoCredentialsConfiguredError,
     UpstreamClientError,
 )
+from invincible.core.selection import (
+    PinnedRoute,
+    RoutingConfig,
+)
+from invincible.core.user_settings_store import routing_config_from_user
 from tests.conftest import provider_body, sse_body, stream_chunk
 
 
@@ -463,3 +469,143 @@ async def test_unrelated_400_under_override_still_surfaces(make_router):
             byok_key_resolver=accept_key,
         )
     assert len(c1) == 1 and c2 == []
+
+
+# --- Phase 1 self-service routing modes (auto / chain / pinned) -------------------
+#
+# byok_routing replaces the hardcoded AUTO: chain steps fall back across
+# MODELS (each step's own configured model, never the request's), the
+# model hint floats the matching step to the front, and pinned surfaces
+# its failure raw with no fallback.
+
+
+async def test_chain_mode_fails_over_with_each_steps_own_model(make_router):
+    """glm down -> kimi serves: the surviving step serves with ITS
+    configured model, not the request's model (the blanket auto-mode
+    override does not apply in chain mode)."""
+    c1, h1 = capturing(httpx.Response(500, json={"error": {}}))
+    c2, h2 = capturing(provider_body("second"))
+    router = make_router(handlers={
+        "u1.example.com": h1, "u2.example.com": h2,
+    })
+    result, info = await router.route_request_detailed(
+        [{"role": "user", "content": "hi"}],
+        model="requested-model",
+        byok_candidates=[
+            byok_candidate(0, "u1.example.com", name="First"),
+            byok_candidate(1, "u2.example.com", name="Second"),
+        ],
+        byok_key_resolver=accept_key,
+        byok_routing=RoutingConfig(mode="chain", chain=(
+            PinnedRoute(provider="First", model="glm-5.3"),
+            PinnedRoute(provider="Second", model="kimi-k3"),
+        )),
+    )
+    assert result["choices"][0]["message"]["content"] == "hello"
+    assert c1[0]["model"] == "glm-5.3"   # step 1's own model
+    assert c2[0]["model"] == "kimi-k3"   # step 2's own model, not the request's
+    assert info["model_id"] == "kimi-k3"
+
+
+async def test_chain_model_hint_floats_matching_step_first(make_router):
+    """The request's model names the chain's entry point: step 2 matches,
+    so it is attempted first and serves without touching step 1."""
+    c1, h1 = counting(provider_body("first"))
+    c2, h2 = capturing(provider_body("second"))
+    router = make_router(handlers={
+        "u1.example.com": h1, "u2.example.com": h2,
+    })
+    routing = routing_config_from_user({
+        "mode": "chain",
+        "chain": [
+            {"credential_id": 1, "model": "glm-5.3"},
+            {"credential_id": 2, "model": "kimi-k3"},
+        ],
+    }, [
+        {"id": 1, "provider_name": "First", "model_id": "stored-1"},
+        {"id": 2, "provider_name": "Second", "model_id": "stored-2"},
+    ], model="kimi-k3")
+    result, info = await router.route_request_detailed(
+        [{"role": "user", "content": "hi"}],
+        model="kimi-k3",
+        byok_candidates=[
+            byok_candidate(0, "u1.example.com", name="First"),
+            byok_candidate(1, "u2.example.com", name="Second"),
+        ],
+        byok_key_resolver=accept_key,
+        byok_routing=routing,
+    )
+    assert result["choices"][0]["message"]["content"] == "hello"
+    assert c1 == []                      # floated past, never attempted
+    assert c2[0]["model"] == "kimi-k3"
+    assert info["provider_name"] == "Second"
+    assert info["model_id"] == "kimi-k3"
+
+
+async def test_pinned_mode_surfaces_raw_failure_without_failover(make_router):
+    """Pinned means pinned: the pinned credential's failure surfaces
+    (mapped to the normal gateway exhaustion error); a healthy bystander
+    candidate is never tried."""
+    c1, h1 = counting(httpx.Response(500, json={"error": {}}))
+    c2, h2 = counting(provider_body("second"))
+    router = make_router(handlers={
+        "u1.example.com": h1, "u2.example.com": h2,
+    })
+    with pytest.raises(AllProvidersFailedError):
+        await router.route_request(
+            [{"role": "user", "content": "hi"}],
+            byok_candidates=[
+                byok_candidate(0, "u1.example.com", name="First"),
+                byok_candidate(1, "u2.example.com", name="Second"),
+            ],
+            byok_key_resolver=accept_key,
+            byok_routing=RoutingConfig(
+                mode="pinned",
+                pinned=PinnedRoute(provider="First", model="glm-5.3")),
+        )
+    assert len(c1) == 1 and c2 == []
+
+
+async def test_pinned_mode_drifted_credential_fails_clean(make_router):
+    """The pinned credential was deleted (drift): the request fails with
+    the normal gateway error naming the pinned provider - never a
+    fallback, never an internal error."""
+    c2, h2 = counting(provider_body("second"))
+    router = make_router(handlers={"u2.example.com": h2})
+    with pytest.raises(AllProvidersFailedError) as exc_info:
+        await router.route_request(
+            [{"role": "user", "content": "hi"}],
+            byok_candidates=[
+                byok_candidate(0, "u2.example.com", name="Second"),
+            ],
+            byok_key_resolver=accept_key,
+            byok_routing=RoutingConfig(
+                mode="pinned",
+                pinned=PinnedRoute(provider="Gone", model="glm-5.3")),
+        )
+    assert "Gone" in str(exc_info.value)
+    assert c2 == []
+
+
+async def test_auto_mode_still_applies_the_blanket_model_override(make_router):
+    """auto (byok_routing=None) keeps the historical Phase 9 behavior: the
+    request model overrides every candidate - pinned/chain gating must not
+    have leaked into the default path."""
+    c1, h1 = capturing(httpx.Response(404, json={"error": {}}))
+    c2, h2 = capturing(provider_body("second"))
+    router = make_router(handlers={
+        "u1.example.com": h1, "u2.example.com": h2,
+    })
+    result, info = await router.route_request_detailed(
+        [{"role": "user", "content": "hi"}],
+        model="requested-model",
+        byok_candidates=[
+            byok_candidate(0, "u1.example.com"),
+            byok_candidate(1, "u2.example.com"),
+        ],
+        byok_key_resolver=accept_key,
+    )
+    assert result["choices"][0]["message"]["content"] == "hello"
+    assert c1[0]["model"] == "requested-model"
+    assert c2[0]["model"] == "requested-model"
+    assert info["model_id"] == "requested-model"

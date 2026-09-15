@@ -17,6 +17,7 @@ from cryptography.fernet import Fernet
 
 from invincible.core.credential_store import ByokCredentialStore
 from invincible.core.identity import ApiKeyStore
+from invincible.core.user_settings_store import UserSettingsStore
 from invincible.main import app
 from tests.conftest import (
     provider_body,
@@ -375,3 +376,143 @@ async def test_anthropic_messages_model_overrides_stored_default(
     assert resp.status_code == 200, resp.text
     assert calls[0]["model"] == "custom-anthropic-model"
     assert_operator_pool_untouched(counters)
+
+
+# --- Phase 1 self-service routing (chain mode, per-user overrides) ----------------
+
+
+async def test_chain_routing_failover_serves_steps_own_model(
+    client, router_setter
+):
+    """End-to-end chain mode: glm step's host is down -> the kimi step
+    serves with ITS configured model. The failover headers report the
+    serving step, and the request's model never leaks into step payloads
+    (it only floated the matching step to the front)."""
+    handlers, counters = transport_handlers()
+    c1, h1 = capturing(httpx.Response(500, json={"error": {}}))
+    handlers[U1] = h1
+    counters[U1] = c1
+    c2, h2 = capturing(provider_body("u2"))
+    handlers[U2] = h2
+    counters[U2] = c2
+    router_setter(handlers)
+    uid, raw = await byok_user(client, "chain@example.com",
+                               credential_count=2)
+    rows = await ByokCredentialStore(app.state.engine).list_for_user(uid)
+    assert [r["provider_name"] for r in rows] == ["Mine1", "Mine2"]
+    await UserSettingsStore(app.state.engine).save_routing(uid, {
+        "mode": "chain",
+        "chain": [
+            {"credential_id": rows[0]["id"], "model": "glm-step"},
+            {"credential_id": rows[1]["id"], "model": "kimi-step"},
+        ],
+    })
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={"model": "glm-step",
+              "messages": [{"role": "user", "content": "hi"}]},
+        headers=chat_headers(raw))
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-invincible-provider"] == "Mine2"
+    assert resp.headers["x-invincible-model"] == "kimi-step"
+    # Each step saw its own configured model, never the request's.
+    assert c1[0]["model"] == "glm-step"
+    assert c2[0]["model"] == "kimi-step"
+    assert_operator_pool_untouched(counters)
+    assert len(counters[U3]) == 0  # not in the chain, never consulted
+
+
+async def test_memory_override_disables_injection_for_that_user(
+    client, router_setter
+):
+    """The per-user ``memory: false`` override silences memory injection
+    for that user's requests only - the same query without the override
+    (first turn) proves retrieval would otherwise fire."""
+    handlers, counters = transport_handlers()
+    calls, handler = capturing(provider_body("u1"))
+    handlers[U1] = handler
+    counters[U1] = calls
+    router_setter(handlers)
+    uid, raw = await byok_user(client, "memoff@example.com",
+                               credential_count=1)
+    await app.state.memory.save_memory(
+        user_id=uid, content="zephyr quokka lantern", layer="explicit")
+
+    def _ask(session_id):
+        return client.post(
+            "/v1/chat/completions",
+            headers={**chat_headers(raw), "X-Session-Id": session_id},
+            json={"messages": [
+                {"role": "user", "content": "zephyr quokka lantern?"}]},
+        )
+
+    # Turn 1 (no overrides stored): retrieval injects the memory.
+    assert (await _ask("mem-override-on")).status_code == 200
+    injected = [
+        m for m in calls[0]["messages"]
+        if m["role"] == "system" and "[Relevant memory" in m["content"]
+    ]
+    assert len(injected) == 1
+    assert "zephyr quokka lantern" in injected[0]["content"]
+
+    # Turn 2 (override off): nothing injected for this user anymore.
+    await UserSettingsStore(app.state.engine).save_overrides(
+        uid, {"memory": False})
+    assert (await _ask("mem-override-off")).status_code == 200
+    assert all(
+        "[Relevant memory" not in (m.get("content") or "")
+        for m in calls[1]["messages"]
+    )
+
+
+async def test_compression_override_sends_history_verbatim(
+    client, router_setter, monkeypatch
+):
+    """The per-user ``compression: false`` override skips send-time tool
+    truncation even with the env toggle forced ON: the oversized tool
+    result reaches the provider verbatim where the default path would
+    have compressed it."""
+    # The developer .env (loaded by main.py's import-time load_dotenv)
+    # may disable compression; pin it on so the override is what turns
+    # it OFF for this user.
+    monkeypatch.setenv("INVINCIBLE_COMPRESSION", "1")
+    handlers, counters = transport_handlers()
+    calls, handler = capturing(provider_body("u1"))
+    handlers[U1] = handler
+    counters[U1] = calls
+    router_setter(handlers)
+    uid, raw = await byok_user(client, "compoff@example.com",
+                               credential_count=1)
+
+    big_tool = "x" * 10_000
+
+    def _ask(session_id):
+        return client.post(
+            "/v1/chat/completions",
+            headers={**chat_headers(raw), "X-Session-Id": session_id},
+            json={"messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": None, "tool_calls": [{
+                    "id": "call_1", "type": "function",
+                    "function": {"name": "f", "arguments": "{}"}}]},
+                {"role": "tool", "tool_call_id": "call_1",
+                 "content": big_tool},
+                {"role": "user", "content": "and now?"},
+            ]},
+        )
+
+    # Turn 1 (default on): the tool result is truncated in flight.
+    assert (await _ask("comp-on")).status_code == 200
+    tool_msgs = [m for m in calls[0]["messages"] if m.get("role") == "tool"]
+    assert len(tool_msgs) == 1
+    assert "compressed away" in tool_msgs[0]["content"]
+    assert len(tool_msgs[0]["content"]) < len(big_tool)
+
+    # Turn 2 (override off): the same history goes out verbatim.
+    await UserSettingsStore(app.state.engine).save_overrides(
+        uid, {"compression": False})
+    assert (await _ask("comp-off")).status_code == 200
+    tool_msgs = [m for m in calls[1]["messages"] if m.get("role") == "tool"]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0]["content"] == big_tool

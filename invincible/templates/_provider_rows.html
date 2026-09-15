@@ -1,0 +1,9 @@
+{# The whole connected-providers <tbody> (Phase 1 self-service routing).
+   Rendered by /dashboard/providers and swapped wholesale by the HTMX
+   move endpoint (hx-target="closest tbody" + hx-swap="outerHTML"), so
+   one ▲/▼ click re-renders every row in its new order. #}
+<tbody id="provider-rows">
+{% for r in rows %}
+{% include "_provider_row.html" %}
+{% endfor %}
+</tbody>

@@ -229,7 +229,8 @@ class SessionStore:
     # process-wide write lock)
 
     async def save(self, session_id: str, new_messages: list, *,
-                   user_id: int, project_id: int) -> None:
+                   user_id: int, project_id: int,
+                   max_turns: int | None = None) -> None:
         """Full replace: wipe the session's turns/messages and re-insert
         ``messages`` through the boundary walker."""
         async with self.engine.begin() as conn:
@@ -239,15 +240,18 @@ class SessionStore:
             await self._delete_turn_rows(conn, pk)
             await self._insert_grouped(conn, pk, new_messages)
             await self._bump_updated_at(conn, pk, time.time())
-            await self._enforce_retention(conn, pk)
+            await self._enforce_retention(conn, pk, max_turns)
 
     async def append(self, session_id: str, new_messages: list, *,
-                     user_id: int, project_id: int) -> None:
+                     user_id: int, project_id: int,
+                     max_turns: int | None = None) -> None:
         """Insert this request's new messages, opening/closing turns by the
         group_into_turns boundary rule.
 
         Retention: stored history bounded to the most recent
         INVINCIBLE_HISTORY_MAX_TURNS whole turns (default 200; 0/off off).
+        ``max_turns`` (Phase 1 self-service) is the caller's per-user
+        override; None = the env default.
         """
         if not new_messages:
             return
@@ -257,7 +261,7 @@ class SessionStore:
             )
             await self._insert_grouped(conn, pk, new_messages)
             await self._bump_updated_at(conn, pk, time.time())
-            await self._enforce_retention(conn, pk)
+            await self._enforce_retention(conn, pk, max_turns)
 
     # ------------------------------------------------------------------
     # Internals
@@ -358,8 +362,12 @@ class SessionStore:
             inserted += 1
         return inserted
 
-    async def _enforce_retention(self, conn, session_pk: int) -> None:
-        limit = history_max_turns()
+    async def _enforce_retention(
+        self, conn, session_pk: int, max_turns: int | None = None,
+    ) -> None:
+        limit = (
+            history_max_turns() if max_turns is None else max(1, max_turns)
+        )
         if limit is None:
             return
         count = (await conn.execute(
