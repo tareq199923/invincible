@@ -112,7 +112,10 @@ preserving your existing `.env` comments and values.
 connections — not something `/mcp` requests send anymore.
 
 The bundled `docker compose up` pair needs none of the manual DB steps: the
-app container runs `invincible db upgrade` before serving.
+app container runs `invincible db upgrade` before serving. The Dockerfile
+CMD honors `INVINCIBLE_MIGRATE_DB_URL` the same way — when set, that DSN
+(schema-owner role) is used for the one `db upgrade` command while the app
+itself always serves on `INVINCIBLE_DB_URL`.
 
 See [Examples](#examples) for ready-to-run `curl` calls, or continue reading
 for the full configuration, API, and tooling reference.

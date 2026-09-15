@@ -237,7 +237,11 @@ turns as nodes/edges/timeline - is available to operators at
   and nothing connects as the bootstrap `postgres` superuser after
   init. TCP auth is pinned to `scram-sha-256`; the compose passwords
   are DEV-ONLY localhost defaults and must be overridden for any other
-  environment.
+  environment. Docker/Platform deploys get the same split by setting
+  `INVINCIBLE_MIGRATE_DB_URL` on the service: the image's CMD runs the
+  startup `db upgrade` against it (falling back to `INVINCIBLE_DB_URL`
+  when unset), while the server itself always serves on
+  `INVINCIBLE_DB_URL`.
 - `invincible dev-db` is a **development** provisioner: loopback-only,
   happy to talk to a local trust-auth server, dev-credential roles. It
   is not a production provisioning path — the required production
