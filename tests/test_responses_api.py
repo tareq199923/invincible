@@ -907,14 +907,18 @@ def test_upstream_error_detail_is_capped():
 
 
 async def _chain_user(client, email, step_models, providers=None):
-    """A v1 user whose saved chain pairs its connected credentials with
-    ``step_models`` in order. Returns the raw inv_ key."""
+    """A v1 user whose saved chain pairs the first ``len(step_models)``
+    connected credentials with ``step_models`` in order. Returns the raw
+    inv_ key."""
     uid, raw_key = await v1_user(client, email, providers=providers)
     rows = await ByokCredentialStore(app.state.engine).list_for_user(uid)
+    chained = rows[:len(step_models)]
+    assert len(chained) == len(step_models), (
+        "not enough connected credentials for the requested chain steps")
     await UserSettingsStore(app.state.engine).save_routing(uid, {
         "mode": "chain",
         "chain": [{"credential_id": row["id"], "model": model}
-                  for row, model in zip(rows, step_models)],
+                  for row, model in zip(chained, step_models, strict=True)],
     })
     return raw_key
 
