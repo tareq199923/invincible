@@ -13,7 +13,9 @@ from cryptography.fernet import Fernet
 
 from invincible.compat.common import upstream_error_detail
 from invincible.compat.responses import responses_to_internal
+from invincible.core.credential_store import ByokCredentialStore
 from invincible.core.identity import ensure_default_project
+from invincible.core.user_settings_store import UserSettingsStore
 from invincible.main import app
 from tests.conftest import (
     default_providers,
@@ -899,3 +901,95 @@ def test_upstream_error_detail_is_capped():
     long_message = "x" * 500
     assert len(upstream_error_detail(
         {"error": {"message": long_message}})) == 300
+
+
+# ------------------------------- served-model reporting (Codex status line)
+
+
+async def _chain_user(client, email, step_models, providers=None):
+    """A v1 user whose saved chain pairs its connected credentials with
+    ``step_models`` in order. Returns the raw inv_ key."""
+    uid, raw_key = await v1_user(client, email, providers=providers)
+    rows = await ByokCredentialStore(app.state.engine).list_for_user(uid)
+    await UserSettingsStore(app.state.engine).save_routing(uid, {
+        "mode": "chain",
+        "chain": [{"credential_id": row["id"], "model": model}
+                  for row, model in zip(rows, step_models)],
+    })
+    return raw_key
+
+
+async def test_response_reports_serving_model_not_requested(
+    client, router_setter, byok_env
+):
+    """``model`` reports the step that actually served, not the request's
+    hint.
+
+    Under chain routing a step carries its own model, so the two differ
+    whenever the request names no step (or a step other than the one that
+    replied). Codex renders this field as its status-line model, so
+    echoing the request would make a cross-model fallback invisible.
+    """
+    raw_key = await _chain_user(client, "served@example.com", ["alpha-step"])
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(
+            200, json=provider_body("alpha", content="Hello world"))
+    })
+    response = await client.post(
+        "/v1/responses",
+        headers={"Authorization": f"Bearer {raw_key}"},
+        json={"model": "requested-elsewhere", "input": "hi"},
+    )
+    assert response.status_code == 200, response.text
+    # The step's model ran, and the body agrees with the route headers.
+    assert response.headers["x-invincible-model"] == "alpha-step"
+    assert response.json()["model"] == "alpha-step"
+
+
+async def test_stream_reports_serving_model_not_requested(
+    client, router_setter, byok_env
+):
+    """The SSE path reports the serving model on every frame, so Codex's
+    status line stays honest mid-stream (response.created fires before the
+    first upstream chunk, but the winning attempt is already known)."""
+    raw_key = await _chain_user(
+        client, "served-stream@example.com", ["alpha-step"])
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(200, content=sse_body(
+            stream_chunk("alpha", {"role": "assistant"}),
+            stream_chunk("alpha", {"content": "Hi"}),
+            stream_chunk("alpha", {}, finish_reason="stop"),
+        ))
+    })
+    response = await client.post(
+        "/v1/responses",
+        headers={"Authorization": f"Bearer {raw_key}"},
+        json={"model": "requested-elsewhere", "input": "hi", "stream": True},
+    )
+    assert response.status_code == 200
+    events = _responses_events(response)
+    assert dict(events)["response.created"]["response"]["model"] == (
+        "alpha-step")
+    completed = [p for name, p in events
+                 if name == "response.completed"][0]["response"]
+    assert completed["model"] == "alpha-step"
+
+
+async def test_auto_mode_still_reports_the_requested_model(
+    client, router_setter, byok_env
+):
+    """The complement: with no routing configured (auto), the per-request
+    model override makes every candidate call the requested model, so the
+    reported model is unchanged - this change only moves chain/pinned."""
+    uid, raw_key = await v1_user(client, "auto-model@example.com")
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(
+            200, json=provider_body("alpha", content="Hello world"))
+    })
+    response = await client.post(
+        "/v1/responses",
+        headers={"Authorization": f"Bearer {raw_key}"},
+        json={"model": "gpt-5.6-terra", "input": "hi"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["model"] == "gpt-5.6-terra"

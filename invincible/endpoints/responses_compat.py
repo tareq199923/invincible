@@ -270,7 +270,7 @@ async def create_response(
 
         return StreamingResponse(
             build_stream_events(
-                first, tail, body.model, input_tokens,
+                first, tail, info.get("model_id"), input_tokens,
                 on_complete=save_complete,
             ),
             media_type="text/event-stream",
@@ -324,7 +324,10 @@ async def create_response(
             max_turns=max_turns,
         )
 
+    # Report the model that actually served (the winning attempt), not the
+    # requested hint: under pinned/chain routing a step's own model answers,
+    # and Codex renders this field as its status-line model.
     responses_response = internal_to_responses(
-        result, body.model, input_tokens)
+        result, info.get("model_id"), input_tokens)
     return JSONResponse(content=responses_response,
                         headers=route_headers(info))

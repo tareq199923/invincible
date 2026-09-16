@@ -336,14 +336,21 @@ def _output_items_from_message(message: dict) -> list:
 
 
 def internal_to_responses(
-    openai_body: dict, requested_model: str | None, input_tokens: int
+    openai_body: dict, served_model: str | None, input_tokens: int
 ) -> dict:
     """Translate an internal (OpenAI-shaped) Router response into a
     Responses API response object.
 
-    Provider ``tool_calls`` become ``function_call`` output items and the
-    ``model`` field echoes the client's model hint (it never influences
-    routing and never requires the provider to expose the same names).
+    Provider ``tool_calls`` become ``function_call`` output items.
+
+    ``model`` reports the model that ACTUALLY served the request (the
+    Router's winning attempt), not the client's requested hint. Under
+    pinned/chain routing a step's own ``model`` answers, so the two differ
+    whenever the request's model did not match the step that replied -
+    echoing the request instead would make that fallback invisible. Codex
+    CLI renders this field as its status-line model, so it is the client's
+    only signal that a different model answered.
+
     ``usage`` counts are estimates (the Router's own heuristic) since
     upstream responses may omit usage entirely.
     """
@@ -364,8 +371,7 @@ def internal_to_responses(
         "object": "response",
         "created_at": int(time.time()),
         "status": status,
-        "model": requested_model or openai_body.get("model")
-        or "invincible",
+        "model": served_model or openai_body.get("model") or "invincible",
         "output": output,
         "usage": {
             "input_tokens": input_tokens,
@@ -484,7 +490,7 @@ def _function_call_item(item_id: str, call_id: str, name: str,
 async def build_stream_events(
     first: dict | None,
     tail: AsyncIterator[dict],
-    requested_model: str | None,
+    served_model: str | None,
     input_tokens: int,
     on_complete: Callable[[dict], Awaitable[None]] | None = None,
 ) -> AsyncGenerator[str, None]:
@@ -510,9 +516,14 @@ async def build_stream_events(
     on a mid-stream failure - so the caller can persist the session once.
     A mid-stream upstream failure emits a well-formed ``error`` event and
     stops; the stream never emits malformed SSE and always closes.
+
+    ``served_model`` is the model the winning attempt actually called (not
+    the client's requested hint) and is what every frame's ``model`` field
+    reports - see :func:`internal_to_responses` for why the difference
+    matters to Codex.
     """
     response_id = _new_id("resp")
-    model = requested_model or "invincible"
+    model = served_model or "invincible"
     reply_text = ""
     finish_reason = None
     text_item_id = None
