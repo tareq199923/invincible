@@ -13,7 +13,6 @@ import httpx
 import pytest
 
 from invincible.core.continuity import ContinuityEngine
-from invincible.core.provider_registry import ProviderRegistry
 from invincible.core.router import Router
 from invincible.core.run_store import RunStore
 from tests.conftest import (
@@ -40,19 +39,15 @@ async def continuity(pg_engine, runs_store):
 
 
 def make_router_with_recorder(
-    monkeypatch, tmp_path, runs_store, handlers
+    monkeypatch, runs_store, handlers, provider_config
 ):
-    """Router in registry mode with fake keys - same shape as
-    test_run_store.py's failover test."""
+    """Static-YAML router with fake keys - same shape as test_run_store.py's
+    failover test (the operator-registry mode retired with Phase 2)."""
     for key in ("ALPHA_API_KEY", "BETA_API_KEY", "GAMMA_API_KEY"):
         monkeypatch.setenv(key, "test-key")
-    registry = ProviderRegistry(
-        file_path=str(tmp_path / "p.yaml"),
-        seed_config={"providers": default_providers()},
-    )
     return Router(
+        config_path=provider_config(default_providers()),
         transport=make_transport(handlers),
-        registry=registry,
         run_recorder=runs_store.record,
     )
 
@@ -67,13 +62,14 @@ async def latest_run(runs_store):
 
 @pytest.mark.asyncio
 async def test_nonstreaming_records_real_usage(
-    runs_store, monkeypatch, tmp_path
+    runs_store, monkeypatch, provider_config
 ):
     body = provider_body("alpha")
     body["usage"] = {"prompt_tokens": 123, "completion_tokens": 456}
     router = make_router_with_recorder(
-        monkeypatch, tmp_path, runs_store,
+        monkeypatch, runs_store,
         {"alpha.example.com": httpx.Response(200, json=body)},
+        provider_config,
     )
     result, _info = await router.route_request_detailed(
         [{"role": "user", "content": "hi"}])
@@ -88,12 +84,13 @@ async def test_nonstreaming_records_real_usage(
 
 @pytest.mark.asyncio
 async def test_nonstreaming_estimates_when_usage_absent(
-    runs_store, monkeypatch, tmp_path
+    runs_store, monkeypatch, provider_config
 ):
     router = make_router_with_recorder(
-        monkeypatch, tmp_path, runs_store,
+        monkeypatch, runs_store,
         {"alpha.example.com": httpx.Response(
             200, json=provider_body("alpha", content="word " * 100))},
+        provider_config,
     )
     await router.route_request_detailed([{"role": "user", "content": "hi"}])
     run = await latest_run(runs_store)
@@ -104,7 +101,7 @@ async def test_nonstreaming_estimates_when_usage_absent(
 
 @pytest.mark.asyncio
 async def test_streaming_records_input_estimate_and_attaches_output(
-    runs_store, monkeypatch, tmp_path
+    runs_store, monkeypatch, provider_config
 ):
     chunks = [
         stream_chunk("alpha", {"role": "assistant", "content": "partial "}),
@@ -112,8 +109,9 @@ async def test_streaming_records_input_estimate_and_attaches_output(
         stream_chunk("alpha", {}, finish_reason="stop"),
     ]
     router = make_router_with_recorder(
-        monkeypatch, tmp_path, runs_store,
+        monkeypatch, runs_store,
         {"alpha.example.com": httpx.Response(200, content=sse_body(*chunks))},
+        provider_config,
     )
     _first, tail = await router.stream_open(
         [{"role": "user", "content": "hello stream"}],
@@ -162,18 +160,19 @@ async def test_attach_output_without_ok_row_is_noop(runs_store):
 
 @pytest.mark.asyncio
 async def test_failover_creates_one_pre_switch_checkpoint(
-    pg_engine, runs_store, continuity, monkeypatch, tmp_path
+    pg_engine, runs_store, continuity, monkeypatch, provider_config
 ):
     """Two providers fail in sequence; exactly ONE snapshot lands before
     the winning attempt - and it names the first broken provider."""
     router = make_router_with_recorder(
-        monkeypatch, tmp_path, runs_store,
+        monkeypatch, runs_store,
         {
             "alpha.example.com": httpx.Response(429),
             "beta.example.com": httpx.Response(500),
             "gamma.example.com": httpx.Response(
                 200, json=provider_body("gamma")),
         },
+        provider_config,
     )
     router.failover_hook = continuity.failover_hook()
     await continuity.set_state("ckpt-s", {"step": "deploy"}, actor="t")
@@ -191,15 +190,16 @@ async def test_failover_creates_one_pre_switch_checkpoint(
 
 @pytest.mark.asyncio
 async def test_no_task_state_means_no_checkpoint(
-    pg_engine, runs_store, continuity, monkeypatch, tmp_path
+    pg_engine, runs_store, continuity, monkeypatch, provider_config
 ):
     router = make_router_with_recorder(
-        monkeypatch, tmp_path, runs_store,
+        monkeypatch, runs_store,
         {
             "alpha.example.com": httpx.Response(429),
             "beta.example.com": httpx.Response(
                 200, json=provider_body("beta")),
         },
+        provider_config,
     )
     router.failover_hook = continuity.failover_hook()
 
@@ -211,18 +211,19 @@ async def test_no_task_state_means_no_checkpoint(
 
 @pytest.mark.asyncio
 async def test_broken_hook_never_breaks_routing(
-    runs_store, monkeypatch, tmp_path
+    runs_store, monkeypatch, provider_config
 ):
     async def exploding_hook(**kwargs):
         raise RuntimeError("checkpoint backend down")
 
     router = make_router_with_recorder(
-        monkeypatch, tmp_path, runs_store,
+        monkeypatch, runs_store,
         {
             "alpha.example.com": httpx.Response(429),
             "beta.example.com": httpx.Response(
                 200, json=provider_body("beta")),
         },
+        provider_config,
     )
     router.failover_hook = exploding_hook
     result, _info = await router.route_request_detailed(
@@ -232,7 +233,7 @@ async def test_broken_hook_never_breaks_routing(
 
 @pytest.mark.asyncio
 async def test_checkpoint_scopes_by_owning_session_pk(
-    pg_engine, runs_store, continuity, monkeypatch, tmp_path
+    pg_engine, runs_store, continuity, monkeypatch, provider_config
 ):
     """The Phase 2 isolation shape: two principals sharing a client string
     get independent checkpoint chains via their surrogate sessions."""
@@ -265,12 +266,13 @@ async def test_checkpoint_scopes_by_owning_session_pk(
         "shared-str", user_id=uid_b, project_id=pid_b)
 
     router = make_router_with_recorder(
-        monkeypatch, tmp_path, runs_store,
+        monkeypatch, runs_store,
         {
             "alpha.example.com": httpx.Response(429),
             "beta.example.com": httpx.Response(
                 200, json=provider_body("beta")),
         },
+        provider_config,
     )
     router.failover_hook = continuity.failover_hook()
     await continuity.set_state(

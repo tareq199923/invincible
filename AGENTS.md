@@ -6,11 +6,12 @@ Guide for contributors and coding agents working in this repository.
 - Console scripts: `invincible` and `inv` (identical entry points).
 - Python **3.10+** (`requires-python = ">=3.10"`; CI tests 3.10–3.14).
 
-Invincible today is a **single-tenant local AI gateway**: an OpenAI- and
-Anthropic-compatible tiered-failover proxy with PostgreSQL-backed
-conversation memory, a continuity engine (versioned task state +
-checkpoints), and an MCP tool server. It is evolving toward a
-remote-first, multi-user AI continuity platform — see
+Invincible today is a **multi-user self-service AI gateway**: an OpenAI-,
+Anthropic-, and Responses-compatible BYOK failover proxy (every user
+authenticates with their own `inv_` API key and routes through their own
+connected provider credentials) with PostgreSQL-backed conversation
+memory, a continuity engine (versioned task state + checkpoints), and an
+MCP tool server. See
 [docs/ROADMAP.md](docs/ROADMAP.md) for the direction and phase status.
 
 **Documentation follows implementation.** Never document a feature as
@@ -44,7 +45,7 @@ Fixture semantics (`tests/conftest.py`):
 - `pg_live` / `admin_pg` auto-skip live-tier tests (doctor/CLI-db checks)
   when unreachable.
 - Fully hermetic suites (run without Postgres): router, provider
-  registry/schema/selection policy, health tracker, timeouts, compression,
+  schema/selection policy, health tracker, timeouts, compression,
   context trimming.
 
 ---
@@ -54,22 +55,22 @@ Fixture semantics (`tests/conftest.py`):
 | Path | Role |
 |---|---|
 | `invincible/main.py` | FastAPI app; lifespan wires engine + all stores; auth dependencies; `/health`, `HEAD /` |
-| `endpoints/auth.py` | Dual-realm Principal resolution for `/v1/*` (legacy gateway key vs API keys; fail-open local when unset) |
-| `core/principal.py` | Authenticated Principal model (`legacy` / `api_key` / `anonymous`) |
+| `endpoints/auth.py` | Principal resolution for `/v1/*` (per-user `inv_` API keys only; fails closed) |
+| `core/principal.py` | Authenticated Principal model (`api_key` / `session`) |
 | `core/identity.py` | argon2id primitives, API-key lifecycle (sha256 at rest, shown once), audit log, scoped login lockouts |
 | `core/accounts.py` | Phase 3 services: UserService, SessionManager (signed cookies), ProjectService, DeviceCodeStore, IdentityStore, GitHubOAuth |
 | `endpoints/openai_compat.py` | `POST /v1/chat/completions` (+ SSE streaming), `GET /v1/models` |
 | `endpoints/anthropic_compat.py` | `POST /v1/messages` (Anthropic protocol + canonical SSE) |
+| `endpoints/responses_compat.py` | `POST /v1/responses` (OpenAI Responses protocol for Codex CLI) |
 | `endpoints/mcp.py` | `POST /mcp` JSON-RPC 2.0 tool server (OAuth-bearer protected) |
-| `endpoints/oauth.py` | Built-in OAuth 2.1 + PKCE authorization server (owner-consent browser flow) |
+| `endpoints/oauth.py` | Built-in OAuth 2.1 + PKCE authorization server (logged-in-account consent; self-service since Phase 2) |
 | `endpoints/accounts.py` | `/auth/*`, `/projects`, `/api-keys`, `/sessions`, device pairing, GitHub login (session realm) |
-| `endpoints/admin_api.py` | `/api/v1/*` management surface (fail-closed operator realm) |
-| `endpoints/graph.py` | `GET /api/v1/sessions/{id}/graph` continuity projection |
+| `endpoints/byok.py` | Per-user provider-credential management (connect, test, order, routing config, per-user overrides) |
+| `endpoints/graph.py` | `GET /api/v1/sessions/{id}/graph` continuity projection (owner-scoped) |
 | `core/router.py` | THE single tiered-failover loop (`_iter_attempts`); run recording |
 | `core/provider_health.py` | Failure counts + exponential cooldowns (in-memory) |
-| `core/provider_registry.py` | File-backed provider CRUD/enable/disable/test + routing state |
 | `core/selection.py` | Pure auto/pinned/chain routing decisions |
-| `core/config.py` | `providers.yaml` schema validation/loading; timeout resolution |
+| `core/config.py` | `providers.yaml` schema validation/loading (static test fixture path); timeout resolution |
 | `core/settings.py` | Typed live-read accessors for every `INVINCIBLE_*` env var |
 | `core/db.py` | Engine factory + schema metadata (**single source of schema truth**) + system local-owner bootstrap |
 | `core/session_store.py` | Normalized `sessions`/`turns`/`messages` persistence (surrogate identity + ownership triple since Phase 1) |
@@ -112,11 +113,11 @@ Fixture semantics (`tests/conftest.py`):
    deferred); JSON-shaped columns are PostgreSQL JSONB and bind objects
    natively — never pre-dump with `json.dumps` before insert.
 6. **Auth realms are separate by design:**
-   - `GATEWAY_API_KEY` guards `/v1/*` (timing-safe compare; FAILS OPEN when
-     unset — there is a loud startup warning).
-   - `/api/v1/*` management/graph surface authenticates through the
-     operator account realm (operator-role session cookie or the
-     operator's own `inv_` API key; fails CLOSED without
+   - `/v1/*` authenticates with per-user `inv_` API keys only (hashed at
+     rest); every request routes through that user's own BYOK credentials.
+     Fails closed — there is no shared gateway key and no anonymous path.
+   - Account surfaces (dashboard, `/auth/*`, OAuth consent) use the
+     account-session realm (signed cookies; fails CLOSED without
      `INVINCIBLE_OWNER_SECRET`).
    - `/mcp` uses OAuth bearer tokens (hashed at rest, revocable via CLI).
    Do not merge realms or flip fail-open/fail-closed semantics casually.

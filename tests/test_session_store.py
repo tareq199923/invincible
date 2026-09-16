@@ -4,13 +4,14 @@ import json
 import httpx
 import pytest
 
+from invincible.core.identity import ensure_default_project
 from invincible.core.session_store import SessionStore
 from invincible.main import app
 from tests.conftest import (
-    local_owner_kwargs,
     provider_body,
     sse_body,
     stream_chunk,
+    v1_user,
 )
 
 
@@ -43,9 +44,12 @@ async def test_non_dict_payload_row_degrades_gracefully(pg_engine):
 
 
 @pytest.mark.asyncio
-async def test_session_history_is_replayed_on_second_request(router_setter, client):
+async def test_session_history_is_replayed_on_second_request(
+    router_setter, client, byok_env
+):
     """Proves the gateway remembers prior turns within the same session_id,
     and does NOT leak history across a different session_id."""
+    uid, auth_key = await v1_user(client, "history@example.com")
 
     received_payloads = []
 
@@ -58,7 +62,7 @@ async def test_session_history_is_replayed_on_second_request(router_setter, clie
     router_setter({"alpha.example.com": alpha_handler})
 
     headers = {
-        "Authorization": "Bearer test-gateway-key",
+        "Authorization": f"Bearer {auth_key}",
         "X-Session-Id": "conversation-1",
     }
 
@@ -86,7 +90,11 @@ async def test_session_history_is_replayed_on_second_request(router_setter, clie
 
 
 @pytest.mark.asyncio
-async def test_different_session_ids_do_not_share_history(router_setter, client):
+async def test_different_session_ids_do_not_share_history(
+    router_setter, client, byok_env
+):
+    _, auth_key = await v1_user(client, "sessions@example.com")
+
     def alpha_handler(request: httpx.Request):
         return httpx.Response(200, json=provider_body("alpha", content="ok"))
 
@@ -95,7 +103,7 @@ async def test_different_session_ids_do_not_share_history(router_setter, client)
     await client.post(
         "/v1/chat/completions",
         headers={
-            "Authorization": "Bearer test-gateway-key",
+            "Authorization": f"Bearer {auth_key}",
             "X-Session-Id": "session-a",
         },
         json={"messages": [{"role": "user", "content": "secret: banana"}]},
@@ -112,7 +120,7 @@ async def test_different_session_ids_do_not_share_history(router_setter, client)
     await client.post(
         "/v1/chat/completions",
         headers={
-            "Authorization": "Bearer test-gateway-key",
+            "Authorization": f"Bearer {auth_key}",
             "X-Session-Id": "session-b",
         },
         json={"messages": [{"role": "user", "content": "what is the secret?"}]},
@@ -154,10 +162,11 @@ async def test_concurrent_appends_lose_no_turns(pg_engine):
 
 @pytest.mark.asyncio
 async def test_openai_system_messages_not_persisted_to_session(
-    client, router_setter
+    client, router_setter, byok_env
 ):
     """Mirror of the Anthropic guarantee: repeated OpenAI requests with a
     system prompt must not accumulate system messages in history."""
+    uid, auth_key = await v1_user(client, "sysmsg@example.com")
     received = []
 
     def recording_handler(request: httpx.Request):
@@ -166,7 +175,7 @@ async def test_openai_system_messages_not_persisted_to_session(
 
     router_setter({"alpha.example.com": recording_handler})
     headers = {
-        "Authorization": "Bearer test-gateway-key",
+        "Authorization": f"Bearer {auth_key}",
         "X-Session-Id": "openai-no-sys-accum",
     }
 
@@ -183,8 +192,10 @@ async def test_openai_system_messages_not_persisted_to_session(
         )
         assert response.status_code == 200
 
-    owner = await local_owner_kwargs(app.state.engine)
-    history = await app.state.sessions.load("openai-no-sys-accum", **owner)
+    history = await app.state.sessions.load(
+        "openai-no-sys-accum", user_id=uid,
+        project_id=await ensure_default_project(app.state.engine, uid),
+    )
     assert [m["role"] for m in history] == [
         "user", "assistant", "user", "assistant", "user", "assistant",
     ]
@@ -193,10 +204,11 @@ async def test_openai_system_messages_not_persisted_to_session(
 
 @pytest.mark.asyncio
 async def test_openai_system_prompt_still_sent_upstream_each_request(
-    client, router_setter
+    client, router_setter, byok_env
 ):
     """Every OpenAI request still sends its own current system prompt
     upstream; prior requests' system prompts never leak in as stale copies."""
+    _, auth_key = await v1_user(client, "sysprompt@example.com")
     received = []
 
     def recording_handler(request: httpx.Request):
@@ -205,7 +217,7 @@ async def test_openai_system_prompt_still_sent_upstream_each_request(
 
     router_setter({"alpha.example.com": recording_handler})
     headers = {
-        "Authorization": "Bearer test-gateway-key",
+        "Authorization": f"Bearer {auth_key}",
         "X-Session-Id": "openai-sys-per-request",
     }
 
@@ -237,9 +249,12 @@ async def test_openai_system_prompt_still_sent_upstream_each_request(
 
 
 @pytest.mark.asyncio
-async def test_openai_claude_code_session_id_isolates_history(router_setter, client):
+async def test_openai_claude_code_session_id_isolates_history(
+    router_setter, client, byok_env
+):
     """x-claude-code-session-id isolates OpenAI sessions the same way:
     session A's history is never replayed into session B."""
+    _, auth_key = await v1_user(client, "ccsid@example.com")
     received = []
 
     def alpha_handler(request: httpx.Request):
@@ -251,7 +266,7 @@ async def test_openai_claude_code_session_id_isolates_history(router_setter, cli
     await client.post(
         "/v1/chat/completions",
         headers={
-            "Authorization": "Bearer test-gateway-key",
+            "Authorization": f"Bearer {auth_key}",
             "x-claude-code-session-id": "openai-session-A",
         },
         json={"messages": [{"role": "user", "content": "secret-from-A"}]},
@@ -260,7 +275,7 @@ async def test_openai_claude_code_session_id_isolates_history(router_setter, cli
     await client.post(
         "/v1/chat/completions",
         headers={
-            "Authorization": "Bearer test-gateway-key",
+            "Authorization": f"Bearer {auth_key}",
             "x-claude-code-session-id": "openai-session-B",
         },
         json={"messages": [{"role": "user", "content": "what is the secret?"}]},
@@ -274,9 +289,12 @@ async def test_openai_claude_code_session_id_isolates_history(router_setter, cli
 
 
 @pytest.mark.asyncio
-async def test_streamed_reply_is_persisted_to_session(client, router_setter):
+async def test_streamed_reply_is_persisted_to_session(
+    client, router_setter, byok_env
+):
     """The streamed reply is reconstructed from the chunk deltas and saved to
     the session store once the stream completes, like the non-stream path."""
+    uid, auth_key = await v1_user(client, "stream@example.com")
     received_payloads = []
 
     def alpha_handler(request: httpx.Request):
@@ -294,7 +312,7 @@ async def test_streamed_reply_is_persisted_to_session(client, router_setter):
     router_setter({"alpha.example.com": alpha_handler})
 
     headers = {
-        "Authorization": "Bearer test-gateway-key",
+        "Authorization": f"Bearer {auth_key}",
         "X-Session-Id": "stream-convo",
     }
     await client.post(
@@ -303,8 +321,10 @@ async def test_streamed_reply_is_persisted_to_session(client, router_setter):
         json={"messages": [{"role": "user", "content": "hi"}], "stream": True},
     )
 
-    owner = await local_owner_kwargs(app.state.engine)
-    history = await app.state.sessions.load("stream-convo", **owner)
+    history = await app.state.sessions.load(
+        "stream-convo", user_id=uid,
+        project_id=await ensure_default_project(app.state.engine, uid),
+    )
     assistant_messages = [m for m in history if m["role"] == "assistant"]
     assert len(assistant_messages) == 1
     assert assistant_messages[0]["content"] == "Hello world"

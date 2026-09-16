@@ -1,17 +1,13 @@
 # invincible/core/principal.py
-"""Authenticated principal model (Platform Phase 1).
+"""Authenticated principal model.
 
 A Principal is whatever presented a valid credential on this request:
 
-- ``legacy``   - the shared ``GATEWAY_API_KEY`` (local mode), mapped to
-  the system *local* owner;
-- ``api_key``  - a per-user API key (hashed at rest, shown once);
-- ``anonymous`` - the fail-open local identity when no gateway key is
-  configured (unchanged single-tenant behavior, loud startup warning).
+- ``api_key`` - a per-user ``inv_`` API key (hashed at rest, shown once);
+- ``session`` - a logged-in dashboard account session.
 
-Phase 2 layers ownership predicates on every query path on top of these
-identities; the legacy/anonymous realms keep working indefinitely in
-local mode (deprecated for hosted mode only, Phase 8).
+Ownership predicates on every query path resolve against
+``user_id``; there is no shared or operator identity anymore.
 """
 from dataclasses import dataclass
 
@@ -22,9 +18,3 @@ class Principal:
     project_id: int
     kind: str
     api_key_id: int | None = None
-
-    @property
-    def is_local(self) -> bool:
-        """True when this principal is the system local owner (either the
-        legacy shared key or the fail-open anonymous identity)."""
-        return self.kind in ("legacy", "anonymous")

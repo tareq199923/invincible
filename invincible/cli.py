@@ -36,7 +36,6 @@ from invincible import __version__
 from invincible.core.accounts import DeviceCodeStore
 from invincible.core.config import load_providers_config
 from invincible.core.db import (
-    ensure_local_owner,
     make_engine,
     migration_heads,
     migrations_config,
@@ -49,7 +48,7 @@ from invincible.core.identity import ApiKeyStore
 from invincible.core.identity import AuditLog as _AuditLog
 from invincible.core.oauth_store import OAuthStore
 
-SECRET_ENV_KEYS = ("GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET")
+SECRET_ENV_KEYS = ("INVINCIBLE_OWNER_SECRET",)
 LEGACY_OWNER_SECRET_KEY = "MCP_SHARED_SECRET"
 
 # --- local dev database (dev-db) ---------------------------------------------
@@ -462,7 +461,7 @@ def setup(env_file, db_url, force, skip_db_check):
         existing["INVINCIBLE_OWNER_SECRET"] = carried
         click.echo(
             "Carried MCP_SHARED_SECRET over to INVINCIBLE_OWNER_SECRET "
-            "(it is now the owner-login secret for approving MCP connections)."
+            "(it is now the account-session signing key)."
         )
 
     # Secrets: generated on first run, regenerated only with --force,
@@ -470,14 +469,6 @@ def setup(env_file, db_url, force, skip_db_check):
     for key in SECRET_ENV_KEYS:
         if not existing.get(key) or force:
             new_values[key] = _generate_secret()
-            if key == "GATEWAY_API_KEY":
-                # R3: without this, a first-time user has no way to know
-                # the /v1/* chat endpoints now require the key (fail-open
-                # applies only while it is unset).
-                click.echo(
-                    "Generated GATEWAY_API_KEY - chat clients must send "
-                    f"it as a Bearer token on /v1/*. It is in {env_path}."
-                )
 
     # Q2 decision (2026-08-30): the BYOK credential master key is generated
     # automatically so per-user provider connections work out of the box.
@@ -496,20 +487,10 @@ def setup(env_file, db_url, force, skip_db_check):
             "secret credential-key`."
         )
 
-    # MEDIUM-1 (2026-09-07 audit): setup-managed self-hosts opt in to the
-    # first-human operator bootstrap - the first account to register IS
-    # the person who ran setup. Hosted/public deploys build their env by
-    # hand and omit this line, so a stranger winning the registration
-    # race lands a plain user account (elevation = `invincible users
-    # promote`). Fresh .env files only: never injected into an existing
-    # one, where removing it is a deliberate posture choice.
-    if not os.path.isfile(env_path):
-        new_values["INVINCIBLE_ALLOW_FIRST_OPERATOR"] = "1"
-        click.echo(
-            "First registered account will become the operator "
-            "(INVINCIBLE_ALLOW_FIRST_OPERATOR=1; remove it on a public "
-            "deploy)."
-        )
+    # MEDIUM-1 (2026-09-07 audit) once wrote the first-human operator
+    # bootstrap flag here; Phase 2 removed the operator role entirely, so
+    # fresh .env files carry no ALLOW_FIRST_OPERATOR line (a stale line in
+    # an existing file is inert - nothing reads it anymore).
 
     # Database (remote-first): --db-url wins; an existing value is left
     # alone; a first run with neither is an error, not a prompt - the
@@ -983,14 +964,11 @@ def _run_doctor_checks():
         run_coro_sync(_check_database(os.getenv("INVINCIBLE_DB_URL")))
     )
 
-    for key in ("GATEWAY_API_KEY",):
-        checks.append((f"{key} exists", bool(os.getenv(key)), ""))
-
     owner = os.getenv("INVINCIBLE_OWNER_SECRET")
     legacy = os.getenv(LEGACY_OWNER_SECRET_KEY)
     note = "falling back to MCP_SHARED_SECRET" if (legacy and not owner) else ""
     checks.append((
-        "INVINCIBLE_OWNER_SECRET exists (owner login for /mcp)",
+        "INVINCIBLE_OWNER_SECRET exists (signs account sessions)",
         bool(owner or legacy),
         note,
     ))
@@ -1277,9 +1255,15 @@ def oauth_revoke(client_id):
 @click.option("--redirect-uri", default="http://127.0.0.1:9999/callback",
               show_default=True,
               help="Loopback redirect URI to register for the test client.")
-def oauth_test_client(redirect_uri):
-    """Headless helper: register a client, approve it, and print a Bearer
-    token - so /mcp can be exercised with curl without a browser."""
+@click.option("--email", default=None,
+              help="Approve as an EXISTING account (requires --password). "
+                   "Default: register a throwaway account.")
+@click.option("--password", default=None,
+              help="Password for --email.")
+def oauth_test_client(redirect_uri, email, password):
+    """Headless helper: register a client, approve it with an account
+    session, and print a Bearer token - so /mcp can be exercised with
+    curl without a browser."""
     import base64
     import hashlib
     from urllib.parse import urlparse
@@ -1288,11 +1272,8 @@ def oauth_test_client(redirect_uri):
 
     from invincible.main import app
 
-    owner = os.getenv("INVINCIBLE_OWNER_SECRET") or os.getenv(LEGACY_OWNER_SECRET_KEY)
-    if not owner:
-        raise click.ClickException(
-            "INVINCIBLE_OWNER_SECRET is not set; cannot authenticate as owner."
-        )
+    if email and not password:
+        raise click.ClickException("--email requires --password.")
     parsed = urlparse(redirect_uri)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise click.ClickException(f"Invalid redirect URI: {redirect_uri}")
@@ -1306,9 +1287,9 @@ def oauth_test_client(redirect_uri):
     async def _run():
         engine = make_engine(db_url)
         store = OAuthStore(engine)
-        # The authorize flow reads app.state.engine (persistent login
-        # lockout + local-owner bootstrap); wire it alongside the OAuth
-        # store so the headless run works without the app lifespan.
+        # The authorize flow reads app.state.engine (session resolution)
+        # and app.state.oauth_store; wire them alongside the OAuth store
+        # so the headless run works without the app lifespan.
         app.state.engine = engine
         app.state.oauth_store = store
         try:
@@ -1317,8 +1298,37 @@ def oauth_test_client(redirect_uri):
                 base_url="http://test",
                 cookies={},
             ) as client:
+                # Consent is a logged-in account session (Phase 2 - the
+                # owner-secret login is gone). Default: throwaway account.
+                if email:
+                    login = await client.post(
+                        "/auth/login",
+                        json={"email": email, "password": password},
+                    )
+                    if login.status_code != 200:
+                        raise click.ClickException(
+                            f"Login failed ({login.status_code}): "
+                            f"{login.text[:200]}"
+                        )
+                else:
+                    scratch_email = (
+                        f"mcp-test-{secrets.token_hex(4)}@example.invalid")
+                    scratch_password = secrets.token_urlsafe(16)
+                    registered = await client.post(
+                        "/auth/register",
+                        json={"email": scratch_email,
+                              "password": scratch_password},
+                    )
+                    if registered.status_code != 201:
+                        raise click.ClickException(
+                            f"Registration failed "
+                            f"({registered.status_code}): "
+                            f"{registered.text[:200]} - is "
+                            "INVINCIBLE_OWNER_SECRET set? Account sessions "
+                            "fail closed without it."
+                        )
                 client_id, code = await _headless_approve(
-                    client, owner, redirect_uri, challenge
+                    client, redirect_uri, challenge
                 )
                 response = await client.post(
                     "/oauth/token",
@@ -1362,9 +1372,10 @@ def oauth_test_client(redirect_uri):
         raise click.ClickException(f"Test client failed: {exc}") from exc
 
 
-async def _headless_approve(client, owner_secret_value, redirect_uri, challenge):
-    """Drive register -> login -> consent through the real endpoints.
-    Returns (client_id, authorization code)."""
+async def _headless_approve(client, redirect_uri, challenge):
+    """Drive register -> consent through the real endpoints. The httpx
+    client must already hold an account session cookie. Returns
+    (client_id, authorization code)."""
     from urllib.parse import parse_qs, urlparse
 
     registration = await client.post(
@@ -1386,13 +1397,6 @@ async def _headless_approve(client, owner_secret_value, redirect_uri, challenge)
         "code_challenge": challenge,
         "code_challenge_method": "S256",
     }
-    login = await client.post(
-        "/oauth/authorize", data={**params, "owner_secret": owner_secret_value}
-    )
-    if login.status_code != 302:
-        raise click.ClickException(
-            f"Owner login failed ({login.status_code}): {login.text[:200]}"
-        )
     approved = await client.post(
         "/oauth/authorize",
         data={**params, "action": "approve"},
@@ -1418,8 +1422,11 @@ def api_key():
 @api_key.command("create")
 @click.option("--label", default="", show_default=True,
               help="Free-form label shown by `api-key list`.")
-def api_key_create(label):
-    """Mint an API key under the system *local* owner.
+@click.option("--user", "user_ref", required=True,
+              help="Account the key belongs to: numeric id or email "
+                   "(find with `invincible users list`).")
+def api_key_create(label, user_ref):
+    """Mint an API key under a named account.
 
     The raw key is printed ONCE and never stored - only its SHA-256 hash
     and a visible prefix are kept. Use it as
@@ -1429,7 +1436,7 @@ def api_key_create(label):
 
     async def _run():
         try:
-            user_id, _ = await ensure_local_owner(engine)
+            user_id = await _resolve_user_ref(engine, user_ref)
             record = await ApiKeyStore(engine).create(user_id, label=label)
             await _AuditLog(engine).record(
                 "auth.api_key_created",
@@ -1521,7 +1528,7 @@ def api_key_revoke(key_ref):
         )
 
 
-# --- account roles (operator gate) ---------------------------------------------
+# --- accounts -----------------------------------------------------------------
 
 
 @click.group()
@@ -1530,13 +1537,16 @@ def api_key_revoke(key_ref):
                    "environment always wins).")
 @click.pass_context
 def users(ctx, env_file):
-    """Manage dashboard accounts and their operator role."""
+    """Inspect dashboard accounts (host tool)."""
     _load_env_file(env_file)
 
 
 @users.command("list")
 def users_list():
-    """List accounts and their role (operator may approve MCP clients)."""
+    """List accounts. Roles are informational only - the operator role is
+    dormant since Phase 2 (every account governs only its own data and
+    clients); the column is kept because the database schema still has
+    it."""
     url = _resolve_db_url()
     engine = make_engine(url)
 
@@ -1564,37 +1574,17 @@ def users_list():
         click.echo(f"{row['email']}  {row['role']}")
 
 
-@users.command("promote")
-@click.argument("email")
-def users_promote(email):
-    """Grant an account the operator role (may approve OAuth/MCP clients).
-
-    Approval mints MCP bearer tokens - execute_bash/write_file on the
-    host - so operator is the gate for self-registered accounts. The
-    system local owner is already an operator and cannot be changed.
-    """
-    _set_role(email, "operator", "promoted to operator",
-              "auth.user_promoted")
-
-
-@users.command("demote")
-@click.argument("email")
-def users_demote(email):
-    """Revoke an account's operator role back to plain user."""
-    _set_role(email, "user", "demoted to user", "auth.user_demoted")
-
-
 @users.command("reset-password")
 @click.argument("email")
 @click.option("--generate", is_flag=True,
               help="Generate a strong password instead of prompting "
                    "(printed once, never stored).")
 def users_reset_password(email, generate):
-    """Reset an account's password (operator recovery path).
+    """Reset an account's password (host recovery path).
 
-    A self-hosted gateway has no email infrastructure: the operator IS
-    the recovery mechanism, and database access is the proof of
-    authority. Prompts for the new password (hidden, confirmed) or
+    A self-hosted gateway has no email infrastructure: whoever holds
+    database access IS the recovery mechanism - that access is the proof
+    of authority. Prompts for the new password (hidden, confirmed) or
     generates one with --generate. Every existing browser session is
     signed out with the old password; inv_ keys and MCP tokens are
     untouched (separate realms).
@@ -1642,48 +1632,37 @@ def users_reset_password(email, generate):
         click.echo(f"New password (shown once): {new_password}")
 
 
-def _set_role(email: str, role: str, action_text: str,
-              audit_action: str) -> None:
-    url = _resolve_db_url()
-    engine = make_engine(url)
+async def _resolve_user_ref(engine, user_ref: str) -> int:
+    """Resolve a numeric id or email to a users.id (host-tool helper).
 
-    async def _run():
-        try:
-            from invincible.core.accounts import AccountError, UserService
-            from invincible.core.db import LOCAL_OWNER_EMAIL
+    Used by `api-key create --user`: a numeric ref goes straight to the
+    row; an email ref must resolve unambiguously (unknown = clean error,
+    never a silently wrong owner for the minted key).
+    """
+    from sqlalchemy import select
 
-            service = UserService(engine)
-            user = await service.get_by_email(email)
-            if user is None:
-                return None, f"No account with email {email!r}."
-            # Immutability first: even a no-op change to the local owner
-            # is refused (set_role would allow the no-op silently).
-            if user["email"] == LOCAL_OWNER_EMAIL:
-                return None, ("The system local owner's role cannot be "
-                              "changed.")
-            if user["role"] == role:
-                return user, None  # already there; nothing to do
-            await service.set_role(user["id"], role)
-            await _AuditLog(engine).record(
-                audit_action,
-                actor_user_id=user["id"],
-                actor_kind="system",
-                resource_type="user",
-                resource_id=str(user["id"]),
-                meta={"email": user["email"], "role": role},
-            )
-            return user, None
-        except AccountError as exc:
-            return None, exc.message
-        finally:
-            await engine.dispose()
+    from invincible.core.accounts import UserService
+    from invincible.core.db import users as users_table
 
-    user, error = run_coro_sync(_run())
-    if error is not None:
-        raise click.ClickException(error)
-    if user is None:
-        raise click.ClickException(f"No account with email {email!r}.")
-    click.echo(f"{user['email']} {action_text}.")
+    ref: int | str
+    try:
+        ref = int(user_ref)
+    except ValueError:
+        ref = user_ref.strip().lower()
+    async with engine.connect() as conn:
+        if isinstance(ref, int):
+            row = (await conn.execute(
+                select(users_table.c.id).where(users_table.c.id == ref)
+            )).first()
+            if row is not None:
+                return int(row[0])
+            raise click.ClickException(
+                f"No account with id {user_ref!r}.")
+        user = await UserService(engine).get_by_email(ref)
+        if user is not None:
+            return int(user["id"])
+    raise click.ClickException(
+        f"No account with email {user_ref!r}.")
 
 
 # --- local dev database -------------------------------------------------------

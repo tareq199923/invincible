@@ -101,14 +101,12 @@ async def byok_attempt_source(
     BYOK-scoped chat request (Platform Phase 9, PR-C; Phase 1 grew the
     tuple with the user's own routing mode and pipeline overrides).
 
-    Returns ``None`` when the principal rides the operator pool unchanged
-    (legacy gateway key / anonymous local identity). Otherwise returns
-    ``(candidates, key_resolver, routing_config, overrides)`` built
-    entirely from this user's ``user_provider_credentials`` +
+    Returns the ``(candidates, key_resolver, routing_config, overrides)``
+    tuple built entirely from this user's ``user_provider_credentials`` +
     ``user_settings`` rows - an EMPTY candidate list means the user has
     connected nothing, and callers must fail fast with a clear 400-class
-    response. There is no fallback to the operator's shared
-    ProviderRegistry in either direction.
+    response. There is no fallback to a shared pool in either
+    direction.
 
     ``routing_config`` is the user's auto/pinned/chain mode over those
     candidates, with the request's ``model`` already applied (a chain
@@ -124,6 +122,9 @@ async def byok_attempt_source(
     ciphertext) logs a warning and returns None, which the Router treats
     exactly like a missing env key - skip to the next attempt.
     """
+    # Defensive: /v1/* only ever mints api_key principals now (the legacy
+    # gateway-key/anonymous realms are gone), so a non-api_key kind means
+    # something reached the BYOK path through an unexpected route.
     if principal.kind != "api_key":
         return None
     store = ByokCredentialStore(request.app.state.engine)
@@ -174,9 +175,8 @@ async def byok_attempt_source(
 
 async def _probe(request: Request, base_url: str, api_key: str) -> dict:
     """Read-only GET against the provider's /models endpoint (no tokens
-    burned), mirroring ProviderRegistry.test()'s report shape. The httpx
-    client is injectable via ``app.state.byok_http_client`` so tests run
-    on MockTransport."""
+    burned). The httpx client is injectable via
+    ``app.state.byok_http_client`` so tests run on MockTransport."""
     client = getattr(request.app.state, "byok_http_client", None)
     owns_client = client is None
     client = client or httpx.AsyncClient()
@@ -340,7 +340,7 @@ async def connect_provider(
         raise _bad_request("model_id is required")
 
     # SSRF guard: catalog entries skip the check only while the stored
-    # URL equals the operator-supplied constant; any user-edited URL is
+    # URL equals the packaged catalog constant; any user-edited URL is
     # fully custom input and validated as such.
     uses_catalog_constant = bool(entry) and base_url == entry["base_url"]
     if not uses_catalog_constant:
@@ -519,8 +519,7 @@ async def delete_provider(
 
 # ---------------------------------------------------------------------------
 # Per-user routing mode (Phase 1 self-service): auto / chain / pinned over
-# the user's OWN connected credentials. Mirrors the operator registry's
-# routing shape but references credential ids.
+# the user's OWN connected credentials, referencing credential ids.
 
 
 def _routing_model(value) -> str:

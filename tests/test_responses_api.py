@@ -13,16 +13,15 @@ from cryptography.fernet import Fernet
 
 from invincible.compat.common import upstream_error_detail
 from invincible.compat.responses import responses_to_internal
+from invincible.core.identity import ensure_default_project
 from invincible.main import app
 from tests.conftest import (
     default_providers,
-    local_owner_kwargs,
     provider_body,
     sse_body,
     stream_chunk,
+    v1_user,
 )
-
-AUTH = {"Authorization": "Bearer test-gateway-key"}
 
 
 def _responses_events(response):
@@ -81,14 +80,22 @@ def test_reasoning_items_are_skipped():
 # ------------------------------------------------------- non-streaming happy
 
 
-async def test_response_object_shape(client, router_setter):
+async def _user_kwargs(uid: int) -> dict:
+    """Store-level kwargs for the inv_ user a v1_user mint resolved."""
+    return {"user_id": uid,
+            "project_id": await ensure_default_project(app.state.engine, uid)}
+
+
+async def test_response_object_shape(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={
         "alpha.example.com": httpx.Response(
             200, json=provider_body("alpha", content="Hello world"))
     })
     response = await client.post(
         "/v1/responses",
-        headers=AUTH,
+        headers=auth,
         json={
             "model": "gpt-5.6-terra",
             "instructions": "Be terse.",
@@ -116,20 +123,24 @@ async def test_response_object_shape(client, router_setter):
         usage["input_tokens"] + usage["output_tokens"])
 
 
-async def test_plain_string_input(client, router_setter):
+async def test_plain_string_input(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={
         "alpha.example.com": httpx.Response(
             200, json=provider_body("alpha", content="ok"))
     })
     response = await client.post(
-        "/v1/responses", headers=AUTH,
+        "/v1/responses", headers=auth,
         json={"model": "m", "input": "hi"},
     )
     assert response.status_code == 200
     assert response.json()["status"] == "completed"
 
 
-async def test_instructions_become_system_upstream(client, router_setter):
+async def test_instructions_become_system_upstream(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -139,7 +150,7 @@ async def test_instructions_become_system_upstream(client, router_setter):
     router_setter({"alpha.example.com": alpha_handler})
     response = await client.post(
         "/v1/responses",
-        headers=AUTH,
+        headers=auth,
         json={"instructions": "You are terse.",
               "input": "hi"},
     )
@@ -152,7 +163,9 @@ async def test_instructions_become_system_upstream(client, router_setter):
 # ------------------------------------------------- tool calls round-trip
 
 
-async def test_function_call_items_round_trip(client, router_setter):
+async def test_function_call_items_round_trip(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -162,7 +175,7 @@ async def test_function_call_items_round_trip(client, router_setter):
     router_setter({"alpha.example.com": alpha_handler})
     response = await client.post(
         "/v1/responses",
-        headers=AUTH,
+        headers=auth,
         json={
             "model": "m",
             "input": [
@@ -196,7 +209,7 @@ async def test_function_call_items_round_trip(client, router_setter):
 
 
 async def test_parallel_function_calls_merge_into_one_assistant(
-    client, router_setter,
+    client, router_setter, byok_env
 ):
     """Responses renders parallel tool calls as sibling function_call
     items followed by their outputs. Each must NOT become its own
@@ -204,6 +217,8 @@ async def test_parallel_function_calls_merge_into_one_assistant(
     tool message's id to appear in the IMMEDIATELY preceding assistant's
     tool_calls (upstream 400: "tool message must follow assistant tool
     calls")."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -213,7 +228,7 @@ async def test_parallel_function_calls_merge_into_one_assistant(
     router_setter({"alpha.example.com": alpha_handler})
     response = await client.post(
         "/v1/responses",
-        headers=AUTH,
+        headers=auth,
         json={
             "model": "m",
             "input": [
@@ -260,10 +275,12 @@ async def test_parallel_function_calls_merge_into_one_assistant(
 
 
 async def test_assistant_text_joins_following_function_calls(
-    client, router_setter,
+    client, router_setter, byok_env
 ):
     """An assistant message item directly before function_call items is
     the same turn: one assistant message with content AND tool_calls."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -273,7 +290,7 @@ async def test_assistant_text_joins_following_function_calls(
     router_setter({"alpha.example.com": alpha_handler})
     response = await client.post(
         "/v1/responses",
-        headers=AUTH,
+        headers=auth,
         json={
             "model": "m",
             "input": [
@@ -307,10 +324,12 @@ async def test_assistant_text_joins_following_function_calls(
     ]
 
 
-async def test_tool_choice_without_tools_is_dropped(client, router_setter):
+async def test_tool_choice_without_tools_is_dropped(client, router_setter, byok_env):
     """Codex occasionally sends tool_choice on a turn with no tools; every
     OpenAI-compatible upstream 400s on that pair, so the router must drop
     tool_choice when the tools list is empty."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -320,7 +339,7 @@ async def test_tool_choice_without_tools_is_dropped(client, router_setter):
     router_setter({"alpha.example.com": alpha_handler})
     response = await client.post(
         "/v1/responses",
-        headers=AUTH,
+        headers=auth,
         json={"model": "m", "input": "hi",
               "tools": [], "tool_choice": "auto"},
     )
@@ -329,7 +348,9 @@ async def test_tool_choice_without_tools_is_dropped(client, router_setter):
     assert "tools" not in captured[0]
 
 
-async def test_tools_and_tool_choice_translate(client, router_setter):
+async def test_tools_and_tool_choice_translate(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -339,7 +360,7 @@ async def test_tools_and_tool_choice_translate(client, router_setter):
     router_setter({"alpha.example.com": alpha_handler})
     response = await client.post(
         "/v1/responses",
-        headers=AUTH,
+        headers=auth,
         json={
             "model": "m",
             "input": "hi",
@@ -374,8 +395,10 @@ async def test_tools_and_tool_choice_translate(client, router_setter):
 
 
 async def test_provider_tool_calls_become_function_call_items(
-    client, router_setter
+    client, router_setter, byok_env
 ):
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={
         "alpha.example.com": httpx.Response(200, json={
             "id": "cmpl-x",
@@ -396,7 +419,7 @@ async def test_provider_tool_calls_become_function_call_items(
         })
     })
     response = await client.post(
-        "/v1/responses", headers=AUTH, json={"model": "m", "input": "hi"},
+        "/v1/responses", headers=auth, json={"model": "m", "input": "hi"},
     )
     assert response.status_code == 200
     body = response.json()
@@ -411,7 +434,9 @@ async def test_provider_tool_calls_become_function_call_items(
 # ------------------------------------------------------------------ streaming
 
 
-async def test_streaming_canonical_sequence(client, router_setter):
+async def test_streaming_canonical_sequence(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={
         "alpha.example.com": httpx.Response(200, content=sse_body(
             stream_chunk("alpha", {"role": "assistant"}),
@@ -421,7 +446,7 @@ async def test_streaming_canonical_sequence(client, router_setter):
         ))
     })
     response = await client.post(
-        "/v1/responses", headers=AUTH,
+        "/v1/responses", headers=auth,
         json={"model": "m", "input": "hi", "stream": True},
     )
     assert response.status_code == 200
@@ -456,7 +481,9 @@ async def test_streaming_canonical_sequence(client, router_setter):
     assert completed["usage"]["output_tokens"] >= 1
 
 
-async def test_streaming_function_calls(client, router_setter):
+async def test_streaming_function_calls(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={
         "alpha.example.com": httpx.Response(200, content=sse_body(
             stream_chunk("alpha", {"role": "assistant"}),
@@ -471,7 +498,7 @@ async def test_streaming_function_calls(client, router_setter):
         ))
     })
     response = await client.post(
-        "/v1/responses", headers=AUTH,
+        "/v1/responses", headers=auth,
         json={"model": "m", "input": "hi", "stream": True},
     )
     assert response.status_code == 200
@@ -502,7 +529,9 @@ async def test_streaming_function_calls(client, router_setter):
     assert "response.output_item.done" in names
 
 
-async def test_stream_persists_session_history(client, router_setter):
+async def test_stream_persists_session_history(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={
         "alpha.example.com": httpx.Response(200, content=sse_body(
             stream_chunk("alpha", {"role": "assistant"}),
@@ -512,7 +541,7 @@ async def test_stream_persists_session_history(client, router_setter):
     })
     response = await client.post(
         "/v1/responses",
-        headers={**AUTH, "X-Session-Id": "resp-stream"},
+        headers={**auth, "X-Session-Id": "resp-stream"},
         json={"model": "m", "input": "hello", "stream": True},
     )
     assert response.status_code == 200
@@ -520,14 +549,16 @@ async def test_stream_persists_session_history(client, router_setter):
     # callback) runs to completion before we read the store.
     assert "response.completed" in response.text
     history = await app.state.sessions.load(
-        "resp-stream", **await local_owner_kwargs(app.state.engine))
+        "resp-stream", **await _user_kwargs(uid))
     assert history == [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "Hi"},
     ]
 
 
-async def test_mid_stream_failure_closes_well_formed(client, router_setter):
+async def test_mid_stream_failure_closes_well_formed(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     prefix = sse_body(
         stream_chunk("alpha", {"role": "assistant"}),
         stream_chunk("alpha", {"content": "partial"}),
@@ -538,7 +569,7 @@ async def test_mid_stream_failure_closes_well_formed(client, router_setter):
             200, content=_FailingStream(prefix))
     })
     response = await client.post(
-        "/v1/responses", headers=AUTH,
+        "/v1/responses", headers=auth,
         json={"model": "m", "input": "hi", "stream": True},
     )
     assert response.status_code == 200
@@ -552,9 +583,11 @@ async def test_mid_stream_failure_closes_well_formed(client, router_setter):
 # --------------------------------------------- prefix-dedupe persistence
 
 
-async def test_resent_conversation_does_not_duplicate(client, router_setter):
+async def test_resent_conversation_does_not_duplicate(client, router_setter, byok_env):
     """Codex resends the full conversation each turn: the second request
     must not duplicate history upstream nor in the stored session."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -562,7 +595,7 @@ async def test_resent_conversation_does_not_duplicate(client, router_setter):
         return httpx.Response(200, json=provider_body("alpha", content="ok"))
 
     router_setter({"alpha.example.com": alpha_handler})
-    headers = {**AUTH, "X-Session-Id": "dedupe"}
+    headers = {**auth, "X-Session-Id": "dedupe"}
 
     # Turn 1: just the user message. Codex always sends instructions -
     # the resent system message must not break the prefix match.
@@ -597,23 +630,25 @@ async def test_resent_conversation_does_not_duplicate(client, router_setter):
 
     # Stored history has each turn once.
     history = await app.state.sessions.load(
-        "dedupe", **await local_owner_kwargs(app.state.engine))
+        "dedupe", **await _user_kwargs(uid))
     contents = [m.get("content") for m in history]
     assert contents == ["hi", "ok", "again", "ok"]
 
 
 async def test_codex_session_id_header_creates_its_own_session(
-    client, router_setter,
+    client, router_setter, byok_env
 ):
     """Codex CLI (>=0.154) stamps requests with a bare `session-id` header
     (no x- prefix). It must key its own session - falling through to
     "default" would mix Codex traffic with every other headerless
     client and break the stored-history prefix match."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={
         "alpha.example.com": httpx.Response(
             200, json=provider_body("alpha", content="ok"))
     })
-    headers = {**AUTH, "session-id": "codex-conv-1",
+    headers = {**auth, "session-id": "codex-conv-1",
                "originator": "codex_cli"}
 
     await client.post(
@@ -624,22 +659,24 @@ async def test_codex_session_id_header_creates_its_own_session(
     )
 
     # The user turn landed under the Codex session key, not "default".
-    owner = await local_owner_kwargs(app.state.engine)
+    owner = await _user_kwargs(uid)
     history = await app.state.sessions.load("codex-conv-1", **owner)
     assert [m.get("content") for m in history] == ["hi", "ok"]
     default_history = await app.state.sessions.load("default", **owner)
     assert not default_history
 
 
-async def test_diverged_history_persists_reply_only(client, router_setter):
+async def test_diverged_history_persists_reply_only(client, router_setter, byok_env):
     """When the resent conversation does not start with the stored
     history (client compacted/rewound), only the assistant reply is
     appended - never the full input."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={
         "alpha.example.com": httpx.Response(
             200, json=provider_body("alpha", content="ok"))
     })
-    headers = {**AUTH, "X-Session-Id": "diverged"}
+    headers = {**auth, "X-Session-Id": "diverged"}
 
     await client.post(
         "/v1/responses", headers=headers,
@@ -655,21 +692,23 @@ async def test_diverged_history_persists_reply_only(client, router_setter):
     )
 
     history = await app.state.sessions.load(
-        "diverged", **await local_owner_kwargs(app.state.engine))
+        "diverged", **await _user_kwargs(uid))
     contents = [m.get("content") for m in history]
     assert contents == ["hi", "ok", "ok"]
 
 
-async def test_system_instructions_never_accumulate(client, router_setter):
+async def test_system_instructions_never_accumulate(client, router_setter, byok_env):
     """The resent system message never lands in the stored history. Each
     turn resends the GROWING conversation (Codex semantics - an identical
     resend would be a retry, which the dedupe correctly treats as no new
     user turn)."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={
         "alpha.example.com": httpx.Response(
             200, json=provider_body("alpha", content="ok"))
     })
-    headers = {**AUTH, "X-Session-Id": "no-sys"}
+    headers = {**auth, "X-Session-Id": "no-sys"}
     conversation = [{"type": "message", "role": "user", "content": "hi"}]
     for _ in range(3):
         response = await client.post(
@@ -684,7 +723,7 @@ async def test_system_instructions_never_accumulate(client, router_setter):
             {"type": "message", "role": "user", "content": "hi"},
         ]
     history = await app.state.sessions.load(
-        "no-sys", **await local_owner_kwargs(app.state.engine))
+        "no-sys", **await _user_kwargs(uid))
     assert all(m.get("role") != "system" for m in history)
     assert [m["role"] for m in history] == [
         "user", "assistant", "user", "assistant", "user", "assistant",
@@ -758,10 +797,12 @@ async def test_byok_routes_through_own_credential(client, router_setter,
     assert captured, "routed through the BYOK credential's provider"
 
 
-async def test_invalid_input_is_400_openai_error(client, router_setter):
+async def test_invalid_input_is_400_openai_error(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter({})
     response = await client.post(
-        "/v1/responses", headers=AUTH, json={"model": "m", "input": ""},
+        "/v1/responses", headers=auth, json={"model": "m", "input": ""},
     )
     assert response.status_code == 400
     error = response.json()["error"]
@@ -769,10 +810,12 @@ async def test_invalid_input_is_400_openai_error(client, router_setter):
     assert error["message"]
 
 
-async def test_upstream_error_detail_is_surfaced(client, router_setter):
+async def test_upstream_error_detail_is_surfaced(client, router_setter, byok_env):
     """A non-failover upstream 400 carries the provider's own message in
     the protocol-correct error shape (the generic "Upstream request
     failed" masked the real cause during Codex debugging)."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={
         "alpha.example.com": httpx.Response(
             400,
@@ -782,7 +825,7 @@ async def test_upstream_error_detail_is_surfaced(client, router_setter):
         ),
     })
     response = await client.post(
-        "/v1/responses", headers=AUTH, json={"model": "m", "input": "hi"},
+        "/v1/responses", headers=auth, json={"model": "m", "input": "hi"},
     )
     assert response.status_code == 400
     error = response.json()["error"]
@@ -790,28 +833,32 @@ async def test_upstream_error_detail_is_surfaced(client, router_setter):
     assert error["type"] == "invalid_request_error"
 
 
-async def test_all_providers_failed_is_503(client, router_setter):
+async def test_all_providers_failed_is_503(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={
         "alpha.example.com": httpx.Response(500, json={"error": "boom"}),
         "beta.example.com": httpx.Response(500, json={"error": "boom"}),
         "gamma.example.com": httpx.Response(500, json={"error": "boom"}),
     })
     response = await client.post(
-        "/v1/responses", headers=AUTH, json={"model": "m", "input": "hi"},
+        "/v1/responses", headers=auth, json={"model": "m", "input": "hi"},
     )
     assert response.status_code == 503
     assert response.json()["error"]["type"] == "server_error"
 
 
-async def test_provider_pool_unchanged_by_other_tests(client, router_setter):
-    """Sanity: the default operator pool still serves legacy principals
-    (the endpoint shares the standard dual-realm auth)."""
+async def test_provider_pool_unchanged_by_other_tests(client, router_setter, byok_env):
+    """Sanity: the caller's own credential pool serves every request -
+    routing is per-principal, never a shared pool."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={
         "alpha.example.com": httpx.Response(
             200, json=provider_body("alpha", content="ok"))
     })
     response = await client.post(
-        "/v1/responses", headers=AUTH, json={"model": "m", "input": "hi"},
+        "/v1/responses", headers=auth, json={"model": "m", "input": "hi"},
     )
     assert response.status_code == 200
 

@@ -220,10 +220,13 @@ async def warn_if_schema_stale(engine) -> None:
 LOCAL_OWNER_EMAIL = "local@invincible.local"
 LOCAL_PROJECT_NAME = "local"
 
-# Account roles. ``operator`` may approve OAuth clients (which mint
-# host-shell MCP tokens); ``user`` is the self-registration default and
-# cannot. Declared with the schema (not in accounts.py) because schema
-# truth lives here and the seed/migrations spell the literals.
+# Account roles. Both are DORMANT since Phase 2: no request path reads
+# ``role`` for authorization - every account approves only its own OAuth
+# clients and reaches only its own data. ``user`` is the registration
+# default; ``operator`` survives only as the value on the system local-owner
+# row and in migrations 0002/0008. Declared with the schema (not in
+# accounts.py) because schema truth lives here and the seed/migrations spell
+# the literals.
 ROLE_USER = "user"
 ROLE_OPERATOR = "operator"
 
@@ -564,7 +567,7 @@ oauth_tokens = Table(
 
 # ---------------------------------------------------------------------------
 # Persistent login rate limiting (Phase 2). One row per client IP; a
-# fixed window of failed owner-login attempts locks that IP out for the
+# fixed window of failed login attempts locks that IP out for the
 # rest of the window. Survives restarts (the Phase-1-era limiter was
 # process memory).
 
@@ -633,7 +636,7 @@ Index("idx_user_identities_user", user_identities.c.user_id)
 # display hint kept (first chars + last 4, computed once at create) so
 # listings can show a recognizable form after the plaintext is gone.
 # ``catalog_key`` names a core.provider_catalog entry when the row came
-# from the operator-supplied catalog; NULL = user-typed custom provider.
+# from the packaged provider catalog; NULL = user-typed custom provider.
 user_provider_credentials = Table(
     "user_provider_credentials",
     metadata,
@@ -668,9 +671,8 @@ Index(
 
 
 # Phase 1 self-service gateway: one row per user holding THEIR routing
-# mode + request-shaping overrides. ``routing`` mirrors the operator
-# registry's shape but references BYOK credential ids instead of provider
-# names: {"mode": "auto"} | {"mode": "pinned", "pinned":
+# mode + request-shaping overrides. ``routing`` references BYOK
+# credential ids: {"mode": "auto"} | {"mode": "pinned", "pinned":
 # {"credential_id", "model"}} | {"mode": "chain", "chain":
 # [{"credential_id", "model"}, ...]}. ``overrides`` keys (memory,
 # continuity, compression, relay, history_max_turns) each fall through to

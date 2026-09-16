@@ -95,13 +95,12 @@ def test_setup_creates_env_file_with_db_url(tmp_path):
     assert str(target) in result.output
     values = _env_dict(target.read_text(encoding="utf-8"))
     assert set(values) == {
-        "GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET",
+        "INVINCIBLE_OWNER_SECRET",
         "INVINCIBLE_DB_URL", "INVINCIBLE_CREDENTIAL_KEY",
-        # MEDIUM-1: fresh self-hosts opt in to the first-human
-        # operator bootstrap (public deploys omit it).
-        "INVINCIBLE_ALLOW_FIRST_OPERATOR",
     }
-    assert values["INVINCIBLE_ALLOW_FIRST_OPERATOR"] == "1"
+    # Phase 2: no operator bootstrap flag in fresh .env files (the
+    # operator role is gone; a stale flag in an existing file is inert).
+    assert "INVINCIBLE_ALLOW_FIRST_OPERATOR" not in values
     assert values["INVINCIBLE_DB_URL"] == EXAMPLE_DB_URL
 
 
@@ -115,7 +114,7 @@ def test_setup_requires_db_url_on_first_run(tmp_path):
     assert not target.exists()
 
 
-def test_setup_generates_gateway_and_owner_secrets_without_printing(tmp_path):
+def test_setup_generates_owner_secret_without_printing(tmp_path):
     target = tmp_path / ".env"
     result = CliRunner().invoke(
         cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL]
@@ -123,38 +122,19 @@ def test_setup_generates_gateway_and_owner_secrets_without_printing(tmp_path):
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
-    assert values["GATEWAY_API_KEY"]
     assert values["INVINCIBLE_OWNER_SECRET"]
-    assert values["GATEWAY_API_KEY"] != values["INVINCIBLE_OWNER_SECRET"]
     # Provider keys are never written by setup anymore...
     assert "NVIDIA_API_KEY" not in values
     assert "GEMINI_API_KEY" not in values
     assert "AGENTROUTER_API_KEY" not in values
     # ...and the generated secrets never reach the terminal.
-    assert values["GATEWAY_API_KEY"] not in result.output
     assert values["INVINCIBLE_OWNER_SECRET"] not in result.output
 
 
-def test_setup_announces_generated_gateway_api_key(tmp_path):
-    """R3: the first run must explain that /v1/* now requires the key."""
-    target = tmp_path / ".env"
-    result = CliRunner().invoke(
-        cli, ["setup", "--env-file", str(target), "--db-url", EXAMPLE_DB_URL]
-        + SKIP,
-    )
-    assert result.exit_code == 0
-    assert "Generated GATEWAY_API_KEY" in result.output
-    assert "Bearer token" in result.output
-    assert str(target) in result.output
-    # The explanation names the key, never its value.
-    values = _env_dict(target.read_text(encoding="utf-8"))
-    assert values["GATEWAY_API_KEY"] not in result.output
-
-
-def test_setup_silent_when_gateway_api_key_already_exists(tmp_path):
+def test_setup_silent_when_owner_secret_already_exists(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
-        "GATEWAY_API_KEY=gw-1\nINVINCIBLE_OWNER_SECRET=owner-1\n"
+        "UNRELATED_SETTING=keep-1\nINVINCIBLE_OWNER_SECRET=owner-1\n"
         "INVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n"
         "INVINCIBLE_CREDENTIAL_KEY=cred-1\n",
         encoding="utf-8",
@@ -163,7 +143,7 @@ def test_setup_silent_when_gateway_api_key_already_exists(tmp_path):
         cli, ["setup", "--env-file", str(target)]
     )
     assert result.exit_code == 0
-    assert "Generated GATEWAY_API_KEY" not in result.output
+    assert "Generated INVINCIBLE_OWNER_SECRET" not in result.output
 
 
 def test_setup_never_reads_stdin(tmp_path):
@@ -180,7 +160,7 @@ def test_setup_never_reads_stdin(tmp_path):
 def test_setup_preserves_existing_values(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
-        "GATEWAY_API_KEY=gw-1\nINVINCIBLE_OWNER_SECRET=owner-1\nNVIDIA_API_KEY=nim-1\n"
+        "UNRELATED_SETTING=keep-1\nINVINCIBLE_OWNER_SECRET=owner-1\nNVIDIA_API_KEY=nim-1\n"
         "INVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n"
         "INVINCIBLE_CREDENTIAL_KEY=cred-1\n",
         encoding="utf-8",
@@ -196,7 +176,7 @@ def test_setup_preserves_existing_values(tmp_path):
 def test_setup_carries_legacy_mcp_shared_secret_into_new_key(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
-        "GATEWAY_API_KEY=gw-1\nMCP_SHARED_SECRET=old-mcp\n"
+        "UNRELATED_SETTING=keep-1\nMCP_SHARED_SECRET=old-mcp\n"
         "INVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n",
         encoding="utf-8",
     )
@@ -230,7 +210,7 @@ def test_setup_preserves_unrelated_vars_comments_and_blank_lines(tmp_path):
     assert values["CUSTOM_SETTING"] == "value"
     assert values["ANOTHER_VARIABLE"] == "test"
     assert values["QUOTED"] == '"keep me"'
-    assert values["GATEWAY_API_KEY"] and values["INVINCIBLE_OWNER_SECRET"]
+    assert values["INVINCIBLE_OWNER_SECRET"]
 
 
 def test_setup_preserves_unicode_comments_and_values(tmp_path):
@@ -261,7 +241,7 @@ def test_setup_repeated_runs_do_not_duplicate_keys(tmp_path):
     )
     assert second.exit_code == 0
     text = target.read_text(encoding="utf-8")
-    for key in ("GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET",
+    for key in ("INVINCIBLE_OWNER_SECRET",
                 "INVINCIBLE_DB_URL", "INVINCIBLE_CREDENTIAL_KEY"):
         assert text.count(f"{key}=") == 1
 
@@ -269,7 +249,7 @@ def test_setup_repeated_runs_do_not_duplicate_keys(tmp_path):
 def test_setup_force_rotates_secrets_keeps_db_and_credential_key(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
-        "GATEWAY_API_KEY=old-gw\nINVINCIBLE_OWNER_SECRET=old-owner\n"
+        "UNRELATED_SETTING=old-value\nINVINCIBLE_OWNER_SECRET=old-owner\n"
         "INVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n"
         "INVINCIBLE_CREDENTIAL_KEY=old-cred\n",
         encoding="utf-8",
@@ -279,12 +259,8 @@ def test_setup_force_rotates_secrets_keeps_db_and_credential_key(tmp_path):
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
-    assert values["GATEWAY_API_KEY"] != "old-gw"
     assert values["INVINCIBLE_OWNER_SECRET"] != "old-owner"
     assert values["INVINCIBLE_DB_URL"] == "postgresql+asyncpg://keep@db/x"
-    # --force regenerates the gateway key, so the announcement fires
-    # again - clients need to be told to update their Bearer token.
-    assert "Generated GATEWAY_API_KEY" in result.output
     # Rotation would orphan every stored BYOK credential - even
     # --force must keep the credential key exactly as it was.
     assert values["INVINCIBLE_CREDENTIAL_KEY"] == "old-cred"
@@ -421,7 +397,7 @@ def test_secret_rotate_preserves_other_lines_comments_and_order(tmp_path):
     target = tmp_path / ".env"
     before = (
         "# Top comment\n"
-        "GATEWAY_API_KEY=gw-1\n"
+        "UNRELATED_SETTING=keep-1\n"
         "CUSTOM_SETTING=value\n"
         "INVINCIBLE_OWNER_SECRET=old-owner\n"
         "# trailing note\n"
@@ -433,7 +409,7 @@ def test_secret_rotate_preserves_other_lines_comments_and_order(tmp_path):
     assert result.exit_code == 0
     lines = target.read_text(encoding="utf-8").splitlines()
     assert lines[0] == "# Top comment"
-    assert lines[1] == "GATEWAY_API_KEY=gw-1"
+    assert lines[1] == "UNRELATED_SETTING=keep-1"
     assert lines[2] == "CUSTOM_SETTING=value"
     assert lines[3].startswith("INVINCIBLE_OWNER_SECRET=")
     assert lines[3] != "INVINCIBLE_OWNER_SECRET=old-owner"
@@ -446,7 +422,7 @@ def test_secret_rotate_preserves_other_lines_comments_and_order(tmp_path):
 def test_secret_rotate_migrates_legacy_mcp_shared_secret(tmp_path):
     target = tmp_path / ".env"
     target.write_text(
-        "GATEWAY_API_KEY=gw-1\nMCP_SHARED_SECRET=old-mcp\n",
+        "UNRELATED_SETTING=keep-1\nMCP_SHARED_SECRET=old-mcp\n",
         encoding="utf-8",
     )
     result = CliRunner().invoke(cli, ["secret", "rotate", "--env-file", str(target)])
@@ -456,7 +432,7 @@ def test_secret_rotate_migrates_legacy_mcp_shared_secret(tmp_path):
     assert "MCP_SHARED_SECRET" not in text
     values = _env_dict(text)
     assert values["INVINCIBLE_OWNER_SECRET"] != "old-mcp"
-    assert values["GATEWAY_API_KEY"] == "gw-1"
+    assert values["UNRELATED_SETTING"] == "keep-1"
 
 
 def test_secret_rotate_missing_env_file_guides_to_setup(tmp_path):
@@ -469,11 +445,11 @@ def test_secret_rotate_missing_env_file_guides_to_setup(tmp_path):
 
 def test_secret_rotate_env_file_without_owner_secret_guides_to_setup(tmp_path):
     target = tmp_path / ".env"
-    target.write_text("GATEWAY_API_KEY=gw-1\n", encoding="utf-8")
+    target.write_text("UNRELATED_SETTING=keep-1\n", encoding="utf-8")
     result = CliRunner().invoke(cli, ["secret", "rotate", "--env-file", str(target)])
     assert result.exit_code == 1
     assert "invincible setup" in result.output
-    assert target.read_text(encoding="utf-8") == "GATEWAY_API_KEY=gw-1\n"
+    assert target.read_text(encoding="utf-8") == "UNRELATED_SETTING=keep-1\n"
 
 
 def test_secret_rotate_hides_value_unless_show_flag(tmp_path):
@@ -1075,7 +1051,10 @@ def test_oauth_test_client_requires_owner_secret(monkeypatch, tmp_path):
     monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
     result = CliRunner().invoke(cli, ["oauth", "test-client"])
     assert result.exit_code == 1
-    assert "INVINCIBLE_OWNER_SECRET is not set" in result.output
+    # Without the secret no account session can be minted, so the
+    # throwaway registration the helper relies on fails closed.
+    assert "Registration failed" in result.output
+    assert "INVINCIBLE_OWNER_SECRET" in result.output
 
 
 def test_oauth_test_client_requires_db_url(monkeypatch, tmp_path):

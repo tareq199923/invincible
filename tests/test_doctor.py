@@ -12,7 +12,7 @@ VALID_YAML = (
     "    api_key_env: SOLO_API_KEY\n    model_id: solo-model\n"
 )
 
-OWNER_LABEL = "INVINCIBLE_OWNER_SECRET exists (owner login for /mcp)"
+OWNER_LABEL = "INVINCIBLE_OWNER_SECRET exists (signs account sessions)"
 CREDENTIAL_LABEL = (
     "INVINCIBLE_CREDENTIAL_KEY exists (BYOK provider connections)")
 DB_URL_LABEL = "INVINCIBLE_DB_URL exists"
@@ -45,7 +45,6 @@ def _clean_invincible_env(monkeypatch):
     project .env loaded at import time) and earlier tests may leak them
     into it, so make every test start from a clean slate."""
     for key in (
-        "GATEWAY_API_KEY",
         "INVINCIBLE_OWNER_SECRET",
         "MCP_SHARED_SECRET",
         "INVINCIBLE_CREDENTIAL_KEY",
@@ -57,7 +56,6 @@ def _clean_invincible_env(monkeypatch):
 
 
 def _set_secrets(monkeypatch):
-    monkeypatch.setenv("GATEWAY_API_KEY", "gw-key")
     monkeypatch.setenv("INVINCIBLE_OWNER_SECRET", "owner-key")
     monkeypatch.setenv("INVINCIBLE_CREDENTIAL_KEY", "cred-key")
 
@@ -104,7 +102,6 @@ def test_doctor_all_ok(monkeypatch, tmp_path):
     assert f"OK  {DB_URL_LABEL}" in result.output
     assert f"OK  {REACHABLE_LABEL}" in result.output
     assert f"OK  {REVISION_LABEL}" in result.output
-    assert "OK  GATEWAY_API_KEY exists" in result.output
     assert f"OK  {OWNER_LABEL}" in result.output
 
 
@@ -120,7 +117,6 @@ def test_doctor_prints_version(monkeypatch, tmp_path):
 
 
 def test_doctor_missing_secrets_fail(monkeypatch, tmp_path):
-    monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
     monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
@@ -129,13 +125,11 @@ def test_doctor_missing_secrets_fail(monkeypatch, tmp_path):
 
     result = _invoke()
     assert result.exit_code == 1
-    assert "FAIL  GATEWAY_API_KEY exists" in result.output
     assert f"FAIL  {OWNER_LABEL}" in result.output
 
 
 def test_doctor_legacy_alias_counts_as_owner_secret(monkeypatch, tmp_path):
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
-    monkeypatch.setenv("GATEWAY_API_KEY", "gw-key")
     monkeypatch.setenv("MCP_SHARED_SECRET", "legacy-owner")
     monkeypatch.setenv("INVINCIBLE_CREDENTIAL_KEY", "cred-key")
     monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
@@ -337,7 +331,6 @@ def test_doctor_uses_rich_console_when_available(monkeypatch, tmp_path):
 
 
 def test_doctor_rich_console_propagates_failure(monkeypatch, tmp_path):
-    monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
     monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
@@ -353,17 +346,16 @@ def test_doctor_rich_console_propagates_failure(monkeypatch, tmp_path):
     monkeypatch.setattr("invincible.cli._doctor_console", lambda: FakeConsole())
     result = _invoke()
     assert result.exit_code == 1
-    assert any("[red]FAIL[/red]  GATEWAY_API_KEY exists" in line for line in printed)
+    assert any(f"[red]FAIL[/red]  {OWNER_LABEL}" in line for line in printed)
 
 
 # --- env file handling --------------------------------------------------------
 
 
 def test_doctor_loads_keys_from_env_file(monkeypatch, tmp_path):
-    monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
     (tmp_path / ".env").write_text(
-        "GATEWAY_API_KEY=gw-from-env\nINVINCIBLE_OWNER_SECRET=owner-from-env\n"
+        "INVINCIBLE_OWNER_SECRET=owner-from-env\n"
         f"INVINCIBLE_CREDENTIAL_KEY=cred-from-env\n"
         f"INVINCIBLE_DB_URL={TEST_DB_URL}\n",
         encoding="utf-8",
@@ -373,7 +365,6 @@ def test_doctor_loads_keys_from_env_file(monkeypatch, tmp_path):
 
     result = _invoke()
     assert result.exit_code == 0
-    assert "OK  GATEWAY_API_KEY exists" in result.output
     assert f"OK  {OWNER_LABEL}" in result.output
     # doctor stays quiet about the env file; output format is unchanged.
     assert "Loaded environment from" not in result.output
@@ -383,7 +374,7 @@ def test_doctor_existing_exports_win_over_env_file(monkeypatch, tmp_path):
     _set_secrets(monkeypatch)
     monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
     (tmp_path / ".env").write_text(
-        "GATEWAY_API_KEY=env-gw\nINVINCIBLE_OWNER_SECRET=env-owner\n",
+        "INVINCIBLE_OWNER_SECRET=env-owner\n",
         encoding="utf-8",
     )
     _hermetic_db(monkeypatch)
@@ -391,14 +382,11 @@ def test_doctor_existing_exports_win_over_env_file(monkeypatch, tmp_path):
 
     result = _invoke()
     assert result.exit_code == 0
-    assert "OK  GATEWAY_API_KEY exists" in result.output
     assert f"OK  {OWNER_LABEL}" in result.output
-    assert os.environ["GATEWAY_API_KEY"] == "gw-key"
     assert os.environ["INVINCIBLE_OWNER_SECRET"] == "owner-key"
 
 
 def test_doctor_missing_env_file_reports_missing_keys(monkeypatch, tmp_path):
-    monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
     monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     _hermetic_db(monkeypatch)
@@ -406,7 +394,6 @@ def test_doctor_missing_env_file_reports_missing_keys(monkeypatch, tmp_path):
 
     result = _invoke()
     assert result.exit_code == 1
-    assert "FAIL  GATEWAY_API_KEY exists" in result.output
     assert f"FAIL  {OWNER_LABEL}" in result.output
 
 
@@ -443,7 +430,6 @@ def test_doctor_credential_key_present_warns_to_back_up(
 
 
 def test_doctor_env_file_without_keys_still_fails(monkeypatch, tmp_path):
-    monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
     monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     (tmp_path / ".env").write_text(
@@ -454,15 +440,13 @@ def test_doctor_env_file_without_keys_still_fails(monkeypatch, tmp_path):
 
     result = _invoke()
     assert result.exit_code == 1
-    assert "FAIL  GATEWAY_API_KEY exists" in result.output
     assert f"FAIL  {OWNER_LABEL}" in result.output
 
 
 def test_doctor_custom_env_file_option(monkeypatch, tmp_path):
-    monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
     custom = tmp_path / ".env.doctor"
     custom.write_text(
-        "GATEWAY_API_KEY=custom-gw\nINVINCIBLE_OWNER_SECRET=custom-owner\n"
+        "INVINCIBLE_OWNER_SECRET=custom-owner\n"
         f"INVINCIBLE_CREDENTIAL_KEY=custom-cred\n"
         f"INVINCIBLE_DB_URL={TEST_DB_URL}\n",
         encoding="utf-8",
@@ -472,5 +456,4 @@ def test_doctor_custom_env_file_option(monkeypatch, tmp_path):
 
     result = _invoke(["doctor", "--env-file", str(custom)])
     assert result.exit_code == 0
-    assert "OK  GATEWAY_API_KEY exists" in result.output
     assert f"OK  {OWNER_LABEL}" in result.output

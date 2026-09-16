@@ -59,33 +59,35 @@ class _FakeClock:
 
 
 @pytest.fixture
-async def golden_stack(client, pg_engine, monkeypatch):
+async def golden_stack(client, pg_engine, monkeypatch, byok_env):
     monkeypatch.setattr("invincible.core.continuity.time", _FakeClock())
     runs = RunStore(engine=pg_engine)
     engine = ContinuityEngine(engine=pg_engine, runs=runs)
     app.state.runs = runs
     app.state.continuity = engine
-    try:
-        from tests.conftest import operator_session
+    # A user principal owns the seeded session (Phase 2: every graph
+    # caller is scoped; the operator override is gone).
+    from tests.conftest import v1_user
 
-        await operator_session(client)
-        yield runs, engine
+    uid, raw = await v1_user(client, "golden@example.com", providers=[])
+    try:
+        yield runs, engine, uid, raw
     finally:
         await engine.close()
         await runs.close()
 
 
-async def seed_rich_session(runs, engine):
+async def seed_rich_session(runs, engine, uid):
     """One deterministic scenario exercising every node/edge kind:
     a failover chain, a clean second request, versioned task state, a
     checkpoint pinning the head, a post-checkpoint failure (interruption
     note), and one normalized turn."""
+    from invincible.core.identity import ensure_default_project
+
     base = 1000.0
     # The session row must exist first so every store write lands on the
     # owning surrogate pk - exactly what production callers resolve.
-    from invincible.core.db import ensure_local_owner
-
-    uid, pid = await ensure_local_owner(app.state.engine)
+    pid = await ensure_default_project(app.state.engine, uid)
     await app.state.sessions.append("default", [
         {"role": "user", "content": "count please"},
         {"role": "assistant", "content": "1 2 3"},
@@ -129,10 +131,12 @@ async def seed_rich_session(runs, engine):
 
 
 async def test_projection_matches_golden(client, golden_stack):
-    runs, engine = golden_stack
-    await seed_rich_session(runs, engine)
+    runs, engine, uid, raw = golden_stack
+    await seed_rich_session(runs, engine, uid)
 
-    resp = await client.get("/api/v1/sessions/default/graph")
+    resp = await client.get(
+        "/api/v1/sessions/default/graph",
+        headers={"Authorization": f"Bearer {raw}"})
     assert resp.status_code == 200
     data = canonicalize(resp.json())
     assert set(data) == _TOP_LEVEL_KEYS

@@ -79,10 +79,6 @@ def _env_flag(name: str) -> bool:
 class Settings:
     """Live-read accessors for every environment variable the app owns."""
 
-    def gateway_api_key(self) -> str | None:
-        """Bearer/x-api-key credential guarding /v1/* (unset = fail open)."""
-        return os.getenv("GATEWAY_API_KEY")
-
     def db_url(self) -> str | None:
         """PostgreSQL DSN (INVINCIBLE_DB_URL). Required since Phase 16;
         e.g. postgresql+asyncpg://invincible:pw@localhost:5433/invincible"""
@@ -107,34 +103,17 @@ class Settings:
         return os.getenv("INVINCIBLE_CREDENTIAL_KEY")
 
     def owner_secret(self) -> str | None:
-        """Owner-login secret signing browser sessions (OAuth consent +
-        Phase 3 account cookies). Unset disables those flows (fail closed).
+        """HMAC key source signing account browser sessions
+        (core.accounts SessionManager). The OAuth owner-secret LOGIN was
+        removed in Phase 2 - consent is a logged-in account session - but
+        the sessions themselves still fail closed when this is unset.
         """
         return os.getenv("INVINCIBLE_OWNER_SECRET")
 
     def legacy_owner_secret(self) -> str | None:
-        """Pre-rename alias (MCP_SHARED_SECRET), honored by endpoints.oauth."""
+        """Pre-rename alias (MCP_SHARED_SECRET), honored as a fallback
+        session-signing key by core.accounts SessionManager."""
         return os.getenv("MCP_SHARED_SECRET")
-
-    def allow_first_operator(self) -> bool:
-        """Whether the first-human operator bootstrap may fire (MEDIUM-1,
-        2026-09-07 audit).
-
-        True when NO owner secret is configured (bare self-host without
-        the browser-session surface) or when INVINCIBLE_ALLOW_FIRST_OPERATOR
-        is explicitly enabled. ``invincible setup`` writes that flag into
-        fresh .env files, so the out-of-the-box one-person self-host keeps
-        its no-terminal bootstrap - the first human to register IS the
-        person who ran setup. Public/hosted deploys configure secrets by
-        hand (Railway vars) and omit the flag: a stranger winning the
-        registration race there lands a plain ``user`` account, and
-        elevation is ``invincible users promote`` (audit-logged).
-        """
-        if self.owner_secret() or self.legacy_owner_secret():
-            return os.getenv(
-                "INVINCIBLE_ALLOW_FIRST_OPERATOR", ""
-            ).strip().lower() in ("1", "true", "on", "yes")
-        return True
 
     def github_client_id(self) -> str | None:
         """GitHub OAuth App client ID - unset hides GitHub login entirely."""
@@ -143,14 +122,6 @@ class Settings:
     def github_client_secret(self) -> str | None:
         """GitHub OAuth App client secret (never logged, never returned)."""
         return os.getenv("INVINCIBLE_GITHUB_CLIENT_SECRET")
-
-    def providers_file(self) -> str | None:
-        """Writable provider-registry file (INVINCIBLE_PROVIDERS_FILE).
-
-        Unset = packaged YAML loaded read-only; management mutations refuse
-        until an operator points this at a real path.
-        """
-        return os.getenv("INVINCIBLE_PROVIDERS_FILE")
 
     def persist_pending_actions(self) -> bool:
         """Whether staged MCP actions survive a restart."""
@@ -161,11 +132,8 @@ class Settings:
         agent (Phase 10). Opt-in on purpose, unlike the default-on
         INVINCIBLE_* feature toggles: unset means every tool executes
         locally on the server host, exactly as before, so local
-        ``invincible start`` development workflows are untouched. Also
-        read by the OAuth consent gate - when routing is on, non-
-        operators may approve their own MCP clients (approval exposes
-        only their own machine, never the server host). Public
-        multi-user deploys MUST set INVINCIBLE_AGENT_ROUTING=1 (see
+        ``invincible start`` development workflows are untouched.
+        Public multi-user deploys MUST set INVINCIBLE_AGENT_ROUTING=1 (see
         docs/SECURITY.md §10 deployment posture)."""
         return bool(os.getenv("INVINCIBLE_AGENT_ROUTING"))
 

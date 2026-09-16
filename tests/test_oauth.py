@@ -1,9 +1,10 @@
 """Tests for the self-hosted OAuth 2.1 + PKCE authorization server.
 
 Covers: RFC 8414 / RFC 9728 discovery metadata, RFC 7591 dynamic client
-registration, the owner-login cookie gate on /oauth/authorize, the full
-authorize -> approve -> token exchange with real PKCE verification, single-use
-codes, refresh-token rotation, revocation, and the /mcp bearer-token gate.
+registration, the account-session gate on /oauth/authorize (anonymous
+browsers bounce to /login), the full authorize -> approve -> token
+exchange with real PKCE verification, single-use codes, refresh-token
+rotation, revocation, and the /mcp bearer-token gate.
 """
 import html
 import re
@@ -14,9 +15,9 @@ from invincible.main import app
 from tests.conftest import (
     TEST_REDIRECT_URI,
     authorize_params,
+    consent_account,
     oauth_approve,
     oauth_exchange,
-    oauth_login,
     oauth_register,
     obtain_access_token,
     pkce_pair,
@@ -122,62 +123,53 @@ async def test_register_rejects_non_object_body(client):
     assert response.status_code == 400
 
 
-# --- owner-login gate on /oauth/authorize ---
+# --- account-session gate on /oauth/authorize -----------------------------
 
 
-async def test_authorize_without_session_cookie_shows_login_not_consent(client):
+async def test_authorize_without_session_redirects_to_login(client):
+    """Anonymous browsers never see the consent page - they bounce to the
+    account login with the authorize URL as the same-origin ``next``
+    target, so the approval funnel survives the login round-trip."""
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
     response = await client.get(
-        f"/oauth/authorize?{'&'.join(f'{k}={v}' for k, v in params.items())}"
+        f"/oauth/authorize?{'&'.join(f'{k}={v}' for k, v in params.items())}",
+        follow_redirects=False,
     )
-    assert response.status_code == 200
-    text = response.text
-    assert "Owner secret" in text and 'name="owner_secret"' in text
-    assert "Approve" not in text
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith("/login?next=")
+    assert "Approve" not in response.text
 
 
-async def test_wrong_owner_secret_sets_no_cookie(client):
+async def test_anonymous_consent_post_is_401(client):
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
-    response = await oauth_login(client, params, owner_secret="wrong-secret")
+    response = await client.post(
+        "/oauth/authorize",
+        data={**params, "action": "approve"},
+        follow_redirects=False,
+    )
     assert response.status_code == 401
-    assert "Incorrect owner secret" in response.text
-    assert "set-cookie" not in response.headers
+    assert "Not authenticated" in response.text
 
 
-async def test_correct_owner_secret_sets_session_cookie(client):
+async def test_consent_post_without_action_is_400(client):
+    """The old owner-secret login form is gone: a POST carrying anything
+    but the approve/deny action is a plain bad request."""
+    await consent_account(client, email="gate-a@example.com")
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
-    response = await oauth_login(client, params)
-    assert response.status_code == 302
-    cookie = response.headers.get("set-cookie", "")
-    assert "invincible_owner=" in cookie
-    assert "HttpOnly" in cookie
-
-
-async def test_owner_secret_unset_blocks_login(client, monkeypatch):
-    monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
-    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
-    verifier, challenge = pkce_pair()
-    client_id, redirect_uri = await oauth_register(client)
-    params = authorize_params(client_id, challenge, redirect_uri)
-    response = await oauth_login(client, params)
-    assert response.status_code == 503
-    assert "No owner secret is configured" in response.text
-
-
-async def test_legacy_mcp_shared_secret_still_authenticates(client, monkeypatch):
-    monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
-    monkeypatch.setenv("MCP_SHARED_SECRET", "legacy-secret")
-    verifier, challenge = pkce_pair()
-    client_id, redirect_uri = await oauth_register(client)
-    params = authorize_params(client_id, challenge, redirect_uri)
-    response = await oauth_login(client, params, owner_secret="legacy-secret")
-    assert response.status_code == 302
+    response = await client.post(
+        "/oauth/authorize",
+        data={**params, "owner_secret": "whatever"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 400
+    assert "Unknown consent action" in response.text
 
 
 async def test_authorize_rejects_unregistered_client(client):
@@ -225,7 +217,7 @@ async def test_wrong_verifier_rejected(client):
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
-    await oauth_login(client, params)
+    await consent_account(client)
     location = await oauth_approve(client, params)
     code = _code_from_location(location)
     wrong_verifier, _ = pkce_pair()
@@ -240,7 +232,7 @@ async def test_code_is_single_use(client):
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
-    await oauth_login(client, params)
+    await consent_account(client)
     location = await oauth_approve(client, params)
     code = _code_from_location(location)
     first = await oauth_exchange(client, code, client_id, redirect_uri, verifier)
@@ -264,7 +256,7 @@ async def test_deny_redirects_with_access_denied(client):
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
-    await oauth_login(client, params)
+    await consent_account(client)
     location = await oauth_approve(client, params, deny=True)
     query = parse_qs(urlparse(location).query)
     assert query["error"] == ["access_denied"]
@@ -301,7 +293,7 @@ async def test_consent_page_renders_post_forms(client):
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
-    await oauth_login(client, params)
+    await consent_account(client)
     approve_data = await _consent_page_form_data(client, params, "approve")
     deny_data = await _consent_page_form_data(client, params, "deny")
     for data in (approve_data, deny_data):
@@ -315,7 +307,7 @@ async def test_get_with_action_is_rejected(client):
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
-    await oauth_login(client, params)
+    await consent_account(client)
     query = "&".join(f"{k}={v}" for k, v in params.items())
     response = await client.get(
         f"/oauth/authorize?{query}&action=approve", follow_redirects=False
@@ -330,7 +322,7 @@ async def test_live_approve_submits_rendered_form(client):
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
-    await oauth_login(client, params)
+    await consent_account(client)
     data = await _consent_page_form_data(client, params, "approve")
     response = await client.post(
         "/oauth/authorize", data=data, follow_redirects=False
@@ -352,7 +344,7 @@ async def test_live_deny_submits_rendered_form(client):
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
-    await oauth_login(client, params)
+    await consent_account(client)
     data = await _consent_page_form_data(client, params, "deny")
     response = await client.post(
         "/oauth/authorize", data=data, follow_redirects=False
@@ -445,113 +437,35 @@ async def test_mcp_with_garbage_bearer_returns_401(client):
     assert "oauth-protected-resource" in response.headers.get("www-authenticate", "")
 
 
-# --- owner-secret-unset hardening ---
+# --- session-signing hardening ---------------------------------------------
 
 
-async def test_authorize_get_rejected_when_owner_secret_unset(client, monkeypatch):
+async def test_authorize_redirects_when_session_secret_unset(client, monkeypatch):
+    """Without INVINCIBLE_OWNER_SECRET no session can verify (the HMAC
+    key would be publicly computable), so consent is unreachable: the
+    GET bounces to /login and no code can ever be issued."""
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
     monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
     response = await client.get(
-        f"/oauth/authorize?{'&'.join(f'{k}={v}' for k, v in params.items())}"
+        f"/oauth/authorize?{'&'.join(f'{k}={v}' for k, v in params.items())}",
+        follow_redirects=False,
     )
-    assert response.status_code == 503
-    assert "No owner secret is configured" in response.text
+    assert response.status_code == 302
+    assert response.headers["location"].startswith("/login?next=")
 
-
-async def test_forged_cookie_rejected_when_owner_secret_unset(client, monkeypatch):
-    """With no owner secret configured the cookie HMAC key would be
-    sha256(b"") - publicly computable. A cookie forged with exactly that key
-    must not authorize anything."""
-    import hashlib
-    import hmac
-    import time
-
-    monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
-    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
-    verifier, challenge = pkce_pair()
-    client_id, redirect_uri = await oauth_register(client)
-    params = authorize_params(client_id, challenge, redirect_uri)
-
-    payload = str(int(time.time()))
-    forged_key = hashlib.sha256(b"").digest()
-    signature = hmac.new(
-        forged_key, payload.encode("ascii"), hashlib.sha256
-    ).hexdigest()
-    client.cookies.set("invincible_owner", f"{payload}.{signature}")
-
-    response = await client.post(
+    forged = await client.post(
         "/oauth/authorize",
         data={**params, "action": "approve"},
         follow_redirects=False,
     )
-    assert response.status_code == 503
-    assert "location" not in response.headers  # no code is ever issued
+    assert forged.status_code == 401
+    assert "location" not in forged.headers  # no code is ever issued
 
 
-# --- owner-login rate limiting ---
-
-
-async def _clear_login_failures(client):
-    """Phase 2: failure state lives in login_attempts - clear the table."""
-    from sqlalchemy import text
-
-    from invincible.main import app
-
-    async with app.state.engine.begin() as conn:
-        await conn.execute(text("DELETE FROM login_attempts"))
-
-
-async def test_five_wrong_secrets_lock_out_the_ip(client):
-    await _clear_login_failures(client)
-    verifier, challenge = pkce_pair()
-    client_id, redirect_uri = await oauth_register(client)
-    params = authorize_params(client_id, challenge, redirect_uri)
-
-    for _ in range(5):
-        response = await oauth_login(client, params, owner_secret="wrong")
-        assert response.status_code == 401
-
-    sixth = await oauth_login(client, params, owner_secret="wrong")
-    assert sixth.status_code == 429
-    assert "Too many failed attempts" in sixth.text
-
-
-async def test_lockout_rejects_even_the_correct_secret(client):
-    await _clear_login_failures(client)
-    verifier, challenge = pkce_pair()
-    client_id, redirect_uri = await oauth_register(client)
-    params = authorize_params(client_id, challenge, redirect_uri)
-
-    for _ in range(5):
-        await oauth_login(client, params, owner_secret="wrong")
-
-    response = await oauth_login(client, params)  # correct secret
-    assert response.status_code == 429
-    assert "set-cookie" not in response.headers
-
-
-async def test_successful_login_resets_the_counter(client):
-    await _clear_login_failures(client)
-    verifier, challenge = pkce_pair()
-    client_id, redirect_uri = await oauth_register(client)
-    params = authorize_params(client_id, challenge, redirect_uri)
-
-    for _ in range(4):  # one short of the limit
-        await oauth_login(client, params, owner_secret="wrong")
-
-    response = await oauth_login(client, params)  # correct: resets
-    assert response.status_code == 302
-
-    # four more failures are allowed again before any lockout
-    for _ in range(4):
-        attempt = await oauth_login(client, params, owner_secret="wrong")
-        assert attempt.status_code == 401
-
-
-# --- persistent rate limiting (Phase 2) ---
+# --- persistent rate limiting (the LoginRateLimiter mechanism) --------------
 
 
 def _limiter(engine):
@@ -563,7 +477,6 @@ def _limiter(engine):
 async def test_lockout_survives_a_new_limiter_instance(client, pg_engine):
     """THE persistence property: a fresh limiter over the same database
     (what a server restart produces) still sees the lockout."""
-    await _clear_login_failures(client)
     limiter = _limiter(pg_engine)
     for _ in range(5):
         await limiter.record_failure("10.0.0.9")

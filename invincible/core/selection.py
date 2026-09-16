@@ -132,6 +132,10 @@ def attempt_order(
     # auto
     ordered = sorted(available, key=lambda p: p["tier"])
     if model_hint:
+        # ``aliases`` are a providers.yaml-only concept: BYOK credential
+        # candidates never carry them, so on the /v1/* path this matches on
+        # model_id alone. The alias branch stays live for the static-YAML
+        # router (kept for router-level tests) - see test_router.py.
         preferred = [
             p
             for p in ordered

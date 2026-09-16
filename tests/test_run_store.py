@@ -3,10 +3,9 @@
 import httpx
 import pytest
 
-from invincible.core.provider_registry import ProviderRegistry
-from invincible.core.router import AllProvidersFailedError, Router
+from invincible.core.router import Router
 from invincible.core.run_store import RunStore
-from tests.conftest import default_providers, provider_body
+from tests.conftest import provider_body
 
 MESSAGES = [{"role": "user", "content": "hi"}]
 
@@ -57,9 +56,8 @@ async def test_record_and_recent_roundtrip(runs):
 
 
 async def test_router_records_every_attempt_across_failover(
-    tmp_path, monkeypatch, pg_engine
+    monkeypatch, pg_engine, provider_config
 ):
-
     from tests.conftest import default_providers
 
     monkeypatch.setenv("ALPHA_API_KEY", "k-a")
@@ -70,15 +68,11 @@ async def test_router_records_every_attempt_across_failover(
             return httpx.Response(500, json={"error": "down"})
         return httpx.Response(200, json=provider_body("beta"))
 
-    registry = ProviderRegistry(
-        file_path=str(tmp_path / "p.yaml"),
-        seed_config={"providers": default_providers()},
-    )
     runs = RunStore(engine=pg_engine)
 
     router = Router(
+        config_path=provider_config(default_providers()),
         transport=httpx.MockTransport(handler),
-        registry=registry,
         run_recorder=runs.record,
     )
     result = await router.route_request(MESSAGES, session_id="sess-9")
@@ -137,28 +131,8 @@ async def test_recorder_failure_never_breaks_the_completion(monkeypatch):
         await router.close()
 
 
-async def test_pinned_unavailable_records_nothing_and_raises(monkeypatch, tmp_path):
-    monkeypatch.delenv("ALPHA_API_KEY", raising=False)
-    recorded = []
-
-    async def recorder(entry):
-        recorded.append(entry)
-
-    registry = ProviderRegistry(
-        file_path=str(tmp_path / "p.yaml"),
-        seed_config={"providers": default_providers()},
-    )
-    await registry.disable("alpha")
-    await registry.set_routing(
-        "pinned", pinned={"provider": "alpha", "model": "m"}
-    )
-    router = Router(registry=registry, run_recorder=recorder)
-    try:
-        with pytest.raises(
-            AllProvidersFailedError, match="not configured or is disabled"
-        ):
-            await router.route_request(MESSAGES)
-        # The pinned target was never attempted (disabled pre-selection).
-        assert recorded == []
-    finally:
-        await router.close()
+# The old "pinned unavailable records nothing" test retired with the
+# operator registry: pinned/chain routing now exists only as per-user
+# BYOK routing (user_settings_store.routing_config_from_user), covered by
+# test_chat_byok.py's chain/pinned tests. The static-YAML router the
+# remaining tests construct is auto-only.

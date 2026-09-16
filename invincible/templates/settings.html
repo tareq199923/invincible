@@ -69,14 +69,6 @@
 
 <h3>System <span class="muted">(read-only)</span></h3>
 <table>
-  <tr><th>Providers configured</th><td>{{ provider_rows | length }}</td></tr>
-  {% for p in provider_rows %}
-  <tr><td class="muted">{{ p.name }} - tier {{ p.tier }}</td>
-      <td><span class="status-badge status-{{ 'ok' if p.enabled else 'untested' }}">{{ "enabled" if p.enabled else "disabled" }}</span></td></tr>
-  {% endfor %}
-  {% if routing_mode %}
-  <tr><th>Routing mode</th><td>{{ routing_mode }}</td></tr>
-  {% endif %}
   {% for label, on in flags %}
   <tr><th>{{ label }}</th><td><span class="status-badge status-{{ 'ok' if on else 'untested' }}">{{ "on" if on else "off" }}</span></td></tr>
   {% endfor %}

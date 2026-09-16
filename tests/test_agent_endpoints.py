@@ -41,12 +41,12 @@ async def test_poll_with_garbage_key_is_401(client):
     assert response.status_code == 401
 
 
-async def test_gateway_key_cannot_reach_agent_surface(client):
-    """require_agent_auth is deliberately NOT require_auth: the legacy
-    gateway-key realm (and the fail-open anonymous mode) must never
-    reach agent dispatch."""
+async def test_non_inv_token_cannot_reach_agent_surface(client):
+    """require_agent_auth is deliberately NOT require_auth: any string
+    that is not a resolvable inv_ key (including the retired gateway-key
+    spelling) must never reach agent dispatch."""
     response = await client.post(
-        "/agent/poll", headers=agent_headers("test-gateway-key")
+        "/agent/poll", headers=agent_headers("not-a-real-key")
     )
     assert response.status_code == 401
 

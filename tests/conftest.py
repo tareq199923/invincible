@@ -7,11 +7,13 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 import yaml
+from cryptography.fernet import Fernet
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
 from invincible.core.agent_registry import AgentRegistry
 from invincible.core.continuity import ContinuityEngine
+from invincible.core.credential_store import ByokCredentialStore
 from invincible.core.db import (
     create_all_from_metadata,
     ensure_local_owner,
@@ -197,12 +199,7 @@ async def admin_pg(pg_live):
 
 @pytest.fixture
 async def client(pg_engine, router_setter, monkeypatch):
-    monkeypatch.setenv("GATEWAY_API_KEY", "test-gateway-key")
     monkeypatch.setenv("INVINCIBLE_OWNER_SECRET", TEST_OWNER_SECRET)
-    # MEDIUM-1: the operator bootstrap is opt-in for secret-configured
-    # instances (setup writes this flag into fresh .env files); the tests
-    # mirror a normal setup-managed self-host.
-    monkeypatch.setenv("INVINCIBLE_ALLOW_FIRST_OPERATOR", "1")
     router_setter({})
     store = SessionStore(engine=pg_engine)
     app.state.engine = pg_engine
@@ -244,12 +241,11 @@ async def client(pg_engine, router_setter, monkeypatch):
     await retrieval.close()
     await memory.close()
     await oauth_store.close()
-    # app.state is module-global: anything a test attaches (registry)
-    # otherwise leaks into every later file - the demonstrated
-    # order-dependent settings-page failure. Mirror the oauth_store
-    # reset for every attribute tests assign directly.
+    # app.state is module-global: anything a test attaches otherwise
+    # leaks into every later file - the demonstrated order-dependent
+    # settings-page failure. Mirror the oauth_store reset for every
+    # attribute tests assign directly.
     app.state.oauth_store = None
-    app.state.registry = None
     app.state.byok_http_client = None
     app.state.agent_registry = None
 
@@ -258,9 +254,10 @@ async def client(pg_engine, router_setter, monkeypatch):
 
 
 async def local_owner_kwargs(engine) -> dict:
-    """``**kwargs`` for the system local owner - the explicit identity
-    tests use when reading back what gateway-key (legacy realm) requests
-    persisted. SessionStore has no owner fallback (audit Step 2)."""
+    """``**kwargs`` for the system local owner - the identity store-level
+    tests use when writing rows directly under it. No /v1/* request ever
+    resolves to it anymore (the gateway-key realm is gone); it exists as
+    a dormant system row."""
     uid, pid = await ensure_local_owner(engine)
     return {"user_id": uid, "project_id": pid}
 
@@ -274,10 +271,55 @@ async def register_account(
     return response, email
 
 
+@pytest.fixture
+def byok_env(monkeypatch):
+    """The BYOK preconditions every v1_user test needs: a credential
+    master key (encryption actually works in store.create) and fake DNS
+    so the per-attempt SSRF re-validation of the mock hosts never hits a
+    real resolver (pattern: test_chat_byok.py)."""
+    monkeypatch.setenv(
+        "INVINCIBLE_CREDENTIAL_KEY", Fernet.generate_key().decode("ascii"))
+
+    import invincible.core.url_safety as url_safety
+
+    monkeypatch.setattr(
+        url_safety, "_default_resolve", lambda host: ["93.184.216.34"])
+
+
+async def v1_user(client, email, providers=None):
+    """Register an account, mint its inv_ API key, and connect mock
+    providers through the real encrypted store - the /v1/* identity
+    since the gateway-key realm was removed (Phase 2).
+
+    ``providers`` defaults to ``default_providers()`` (alpha/beta/gamma
+    at https://<name>.example.com/v1, model ``<name>-model``), so tests
+    keep their existing handler maps, model ids, and
+    x-invincible-provider assertions - only the auth header changes.
+    Pass ``providers=[]`` for a key with zero connected credentials.
+    Created order drives failover order. Returns ``(user_id, raw_key)``.
+
+    Requires the ``byok_env`` fixture (credential key + fake DNS).
+    """
+    registered, _ = await register_account(client, email)
+    uid = registered.json()["id"]
+    raw = (await ApiKeyStore(app.state.engine).create(uid, label="t"))["raw"]
+    store = ByokCredentialStore(app.state.engine)
+    for provider in (providers if providers is not None
+                     else default_providers()):
+        await store.create(
+            user_id=uid,
+            provider_name=provider["name"],
+            model_id=provider["model_id"],
+            base_url=provider["base_url"],
+            api_key=f"test-key-{provider['name']}",
+        )
+    return uid, raw
+
+
 async def promote_operator(uid: int) -> None:
-    """Elevate a dashboard account to operator (the role OAuth consent
-    requires). Real deployments get this from the local-owner bootstrap
-    or revision 0008; tests reach for the row directly."""
+    """Elevate a dashboard account to operator (a dormant role since
+    Phase 2 removed the operator surface; tests reach for the row
+    directly to prove the role grants nothing on user-scoped surfaces)."""
     async with app.state.engine.begin() as conn:
         await conn.execute(
             text("UPDATE users SET role = 'operator' WHERE id = :id"),
@@ -289,26 +331,6 @@ async def login_account(client, email="user@example.com",
                         password="longenough1"):
     return await client.post(
         "/auth/login", json={"email": email, "password": password})
-
-
-async def operator_session(client, email="op@example.com",
-                           password="longenough1"):
-    """Register a FRESH account and promote it to operator explicitly.
-    The first-human bootstrap used to make this implicit, but it is
-    opt-in since MEDIUM-1 (the client fixture enables the flag, so a
-    clean table usually lands operator anyway - promote makes the
-    operator outcome explicit regardless of other humans/tests in the
-    same table). Then log in. The returned id carries the operator's
-    session cookie (management API realm)."""
-    response = await client.post(
-        "/auth/register", json={"email": email, "password": password})
-    assert response.status_code == 201, response.text
-    uid = response.json()["id"]
-    await promote_operator(uid)
-    login = await client.post(
-        "/auth/login", json={"email": email, "password": password})
-    assert login.status_code == 200, login.text
-    return uid
 
 
 def pkce_pair():
@@ -338,11 +360,15 @@ async def oauth_register(client, redirect_uri=TEST_REDIRECT_URI, name="test-clie
     return response.json()["client_id"], redirect_uri
 
 
-async def oauth_login(client, params, owner_secret=TEST_OWNER_SECRET):
-    """Submit the owner-login form (sets the session cookie on success)."""
-    return await client.post(
-        "/oauth/authorize", data={**params, "owner_secret": owner_secret}
-    )
+async def consent_account(client, email="consent@example.com",
+                          password="longenough1"):
+    """Register the browser account an OAuth consent approval acts as
+    (the only consent identity since Phase 2 - the owner-secret login
+    was removed). Registration sets the session cookie; returns the uid."""
+    response = await client.post(
+        "/auth/register", json={"email": email, "password": password})
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
 
 
 async def oauth_approve(client, params, deny=False):
@@ -373,20 +399,30 @@ async def oauth_exchange(
     return await client.post("/oauth/token", data=data)
 
 
-async def obtain_access_token(client):
-    """Run the complete register -> login -> approve -> exchange flow and
-    return the raw access token (and client_id, refresh_token, verifier)."""
+async def obtain_access_token(client, email=None, password="longenough1"):
+    """Run the complete account-session -> client-register -> approve ->
+    exchange flow and return the raw access token (and client_id,
+    refresh_token, verifier, user_id). Without ``email`` a throwaway
+    consent account is registered; with it, the EXISTING account is
+    logged in instead (tests that pair the token subject with an inv_
+    key's owner). The consent client is named "test-client"."""
+    if email is None:
+        uid = await consent_account(client, password=password)
+    else:
+        login = await client.post(
+            "/auth/login", json={"email": email, "password": password})
+        assert login.status_code == 200, login.text
+        uid = login.json()["id"]
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)
-    login = await oauth_login(client, params)
-    assert login.status_code == 302, login.text[:300]
     location = await oauth_approve(client, params)
     code = parse_qs(urlparse(location).query)["code"][0]
     exchange = await oauth_exchange(client, code, client_id, redirect_uri, verifier)
     assert exchange.status_code == 200, exchange.text
     tokens = exchange.json()
     return {
+        "user_id": uid,
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "verifier": verifier,

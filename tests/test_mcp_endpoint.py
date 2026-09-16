@@ -296,7 +296,7 @@ async def test_mcp_call_read_own_source_allowed(client, bearer_headers):
 
 async def test_mcp_write_to_protected_path_blocked(client, bearer_headers):
     response = await _call_tool(client, bearer_headers, "write_file", {
-        "path": ".env", "content": "GATEWAY_API_KEY=stolen",
+        "path": ".env", "content": "SOME_SECRET=stolen",
     })
     body = response.json()
     assert body["result"]["isError"] is True

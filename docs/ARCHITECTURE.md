@@ -11,11 +11,11 @@ non-obvious algorithms (context trimming, cooldowns, config resolution).
 invincible/
 ├── main.py                     FastAPI app, lifespan, auth wiring, /health, HEAD /
 ├── cli.py                      Click CLI (setup / start / login / doctor / dev-db / db / oauth / secret / api-key / users)
-├── providers.yaml              Canonical provider config (packaged)
+├── providers.yaml              Static provider config (packaged test fixture)
 ├── templates/                  Jinja2 UI (login/register/account/device pages + dashboard)
 ├── migrations/                 Packaged Alembic environment (0001 baseline … 0008 operator_role)
 ├── endpoints/
-│   ├── auth.py                 require_auth: dual-realm Principal resolution for /v1/* (Phase 1)
+│   ├── auth.py                 require_auth: per-user inv_ API-key Principal resolution for /v1/* (fail closed)
 │   ├── accounts.py             Phase 3: /auth/*, /projects, /api-keys, /sessions,
 │   │                           device pairing, GitHub login, password set/change
 │   │                           via /auth/password (session-cookie realm)
@@ -26,11 +26,14 @@ invincible/
 │   │                           MCP bearers excluded by construction)
 │   ├── openai_compat.py        POST /v1/chat/completions, GET /v1/models
 │   ├── anthropic_compat.py     POST /v1/messages (Anthropic protocol)
+│   ├── responses_compat.py     POST /v1/responses (OpenAI Responses protocol for Codex CLI)
+│   ├── byok.py                 Per-user provider-credential management
+│   │                           (/providers/mine connect/test/order/routing)
 │   ├── mcp.py                  POST /mcp (JSON-RPC 2.0 dispatch, Bearer resource server)
 │   ├── oauth.py                Built-in OAuth 2.1 + PKCE authorization server
-│   │                           (/.well-known/oauth-*, /oauth/register|authorize|token|revoke)
-│   ├── admin_api.py            /api/v1/* management surface (provider CRUD, routing modes)
-│   └── graph.py                GET /api/v1/sessions/{id}/graph (continuity projection)
+│   │                           (/.well-known/oauth-*, /oauth/register|authorize|token|revoke;
+│   │                           self-service consent since Phase 2)
+│   └── graph.py                GET /api/v1/sessions/{id}/graph (continuity projection, owner-scoped)
 ├── models/
 │   └── anthropic.py            Pydantic request model (ignores unknown fields)
 ├── compat/
@@ -40,7 +43,7 @@ invincible/
     ├── router.py               Provider loading, failover, trimming, timeouts
     ├── provider_health.py      Per-provider failure counts + cooldowns
     ├── settings.py             Typed live-read accessors for every INVINCIBLE_* variable
-    ├── principal.py            Authenticated Principal model (legacy | api_key | anonymous | session)
+    ├── principal.py            Authenticated Principal model (api_key | session)
     ├── identity.py             Phase 1: argon2id primitives, API-key lifecycle, audit log
     ├── accounts.py             Phase 3: UserService/SessionManager/ProjectService/
     │                           DeviceCodeStore/IdentityStore/GitHubOAuth;
@@ -98,11 +101,10 @@ import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
         warn_if_schema_stale(engine)       (LOUD warning if alembic_version is
                                             absent or ≠ head — never auto-migrates;
                                             `invincible db upgrade` is explicit)
-        ProviderRegistry(seed=packaged providers.yaml, file=
-                         INVINCIBLE_PROVIDERS_FILE)   (Phase 13.5)
-        Router(registry=...)  + runs recorder + failover_hook
-                              (both bound after construction; the hook points
-                               at ContinuityEngine.reactive_checkpoint)
+        Router()  (bare constructor — BYOK-only; every real request
+                  arrives with per-user credentials) + runs recorder +
+                  failover_hook (both bound after construction; the hook
+                  points at ContinuityEngine.reactive_checkpoint)
         OAuthStore(engine)  MemoryStore(engine)  RetrievalService(engine)
         RunStore(engine)    SessionStore(engine)
         ContinuityEngine(engine, runs=RunStore)
@@ -111,12 +113,13 @@ import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
                      │
         serving               app.include_router(openai_router, deps=[require_auth])
                               app.include_router(anthropic_router, deps=[require_auth])
-                              app.include_router(admin_router)  (own operator realm)
+                              app.include_router(responses_router, deps=[require_auth])
+                              app.include_router(byok_router)  (cookie realm)
                               app.include_router(mcp_router, deps=[require_mcp_auth])
                               app.include_router(accounts_router)   (cookie realm)
                               app.include_router(dashboard_router)  (cookie realm, Phase 5)
                               app.include_router(oauth_router)      (no dep — own auth)
-                              app.include_router(graph_router)      (operator realm)
+                              app.include_router(graph_router)      (inv_ key, owner-scoped)
                      │
          shutdown (lifespan)   await router.close()  (httpx client)
                                await continuity.close() / runs.close()
@@ -203,9 +206,8 @@ Claude Code
   │  POST /v1/messages?beta=true
   │  anthropic-version / anthropic-beta headers (accepted, ignored)
   ▼
-endpoints/auth::require_auth              dual-realm Principal (Phase 1):
-                                          legacy GATEWAY_API_KEY or inv_* API
-                                          key; fail-open local when unset
+endpoints/auth::require_auth              inv_* API key only (fail closed):
+                                          resolves to that key's user + project
   ▼
 anthropic_compat::anthropic_messages
   │  1. anthropic_to_internal(messages, system) → internal model
@@ -462,8 +464,9 @@ The security architecture is explicit in the module docstring:
    under an unpredictable `secrets.token_urlsafe(16)` token and runs only
    after `confirm_action(token, approve=true)` — a second `/mcp` call.
    Tokens expire after 10 minutes and are single-use.
-4. **Auth lives one layer up** (OAuth 2.1 + PKCE bearer tokens, independent
-   of `GATEWAY_API_KEY`); this module assumes an authenticated caller.
+4. **Auth lives one layer up** (OAuth 2.1 + PKCE bearer tokens, a realm
+   entirely separate from the `inv_` chat keys); this module assumes an
+   authenticated caller.
    Deliberate trust-boundary change: approval is now whoever holds a valid
    bearer token, not whoever happens to be at the machine's terminal.
    Revoking the client (`invincible oauth revoke <client_id>`) cuts it off.

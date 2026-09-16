@@ -55,7 +55,10 @@ async def test_agent_loop_end_to_end(client, monkeypatch, agent_root):
     test root), posts the result, and the /mcp caller sees it."""
     monkeypatch.setenv("INVINCIBLE_AGENT_ROUTING", "1")
     uid, key = await _mint_key(client)
-    tokens = await obtain_access_token(client)  # MCP token acts as uid
+    # The MCP token must act as the SAME user the agent key belongs to:
+    # dispatch routes confirmed work by the token subject.
+    tokens = await obtain_access_token(
+        client, email="agent-loop@example.com")  # MCP token acts as uid
     headers = {"Authorization": f"Bearer {tokens['access_token']}"}
 
     target = agent_root / "loop-proof.txt"
@@ -91,7 +94,8 @@ async def test_wall2_block_becomes_result_not_crash(client, monkeypatch,
     on the user's machine) executes as a 'blocked' result the AI sees."""
     monkeypatch.setenv("INVINCIBLE_AGENT_ROUTING", "1")
     uid, key = await _mint_key(client)
-    tokens = await obtain_access_token(client)
+    tokens = await obtain_access_token(
+        client, email="agent-loop@example.com")
     headers = {"Authorization": f"Bearer {tokens['access_token']}"}
 
     # write_file's server-side check only guards the server repo; a

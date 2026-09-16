@@ -13,34 +13,26 @@ provider behind either request is chosen by the Router, never by the client.
 | `GET` | `/` | none | Health check → `{"status": "healthy"}` |
 | `HEAD` | `/` | none | 200 OK (Claude Code base-URL probe) |
 | `GET` | `/health` | none | `{"service", "status", "version"}` |
-| `POST` | `/v1/chat/completions` | `Bearer <GATEWAY_API_KEY>` or `Bearer inv_…` API key | OpenAI chat completion with failover |
-| `POST` | `/v1/messages` | same as above | Anthropic Messages completion with failover |
-| `GET/POST/PATCH/DELETE` | `/api/v1/providers[...]` | Operator session cookie or `Bearer inv_…` (operator role) | Provider management: list, add, update, remove, enable/disable, test connectivity |
-| `GET/PUT` | `/api/v1/routing` | Operator session cookie or `Bearer inv_…` (operator role) | Routing mode: `auto` / `pinned` / `chain` |
-| `GET` | `/api/v1/sessions/{id}/graph` | Operator session (operator override) or user Principal (scoped) | Continuity-graph projection: runs chain, task states, checkpoints as nodes/edges/timeline |
+| `GET` | `/v1/models` | `Bearer inv_…` API key | Model list built from the caller's own connected credentials |
+| `POST` | `/v1/chat/completions` | `Bearer inv_…` API key | OpenAI chat completion with failover |
+| `POST` | `/v1/messages` | `Bearer inv_…` API key | Anthropic Messages completion with failover |
+| `POST` | `/v1/responses` | `Bearer inv_…` API key | OpenAI Responses completion (Codex CLI) with failover |
+| `GET` | `/api/v1/sessions/{id}/graph` | `Bearer inv_…` or session (owner-scoped) | Continuity-graph projection: runs chain, task states, checkpoints as nodes/edges/timeline |
 | `POST` | `/auth/register`, `/auth/login`, `/auth/logout`, `/auth/password` · `GET` `/auth/me` | session cookie realm | Account auth + password set/change (Phases 3/5) — see §10 |
-| Mixed | `/projects`, `/api-keys`, `/sessions`, `/auth/device/*`, GitHub login | cookie (own `inv_` key accepted on some) | Account management + pairing (Phase 3) — see §10 |
+| Mixed | `/projects`, `/api-keys`, `/sessions`, `/auth/device/*`, GitHub login, `/providers/mine[...]` | cookie (own `inv_` key accepted on some) | Account management, BYOK provider connections, pairing (Phase 3) — see §10 |
 | `GET` | `/dashboard`, `/dashboard/sessions[/{pk}]`, `/dashboard/tasks`, `/dashboard/memory`, `/dashboard/usage`, `/dashboard/settings` | session cookie realm | Full-dashboard pages (Phase 5) — see §10 |
 
-Auth details (dual-realm since Phase 1, resolved in this fixed order):
+Auth details (inv_-only since Phase 2):
 
-1. A token matching `GATEWAY_API_KEY` (timing-safe compare) authenticates
-   as the system *local* owner — the single-tenant behavior.
-2. Otherwise a token matching an **API key** (`inv_…`, minted via
-   `invincible api-key create`) authenticates as that key's user; its
-   session history is stored under that user's project.
-3. If `GATEWAY_API_KEY` is **unset**, both chat endpoints are open — every
-   request maps to the local owner (documented fail-open local mode).
-4. Wrong/missing token with the key set → `401`.
-
-The management surface (`/api/v1/*`) authenticates through the **operator
-account realm** — the same realm as the dashboard: an operator-role
-browser session cookie, or that operator's own `Bearer inv_…` API key for
-terminal use. It answers **503 when `INVINCIBLE_OWNER_SECRET` is unset**
-(no account sessions — fail closed), **403** for a logged-in non-operator
-account, and neither chat credential is accepted there. (The former
-`INVINCIBLE_ADMIN_KEY` bearer was retired: a single-operator deployment
-should not carry a second top-level secret.)
+1. A token matching an **API key** (`inv_…`, minted on the dashboard's
+   Account page or by the host via `invincible api-key create --user …`)
+   authenticates as that key's user; session history is stored under that
+   user's project, and the request routes through **that user's own
+   connected BYOK credentials**.
+2. No token / wrong token → `401`. There is no shared gateway key and no
+   anonymous path — the endpoint always fails closed.
+3. A user with no connected credentials gets `400` on the chat endpoints
+   (connect one on the dashboard's Providers page).
 
 ---
 
@@ -48,7 +40,7 @@ should not carry a second top-level secret.)
 
 ```
 POST /v1/chat/completions
-Authorization: Bearer <GATEWAY_API_KEY>          # required if key is set
+Authorization: Bearer inv_…                        # per-user API key, required
 X-Session-Id: <id>                               # optional, default "default"
 Content-Type: application/json
 ```
@@ -64,8 +56,8 @@ Content-Type: application/json
 Other OpenAI fields (`temperature`, `max_tokens`, …) are **not accepted** —
 `ChatRequest` only defines `messages`, `stream`, and `model`, so sending
 other extra fields yields `422 Unprocessable Entity` from Pydantic (strict by
-default). The upstream `model` is set per-provider from `providers.yaml`,
-never from the client.
+default). The upstream `model` comes from the caller's connected BYOK
+credential, never from the client.
 
 ### Sessions
 
@@ -101,7 +93,7 @@ Every chat completion response (both protocols, streaming and not) carries
 
 | Header | Meaning |
 |---|---|
-| `x-invincible-provider` | Registry name of the provider that served the request |
+| `x-invincible-provider` | Name of the credential/provider that served the request |
 | `x-invincible-model` | The exact upstream `model_id` sent (pinned/chain may override the provider default) |
 | `x-invincible-attempts` | Upstream attempts made (`1` = no failover occurred) |
 | `x-invincible-request-id` | Gateway-side id correlating the failover chain across `runs` records |
@@ -133,27 +125,30 @@ Session persistence only happens if `choices[0].message` exists.
 | Status | When | Body shape |
 |---|---|---|
 | `200` | Upstream success | Upstream body verbatim, or SSE stream (`stream: true`) |
-| `401` | Missing/invalid `GATEWAY_API_KEY` | `{"detail": {"error": {"message": "...", "type": "auth_error"}}}` (FastAPI HTTPException) |
+| `400` | Caller has no connected provider credentials (BYOK) | `{"error": {"message": "No provider credentials connected. Add one on the dashboard's Providers page.", "type": "invalid_request_error"}}` |
+| `401` | Missing/invalid `inv_` API key | `{"detail": {"error": {"message": "...", "type": "auth_error"}}}` (FastAPI HTTPException) |
 | `422` | Body fails Pydantic validation (missing `messages`, extra fields) | FastAPI validation detail |
 | `4xx` (forwarded) | Upstream returned a non-failover error (see below) | **Upstream's own error body**, status copied |
-| `503` | All providers failed / in cooldown, or an unexpected exception | `{"error": {"message": "All providers failed or are in cooldown.", "type": "gateway_error"}}` |
+| `503` | All of the caller's credentials failed / in cooldown, or an unexpected exception | `{"error": {"message": "All providers failed or are in cooldown.", "type": "gateway_error"}}` |
 
 ### Failover semantics (per upstream response)
 
-The router (`invincible/core/router.py::route_request`) tries providers in
-`tier` ascending order. Per attempt:
+The router (`invincible/core/router.py::route_request`) tries the
+caller's connected credentials in their configured order (`auto`, or an
+explicit `pinned`/`chain`). Per attempt:
 
 | Upstream status | Router behavior |
 |---|---|
 | `200` | `record_success` (resets cooldown), return body |
-| `429` or `5xx` | `record_failure` → cooldown → **try next provider** |
-| `401` / `403` | `disable` (permanent for process lifetime) → **try next provider** |
+| `429` or `5xx` | `record_failure` → cooldown → **try next credential** |
+| `401` / `403` | `disable` (in-memory, for the process lifetime) → **try next credential** |
 | Other `4xx` (e.g. `400`) | **Abort immediately** — raise `UpstreamClientError`, which the endpoint forwards with the provider's status and body. No failover. |
-| Network error (`httpx.RequestError`) | `record_failure` → cooldown → **try next provider** |
-| `200` with no completion in it (empty SSE stream, or a JSON body with no `choices` — e.g. an error payload wearing a success status) | `record_failure` → cooldown → **try next provider** |
-| Provider in cooldown / no API key | Skipped silently (log only) |
+| Network error (`httpx.RequestError`) | `record_failure` → cooldown → **try next credential** |
+| `200` with no completion in it (empty SSE stream, or a JSON body with no `choices` — e.g. an error payload wearing a success status) | `record_failure` → cooldown → **try next credential** |
+| Credential in cooldown | Skipped silently (log only) |
 
-Exhausted all providers (including all in cooldown) → the `503` above.
+Exhausted all credentials (including all in cooldown) → the `503` above.
+No credentials connected at all → the `400` above.
 
 **Exception — BYOK model override:** a BYOK request whose `model` field
 overrides the credential's stored default sends that model to every
@@ -168,9 +163,9 @@ error body surfaces (the `4xx` row above) instead of the `503`.
 
 `record_failure` sets `cooldown_until = now + min(30 * 2**(failures-1), 300)`:
 **30s → 60s → 120s → 240s → 300s (cap).** `record_success` resets the
-counter and clears the cooldown. `disable` (401/403) blocks the provider
-forever — both cooldowns and disables are **in-memory only** and reset on
-process restart.
+counter and clears the cooldown. `disable` (upstream `401`/`403`) blocks the
+credential for the rest of the process lifetime. Both cooldowns and disables
+are **in-memory only** and reset on process restart.
 
 ---
 
@@ -211,7 +206,7 @@ apply unchanged), and translates the response back to Anthropic format.
 
 ```
 POST /v1/messages?beta=true       # the ?beta=true is ignored
-Authorization: Bearer <GATEWAY_API_KEY>
+Authorization: Bearer inv_…
 anthropic-version: 2023-06-01      # accepted, not required
 anthropic-beta: ...                # accepted, ignored
 X-Session-Id: <id>                 # optional, default "default"
@@ -347,7 +342,7 @@ Query: `?limit=N` caps how many runs/state versions are projected
 Phase 3. Browser realm: HMAC-signed HttpOnly session cookies; JSON bodies
 for scripts, urlencoded form posts for the built-in pages (form posts get
 redirects / rendered errors). Management endpoints also accept the caller's
-own `inv_` API key — MCP bearers and `GATEWAY_API_KEY` never work here.
+own `inv_` API key — MCP bearers never work here.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|

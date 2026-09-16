@@ -158,10 +158,9 @@ async def create_response(
         user_id=principal.user_id,
         project_id=principal.project_id,
     )
-    # BYOK: api_key-realm principals route ONLY through their own
-    # connected credentials (never the operator's shared pool);
-    # legacy/anonymous keep the operator pool as-is. Loaded before the
-    # injections so the user's per-user overrides (Phase 1) can gate
+    # BYOK: every /v1/* principal routes ONLY through its own connected
+    # credentials - there is no shared pool. Loaded before the injections
+    # so the user's per-user overrides (Phase 1) can gate
     # memory/continuity/compression for this request.
     byok = await byok_attempt_source(request, principal, model=body.model)
     user_overrides = {} if byok is None else byok[3]

@@ -18,24 +18,14 @@
 A local, Python (FastAPI) server that runs on your development machine and
 serves two roles in one process:
 
-> **Recent additions (Phases 13–15):** runtime provider management with
-> `auto`/`pinned`/`chain` routing modes (`/api/v1/*`, fail-closed
-> operator realm), per-request `x-invincible-provider/model/attempts`
-> headers, a shared Continuity Engine (canonical task state + checkpoints
-> injected into every prompt, writable from MCP via `task_state_set/get`
-> and `checkpoint_create`), and a continuity-graph projection at
-> `GET /api/v1/sessions/{id}/graph`. See
-> [docs/API_REFERENCE.md](docs/API_REFERENCE.md),
-> [docs/CONFIGURATION.md](docs/CONFIGURATION.md) and
-> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-1. **Local Failover Proxy** — an OpenAI-compatible `/v1/chat/completions`
-   endpoint that fans requests across tiered upstream providers (TokenRouter,
-   NVIDIA NIM, Groq, OpenRouter, Gemini) and transparently fails over on rate limits (429)
-   and server errors, so a free-tier 429 no longer kills an agent's workflow.
-   It also speaks the **Anthropic Messages API** (`POST /v1/messages`), so
-   Claude Code and other Anthropic-native clients plug in with a one-line
-   config change.
+1. **Self-Service BYOK Gateway** — an OpenAI-compatible `/v1/chat/completions`
+   endpoint where every user authenticates with their own `inv_` API key and
+   routes through **their own connected provider credentials** (BYOK), with
+   transparent failover on rate limits (429) and server errors, so a
+   free-tier 429 no longer kills an agent's workflow. It also speaks the
+   **Anthropic Messages API** (`POST /v1/messages`) and the **OpenAI
+   Responses API** (`POST /v1/responses`), so Claude Code, Codex CLI, and
+   other native clients plug in with a one-line config change.
 2. **Local MCP Tool Server** — a JSON-RPC 2.0 `/mcp` endpoint exposing
    `read_file`, `execute_bash`, and `write_file` to a cloud-hosted AI that
    reaches your machine through a tunnel, letting it read local files, write
@@ -44,15 +34,15 @@ serves two roles in one process:
 ### Why it exists
 
 - **The 429 problem.** AI coding agents using free/open-source providers
-  (TokenRouter, NVIDIA NIM, Groq, OpenRouter, Gemini) get killed when they hit a rate
-  limit. Invincible
+  get killed when they hit a rate limit. Invincible
   sits between the agent and the providers; on a 429 (or 5xx) it records the
   failure, puts the provider in a short cooldown, and retries the next
-  provider in the tier order. The agent sees a single, stable endpoint.
+  credential in the user's own routing order. The agent sees a single,
+  stable endpoint.
 - **The cloud-to-local gap.** Cloud AI tools (e.g. the Claude web/mobile app)
   can reason well but cannot read your local files, write to disk, or run
   terminal commands. Invincible's MCP server exposes those capabilities over
-  HTTP, so a remote model can act on the local machine — under operator
+  HTTP, so a remote model can act on the local machine — under owner
   confirmation for anything destructive.
 
 ---
@@ -61,14 +51,14 @@ serves two roles in one process:
 
 | Feature | What it gives you |
 |---|---|
-| **Tiered failover** | Providers sorted by `tier`, tried in order; 429/5xx → cooldown + next tier; 401/403 → permanent disable; network errors → next tier. All providers down → HTTP 503. |
+| **BYOK routing** | Every user connects their own provider credentials (dashboard → Providers) and routes only through them: `auto`/`pinned`/`chain` routing per user, 429/5xx → cooldown + next credential, 401/403 → skip, network errors → next. No credentials connected → HTTP 400. All credentials exhausted → HTTP 503. |
 | **Exponential cooldown** | 30s → 60s → 120s → 240s → capped at 300s; a success resets the counter (in-memory, process-scoped). |
 | **Conversation memory** | PostgreSQL-backed (Phase 16), keyed by the `X-Session-Id` header (default `default`). History is merged into every request and the assistant reply is persisted back. |
-| **Context trimming** | Per-provider `max_context`; system messages always kept; everything else dropped as atomic *turns* (an assistant `tool_calls` is never separated from its tool results); the most recent turn is always sent. |
-| **Per-provider timeouts** | Split connect/read/write/pool with sane defaults and per-provider overrides (NIM, Gemini, and the OpenRouter fallback get 90s reads; Groq 45s). |
-| **MCP tool server** | `read_file` (no approval), `execute_bash` and `write_file` (staged, then approved via a token round-trip through the `confirm_action` tool), guarded by denylists and an **OAuth 2.1 + PKCE bearer-token** auth layer (browser owner-login + per-client consent, tokens don't survive on requests like a shared header does). With `INVINCIBLE_AGENT_ROUTING` on, confirmed actions execute on the **user's own PC** via the paired `invincible agent` (server keeps every security decision; see [§ Run tools on your own PC](#run-tools-on-your-own-pc-the-local-agent)). |
+| **Context trimming** | Per-credential `max_context`; system messages always kept; everything else dropped as atomic *turns* (an assistant `tool_calls` is never separated from its tool results); the most recent turn is always sent. |
+| **Per-provider timeouts** | Split connect/read/write/pool with sane defaults and per-provider overrides. |
+| **MCP tool server** | `read_file` (no approval), `execute_bash` and `write_file` (staged, then approved via a token round-trip through the `confirm_action` tool), guarded by denylists and an **OAuth 2.1 + PKCE bearer-token** auth layer (account login + per-client consent, tokens don't survive on requests like a shared header does). With `INVINCIBLE_AGENT_ROUTING` on, confirmed actions execute on the **user's own PC** via the paired `invincible agent` (server keeps every security decision; see [§ Run tools on your own PC](#run-tools-on-your-own-pc-the-local-agent)). |
 | **Accounts & projects** (Phase 3) | Sign up / sign in in a browser (email + argon2id passwords, or **GitHub login**), manage your own projects and `inv_` API keys over HTTP, list your sessions — all under ownership predicates so users never see each other's data. Pair a CLI with `invincible login` via device-code approval. |
-| **Protocol-agnostic** | Native **OpenAI** and **Anthropic** protocols, both translated into one internal message model. Claude Code works with `ANTHROPIC_BASE_URL` pointing at the gateway. |
+| **Protocol-agnostic** | Native **OpenAI**, **Anthropic**, and **Responses** protocols, all translated into one internal message model. Claude Code works with `ANTHROPIC_BASE_URL` pointing at the gateway; Codex CLI works out of the box. |
 
 ---
 
@@ -103,13 +93,12 @@ invincible db upgrade               # create/migrate the schema (explicit, never
 invincible start                    # http://127.0.0.1:8000
 ```
 
-`invincible setup` writes missing secret values (`GATEWAY_API_KEY`,
-`INVINCIBLE_OWNER_SECRET`) as random `secrets.token_urlsafe(32)` tokens,
-prompts for the provider keys, and asks how you want to supply
-`INVINCIBLE_DB_URL` (paste a DSN / provision locally via dev-db / skip) —
-preserving your existing `.env` comments and values.
-`INVINCIBLE_OWNER_SECRET` is the one-time browser login for approving MCP
-connections — not something `/mcp` requests send anymore.
+`invincible setup` writes missing secret values (`INVINCIBLE_OWNER_SECRET`)
+as random `secrets.token_urlsafe(32)` tokens, generates the BYOK credential
+master key (`INVINCIBLE_CREDENTIAL_KEY`), and takes the `INVINCIBLE_DB_URL`
+via `--db-url` (non-interactive) — preserving your existing `.env` comments
+and values. `INVINCIBLE_OWNER_SECRET` signs account browser sessions
+(dashboard login, OAuth consent) — not something `/mcp` requests send.
 
 The bundled `docker compose up` pair needs none of the manual DB steps: the
 app container runs `invincible db upgrade` before serving. The Dockerfile
@@ -130,32 +119,29 @@ Everything is environment variables plus one YAML file — no other config.
 
 | Variable | Required by | Purpose |
 |---|---|---|
-| `GATEWAY_API_KEY` | `/v1/*` | Bearer token for the chat endpoint (the *legacy local-mode* realm — maps to the system *local* owner). **If unset, the endpoint fails open to the same identity (no auth).** Per-user API keys (`inv_…`, minted via `invincible api-key create`) are accepted on the same endpoints and keep history under their own user. |
-| `INVINCIBLE_OWNER_SECRET` | `/oauth/authorize` | One-time **browser login** to approve MCP connections (kept in a 30-day signed session cookie). **Not** sent on `/mcp` — requests use short-lived OAuth Bearer tokens. **If unset, no new MCP grants can be approved.** The legacy `MCP_SHARED_SECRET` key is still read as a fallback. |
-| `NVIDIA_API_KEY` | provider tier 2 | NVIDIA NIM hosted: GLM-5.2 (Z.ai); strongest coding/agentic tier. |
-| `GROQ_API_KEY` | provider tier 3 | Groq Llama 70B. |
-| `OPENROUTER_API_KEY` | provider tier 4 | OpenRouter free fallback. |
-| `GEMINI_API_KEY` | provider tier 5 | Gemini Flash — last resort. |
-| `TOKENROUTER_API_KEY` | provider tier 1 | TokenRouter: deepseek/deepseek-v4-pro-0813-free. |
-| `INVINCIBLE_CONFIG_PATH` | startup | Path to a custom `providers.yaml` (set by CLI `--config`). |
 | `INVINCIBLE_DB_URL` | startup (**required since Phase 16**) | PostgreSQL DSN for all persistent state, e.g. `postgresql+asyncpg://invincible@localhost:5433/invincible`. Provision with `invincible dev-db` or the bundled compose pair; masked in `doctor` output. |
+| `INVINCIBLE_OWNER_SECRET` | account sessions | Signs account browser sessions (dashboard login, OAuth consent). **Not** sent on `/mcp` — requests use short-lived OAuth Bearer tokens. **If unset, browser sessions fail closed (no login, no consent).** The legacy `MCP_SHARED_SECRET` key is still read as a fallback. Rotating it logs every browser out but does **not** revoke MCP grants — use `invincible oauth revoke <client_id>` for that. |
+| `INVINCIBLE_CREDENTIAL_KEY` | BYOK | Fernet master key encrypting stored provider credentials at rest. Generated by `invincible setup` (or `invincible secret credential-key`); **back it up** — losing it makes every saved provider key undecryptable. Never rotated by `setup --force`. |
 | `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the PostgreSQL database (`pending_actions` table) and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
-| `INVINCIBLE_AGENT_ROUTING` | startup | **Opt-in** (Phase 10): route confirmed tool execution to the caller's paired local agent (`invincible agent`) instead of running it on the server host. **Off by default** — tools execute locally on the server, exactly as before. When on, a non-operator may also approve their own MCP clients (their approval exposes only their own machine). |
+| `INVINCIBLE_AGENT_ROUTING` | startup | **Opt-in** (Phase 10): route confirmed tool execution to the caller's paired local agent (`invincible agent`) instead of running it on the server host. **Off by default** — tools execute locally on the server, exactly as before. |
 | `INVINCIBLE_AGENT_ROOT` | agent | Sandbox root for the local agent (default: the user's home directory). Reads and writes outside it are blocked; `.env*`, `.git`, `.ssh`, SSH keys, `*.pem`, `*credentials*` are blocked by name everywhere. |
 
-The two secrets are **independent**: a leaked tunnel URL alone is not enough
+`/v1/*` requests authenticate with **per-user `inv_` API keys** (minted on
+the dashboard's Account page, or by the host with
+`invincible api-key create --user <email-or-id>`). Each user connects their
+own provider credentials on the dashboard's Providers page (BYOK) and
+routes only through them — there is no shared gateway key and no shared
+provider pool.
+
+The secrets are **independent**: a leaked tunnel URL alone is not enough
 to reach tool execution, and rotating one secret never affects the other.
-Rotating `INVINCIBLE_OWNER_SECRET` does **not** kill existing MCP grants —
-use `invincible oauth revoke <client_id>` for that.
 
 ### `providers.yaml`
 
-Defines the upstream providers: `tier` (failover order, ascending), `base_url`
-(OpenAI-compatible), `api_key_env` (env var *name*, never the key itself),
-`model_id`, optional `aliases` (soft routing hints — request `model: fast` to
-prefer Groq), `max_context`, and optional per-provider `timeout` overrides.
-The canonical copy is packaged at `invincible/providers.yaml`. There is
-no repository-root fallback copy.
+The packaged `invincible/providers.yaml` is a static fixture (tests and
+direct `Router` construction); live traffic never reads it — every
+`/v1/*` request routes through the caller's own connected BYOK
+credentials. There is no repository-root copy.
 
 Full reference — schema, validation rules, timeout resolution:
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
@@ -180,9 +166,11 @@ Two commands, both exposed as `invincible` and `inv`:
 | `invincible oauth list` | Show registered OAuth clients, their redirect URIs, and active/revoked grants. |
 | `invincible oauth revoke <client_id>` | Revoke every access/refresh token for a client immediately. |
 | `invincible oauth test-client` | Headless helper: registers a client, approves it, and prints a ready-to-use Bearer token + curl for `/mcp` (no browser needed). |
-| `invincible api-key create --label L` | Mint an API key (`inv_…`) under the local owner — raw key shown **once**, only its SHA-256 hash is stored. |
+| `invincible api-key create --user <id-or-email> --label L` | Mint an API key (`inv_…`) under a named account (host tool) — raw key shown **once**, only its SHA-256 hash is stored. |
 | `invincible api-key list` | List API keys by visible prefix (never hashes or raw keys). |
 | `invincible api-key revoke <id-or-prefix>` | Revoke a key immediately. |
+| `invincible users list` | List accounts (host tool; roles are informational only). |
+| `invincible users reset-password <email>` | Reset an account's password (host recovery path — database access is the proof of authority; `--generate` prints a strong password once). Every browser session for the account is signed out; `inv_` keys and MCP tokens are untouched. |
 | `invincible login [--server URL]` | Pair this machine with an Invincible server (device flow): opens the approval page in your browser — click Approve and the command finishes, saving the `inv_` key to `~/.invincible/config.json`. Defaults to the hosted service (`https://invincible-ai.me`); pass `--server` for a self-hosted or local server. URL + code are printed for headless terminals; the Account page also has a "Pair a device" box for typing a code by hand. |
 | `invincible agent` | Run the local agent (Phase 10): polls the paired server for confirmed tool jobs and executes them on **this machine** with your own user privileges — denylist re-checked locally, reads/writes sandboxed to your home. Ctrl+C to stop. Requires `invincible login` first. |
 
@@ -206,9 +194,10 @@ Full CLI reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md) → *CLI refe
 | `GET` | `/` | none | Health check → `{"status": "healthy"}` |
 | `HEAD` | `/` | none | 200 OK — Claude Code's base-URL probe |
 | `GET` | `/health` | none | Service detail → `{"service", "status", "version"}` |
-| `GET` | `/v1/models` | `Authorization: Bearer <GATEWAY_API_KEY>` | OpenAI-compatible model list from `providers.yaml` |
-| `POST` | `/v1/chat/completions` | `Bearer <GATEWAY_API_KEY>` or `Bearer inv_…` API key | OpenAI chat completion with tiered failover |
-| `POST` | `/v1/messages` | same as above | Anthropic Messages API with tiered failover |
+| `GET` | `/v1/models` | `Authorization: Bearer inv_…` | OpenAI-compatible model list built from **your** connected credentials (empty when you have none) |
+| `POST` | `/v1/chat/completions` | `Bearer inv_…` API key | OpenAI chat completion routed through your own credentials with failover |
+| `POST` | `/v1/messages` | `Bearer inv_…` API key | Anthropic Messages API (same routing) |
+| `POST` | `/v1/responses` | `Bearer inv_…` API key | OpenAI Responses API for Codex CLI (same routing) |
 
 ### Chat request
 
@@ -249,11 +238,11 @@ are served. Supported request fields: `model`, `system`, `messages`,
 headers, the `?beta=true` query) is **accepted and ignored** — never a 422.
 
 The `model` field is treated as a **client hint**: it is echoed back in
-the response, and if it matches a configured alias (or an exact provider
-`model_id`) the matching provider is *preferred* — the Router still fails
-over through the rest of the tier order if that provider is down. An
+the response, and if it matches one of **your** connected credentials (an
+alias or an exact `model_id`) that credential is *preferred* — the Router
+still fails over through the rest of your routing order if it is down. An
 unknown model name (like Claude Code's own model ids) changes nothing.
-The upstream model always comes from `providers.yaml`.
+The upstream model always comes from your connected credentials.
 
 - **Streaming**: `stream: true` returns Anthropic SSE events in the
   canonical order — `message_start` → `content_block_start` →
@@ -281,10 +270,11 @@ The upstream model always comes from `providers.yaml`.
 | Status | When |
 |---|---|
 | `200` | Upstream success — JSON body forwarded verbatim, or SSE stream (`stream: true`) |
-| `401` | Missing/invalid `GATEWAY_API_KEY` (when set) |
+| `400` | Caller has no connected provider credentials (BYOK) — connect one on the dashboard's Providers page |
+| `401` | Missing/invalid `inv_` API key |
 | `422` | Body fails validation (missing `messages`, extra fields) |
 | `4xx` | Upstream returned a non-failover error (e.g. 400) — forwarded verbatim |
-| `503` | All providers failed or are in cooldown (before streaming starts) |
+| `503` | All of the caller's credentials failed or are in cooldown (before streaming starts) |
 
 The Anthropic endpoint uses the same statuses; error bodies are Anthropic
 shaped (`{"type": "error", "error": {"type": …, "message": …}}`) and map to
@@ -364,31 +354,23 @@ immediately — nothing hangs. Full transport and threat model:
 
 ## Provider Routing
 
-Providers are tried in **`tier` ascending order** (1 first). Per attempt:
+Every `/v1/*` request routes through **the caller's own connected BYOK
+credentials** (dashboard → Providers), in the order the user configured
+(`auto` by ability, or an explicit `pinned`/`chain` order). Per attempt:
 
 | Upstream status | Router behavior |
 |---|---|
 | `200` | `record_success` (resets cooldown) → return body |
-| `429` / `5xx` | `record_failure` → cooldown → **try next provider** |
-| `401` / `403` | `disable` (permanent for process lifetime) → **try next provider** |
+| `429` / `5xx` | `record_failure` → cooldown → **try next credential** |
+| `401` / `403` | Skip that credential for this request → **try next** |
 | Other `4xx` (e.g. `400`) | **Abort** — forward the provider's status and body |
-| Network error | `record_failure` → cooldown → **try next provider** |
-| In cooldown / missing API key | Skipped silently (log only) |
+| Network error | `record_failure` → cooldown → **try next credential** |
+| In cooldown | Skipped silently (log only) |
 
-All providers exhausted → **HTTP 503**. Cooldowns follow
+All of the caller's credentials exhausted → **HTTP 503**. No credentials
+connected at all → **HTTP 400**. Cooldowns follow
 `30 * 2**(failures-1)`, capped at **300s**; all health state is in-memory and
 resets on restart.
-
-Shipped tier order (aliases are soft routing hints — `model: fast` prefers
-Groq, and failover still covers every other provider):
-
-| Tier | Provider | Model | Max context | Alias |
-|---|---|---|---|---|
-| 1 | `tokenrouter-deepseek` | `deepseek/deepseek-v4-pro-0813-free` | 1 000 000 | — |
-| 2 | `nim-glm` | `z-ai/glm-5.2` | 1 000 000 | `strong` |
-| 3 | `groq-llama` | `openai/gpt-oss-120b` | 128 000 | `fast` |
-| 4 | `openrouter-fallback` | `nvidia/nemotron-3-ultra-550b-a55b:free` | 1 000 000 | `free` |
-| 5 | `gemini-flash` | `gemini-2.5-flash` | 1 000 000 | `backup` |
 
 Deep dive (failover state machine, context trimming): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -406,31 +388,27 @@ curl http://127.0.0.1:8000/
 ### 2. List models
 
 ```bash
-curl http://127.0.0.1:8000/v1/models
+curl http://127.0.0.1:8000/v1/models \
+  -H "Authorization: Bearer $INVINCIBLE_API_KEY"
 # {
 #   "object": "list",
 #   "data": [
-#     {"id": "z-ai/glm-5.2", "object": "model", "owned_by": "invincible"},
-#     {"id": "openai/gpt-oss-120b", "object": "model", "owned_by": "invincible"},
-#     {"id": "nvidia/nemotron-3-ultra-550b-a55b:free", "object": "model", "owned_by": "invincible"},
-#     {"id": "gemini-2.5-flash", "object": "model", "owned_by": "invincible"},
-#     {"id": "strong", "object": "model", "owned_by": "invincible"},
-#     {"id": "fast", "object": "model", "owned_by": "invincible"},
-#     {"id": "free", "object": "model", "owned_by": "invincible"},
-#     {"id": "backup", "object": "model", "owned_by": "invincible"}
+#     {"id": "<your connected credentials' model ids>", "object": "model", "owned_by": "invincible"},
+#     {"id": "<your configured aliases>", "object": "model", "owned_by": "invincible"}
 #   ]
 # }
 ```
 
-The list is built from the running gateway's provider configuration, so it
-reflects exactly what the gateway can route to. Real model ids are listed
-first, then the configured aliases.
+The list is built from **your** connected BYOK credentials, so it reflects
+exactly what the gateway can route to for you (an empty list when you have
+none connected). Real model ids are listed first, then the aliases you
+configured.
 
 ### 3. Chat with session memory
 
 ```bash
 curl http://127.0.0.1:8000/v1/chat/completions \
-  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -H "Authorization: Bearer $INVINCIBLE_API_KEY" \
   -H "Content-Type: application/json" \
   -H "X-Session-Id: my-conversation" \
   -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
@@ -444,7 +422,7 @@ conversation.
 
 ```bash
 curl -N http://127.0.0.1:8000/v1/chat/completions \
-  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -H "Authorization: Bearer $INVINCIBLE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "Hello!"}], "stream": true}'
 ```
@@ -473,7 +451,7 @@ You can send the same call directly:
 
 ```bash
 curl http://127.0.0.1:8000/v1/messages \
-  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -H "Authorization: Bearer $INVINCIBLE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"claude-sonnet-4","max_tokens":1024,
        "messages":[{"role":"user","content":"Hello!"}]}'
@@ -590,14 +568,15 @@ store, and trimming logic consume.
 | `invincible/compat/common.py` | Protocol-neutral internal-message/usage helpers shared by compat layers. |
 | `invincible/compat/anthropic.py` | Pure Anthropic translators: flattening, finish-reason map, error map, Anthropic SSE streaming. |
 | `invincible/endpoints/mcp.py` | `POST /mcp`; JSON-RPC 2.0 dispatch, `tools/list`, `tools/call`. |
-| `invincible/core/router.py` | Provider loading, tiered failover, response trimming, timeouts. |
-| `invincible/core/provider_health.py` | Per-provider failure counts + exponential cooldowns. |
+| `invincible/core/router.py` | Tiered failover over per-user BYOK credentials, response trimming, timeouts. |
+| `invincible/core/provider_health.py` | Per-credential failure counts + exponential cooldowns. |
 | `invincible/core/db.py` | SQLAlchemy engine factory + schema metadata (single source of truth). |
 | `invincible/migrations/` | Packaged Alembic environment (`invincible db upgrade`). |
 | `invincible/core/session_store.py` | Conversation memory on PostgreSQL, partitioned by session id. |
 | `invincible/core/tool_executor.py` | Denylists, pending-action approval (`confirm_action`), tool execution. |
-| `invincible/cli.py` | Click CLI: `setup` (env file wizard) and `start` (uvicorn wrapper). |
-| `invincible/providers.yaml` | Canonical provider configuration (packaged, authoritative). |
+| `invincible/endpoints/byok.py` | Per-user provider-credential management (connect, test, order, routing config). |
+| `invincible/cli.py` | Click CLI: `setup`, `start`, `doctor`, `api-key`, `users`, `oauth`, `db`, `login`, `agent`. |
+| `invincible/providers.yaml` | Static provider fixture (tests/direct construction; live traffic is BYOK-only). |
 
 ---
 
@@ -632,10 +611,10 @@ store, and trimming logic consume.
   terminal prompt and no separate human-authentication surface. Revoke the
   client with `invincible oauth revoke <client_id>` to cut that off.
 - Sessions are stored **plaintext** in PostgreSQL (protect the DSN);
-  cooldowns and provider disables are **in-memory only**. Since Phase 2,
-  every store path is ownership-scoped per principal, and the graph
-  endpoint is dual-realm: an operator-role session remains an explicit
-  operator override for any session.
+  cooldowns and provider disables are **in-memory only**. Since the
+  multi-tenant audit, every store path is ownership-scoped per principal —
+  one user can never read another's sessions, graph, or history, and the
+  former operator override is gone.
 
 Full details: [docs/SECURITY.md](docs/SECURITY.md) → *Known limits*.
 

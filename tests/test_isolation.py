@@ -7,7 +7,8 @@ internals):
 
 - sessions/graph  : GET /api/v1/sessions/{id}/graph under another
                     principal reads as nonexistent ("known": false,
-                    empty projection); admin override still works;
+                    empty projection) - including for operator-role
+                    accounts (the override is gone);
 - task states     : MCP task_state_set by A, task_state_get/history by B
                     -> empty result; independent chains under one string;
 - checkpoints     : created by A invisible to B's projections;
@@ -39,8 +40,6 @@ from sqlalchemy import text
 
 from invincible.core.credential_store import ByokCredentialStore
 from invincible.main import app
-
-GATEWAY = {"Authorization": "Bearer test-gateway-key"}
 
 
 @pytest.fixture(autouse=True)
@@ -165,21 +164,28 @@ async def test_graph_enumeration_probes_leak_nothing(client, alpha_handler):
     assert len(shapes) == 1  # identical negative shape for every probe
 
 
-async def test_graph_admin_override_still_reads_any_session(
+async def test_graph_operator_role_reads_nothing(
     client, alpha_handler
 ):
+    """The operator override is gone: even a promoted operator account's
+    inv_ key gets the same indistinguishable negative shape for a session
+    it does not own - the role grants nothing on /v1-adjacent surfaces."""
     a = await _mint_user_and_key(client, "visible@example.com")
     await _chat(client, auth_for(a["raw"]), "admin-visible", "hi")
 
-    from tests.conftest import operator_session, promote_operator
+    from tests.conftest import promote_operator, register_account
 
-    uid = await operator_session(client, email="override-op@example.com")
-    # Raw-SQL users above bypassed the first-human bootstrap, so this
-    # account registered as plain; reach for the row directly.
-    await promote_operator(uid)
-    resp = await client.get("/api/v1/sessions/admin-visible/graph")
+    made, _ = await register_account(client, "override-op@example.com")
+    await promote_operator(made.json()["id"])
+    from invincible.core.identity import ApiKeyStore
+
+    record = await ApiKeyStore(app.state.engine).create(
+        made.json()["id"], label="override probe")
+    resp = await client.get(
+        "/api/v1/sessions/admin-visible/graph",
+        headers=auth_for(record["raw"]))
     assert resp.status_code == 200
-    assert resp.json()["known"] is True
+    assert resp.json()["known"] is False and resp.json()["nodes"] == []
 
 
 # --- task states / checkpoints (MCP surface) --------------------------------------

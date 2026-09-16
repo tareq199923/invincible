@@ -2,9 +2,9 @@
 """Phase 3: the /dashboard/mcp MCP-grants page (Q1: /mcp stays OAuth-only).
 
 Gates: session-only page; the page lists OAuth clients this principal
-may manage (own + unowned) with live active-token counts; revoking a
-client's tokens is ownership-predicated (foreign and unknown 404s are
-identical) and actually kills the bearer's /mcp access; the page
+owns with live active-token counts; revoking a client's tokens is
+ownership-predicated (foreign, unknown, and legacy-era clients are
+identical 404s) and actually kills the bearer's /mcp access; the page
 documents the OAuth-only posture (no inv_ key acceptance).
 """
 import re
@@ -16,7 +16,6 @@ from invincible.main import app
 from tests.conftest import (
     oauth_register,
     obtain_access_token,
-    promote_operator,
     register_account,
 )
 
@@ -25,11 +24,7 @@ async def logged_in(client, seq):
     registered, _ = await register_account(
         client, f"mcp-ui-{seq}@example.com")
     assert registered.status_code == 201, registered.text
-    uid = registered.json()["id"]
-    # This page manages MCP clients, so its user is an operator (the
-    # role the consent flow requires); plain accounts get 403 there.
-    await promote_operator(uid)
-    return uid
+    return registered.json()["id"]
 
 
 async def test_page_requires_session(client):
@@ -110,7 +105,7 @@ async def test_foreign_client_hidden_and_revocation_is_predicated(client):
     assert foreign.json() == unknown.json()  # identical anti-enumeration
 
 
-# --- operator-gated legacy pools (HIGH-2 regression) -------------------------------
+# --- legacy-era clients are nobody-manageable (HIGH-2 regression) ----------
 
 
 async def _seed_legacy_clients() -> tuple[str, str]:
@@ -137,23 +132,12 @@ async def _seed_legacy_clients() -> tuple[str, str]:
     return owned_id, unowned_id
 
 
-async def test_plain_user_cannot_see_or_revoke_legacy_clients(client):
-    """HIGH-2 (audit 2026-09-07): any dashboard user used to see and
-    revoke the local owner's / unowned MCP clients. Plain users now get
-    the 404-shaped denial, identical to an unknown client."""
-    from tests.conftest import register_account
-
-    # A deliberately NON-operator account. Fresh-table first
-    # registrations bootstrap as operator (MEDIUM-1 pattern), so demote
-    # explicitly to assert the plain-user behavior.
-    registered, _ = await register_account(client, "mcp-plain@example.com")
-    assert registered.status_code == 201
-    demote_uid = registered.json()["id"]
-    async with app.state.engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE users SET role = 'user' WHERE id = :id"),
-            {"id": demote_uid},
-        )
+async def test_legacy_clients_are_nobody_manageable(client):
+    """HIGH-2 (audit 2026-09-07) + Phase 2: the local-owner-era pools
+    (the dormant system row's clients + unowned rows) are invisible and
+    404-shaped for every user - there is no operator escape hatch
+    anymore. The rows are harmless dormants, rendered for no one."""
+    await logged_in(client, 5)
     owned_id, unowned_id = await _seed_legacy_clients()
 
     page = await client.get("/dashboard/mcp")
@@ -170,43 +154,17 @@ async def test_plain_user_cannot_see_or_revoke_legacy_clients(client):
         assert denied.json() == unknown.json()  # anti-enumeration
 
 
-async def test_operator_still_manages_legacy_clients(client):
-    """The operator escape hatch survives the fix: legacy pools (local
-    owner's + unowned) stay listed and revocable from an operator
-    session."""
-    await logged_in(client, 5)  # registers + promotes to operator
-    owned_id, unowned_id = await _seed_legacy_clients()
-
-    page = await client.get("/dashboard/mcp")
-    assert page.status_code == 200
-    assert "Legacy Owned" in page.text
-    assert "Legacy Unowned" in page.text
-
-    for client_id in (owned_id, unowned_id):
-        resp = await client.delete(
-            f"/dashboard/mcp/clients/{client_id}/tokens")
-        assert resp.status_code == 200
-        assert resp.json()["revoked"] >= 0
-
-
-async def test_plain_user_still_manages_own_client(client):
-    """No over-tightening: a plain user keeps full control of the client
+async def test_user_still_manages_own_client(client):
+    """No over-tightening: every user keeps full control of the client
     they own (listing + revoke)."""
     import httpx
 
-    # Plain user registers and owns a client; demote the first-human
-    # bootstrap so this really is a non-operator session.
     async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://test") as plain:
         registered, _ = await register_account(plain,
                                                "mcp-plain-own@example.com")
         assert registered.status_code == 201
-        async with app.state.engine.begin() as conn:
-            await conn.execute(
-                text("UPDATE users SET role = 'user' WHERE id = :id"),
-                {"id": registered.json()["id"]},
-            )
         client_id, _ = await oauth_register(plain, name="plain-client")
         await OAuthStore(app.state.engine).attach_owner(
             client_id, registered.json()["id"])
@@ -221,13 +179,12 @@ async def test_plain_user_still_manages_own_client(client):
         assert revoked.json()["revoked"] >= 0
 
 
-async def test_operator_cannot_revoke_another_users_client(client):
-    """Operator privilege stops at the legacy pools: another USER's
-    owned client stays invisible and 404-shaped even for operators."""
+async def test_user_cannot_revoke_another_users_client(client):
+    """Ownership stops at exactly your own clients: another USER's owned
+    client stays invisible and 404-shaped."""
     await logged_in(client, 6)
     # A row for a distinct third-party user (raw SQL: no auth surface
-    # needed, just a real owner_user_id that is neither the operator
-    # nor the local owner).
+    # needed, just a real owner_user_id that is not the caller).
     async with app.state.engine.begin() as conn:
         uid_c = (await conn.execute(text(
             "INSERT INTO users (email, created_at)"

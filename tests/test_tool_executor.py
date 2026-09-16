@@ -456,7 +456,7 @@ async def test_write_file_to_protected_path_never_issues_token():
     target = os.path.join(tool_executor._REPO_ROOT, ".env")
 
     with pytest.raises(tool_executor.ToolBlocked):
-        tool_executor.write_file(target, "GATEWAY_API_KEY=stolen", store)
+        tool_executor.write_file(target, "SOME_SECRET=stolen", store)
 
     assert len(store) == 0  # never staged, never approved, never written
 

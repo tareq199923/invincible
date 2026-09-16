@@ -32,8 +32,6 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from invincible.core.db import (
-    LOCAL_OWNER_EMAIL,
-    ROLE_OPERATOR,
     ROLE_USER,
     device_codes,
     projects,
@@ -126,36 +124,12 @@ class UserService:
                     status_code=409,
                 ) from None
             uid = int(row[0])
-            # FIRST-HUMAN BOOTSTRAP: on a fresh instance the first
-            # self-registered account becomes an operator - a personal
-            # self-hosted gateway must be governable by the person who
-            # set it up, without a terminal step. Later registrations,
-            # and the seeded system local owner, never trigger it.
-            # MEDIUM-1 gate (2026-09-07 audit): the bootstrap only fires
-            # on deployments that opted in - no owner secret configured,
-            # or INVINCIBLE_ALLOW_FIRST_OPERATOR=1 (setup writes it into
-            # fresh .env files, so out-of-the-box self-hosts keep the
-            # behavior). On a hosted deploy the flag is absent: a
-            # stranger winning the registration race gets a plain user
-            # account, never the operator role; elevation there is
-            # ``invincible users promote`` (audit-logged).
-            # Benign race note: two simultaneous first-registrations can
-            # both win (uncommitted rows are invisible to each other);
-            # the worst case is one operator too many, demotable by hand.
-            earlier_human = (await conn.execute(
-                select(users.c.id)
-                .where(users.c.is_system.is_(False), users.c.id < uid)
-                .limit(1)
-            )).first()
-            role = ROLE_USER
-            if earlier_human is None and settings.allow_first_operator():
-                await conn.execute(
-                    update(users)
-                    .where(users.c.id == uid)
-                    .values(role=ROLE_OPERATOR)
-                )
-                role = ROLE_OPERATOR
-        return {"id": uid, "email": email, "created_at": now, "role": role}
+        # Phase 2: no operator bootstrap - every registered account is a
+        # plain user. The operator role is dormant (the column stays for
+        # migration history); governance is per-account (own data, own
+        # clients) and host powers live in the CLI.
+        return {"id": uid, "email": email, "created_at": now,
+                "role": ROLE_USER}
 
     async def authenticate(self, email: str, password: str) -> dict | None:
         """The user for correct credentials, else None. Unknown email and
@@ -270,34 +244,6 @@ class UserService:
             raise AccountError(
                 "not_found", "No such user.", status_code=404)
         return {"id": user_id}
-
-    async def set_role(self, user_id: int, role: str) -> dict:
-        """Set the account role (ROLE_USER | ROLE_OPERATOR). The OAuth
-        consent gate reads it: only operators may approve clients. The
-        system *local* owner is refused - it is an operator by
-        construction (seed + migration 0008 both elevate it), and
-        demoting it would break the owner-secret consent path."""
-        if role not in (ROLE_USER, ROLE_OPERATOR):
-            raise AccountError(
-                "invalid_role", "Role must be 'user' or 'operator'.")
-        async with self.engine.begin() as conn:
-            row = (await conn.execute(
-                select(users.c.email)
-                .where(users.c.id == user_id)
-            )).first()
-            if row is None:
-                raise AccountError(
-                    "not_found", "No such user.", status_code=404)
-            if row[0] == LOCAL_OWNER_EMAIL:
-                raise AccountError(
-                    "local_owner_immutable",
-                    "The system local owner's role cannot be changed.",
-                    status_code=409,
-                )
-            await conn.execute(
-                update(users).where(users.c.id == user_id).values(role=role)
-            )
-        return {"id": user_id, "role": role}
 
 
 class SessionManager:

@@ -1,19 +1,17 @@
 import json
-import logging
 
 import httpx
 
-from invincible.main import _warn_if_gateway_open, app
+from invincible.core.identity import ensure_default_project
+from invincible.main import app
 from tests.conftest import (
-    default_providers,
-    local_owner_kwargs,
     provider_body,
     sse_body,
     stream_chunk,
+    v1_user,
 )
 
 MESSAGES = [{"role": "user", "content": "hi"}]
-AUTH = {"Authorization": "Bearer test-gateway-key"}
 
 
 async def _events(response):
@@ -24,22 +22,10 @@ async def _events(response):
     ]
 
 
-def test_gateway_open_warns_loudly_when_key_unset(caplog, monkeypatch):
-    monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
-    with caplog.at_level(logging.WARNING):
-        _warn_if_gateway_open()
-    assert any(
-        "UNAUTHENTICATED" in record.message for record in caplog.records
-    )
-
-
-def test_gateway_open_warns_nothing_when_key_set(caplog, monkeypatch):
-    monkeypatch.setenv("GATEWAY_API_KEY", "test-gateway-key")
-    with caplog.at_level(logging.WARNING):
-        _warn_if_gateway_open()
-    assert not any(
-        "UNAUTHENTICATED" in record.message for record in caplog.records
-    )
+async def _user_kwargs(uid: int) -> dict:
+    """Store-level kwargs for the inv_ user a v1_user mint resolved."""
+    return {"user_id": uid,
+            "project_id": await ensure_default_project(app.state.engine, uid)}
 
 
 async def test_health_check(client):
@@ -61,19 +47,23 @@ async def test_root_serves_landing_page_to_browsers(client):
     assert 'href="/login"' in body
 
 
-async def test_chat_completion_success(client, router_setter):
+async def test_chat_completion_success(client, router_setter, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     alpha_body = provider_body("alpha")
     router_setter(
         handlers={"alpha.example.com": httpx.Response(200, json=alpha_body)}
     )
     response = await client.post(
-        "/v1/chat/completions", headers=AUTH, json={"messages": MESSAGES}
+        "/v1/chat/completions", headers=auth, json={"messages": MESSAGES}
     )
     assert response.status_code == 200
     assert response.json() == alpha_body
 
 
-async def test_streaming_true_returns_event_stream(client, router_setter):
+async def test_streaming_true_returns_event_stream(client, router_setter, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(
@@ -84,14 +74,16 @@ async def test_streaming_true_returns_event_stream(client, router_setter):
     )
     response = await client.post(
         "/v1/chat/completions",
-        headers=AUTH,
+        headers=auth,
         json={"messages": MESSAGES, "stream": True},
     )
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
 
 
-async def test_streaming_chunks_emitted_incrementally(client, router_setter):
+async def test_streaming_chunks_emitted_incrementally(client, router_setter, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     chunks = [
         stream_chunk("alpha", {"role": "assistant"}),
         stream_chunk("alpha", {"content": "Hel"}),
@@ -103,7 +95,7 @@ async def test_streaming_chunks_emitted_incrementally(client, router_setter):
     )
     response = await client.post(
         "/v1/chat/completions",
-        headers=AUTH,
+        headers=auth,
         json={"messages": MESSAGES, "stream": True},
     )
     assert response.status_code == 200
@@ -119,7 +111,9 @@ async def test_streaming_chunks_emitted_incrementally(client, router_setter):
     assert payloads[-1]["choices"][0]["finish_reason"] == "stop"
 
 
-async def test_streaming_ends_with_done(client, router_setter):
+async def test_streaming_ends_with_done(client, router_setter, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(
@@ -130,7 +124,7 @@ async def test_streaming_ends_with_done(client, router_setter):
     )
     response = await client.post(
         "/v1/chat/completions",
-        headers=AUTH,
+        headers=auth,
         json={"messages": MESSAGES, "stream": True},
     )
     assert response.text.endswith("data: [DONE]\n\n")
@@ -143,14 +137,16 @@ async def test_streaming_auth_enforced(client):
     assert response.status_code == 401
 
 
-async def test_stream_false_returns_json(client, router_setter):
+async def test_stream_false_returns_json(client, router_setter, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     alpha_body = provider_body("alpha")
     router_setter(
         handlers={"alpha.example.com": httpx.Response(200, json=alpha_body)}
     )
     response = await client.post(
         "/v1/chat/completions",
-        headers=AUTH,
+        headers=auth,
         json={"messages": MESSAGES, "stream": False},
     )
     assert response.status_code == 200
@@ -158,7 +154,9 @@ async def test_stream_false_returns_json(client, router_setter):
     assert response.json() == alpha_body
 
 
-async def test_streaming_failover_before_first_chunk(client, router_setter):
+async def test_streaming_failover_before_first_chunk(client, router_setter, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router = router_setter(
         handlers={
             "alpha.example.com": httpx.Response(429),
@@ -174,16 +172,20 @@ async def test_streaming_failover_before_first_chunk(client, router_setter):
     )
     response = await client.post(
         "/v1/chat/completions",
-        headers=AUTH,
+        headers=auth,
         json={"messages": MESSAGES, "stream": True},
     )
     assert response.status_code == 200
     payloads = [json.loads(event) for event in await _events(response)]
     assert payloads[0]["model"] == "beta-model"
-    assert not router.health_tracker.is_available("alpha")
+    assert not router.health_tracker.is_available("byok:1")
 
 
-async def test_streaming_all_providers_fail_returns_503(client, router_setter):
+async def test_streaming_all_providers_fail_returns_503(
+    client, router_setter, byok_env
+):
+    _, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(429),
@@ -193,7 +195,7 @@ async def test_streaming_all_providers_fail_returns_503(client, router_setter):
     )
     response = await client.post(
         "/v1/chat/completions",
-        headers=AUTH,
+        headers=auth,
         json={"messages": MESSAGES, "stream": True},
     )
     assert response.status_code == 503
@@ -212,7 +214,11 @@ class _FailingStream(httpx.AsyncByteStream):
         pass
 
 
-async def test_streaming_midstream_error_terminates_cleanly(client, router_setter):
+async def test_streaming_midstream_error_terminates_cleanly(
+    client, router_setter, byok_env
+):
+    _, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     stream = _FailingStream(
         sse_body(stream_chunk("alpha", {"role": "assistant"}), done=False).encode()
     )
@@ -227,7 +233,7 @@ async def test_streaming_midstream_error_terminates_cleanly(client, router_sette
     )
     response = await client.post(
         "/v1/chat/completions",
-        headers=AUTH,
+        headers=auth,
         json={"messages": MESSAGES, "stream": True},
     )
     assert response.status_code == 200
@@ -236,9 +242,11 @@ async def test_streaming_midstream_error_terminates_cleanly(client, router_sette
     assert not response.text.endswith("data: [DONE]\n\n")
 
 
-async def test_streamed_tool_calls_are_persisted(client, router_setter):
+async def test_streamed_tool_calls_are_persisted(client, router_setter, byok_env):
     """Streamed tool_call fragments are reassembled into the persisted
     assistant turn, matching what a non-streaming upstream would return."""
+    uid, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     chunks = [
         stream_chunk("alpha", {"role": "assistant"}),
         stream_chunk(
@@ -273,12 +281,12 @@ async def test_streamed_tool_calls_are_persisted(client, router_setter):
     )
     await client.post(
         "/v1/chat/completions",
-        headers={**AUTH, "X-Session-Id": "tool-stream"},
+        headers={**auth, "X-Session-Id": "tool-stream"},
         json={"messages": MESSAGES, "stream": True},
     )
 
     history = await app.state.sessions.load(
-        "tool-stream", **await local_owner_kwargs(app.state.engine))
+        "tool-stream", **await _user_kwargs(uid))
     assistant = [m for m in history if m["role"] == "assistant"]
     assert len(assistant) == 1
     message = assistant[0]
@@ -293,10 +301,12 @@ async def test_streamed_tool_calls_are_persisted(client, router_setter):
 
 
 async def test_streamed_parallel_tool_calls_persist_in_index_order(
-    client, router_setter
+    client, router_setter, byok_env
 ):
     """Fragments for several tool calls interleave by index; the persisted
     turn lists them in ascending index order with complete arguments."""
+    uid, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     chunks = [
         stream_chunk("alpha", {"role": "assistant"}),
         stream_chunk(
@@ -323,21 +333,25 @@ async def test_streamed_parallel_tool_calls_persist_in_index_order(
     )
     await client.post(
         "/v1/chat/completions",
-        headers={**AUTH, "X-Session-Id": "parallel-tools"},
+        headers={**auth, "X-Session-Id": "parallel-tools"},
         json={"messages": MESSAGES, "stream": True},
     )
 
     history = await app.state.sessions.load(
-        "parallel-tools", **await local_owner_kwargs(app.state.engine))
+        "parallel-tools", **await _user_kwargs(uid))
     assistant = [m for m in history if m["role"] == "assistant"][0]
     assert [t["id"] for t in assistant["tool_calls"]] == ["call_a", "call_b"]
     assert assistant["tool_calls"][0]["function"]["arguments"] == '{"y":2}'
     assert assistant["tool_calls"][1]["function"]["arguments"] == '{"x":1}'
 
 
-async def test_midstream_error_persists_partial_tool_turn(client, router_setter):
+async def test_midstream_error_persists_partial_tool_turn(
+    client, router_setter, byok_env
+):
     """A stream that dies mid-flight still persists what accumulated, so the
     stored history matches the partial output the client received."""
+    uid, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     prefix_chunks = [
         stream_chunk("alpha", {"role": "assistant"}),
         stream_chunk(
@@ -365,13 +379,13 @@ async def test_midstream_error_persists_partial_tool_turn(client, router_setter)
     )
     response = await client.post(
         "/v1/chat/completions",
-        headers={**AUTH, "X-Session-Id": "partial-tool-stream"},
+        headers={**auth, "X-Session-Id": "partial-tool-stream"},
         json={"messages": MESSAGES, "stream": True},
     )
     assert '"error"' in response.text
 
     history = await app.state.sessions.load(
-        "partial-tool-stream", **await local_owner_kwargs(app.state.engine))
+        "partial-tool-stream", **await _user_kwargs(uid))
     assistant = [m for m in history if m["role"] == "assistant"]
     assert len(assistant) == 1
     assert assistant[0]["content"] is None
@@ -397,21 +411,23 @@ async def test_invalid_auth_returns_401(client):
     assert response.json()["detail"]["error"]["type"] == "auth_error"
 
 
-async def test_x_api_key_auth_succeeds(client, router_setter):
+async def test_x_api_key_auth_succeeds(client, router_setter, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
     alpha_body = provider_body("alpha")
     router_setter(
         handlers={"alpha.example.com": httpx.Response(200, json=alpha_body)}
     )
     response = await client.post(
         "/v1/chat/completions",
-        headers={"x-api-key": "test-gateway-key"},
+        headers={"x-api-key": raw_key},
         json={"messages": MESSAGES},
     )
     assert response.status_code == 200
     assert response.json() == alpha_body
 
 
-async def test_bearer_priority_over_x_api_key(client, router_setter):
+async def test_bearer_priority_over_x_api_key(client, router_setter, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
     alpha_body = provider_body("alpha")
     router_setter(
         handlers={"alpha.example.com": httpx.Response(200, json=alpha_body)}
@@ -419,7 +435,7 @@ async def test_bearer_priority_over_x_api_key(client, router_setter):
     response = await client.post(
         "/v1/chat/completions",
         headers={
-            "Authorization": "Bearer test-gateway-key",
+            "Authorization": f"Bearer {raw_key}",
             "x-api-key": "wrong-key",
         },
         json={"messages": MESSAGES},
@@ -428,61 +444,75 @@ async def test_bearer_priority_over_x_api_key(client, router_setter):
     assert response.json() == alpha_body
 
 
-async def test_valid_auth_succeeds(client, router_setter):
+async def test_valid_auth_succeeds(client, router_setter, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     alpha_body = provider_body("alpha")
     router_setter(
         handlers={"alpha.example.com": httpx.Response(200, json=alpha_body)}
     )
     response = await client.post(
         "/v1/chat/completions",
-        headers=AUTH,
+        headers=auth,
         json={"messages": MESSAGES},
     )
     assert response.status_code == 200
     assert response.json() == alpha_body
 
 
-async def test_auth_optional_when_key_unset(client, router_setter, monkeypatch):
+async def test_no_auth_is_401_even_with_providers_configured(
+    client, router_setter
+):
+    """The fail-open anonymous realm is gone: with no GATEWAY_API_KEY to
+    unset and no bearer at all, /v1/* is 401 - there is no local mode."""
     alpha_body = provider_body("alpha")
     router_setter(
         handlers={"alpha.example.com": httpx.Response(200, json=alpha_body)}
     )
-    monkeypatch.delenv("GATEWAY_API_KEY")
     response = await client.post(
         "/v1/chat/completions", json={"messages": MESSAGES}
     )
-    assert response.status_code == 200
-    assert response.json() == alpha_body
+    assert response.status_code == 401
+    assert response.json()["detail"]["error"]["type"] == "auth_error"
 
 
-async def test_missing_messages_returns_422(client):
-    response = await client.post("/v1/chat/completions", headers=AUTH, json={})
+async def test_missing_messages_returns_422(client, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {raw_key}"}, json={})
     assert response.status_code == 422
 
 
-async def test_all_providers_fail_returns_503(client, router_setter):
+async def test_all_providers_fail_returns_503(client, router_setter, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={"alpha.example.com": httpx.Response(429)})
     response = await client.post(
-        "/v1/chat/completions", headers=AUTH, json={"messages": MESSAGES}
+        "/v1/chat/completions", headers=auth, json={"messages": MESSAGES}
     )
     assert response.status_code == 503
     assert response.json()["error"]["type"] == "gateway_error"
 
 
-async def test_upstream_error_forwarded(client, router_setter):
+async def test_upstream_error_forwarded(client, router_setter, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     error_body = {"error": {"message": "bad request"}}
     router_setter(
         handlers={"alpha.example.com": httpx.Response(400, json=error_body)}
     )
     response = await client.post(
-        "/v1/chat/completions", headers=AUTH, json={"messages": MESSAGES}
+        "/v1/chat/completions", headers=auth, json={"messages": MESSAGES}
     )
     assert response.status_code == 400
     assert response.json() == error_body
 
 
-async def test_models_lists_configured_models(client):
-    response = await client.get("/v1/models", headers=AUTH)
+async def test_models_lists_configured_models(client, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
+    response = await client.get(
+        "/v1/models", headers={"Authorization": f"Bearer {raw_key}"})
     assert response.status_code == 200
     body = response.json()
     assert body["object"] == "list"
@@ -491,27 +521,20 @@ async def test_models_lists_configured_models(client):
     ] == ["alpha-model", "beta-model", "gamma-model"]
 
 
-async def test_models_order_follows_router_tier_order(client, router_setter):
-    router_setter(
-        providers=list(reversed(default_providers())),
-        handlers={},
-    )
-    response = await client.get("/v1/models", headers=AUTH)
-    assert response.status_code == 200
-    assert [
-        model["id"] for model in response.json()["data"]
-    ] == ["alpha-model", "beta-model", "gamma-model"]
-
-
-async def test_models_empty_providers_returns_empty_list(client, router_setter):
-    router_setter(providers=[], handlers={})
-    response = await client.get("/v1/models", headers=AUTH)
+async def test_models_zero_credentials_returns_empty_list(client, byok_env):
+    """A key with nothing connected lists nothing - matching the chat
+    surface's clean 400 (LOW-3)."""
+    _, raw_key = await v1_user(client, "api@example.com", providers=[])
+    response = await client.get(
+        "/v1/models", headers={"Authorization": f"Bearer {raw_key}"})
     assert response.status_code == 200
     assert response.json() == {"object": "list", "data": []}
 
 
-async def test_models_matches_openai_schema(client):
-    response = await client.get("/v1/models", headers=AUTH)
+async def test_models_matches_openai_schema(client, byok_env):
+    _, raw_key = await v1_user(client, "api@example.com")
+    response = await client.get(
+        "/v1/models", headers={"Authorization": f"Bearer {raw_key}"})
     assert response.status_code == 200
     assert response.json() == {
         "object": "list",
@@ -529,50 +552,17 @@ async def test_models_requires_auth(client):
     assert response.json()["detail"]["error"]["type"] == "auth_error"
 
 
-# --- Phase 6: model aliasing --------------------------------------------------
-
-
-async def test_model_field_accepted_no_422(client, router_setter):
-    """The OpenAI request body now accepts model (previously 422)."""
+async def test_model_field_accepted_no_422(client, router_setter, byok_env):
+    """The OpenAI request body accepts model; an unknown model name is a
+    soft hint in auto mode, not a 422."""
+    _, raw_key = await v1_user(client, "api@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={"alpha.example.com": httpx.Response(200, json=provider_body("alpha"))}
     )
     response = await client.post(
         "/v1/chat/completions",
-        headers=AUTH,
+        headers=auth,
         json={"messages": MESSAGES, "model": "claude-sonnet-4"},
     )
     assert response.status_code == 200
-
-
-async def test_model_alias_routes_to_preferred_provider(client, router_setter):
-    """model: fast routes to the aliased provider (beta) instead of tier-1
-    alpha - the endpoint surfaces the router's soft alias preference."""
-    providers = default_providers()
-    providers[1]["aliases"] = ["fast"]
-    router_setter(
-        providers=providers,
-        handlers={
-            "alpha.example.com": httpx.Response(503),
-            "beta.example.com": httpx.Response(200, json=provider_body("beta")),
-            "gamma.example.com": httpx.Response(503),
-        },
-    )
-    response = await client.post(
-        "/v1/chat/completions",
-        headers=AUTH,
-        json={"messages": MESSAGES, "model": "fast"},
-    )
-    assert response.status_code == 200
-    assert response.json() == provider_body("beta")
-
-
-async def test_models_lists_aliases_after_model_ids(client, router_setter):
-    providers = default_providers()
-    providers[1]["aliases"] = ["fast"]
-    router_setter(providers=providers, handlers={})
-    response = await client.get("/v1/models", headers=AUTH)
-    assert response.status_code == 200
-    assert [
-        model["id"] for model in response.json()["data"]
-    ] == ["alpha-model", "beta-model", "gamma-model", "fast"]

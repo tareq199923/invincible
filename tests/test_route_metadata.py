@@ -5,10 +5,19 @@ import json
 
 import httpx
 
-from tests.conftest import provider_body, sse_body, stream_chunk
+from tests.conftest import (
+    provider_body,
+    sse_body,
+    stream_chunk,
+    v1_user,
+)
 
 
-async def test_openai_nonstreaming_headers_report_actual_route(client, router_setter):
+async def test_openai_nonstreaming_headers_report_actual_route(
+    client, router_setter, byok_env
+):
+    _, auth_key = await v1_user(client, "route@example.com")
+    auth = {"Authorization": f"Bearer {auth_key}"}
     def alpha_down(request):
         return httpx.Response(500, json={"error": "down"})
 
@@ -18,7 +27,7 @@ async def test_openai_nonstreaming_headers_report_actual_route(client, router_se
     router_setter({"alpha.example.com": alpha_down, "beta.example.com": beta_ok})
     resp = await client.post(
         "/v1/chat/completions",
-        headers={"Authorization": "Bearer test-gateway-key"},
+        headers=auth,
         json={"messages": [{"role": "user", "content": "hi"}]},
     )
     assert resp.status_code == 200
@@ -28,20 +37,26 @@ async def test_openai_nonstreaming_headers_report_actual_route(client, router_se
     assert resp.headers["x-invincible-request-id"]
 
 
-async def test_openai_single_attempt_headers(client, router_setter):
+async def test_openai_single_attempt_headers(client, router_setter, byok_env):
+    _, auth_key = await v1_user(client, "route@example.com")
+    auth = {"Authorization": f"Bearer {auth_key}"}
     router_setter({"alpha.example.com": lambda r: httpx.Response(
         200, json=provider_body("alpha")
     )})
     resp = await client.post(
         "/v1/chat/completions",
-        headers={"Authorization": "Bearer test-gateway-key"},
+        headers=auth,
         json={"messages": [{"role": "user", "content": "hi"}]},
     )
     assert resp.headers["x-invincible-attempts"] == "1"
     assert resp.headers["x-invincible-provider"] == "alpha"
 
 
-async def test_openai_streaming_headers_present_before_body(client, router_setter):
+async def test_openai_streaming_headers_present_before_body(
+    client, router_setter, byok_env
+):
+    _, auth_key = await v1_user(client, "route@example.com")
+    auth = {"Authorization": f"Bearer {auth_key}"}
     router_setter({
         "alpha.example.com": lambda r: httpx.Response(500, json={"error": "down"}),
         "beta.example.com": lambda r: httpx.Response(
@@ -52,7 +67,7 @@ async def test_openai_streaming_headers_present_before_body(client, router_sette
     req = client.build_request(
         "POST",
         "/v1/chat/completions",
-        headers={"Authorization": "Bearer test-gateway-key"},
+        headers=auth,
         json={"messages": [{"role": "user", "content": "hi"}], "stream": True},
     )
     resp = await client.send(req, stream=True)
@@ -63,7 +78,11 @@ async def test_openai_streaming_headers_present_before_body(client, router_sette
     await resp.aclose()
 
 
-async def test_anthropic_nonstreaming_headers_and_model_echo(client, router_setter):
+async def test_anthropic_nonstreaming_headers_and_model_echo(
+    client, router_setter, byok_env
+):
+    _, auth_key = await v1_user(client, "route@example.com")
+    auth = {"Authorization": f"Bearer {auth_key}"}
     def alpha_down(request):
         return httpx.Response(500, json={"error": "down"})
 
@@ -83,7 +102,7 @@ async def test_anthropic_nonstreaming_headers_and_model_echo(client, router_sett
     router_setter({"alpha.example.com": alpha_down, "beta.example.com": beta_ok})
     resp = await client.post(
         "/v1/messages",
-        headers={"Authorization": "Bearer test-gateway-key"},
+        headers=auth,
         json={"model": "claude-3-5-sonnet", "max_tokens": 10,
               "messages": [{"role": "user", "content": "hi"}]},
     )
@@ -96,7 +115,9 @@ async def test_anthropic_nonstreaming_headers_and_model_echo(client, router_sett
     assert body["model"] == "claude-3-5-sonnet"
 
 
-async def test_anthropic_streaming_headers(client, router_setter):
+async def test_anthropic_streaming_headers(client, router_setter, byok_env):
+    _, auth_key = await v1_user(client, "route@example.com")
+    auth = {"Authorization": f"Bearer {auth_key}"}
     router_setter({
         "alpha.example.com": lambda r: httpx.Response(500, json={"error": "down"}),
         "beta.example.com": lambda r: httpx.Response(
@@ -107,7 +128,7 @@ async def test_anthropic_streaming_headers(client, router_setter):
     req = client.build_request(
         "POST",
         "/v1/messages",
-        headers={"Authorization": "Bearer test-gateway-key"},
+        headers=auth,
         json={"max_tokens": 10, "stream": True,
               "messages": [{"role": "user", "content": "hi"}]},
     )

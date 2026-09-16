@@ -126,13 +126,15 @@ GET /oauth/authorize?response_type=code&client_id=<id>&redirect_uri=<uri>
     &code_challenge=<S256>&code_challenge_method=S256&state=<opaque>
 ```
 
-- No valid owner session cookie → a **login form** asking for
-  `INVINCIBLE_OWNER_SECRET` (entered once per browser, ~30-day remembered
-  session). A wrong secret sets no cookie.
+- No valid account session cookie → redirect to `/login` (register /
+  log in with email + password, or GitHub; the authorize URL rides along
+  as the same-origin `next` target so the approval funnel survives the
+  round-trip). The owner-secret login form is gone (Phase 2).
 - Logged in → a **consent page**: "`<client_name>` wants access to your
-  Invincible instance. [Approve] [Deny]".
+  Invincible instance. Approving as `<your email>` — tokens minted from
+  this consent act as that user. [Approve] [Deny]".
 
-On **Approve**, the owner's browser is redirected to:
+On **Approve**, the approver's browser is redirected to:
 
 ```
 http://localhost:8765/callback?code=<single-use-code>&state=<opaque>
@@ -607,8 +609,9 @@ its sandbox is the user's home, not the server's read roots.
 Isolation is structural: jobs queue per `user_id`, an agent's key
 resolves to one user, and results for another user's jobs are refused.
 With routing on, no code path executes a tool on the server host —
-which is what lets non-operator accounts approve their own MCP clients
-(the operator-only consent gate relaxes exactly and only in this mode).
+which is what makes self-service consent safe: every account approves
+its own MCP clients, and approving exposes only the approver's own
+machine (Phase 2; the old operator-only consent gate is gone).
 
 ---
 

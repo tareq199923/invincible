@@ -45,7 +45,7 @@ def test_setup_never_rotates_existing_credential_key_even_with_force(
     target = tmp_path / ".env"
     target.write_text(
         "INVINCIBLE_CREDENTIAL_KEY=keep-this-exact-value\n"
-        "GATEWAY_API_KEY=gw\nINVINCIBLE_OWNER_SECRET=owner\n"
+        "UNRELATED_SETTING=keep\nINVINCIBLE_OWNER_SECRET=owner\n"
         "INVINCIBLE_DB_URL=postgresql+asyncpg://keep@db/x\n",
         encoding="utf-8",
     )

@@ -6,8 +6,8 @@ ownership goes through ``user_id`` on every read/write, and the request
 path NEVER trusts the stored JSON - :func:`routing_config_from_user`
 degrades any malformed row to auto routing instead of raising.
 
-The routing JSON mirrors the operator registry's shape but references the
-user's own ``user_provider_credentials`` ids::
+The routing JSON references the user's own
+``user_provider_credentials`` ids::
 
     {"mode": "chain", "chain": [{"credential_id": 2,
                                  "model": "moonshotai/kimi-k3"}, ...]}
@@ -157,8 +157,8 @@ def routing_config_from_user(
     the shared ``attempt_order``) matches candidates by ``name`` - each
     credential row's unique ``provider_name`` - so the mapping happens
     here. Runtime drift (a step whose credential was deleted) silently
-    drops that step, the same semantics the operator registry's chain
-    keeps (selection.py).
+    drops that step - the same semantics selection.py's chain
+    mapping has always kept.
 
     ``model`` (the client's requested model) only reorders a chain: the
     matching step floats to the front so the entry point follows the

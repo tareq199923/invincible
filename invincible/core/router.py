@@ -4,7 +4,6 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
 
 import httpx
 
@@ -28,7 +27,6 @@ from invincible.core.selection import (
     PinnedUnavailableError,
     RoutingConfig,
     attempt_order,
-    routing_from_config,
 )
 from invincible.core.settings import settings
 from invincible.core.tool_compression import compress_tools
@@ -43,8 +41,6 @@ from invincible.core.user_settings_store import override_flag
 
 logger = logging.getLogger("invincible.router")
 
-if TYPE_CHECKING:
-    from invincible.core.provider_registry import ProviderRegistry
 
 class UpstreamClientError(Exception):
     def __init__(self, status_code: int, body: dict):
@@ -89,7 +85,7 @@ class AllProvidersFailedError(Exception):
 NO_CREDENTIALS_MESSAGE = (
     "No AI provider is connected for this account. Connect one at "
     "/dashboard/providers - chat requests route only through providers "
-    "you connect yourself, never the operator's shared pool."
+    "you connect yourself, never a shared pool."
 )
 
 
@@ -320,8 +316,8 @@ def _all_providers_failed() -> AllProvidersFailedError:
 def _health_key(provider: dict) -> str:
     """Cooldown/isolation key for the health tracker. BYOK candidates
     carry a per-credential ``health_id`` so same-labeled providers of
-    different users never share cooldown state (and can never poison the
-    operator pool's); operator providers keep their name."""
+    different users never share cooldown state (and can never poison
+    each other's); static-config providers keep their name."""
     return provider.get("health_id") or provider["name"]
 
 
@@ -330,14 +326,12 @@ class Router:
         self,
         config_path: str | None = None,
         transport=None,
-        registry: "ProviderRegistry | None" = None,
         run_recorder=None,
     ):
-        # Registry mode (Phase 13.5): the registry owns provider state and
-        # the routing mode; a snapshot is taken per request. Legacy mode
-        # (tests, direct construction) keeps loading static YAML exactly as
-        # before and runs in auto mode.
-        self.registry = registry
+        """The production app constructs the router bare - every real
+        request arrives with a per-user ``inv_`` key and BYOK candidates.
+        The static-YAML constructor below stays for tests and direct
+        construction (it runs in auto mode)."""
         # Optional async callable receiving one run-entry dict per upstream
         # attempt (success, failover, or error). None = no recording.
         self.run_recorder = run_recorder
@@ -346,39 +340,26 @@ class Router:
         # request_id, session_id, session_pk, failed_provider, error_class.
         # Wired by the lifespan to the ContinuityEngine; never imported here.
         self.failover_hook = None
-        if registry is not None:
-            self.providers = []
-        else:
-            config = load_providers_config(config_path)
-            self.providers = config.get("providers", [])
-            # Shape is validated in load_providers_config (Phase 6); sort by
-            # tier here so failover order never depends on YAML order.
-            self.providers.sort(key=lambda p: p["tier"])
-            for provider in self.providers:
-                if not settings.provider_api_key(provider["api_key_env"]):
-                    logger.warning(
-                        f"Provider '{provider['name']}' has no API key set via "
-                        f"{provider['api_key_env']}. It will be unavailable."
-                    )
+        config = load_providers_config(config_path)
+        self.providers = config.get("providers", [])
+        # Shape is validated in load_providers_config (Phase 6); sort by
+        # tier here so failover order never depends on YAML order.
+        self.providers.sort(key=lambda p: p["tier"])
+        for provider in self.providers:
+            if not settings.provider_api_key(provider["api_key_env"]):
+                logger.warning(
+                    f"Provider '{provider['name']}' has no API key set via "
+                    f"{provider['api_key_env']}. It will be unavailable."
+                )
         self.health_tracker = HealthTracker()
         self.client = httpx.AsyncClient(transport=transport)
 
     def _candidates(self, model: str | None = None) -> list[dict]:
-        """Per-request ordered candidate providers.
-
-        Delegates to the selection layer with a fresh snapshot, so routing
-        mode changes and registry mutations apply to the next request but
-        never to an in-flight one. Pinned misconfiguration surfaces as the
-        normal gateway exhaustion error.
-        """
-        if self.registry is not None:
-            snapshot = self.registry.list()
-            routing = routing_from_config(self.registry.routing())
-        else:
-            snapshot = self.providers
-            routing = AUTO_ROUTING
+        """Per-request ordered candidate providers for the static
+        (test/direct-construction) path: auto mode over the loaded YAML."""
         try:
-            return attempt_order(snapshot, self.health_tracker, routing, model)
+            return attempt_order(
+                self.providers, self.health_tracker, AUTO_ROUTING, model)
         except PinnedUnavailableError as e:
             raise AllProvidersFailedError(str(e)) from None
 
@@ -432,7 +413,7 @@ class Router:
         BYOK (Platform Phase 9): when ``byok_candidates`` is not None, the
         attempt list comes ENTIRELY from that list (the caller's per-user
         credential rows) and ``byok_key_resolver(provider)`` resolves each
-        attempt's key lazily - never the operator registry. ``byok_routing``
+        attempt's key lazily - never any shared pool. ``byok_routing``
         (Phase 1) is the user's own routing mode over those candidates;
         ``overrides`` are their per-user pipeline toggles.
         """
@@ -573,12 +554,12 @@ class Router:
 
         BYOK (Platform Phase 9): ``byok_candidates is not None`` switches
         the candidate source to that list - the requesting user's own
-        connected credentials, never the operator registry, with no
+        connected credentials, never any shared pool, with no
         fallback in either direction. ``byok_key_resolver(provider)`` must
         return the attempt's API key or None (skip); it is awaited once per
         attempt so decryption is lazy and per-credential. An empty BYOK
         list raises :class:`NoCredentialsConfiguredError` - connecting a
-        provider is expected of the user, not an operator emergency.
+        provider is the user's own setup step, not an operator emergency.
 
         BYOK routing modes (Phase 1 self-service): ``byok_routing`` is the
         user's own auto/pinned/chain config over their candidates. In
@@ -599,9 +580,9 @@ class Router:
         model fails over (404 always; a 400 whose body reads as "model not
         served here" too) - no silent substitution. If EVERY credential
         rejects the model that way, the last provider's own error surfaces
-        instead of the generic exhaustion message. The operator pool path
-        keeps its historical semantics: ``model`` is a soft ordering hint
-        only.
+        instead of the generic exhaustion message. On the static-config
+        (test/direct-construction) path, ``model`` stays a soft ordering
+        hint only - the historical semantics.
 
         Yields ``(result, route_info)`` where ``result`` is the parsed JSON
         body (``stream=False``) or ``(first_chunk, tail)`` (``stream=True``)

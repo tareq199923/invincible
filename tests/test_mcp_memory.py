@@ -15,7 +15,6 @@ import time
 
 from sqlalchemy import text
 
-from invincible.core.db import ensure_local_owner
 from invincible.core.memory import MCP_CONFIDENCE
 from invincible.main import app
 
@@ -41,10 +40,13 @@ def _tool_json(result):
 
 
 async def _bearer_user_id() -> int:
-    """The OAuth subject behind the bearer_headers fixture: the owner-
-    secret browser login resolves to the system local owner, so memory
-    rows land under that user."""
-    return (await ensure_local_owner(app.state.engine))[0]
+    """The OAuth subject behind the bearer_headers fixture: the throwaway
+    account obtain_access_token registers and approves as (Phase 2 -
+    consent is a logged-in account, so rows land under that user)."""
+    async with app.state.engine.connect() as conn:
+        return (await conn.execute(text(
+            "SELECT owner_user_id FROM oauth_clients "
+            "WHERE client_name = 'test-client'"))).scalar()
 
 
 async def _create_project(user_id: int, name: str) -> int:

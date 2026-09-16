@@ -8,9 +8,8 @@ realms meet here, and they never mix:
 - ``POST /agent/poll`` and ``POST /agent/result`` authenticate with an
   inv_ API key (the same credential ``invincible login`` persists to
   ~/.invincible/config.json) via ``require_agent_auth`` - a deliberately
-  narrow dependency, NOT endpoints/auth.py's require_auth: the gateway
-  key realm and the fail-open anonymous local mode must never reach
-  agent dispatch. A key resolves to exactly one user, and registry
+  narrow dependency, NOT endpoints/auth.py's require_auth. A key
+  resolves to exactly one user, and registry
   queues are keyed by that user - routing is the isolation.
 - ``GET /agent/status`` authenticates with a dashboard session cookie
   (``resolve_session``, the same resolver every account page uses) and

@@ -4,10 +4,9 @@
 A registered user's inv_ API key (api_key realm) routes ONLY through
 that user's connected credentials - the operator's shared registry
 providers are provably never called (counting MockTransport handlers).
-Zero connected credentials fail fast with a clean 400. The legacy
-gateway-key flow is completely unaffected. Both /v1/chat/completions
-and /v1/messages are covered. The request's model overrides the
-credential's stored default on both surfaces.
+Zero connected credentials fail fast with a clean 400. Both
+/v1/chat/completions and /v1/messages are covered. The request's model
+overrides the credential's stored default on both surfaces.
 """
 import json
 
@@ -217,33 +216,6 @@ async def test_models_empty_for_byok_user_without_credentials(
     resp = await client.get("/v1/models", headers=chat_headers(key["raw"]))
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"object": "list", "data": []}
-
-
-async def test_models_for_gateway_key_keeps_operator_pool(
-    client, router_setter
-):
-    """The split's other arm: the legacy gateway-key realm still sees the
-    full operator pool (unchanged behavior)."""
-    handlers, _ = transport_handlers()
-    router_setter(handlers)
-    resp = await client.get(
-        "/v1/models", headers={"Authorization": "Bearer test-gateway-key"})
-    assert resp.status_code == 200, resp.text
-    assert [m["id"] for m in resp.json()["data"]] == [
-        "alpha-model", "beta-model", "gamma-model"]
-
-
-async def test_legacy_gateway_key_completely_unaffected(client, router_setter):
-    handlers, counters = transport_handlers()
-    router_setter(handlers)
-    resp = await client.post(
-        "/v1/chat/completions", json=CHAT_BODY,
-        headers={"Authorization": "Bearer test-gateway-key"})
-    assert resp.status_code == 200, resp.text
-    assert resp.headers["x-invincible-provider"] == "alpha"
-    assert len(counters[OPERATOR_HOSTS[0]]) == 1
-    for host in (U1, U2, U3):
-        assert counters[host] == []
 
 
 async def test_streaming_routes_through_user_provider(client, router_setter):

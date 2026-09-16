@@ -12,7 +12,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from invincible import __version__
 from invincible.core.agent_registry import AgentRegistry
-from invincible.core.config import load_providers_config
 from invincible.core.continuity import ContinuityEngine
 from invincible.core.db import (
     create_all_from_metadata,
@@ -23,7 +22,6 @@ from invincible.core.db import (
 from invincible.core.identity import ApiKeyStore, AuditLog
 from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore
-from invincible.core.provider_registry import ProviderRegistry
 from invincible.core.retrieval import RetrievalService
 from invincible.core.router import Router
 from invincible.core.run_store import RunStore
@@ -31,7 +29,6 @@ from invincible.core.session_store import SessionStore
 from invincible.core.settings import settings
 from invincible.core.tool_executor import PendingActionStore
 from invincible.endpoints.accounts import router as accounts_router
-from invincible.endpoints.admin_api import router as admin_router
 from invincible.endpoints.agents import router as agents_router
 from invincible.endpoints.anthropic_compat import router as anthropic_router
 from invincible.endpoints.auth import require_auth
@@ -59,19 +56,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("invincible")
 
 
-def _warn_if_gateway_open() -> None:
-    """The /v1/* chat endpoints fail open when GATEWAY_API_KEY is unset
-    (documented behavior, convenient for local use). Make sure anyone
-    exposing the server to something untrusted sees that loud and clear."""
-    if not settings.gateway_api_key():
-        logger.warning(
-            "GATEWAY_API_KEY is not set - the /v1/* chat endpoints are "
-            "UNAUTHENTICATED. Anyone who can reach this server can use your "
-            "providers. Set GATEWAY_API_KEY in your .env before exposing it "
-            "through a tunnel or to anything untrusted."
-        )
-
-
 def _warn_if_credential_key_unset() -> None:
     """BYOK provider connections refuse to run without INVINCIBLE_CREDENTIAL_KEY
     (fail closed, the same posture the management API keeps toward
@@ -87,7 +71,6 @@ def _warn_if_credential_key_unset() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _warn_if_gateway_open()
     _warn_if_credential_key_unset()
     url = settings.db_url()
     if not url:
@@ -108,11 +91,11 @@ async def lifespan(app: FastAPI):
     await warn_if_schema_stale(engine)
     app.state.engine = engine
 
-    seed_config = load_providers_config(settings.config_path())
-    app.state.registry = ProviderRegistry(
-        file_path=settings.providers_file(), seed_config=seed_config
-    )
-    app.state.router = Router(registry=app.state.registry)
+    # Phase 2: BYOK-only routing. Every /v1/* request carries a per-user
+    # inv_ key and routes through that user's own connected credentials -
+    # there is no operator pool, so the router starts bare. The static
+    # YAML constructor stays available for tests and direct construction.
+    app.state.router = Router()
 
     oauth_store = OAuthStore(engine)
     await oauth_store.init()
@@ -195,13 +178,13 @@ async def _browser_login_redirect(request: Request, exc: StarletteHTTPException)
         headers=getattr(exc, "headers", None),
     )
 
-# /v1/* resolves a Principal per request (dual-realm: legacy gateway key
-# vs per-user API keys; fail-open anonymous when no gateway key is set -
-# see endpoints/auth.py for the exact, tested resolution order).
+# /v1/* resolves a Principal per request (per-user inv_ API keys only,
+# fail closed - see endpoints/auth.py for the exact, tested resolution
+# order).
 
 app.include_router(openai_router, dependencies=[Depends(require_auth)])
 app.include_router(anthropic_router, dependencies=[Depends(require_auth)])
-# Responses surface (Codex CLI et al.): same dual-realm auth as the other
+# Responses surface (Codex CLI et al.): same inv_-key auth as the other
 # /v1/* chat endpoints.
 app.include_router(responses_router, dependencies=[Depends(require_auth)])
 app.include_router(oauth_router)
@@ -231,8 +214,6 @@ app.mount(
 templates = Jinja2Templates(
     directory=str(Path(__file__).resolve().parent / "templates"))
 register_template_filters(templates)
-# Management surface carries its own fail-closed authz (operator realm).
-app.include_router(admin_router)
 app.include_router(graph_router)
 
 @app.head("/mcp")

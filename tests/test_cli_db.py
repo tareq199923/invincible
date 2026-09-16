@@ -200,7 +200,7 @@ def test_dev_db_write_env_merges_preserving_comments(monkeypatch, tmp_path):
     monkeypatch.setattr("invincible.cli._provision_dev_db", fake_provision)
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "# my keys\nGATEWAY_API_KEY=gw\n", encoding="utf-8"
+        "# my keys\nUNRELATED_SETTING=keep\n", encoding="utf-8"
     )
     monkeypatch.setenv("INVINCIBLE_DB_URL", "")  # not set -> provisions
 
@@ -210,7 +210,7 @@ def test_dev_db_write_env_merges_preserving_comments(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     lines = env_file.read_text(encoding="utf-8").splitlines()
     assert lines[0] == "# my keys"
-    assert lines[1] == "GATEWAY_API_KEY=gw"
+    assert lines[1] == "UNRELATED_SETTING=keep"
     assert any(
         line.startswith(
             "INVINCIBLE_DB_URL=postgresql+asyncpg://invincible@127.0.0.1:5433/invincible"

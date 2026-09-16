@@ -1,98 +1,87 @@
 # Security Model
 
-Invincible exposes two attack-relevant surfaces: a chat proxy that calls
-upstream AI providers, and an MCP tool server that can **run shell commands
+Invincible exposes three attack-relevant surfaces: a chat proxy that calls
+upstream AI providers, a browser dashboard managing accounts and provider
+credentials, and an MCP tool server that can **run shell commands
 and write files on the host machine**. This document describes exactly what
 guards what, where the boundaries are, and — explicitly — where they are not.
 
 ---
 
-## 1. Two independent auth realms
+## 1. Three independent auth realms
 
-The two surfaces authenticate **independently**. Rotating one never affects
-the other, and a leaked tunnel URL alone is not enough to reach tool
-execution.
+The three surfaces authenticate **independently**. Rotating one realm's
+credential never affects the others, and no credential is accepted outside
+its own realm.
 
-> **Renamed in this release:** the old per-request MCP secret
-> `MCP_SHARED_SECRET` is now the owner-login secret `INVINCIBLE_OWNER_SECRET`
-> and is no longer sent on `/mcp` at all. See
-> [§1.2](#12-mcp--oauth-21--pkce-bearer-tokens). Your old `.env` value still
-> works (the legacy key is read as a fallback), but its role has changed.
+> **Renamed earlier, re-scoped in Phase 2:** the old per-request MCP secret
+> `MCP_SHARED_SECRET` became `INVINCIBLE_OWNER_SECRET`, then Phase 2 removed
+> the owner-secret *login* entirely. The variable survives with one job
+> only: the HMAC key source signing account browser sessions
+> (`core.accounts SessionManager`). It is never sent on `/mcp` and never
+> typed into any form. A stale `MCP_SHARED_SECRET` value still works as a
+> session-signing fallback.
 
-### `/v1/*` — dual-realm auth (Platform Phase 1)
+### `/v1/*` — per-user API keys only (fail closed)
 
-Requests resolve a Principal in this fixed order (implemented in
-`invincible/endpoints/auth.py::require_auth`):
+Every chat request (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`,
+`/v1/models`, and the session-graph API) authenticates with a per-user
+`inv_` API key — implemented in `invincible/endpoints/auth.py::require_auth`:
 
 | Step | Realm | Result |
 |---|---|---|
-| 1 | `Authorization: Bearer <GATEWAY_API_KEY>` or `x-api-key`, timing-safe compared (`hmac.compare_digest`) | System *local* owner (`kind="legacy"`) |
-| 2 | `Bearer inv_…` matching an **API key** (SHA-256 hash lookup; revoked keys excluded) | That key's user + its default project (`kind="api_key"`) |
-| 3 | Gateway key **unset** | Documented fail-open local identity (`kind="anonymous"`) |
-| 4 | anything else | HTTP 401, body `{"detail": {"error": {"message": "...", "type": "auth_error"}}}` |
+| 1 | `Authorization: Bearer inv_…` or `x-api-key`, matching an **API key** (SHA-256 hash lookup; revoked keys excluded) | That key's user + its default project (`kind="api_key"`) |
+| 2 | anything else | HTTP 401, body `{"detail": {"error": {"message": "...", "type": "auth_error"}}}` |
 
-API-key properties:
+There is no shared gateway key, no operator realm, and no anonymous
+fallback: the endpoint always fails closed. API-key properties:
 
-- Raw values are shown **once**, at creation (`invincible api-key create`);
-  storage keeps only a SHA-256 hash plus a visible prefix for listings.
-- Resolution is unambiguous: the legacy realm is checked first, so even a
-  deliberately crafted hash collision between the two realms resolves as
-  legacy (pinned by test).
+- Raw values are shown **once**, at creation (dashboard API-keys page, or
+  `invincible api-key create --user …` on the host); storage keeps only a
+  SHA-256 hash plus a visible prefix for listings.
+- Every authenticated request routes **only through that user's own
+  connected BYOK credentials** (see the BYOK section below) — with zero
+  credentials connected the request fails fast with a clear 400, and there
+  is no shared pool to fall back to in either direction.
 - Sessions created under an API-key principal are stored under that user's
   ownership triple (`user_id`, `project_id`, `client_session_id`) — the
-  same client session string under two principals yields two distinct
-  session rows. Enforcement of isolation on every read path lands in
-  Phase 2.
-
-Note the open-if-unset behavior (step 3): on a dev box without a gateway
-key, anyone who can reach the port can use your provider credits. Set the
-key. Hosted mode retires fail-open entirely (Phase 8).
+  same client session string under two users yields two distinct session
+  rows, and a foreign string reads exactly like a nonexistent one
+  (anti-enumeration).
 
 ### `/mcp` — OAuth 2.1 + PKCE Bearer tokens
 
-`/mcp` no longer takes a shared secret header. It accepts **short-lived
+`/mcp` does not take a shared secret header. It accepts **short-lived
 access tokens** (`Authorization: Bearer <token>`, ~1h TTL) issued by
 Invincible's own, built-in authorization server (`/oauth/*`) after a
 browser-based login and per-client consent. `inv_` API keys are
-deliberately **not** accepted here (owner decision, 2026-08-30): MCP
-grants must always pass the browser gate, so a leaked API key can never
-run `execute_bash`/`write_file`.
+deliberately **not** accepted here: MCP grants must always pass the
+browser gate, so a leaked API key can never run
+`execute_bash`/`write_file`.
 
-**Consent identity (Phase 5, Q3):** a valid dashboard session cookie
-(`invincible_session`) grants consent **as that logged-in user** — the
-consent page names the identity, and tokens minted from the approval act
-as that user's subject. The owner-secret cookie (`invincible_owner`)
-remains supported for headless/local flows and resolves to the system
-*local* owner, exactly as before. `require_mcp_auth` itself is untouched:
-tokens have always resolved through `subject_user_id`.
+**Consent identity (Phase 2, self-service).** A valid dashboard session
+cookie (`invincible_session`) grants consent **as that logged-in user** —
+the consent page names the identity, and tokens minted from the approval
+act as that user's subject. Every user approves their OWN clients; there
+is no operator gate and no owner-secret login anymore (the old
+owner-secret cookie path was removed in Phase 2). `require_mcp_auth`
+itself is unchanged: tokens have always resolved through
+`subject_user_id`.
 
-**Who may approve (the operator gate).** Dashboard registration
-(`POST /auth/register`) is open, so the session cookie alone must not be
-enough — approval mints MCP bearer tokens (`execute_bash`/`write_file` on
-the host). Consent therefore requires either the owner secret or an
-**operator-role account** (`users.role = 'operator'`; the local owner is
-seeded/elevated to operator, revision 0008 backfills migrated databases,
-and `invincible users promote <email>` / `demote <email>` is the runtime
-elevation path — every change is audit-logged, and the local owner's
-role is immutable). On a fresh **opted-in** instance the first registered
-account bootstraps to operator — the self-hosted model is one person per
-instance, and the person who ran `inv setup` must be able to govern
-their own machine without a terminal step; every later registration
-joins as a plain user. MEDIUM-1 (2026-09-07 audit) made the bootstrap
-opt-in: it fires only when no owner secret is configured or when
-`INVINCIBLE_ALLOW_FIRST_OPERATOR=1` (which `invincible setup` writes
-into fresh `.env` files and public deploys deliberately omit — a
-stranger winning the registration race there lands a plain user
-account). A self-registered plain account gets 403 on both
-the consent page and the approve POST, and the refusal is audited
-(`oauth.consent_forbidden`).
-When a browser holds *both* cookies, the dashboard session wins: approval
-stamps that user (an operator) rather than silently falling back from a
-plain session to the owner identity, which would be a confused deputy.
-Session resolution on the consent endpoints is the full principal check —
+**Why self-approval is safe here.** Approval mints MCP bearer tokens, and
+on a server with `INVINCIBLE_AGENT_ROUTING=1` confirmed tool execution
+routes to the approver's own paired agent — never the server host — so
+approving a client exposes only the approver's own machine. The
+deployment-posture rule (§10) makes that flag a hard requirement on any
+public multi-user deployment. Approving/denying is only possible via the
+POST forms — a GET carrying an `action` is rejected, so a cross-site
+navigation can never grant consent (the SameSite=Lax session cookie is
+sent on top-level GETs, which made GET links CSRF-able). Session
+resolution on the consent endpoints is the full principal check —
 signature, expiry, live user row, and `session_version` match — so a
 password-orphaned or deleted-account cookie behaves exactly like a forged
-one.
+one, and an anonymous browser bounces to `/login` with the authorize URL
+as the same-origin `next` target.
 
 | Aspect | Value |
 |---|---|
@@ -113,7 +102,7 @@ server) and `invincible/endpoints/oauth.py` (authorization server).
 | Surface | `/auth/*`, `/projects*`, `/api-keys*`, `/sessions` (Phase 3) |
 | Auth | `invincible_session` cookie: `v1.<uid>.<expiry>.<HMAC-SHA256>`, HttpOnly, SameSite=Lax; key derived from `INVINCIBLE_OWNER_SECRET` |
 | Failure mode | **Fail closed** — with no owner secret configured the HMAC key would be publicly computable, so no session is ever issued or accepted (503) |
-| Management alt-realm | A user's own `inv_` API key also works on `/api-keys`; MCP bearer tokens and `GATEWAY_API_KEY` are rejected by construction (`ApiKeyStore.resolve` matches only `inv_` hashes) |
+| Management alt-realm | A user's own `inv_` API key also works on `/api-keys`; MCP bearer tokens are rejected by construction (`ApiKeyStore.resolve` matches only `inv_` hashes) |
 
 Properties of this realm:
 
@@ -178,20 +167,17 @@ Properties of this realm:
   keys shorter than 12 chars are fully masked).
 - Deleting/testing is ownership-predicated: foreign and unknown
   credential ids return byte-identical 404 bodies (no enumeration).
-- **Routing split (PR-C):** `api_key`-realm chat requests build their
-  attempt list ENTIRELY from that user's connected credentials — with
-  zero credentials the request fails fast with a clear 400 — and never
-  fall back to the operator's shared `ProviderRegistry` pool in either
-  direction. Legacy/anonymous (local mode) keep the operator pool
-  unchanged. Health cooldowns are keyed per-credential (`byok:<id>`),
-  so users can never poison each other's or the operator pool's
-  cooldown state, and the per-attempt key resolver re-runs the SSRF
-  guard and decrypts lazily, one credential at a time.
+- **Routing (per-user only):** every `/v1/*` request builds its attempt
+  list ENTIRELY from the authenticated user's connected credentials — with
+  zero credentials the request fails fast with a clear 400 — and there is
+  no shared operator pool to fall back to in either direction. Health
+  cooldowns are keyed per-credential (`byok:<id>`), so users can never
+  poison each other's cooldown state, and the per-attempt key resolver
+  re-runs the SSRF guard and decrypts lazily, one credential at a time.
 - `base_url` for non-catalog (user-typed) providers must be `https://`
   and resolve to a public address; the SSRF guard re-checks on EVERY
   later test use, not just at create (details: §9). Catalog base URLs
-  are operator-supplied constants and skip the check only while
-  unedited.
+  are packaged constants and skip the check only while unedited.
 - Audit rows (`byok.credential.created/tested/deleted`) carry
   `provider_name` + `catalog_key` + id only — never the key, and never
   the base URL (a URL may embed auth parameters).
@@ -212,10 +198,11 @@ credential* proves you are authenticated.
 For `/mcp`, the auth model is **three gates in order**:
 
 ```
-1. owner-login (once, browser)    2. consent (per client)     3. bearer token (per call)
-INVINCIBLE_OWNER_SECRET on  →      Approve on consent page  →  access token sent on every
-/oauth/authorize + signed,         issues a single-use        /mcp call; ~1h TTL,
-30-day session cookie              authorization code          revocable, hash-stored
+1. account login (once, browser)   2. consent (per client)     3. bearer token (per call)
+Email + password on /login   →     Approve on consent page  →  access token sent on every
+(or GitHub); signed                 as that user; issues        /mcp call; ~1h TTL,
+invincible_session cookie          a single-use               revocable, hash-stored
+                                   authorization code
         │                                  │                          │
         └─────────────── OAuth 2.1 + PKCE ───────────────────────────┘
 ```
@@ -259,9 +246,9 @@ second `tools/call` for `confirm_action` arrives with that token,
 **Where the boundary is now.** Approval of a pending action is decided by
 whatever the calling client reports back through a second `/mcp` call — the
 boundary is **"whoever holds a valid bearer access token"**. Since a token
-only exists after an operator — the owner secret or an operator-role
-account — approves the client on the consent page, this is a **named trust
-boundary** in a way the shared secret never
+only exists after its owner — the logged-in account that approved the
+client on the consent page — passes the browser gate, this is a **named
+trust boundary** in a way the shared secret never
 was: a grant is scoped to one registered client, is revocable, and expires
 on its own. This mirrors the earlier `confirm_action` trust-boundary change
 and is documented here explicitly.
@@ -269,9 +256,10 @@ and is documented here explicitly.
 Implications, stated plainly:
 
 - Anyone holding a live access token can approve a staged action — there is
-  no separation between "AI client" and "operator" at the protocol level.
-  The operator's lever is **revocation**: `invincible oauth revoke
-  <client_id>` kills every outstanding token for a client instantly.
+  no separation between "AI client" and "owner" at the protocol level.
+  The user's lever is **revocation**: `invincible oauth revoke
+  <client_id>` (or the dashboard's MCP page) kills every outstanding
+  token for a client instantly.
 - A `confirm_action` sent as a **notification** (no `id`) also executes —
   JSON-RPC notifications still run their side effects.
 - Pending entries are **persisted across restarts only when explicitly
@@ -444,23 +432,23 @@ Details:
 
 ## 4. The OAuth authorization server
 
-Invincible ships a small, few-operator OAuth 2.1 + PKCE authorization
-server (RFC 7591 dynamic client registration, RFC 8414 and RFC 9728
-metadata) so MCP-compatible clients can connect the way the ecosystem
-expects — no external identity provider, no hosted relay, everything in the
-operator's own process.
+Invincible ships a small OAuth 2.1 + PKCE authorization server (RFC 7591
+dynamic client registration, RFC 8414 and RFC 9728 metadata) so
+MCP-compatible clients can connect the way the ecosystem expects — no
+external identity provider, no hosted relay, everything in the host's
+own process.
 
-- **Owner login** (`INVINCIBLE_OWNER_SECRET`) is entered **once per
-  browser** on `/oauth/authorize`, then exchanges a **signed, HMAC-protected
-  session cookie** (HttpOnly, SameSite=Lax, 30-day "remember this browser"
-  TTL, `Secure` when served over HTTPS). The only place the owner secret is
-  ever transmitted is that login form. Operator-role dashboard accounts
-  (`users.role = 'operator'`) may approve with their `invincible_session`
-  cookie instead; plain self-registered accounts are refused — see the
-  consent-identity paragraph in §1.2.
+- **Consent requires a logged-in account** (Phase 2, self-service). The
+  approver is the dashboard session (`invincible_session` cookie:
+  HttpOnly, SameSite=Lax, HMAC-signed, `Secure` when served over HTTPS);
+  the owner-secret login form is gone, and `INVINCIBLE_OWNER_SECRET`
+  survives only as the session-signing key source. Tokens minted from
+  the approval act as that user's subject.
 - **Client registration** (`POST /oauth/register`) is open by design —
-  dynamic registration is supposed to be. The actual gate is the consent
-  page: only a registered `client_id`/`redirect_uri` pair is ever redirected
+  dynamic registration is supposed to be, and it is per-IP rate-capped
+  (MEDIUM-4) so one address cannot bloat `oauth_clients`. The actual
+  gate is the consent page: only a registered `client_id`/`redirect_uri`
+  pair is ever redirected
   to; anything else gets an error page, never a redirect. Redirect URIs must
   be `https://` or loopback `http://localhost`/`http://127.0.0.1` (OAuth 2.1
   communication-security rule, enforced at registration).
@@ -477,18 +465,15 @@ operator's own process.
 
 ## 5. The chat endpoint's security posture
 
-- **Auth**: dual-realm (legacy gateway key vs per-user API keys — see
-  [§1.1](#v1--dual-realm-auth-platform-phase-1)). Unset gateway key with no
-  matching API key = fail-open local identity.
+- **Auth**: per-user `inv_` API keys only — fail closed (see
+  [§1](#1-three-independent-auth-realms)). No shared gateway key, no
+  anonymous path.
 - **Sessions**: the client session string (`X-Session-Id`) is a
-  **partition key, not a credential**. Since Phase 2 every store read and
-  write is predicated on the caller's ownership triple: two principals
+  **partition key, not a credential**. Every store read and
+  write is predicated on the caller's ownership triple: two users
   using the same string get fully independent sessions, task chains,
   checkpoints, and runs, and a foreign string reads exactly like a
-  nonexistent one (anti-enumeration). The one exception is the operator:
-  an operator-role account session (dashboard realm — the retired
-  `INVINCIBLE_ADMIN_KEY`'s successor) may resolve any session on the
-  graph surface — documented out-of-band operator trust. History is stored as **plaintext
+  nonexistent one (anti-enumeration). History is stored as **plaintext
   JSON in PostgreSQL** (`INVINCIBLE_DB_URL`) — the database credentials are
   the security boundary, and `invincible doctor` always prints the DSN
   password-masked so it never leaks into terminal output or CI logs.
@@ -500,11 +485,13 @@ operator's own process.
   saver's own user scope; provenance records the originating session.
   Injection is budget-capped and rendered as system messages that are
   never persisted into history.
-- **Upstream keys**: API keys are read from the environment by *name*
-  (`api_key_env`), never stored in `providers.yaml`.
+- **Upstream keys**: each user's provider API keys are Fernet-encrypted
+  at rest under `INVINCIBLE_CREDENTIAL_KEY` (§9); `providers.yaml` is a
+  static test fixture and carries no live secrets.
 - **Failure data**: a provider's `401/403` response body is never forwarded
-  to the client (the provider is silently disabled instead); other upstream
-  errors are forwarded verbatim.
+  to the client (the credential is skipped and marked disabled in-memory
+  for the process lifetime, and the next credential is tried); other
+  upstream errors are forwarded verbatim.
 
 ---
 
@@ -546,32 +533,36 @@ sandbox:
    useful only until the next rotation or revocation. Treat the output of
    client tooling that echoes tokens as sensitive. (Contrast with the old
    model: the shared secret never expired at all.)
-4. **Owner-login rate limiting is per-IP with a fixed window.** The
-   `/oauth/authorize` login form compares the owner secret with a
-   timing-safe digest and, after `LOGIN_MAX_ATTEMPTS` (5) wrong guesses
-   inside `LOGIN_WINDOW_SECONDS` (15 minutes), rejects further attempts
-   from that IP until the window ages out. Since Phase 2 the counter is
-   persisted (`login_attempts`), so restarts no longer clear it; it can
-   still be bypassed by rotating IPs and does not protect the consent page
-   from other abuse. Use a high-entropy secret (`invincible setup`
-   generates one) and keep the service on localhost/tunnel HTTPS.
-5. **Owner-secret exposure.** If `INVINCIBLE_OWNER_SECRET` is ever
-   accidentally pasted somewhere or otherwise exposed, rotate it immediately
+4. **Login rate limiting is per-IP with a fixed window.** The
+   `/auth/login` form (and device-pairing code entry) counts attempts in a
+   persisted per-IP store; after `5` wrong guesses
+   inside `15 minutes`, further attempts from that IP are rejected until
+   the window ages out. The counters are persisted (`login_attempts`), so
+   restarts no longer clear them; they can
+   still be bypassed by rotating IPs. Keep the service on
+   localhost/tunnel HTTPS.
+5. **Session-signing secret exposure.** `INVINCIBLE_OWNER_SECRET` now has
+   exactly one job: the HMAC key source for account browser sessions
+   (`SessionManager`). If it is ever exposed, rotate it immediately
    with `invincible secret rotate` — it regenerates the value inside `.env`
-   in place (never echoed) so no manual editing is needed. Note what
+   in place (never echoed) so no manual editing is needed. Rotation
+   invalidates **every** browser session at once (including OAuth-consent
+   sessions), which is exactly what you want after a leak. Note what
    rotation does **not** do: it does not invalidate OAuth grants/tokens
    already issued to approved clients (they keep working until they expire
-   or are revoked — rotation only affects future browser logins). Cutting a
+   or are revoked). Cutting a
    client off is `invincible oauth revoke <client_id>`, a separate lever.
 6. **Dynamic registration is open to the port.** Anyone who can reach
-   `/oauth/register` can create a client, but the consent page still gates
-   every grant — only the owner secret or an operator-role account may
+   `/oauth/register` can create a client (per-IP rate cap aside), but the
+   consent page still gates every grant — only a logged-in account may
    approve, and an unregistered or mismatched redirect is never followed.
    The exposure is spam/annoyance, not access.
-7. **`/v1/*` fails open to the local identity if `GATEWAY_API_KEY` is
-   unset.** Forgetting the key opens your provider credits to anyone who
-   can reach the port (API keys, when minted, still authenticate as their
-   own users — but the anonymous fallback also remains open).
+7. **401/403 disables a credential for the process lifetime.** When an
+   upstream provider answers 401/403, that credential is skipped and
+   marked disabled in-memory (keyed `byok:<credential-id>`); it stays
+   disabled until the process restarts. Re-connecting the credential on
+   the dashboard (delete + re-add) is the user-side fix. Cooldowns from
+   429/5xx follow the exponential curve instead and self-heal.
 8. **Sessions and grants persist plaintext (except tokens, which are
    hashed).** The PostgreSQL database holds full conversation history
    unencrypted and the OAuth client/code/refresh rows — protect it with
@@ -579,10 +570,10 @@ sandbox:
    from a filename to the DSN (masked in `doctor` output). The `.env`
    denylist entry still stops exfiltration of secrets; the `sessions.db`
    entries remain purely as leftover-file guards.
-9. **Chat-key threat scope.** `GATEWAY_API_KEY` (compared timing-safely
-   since Phase 12) protects provider credits, not tool execution — but
-   prefer long random tokens anyway (the CLI generates
-   `token_urlsafe(32)`).
+9. **Chat-key threat scope.** An `inv_` key protects that user's provider
+   credits and data — not tool execution (`/mcp` needs an OAuth token).
+   Keys are random `token_urlsafe` values, SHA-256-hashed at rest, and
+   revocable from the dashboard or `invincible api-key revoke`.
 10. **Continuity payloads render into prompts.** Content written through
    the MCP continuity tools is stored verbatim and injected as a system
    message for later requests. It carries exactly the trust level of the
@@ -590,9 +581,9 @@ sandbox:
    prompts in their own session. Payloads are size-capped and never
    treated as instructions by Invincible itself.
 11. **Graph API shows raw snippets.** `/api/v1/sessions/{id}/graph`
-    includes first-message JSON snippets per turn — operator-realm only
-    (operator-role session or `inv_` key), same exposure class as
-    reading the session via other management endpoints.
+    includes first-message JSON snippets per turn — owner-scoped to the
+    `inv_` key's user, same exposure class as reading the session via
+    other management endpoints.
 12. **Account sessions inherit the owner-secret key.** The Phase 3 cookie
     realm is signed with a key derived from `INVINCIBLE_OWNER_SECRET`, so
     rotating that secret (deliberately) logs every browser out — including
@@ -605,11 +596,11 @@ sandbox:
     reusing the same verified email is rejected (`identity_conflict`) rather
     than attached. Password-less accounts created through GitHub can adopt
     a first password from Dashboard settings (Phase 5); a forgotten
-    password is reset by the operator:
+    password is reset by the server host:
     `invincible users reset-password <email>` (audited as
     `auth.password_reset`). There is deliberately no email-based
     self-service reset - a self-hosted gateway has no mail
-    infrastructure, and database access is the operator's proof of
+    infrastructure, and database access is the host's proof of
     authority. The reset bumps `session_version`, so every existing
     browser cookie dies with the old password; `inv_` keys and MCP
     tokens are untouched (separate realms).
@@ -642,7 +633,7 @@ sandbox:
     decryption with a caught, user-visible "re-connect the provider"
     error — never plaintext, never a crash). Recovery is manual:
     re-connect each provider under the new key. See also the dashboard
-    Providers page and limit 13's operator-side password reset.
+    Providers page and limit 13's host-side password reset.
 
 16. **The agent trusts the machine it runs on (Phase 10).** With agent
     routing on, confirmed tool execution happens on the user's own PC
@@ -738,7 +729,7 @@ is never stored, logged, audited, or returned after the create request.
   decrypt-at-attempt path, the probe's `Authorization` header). It is
   never included in logs — the router's attempt logging carries sizes
   and outcomes only — but a memory dump of the process sees keys, as
-  it would for the operator's own env-resolved provider keys.
+  it would for any env-held secret in the server process.
 
 **The SSRF guard (`core/url_safety.py`).** User-typed `base_url`s are
 the one new server-side fetch surface in Phase 9, so every non-catalog
@@ -749,7 +740,7 @@ address), unspecified, multicast, IPv6 ULA/link-local, and
 IPv4-mapped forms are all rejected; `localhost` and dotless names are
 rejected outright. The check runs at create AND before every later
 test/chat use, so a DNS rebind after "add" cannot bypass it. Catalog
-base URLs are operator constants and skip the check only while
+base URLs are packaged constants and skip the check only while
 unedited. Known residual: the probe/streaming client follows only the
 validated URL's host; it does not pin the resolved IP for the
 connection itself, so a same-request rebind (TOCTOU between check and
@@ -789,14 +780,17 @@ user, and `POST /agent/result` refuses results for another user's
 jobs. User 1's confirmed commands cannot reach user 2's PC because no
 code path tries.
 
-**The consent-gate coupling (do not "simplify" this apart):** the
-operator-only OAuth consent gate relaxes for plain users *iff* routing
-is on, because in that mode no code path executes a tool on the server
-host — approving a client exposes only the approver's own machine.
-With routing off, the Phase 5/6 refusal stands in full: a
-self-registered session must never mint host-shell MCP tokens. The
-coupling lives in `oauth.py`'s `_non_operator_response` and is pinned
-by `tests/test_oauth_consent_relaxation.py`.
+**The consent-routing coupling (Phase 2 resolved it, keep the reasoning):**
+before Phase 2, self-service consent was allowed *only* when routing was
+on, because with routing off a confirmed tool call executed on the server
+host — a self-registered session minting host-shell MCP tokens was
+indefensible. Phase 2 removed that gate by making every consent
+self-approval, which is safe **precisely because** the deployment posture
+below makes `INVINCIBLE_AGENT_ROUTING=1` mandatory on public multi-user
+deployments: approving a client exposes only the approver's own machine.
+The old relaxation switch (`oauth.py`'s `_non_operator_response` and its
+`test_oauth_consent_relaxation.py` pin) is gone with the operator gate
+itself.
 
 **Deployment posture (2026-09-07 audit, Step 3):** on any PUBLIC
 multi-user deployment, `INVINCIBLE_AGENT_ROUTING=1` is a hard
@@ -809,11 +803,9 @@ variables; losing it would silently revert every confirmed tool call
 to server-host execution. The flag stays opt-in rather than
 defaulting on at multi-user detection (considered and rejected in the
 audit): settings are live env reads with no startup user-count gate,
-local dev workflows depend on the off default, and flipping the
-consent relaxation as a side effect of a runtime headcount would be a
-surprising behavioral change. Verify the flag after any platform
-migration (Railway → Azure, October 2026) via the deploy checklist:
-`invincible doctor` output plus the operator's MCP clients page
-showing per-user agents online.
+and local dev workflows depend on the off default. Verify the flag
+after any platform migration (Railway → Azure, October 2026) via the
+deploy checklist: `invincible doctor` output plus the dashboard's MCP
+clients page showing per-user agents online.
 
 ---

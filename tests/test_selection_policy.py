@@ -1,23 +1,20 @@
 # tests/test_selection_policy.py
-"""Selection-policy tests (Phase 13.5): auto / pinned / chain.
+"""Selection-policy unit tests (Phase 13.5): auto / pinned / chain.
 
-Unit tests exercise attempt_order directly over synthetic snapshots;
-router-integration tests prove the modes end-to-end through
-Router(route_request) with a registry, including forced model ids and
-pinned-failure surfacing.
+These exercise attempt_order directly over synthetic snapshots. The
+router-integration tests that used the operator registry retired with it
+(Phase 2): pinned/chain routing now exists only as per-user BYOK routing,
+covered end-to-end by test_chat_byok.py's chain test, and the static-YAML
+router the tests construct is auto-only.
 """
-import httpx
 import pytest
 
-from invincible.core.provider_registry import ProviderRegistry
-from invincible.core.router import AllProvidersFailedError, Router
 from invincible.core.selection import (
     AUTO_ROUTING,
     PinnedUnavailableError,
     attempt_order,
     routing_from_config,
 )
-from tests.conftest import default_providers, provider_body
 
 MESSAGES = [{"role": "user", "content": "hi"}]
 
@@ -124,80 +121,3 @@ def test_chain_overrides_models_and_skips_disabled():
         ("a", "chain-a"),
         ("c", "chain-c"),
     ]
-
-
-# ------------------------------------------------- router integration
-
-
-async def test_router_pinned_mode_only_attempts_target(tmp_path, monkeypatch):
-    monkeypatch.setenv("BETA_API_KEY", "k-beta")
-    path = str(tmp_path / "providers.user.yaml")
-    registry = ProviderRegistry(
-        file_path=path, seed_config={"providers": default_providers()}
-    )
-    await registry.set_routing(
-        "pinned", pinned={"provider": "beta", "model": "beta-model"}
-    )
-
-    calls = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append((request.url.host, request.read()))
-        return httpx.Response(500, json={"error": "down"})
-
-    router = Router(transport=httpx.MockTransport(handler), registry=registry)
-    with pytest.raises(AllProvidersFailedError):
-        await router.route_request(MESSAGES)
-    # Exactly one upstream call: pinned failure never substitutes.
-    assert [host for host, _ in calls] == ["beta.example.com"]
-    assert b'"beta-model"' in calls[0][1] or b'beta-model' in calls[0][1]
-
-
-async def test_router_chain_failover_uses_forced_models(tmp_path, monkeypatch):
-    monkeypatch.setenv("BETA_API_KEY", "k-beta")
-    monkeypatch.setenv("GAMMA_API_KEY", "k-gamma")
-    path = str(tmp_path / "providers.user.yaml")
-    registry = ProviderRegistry(
-        file_path=path, seed_config={"providers": default_providers()}
-    )
-    await registry.set_routing(
-        "chain",
-        chain=[
-            {"provider": "alpha", "model": "alpha-chain"},  # no key -> skipped
-            {"provider": "beta", "model": "beta-chain"},  # 500s -> failover
-            {"provider": "gamma", "model": "gamma-chain"},
-        ],
-    )
-
-    seen_models = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        import json as _json
-
-        body = _json.loads(request.read())
-        provider_name = body["model"].split("-")[0]
-        seen_models.append(body["model"])
-        if request.url.host.startswith("beta"):
-            return httpx.Response(500, json={"error": "down"})
-        return httpx.Response(200, json=provider_body(provider_name))
-
-    router = Router(transport=httpx.MockTransport(handler), registry=registry)
-    result = await router.route_request(MESSAGES)
-    assert result["choices"][0]["message"]["role"] == "assistant"
-    assert seen_models == ["beta-chain", "gamma-chain"]
-
-
-async def test_router_registry_disabled_provider_is_invisible(tmp_path, monkeypatch):
-    monkeypatch.setenv("GAMMA_API_KEY", "k-gamma")
-    path = str(tmp_path / "providers.user.yaml")
-    registry = ProviderRegistry(
-        file_path=path, seed_config={"providers": default_providers()}
-    )
-    await registry.disable("gamma")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=provider_body())
-
-    router = Router(transport=httpx.MockTransport(handler), registry=registry)
-    with pytest.raises(AllProvidersFailedError):
-        await router.route_request(MESSAGES)

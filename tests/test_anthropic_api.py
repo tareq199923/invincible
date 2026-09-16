@@ -9,16 +9,15 @@ from invincible.compat.anthropic import (
     flatten_content_blocks,
     translate_finish_reason,
 )
+from invincible.core.identity import ensure_default_project
 from invincible.main import app
 from tests.conftest import (
-    default_providers,
-    local_owner_kwargs,
     provider_body,
     sse_body,
     stream_chunk,
+    v1_user,
 )
 
-AUTH = {"Authorization": "Bearer test-gateway-key"}
 ANTHROPIC_BODY = {
     "model": "claude-sonnet-4",
     "max_tokens": 1024,
@@ -57,6 +56,12 @@ class _FailingStream(httpx.AsyncByteStream):
 # ---------------------------------------------------------------- root probes
 
 
+async def _user_kwargs(uid: int) -> dict:
+    """Store-level kwargs for the inv_ user a v1_user mint resolved."""
+    return {"user_id": uid,
+            "project_id": await ensure_default_project(app.state.engine, uid)}
+
+
 async def test_head_root_returns_200(client):
     response = await client.request("HEAD", "/")
     assert response.status_code == 200
@@ -75,10 +80,12 @@ async def test_get_health_detail(client):
 # ----------------------------------------------------- non-streaming messages
 
 
-async def test_anthropic_completion_success(client, router_setter):
+async def test_anthropic_completion_success(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     alpha_body = provider_body("alpha", content="Hello world")
     router_setter(handlers={"alpha.example.com": httpx.Response(200, json=alpha_body)})
-    response = await client.post("/v1/messages", headers=AUTH, json=ANTHROPIC_BODY)
+    response = await client.post("/v1/messages", headers=auth, json=ANTHROPIC_BODY)
     assert response.status_code == 200
     body = response.json()
     assert body["type"] == "message"
@@ -92,7 +99,11 @@ async def test_anthropic_completion_success(client, router_setter):
     assert body["usage"]["output_tokens"] >= 1
 
 
-async def test_anthropic_echoes_requested_model_as_hint(client, router_setter):
+async def test_anthropic_echoes_requested_model_as_hint(
+    client, router_setter, byok_env
+):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(
@@ -102,7 +113,7 @@ async def test_anthropic_echoes_requested_model_as_hint(client, router_setter):
     )
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={
             "model": "claude-opus-4-8",
             "messages": [{"role": "user", "content": "x"}],
@@ -112,7 +123,11 @@ async def test_anthropic_echoes_requested_model_as_hint(client, router_setter):
     assert response.json()["model"] == "claude-opus-4-8"
 
 
-async def test_anthropic_system_and_blocks_are_flattened(client, router_setter):
+async def test_anthropic_system_and_blocks_are_flattened(
+    client, router_setter, byok_env
+):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -122,7 +137,7 @@ async def test_anthropic_system_and_blocks_are_flattened(client, router_setter):
     router_setter({"alpha.example.com": alpha_handler})
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={
             "model": "claude-sonnet-4",
             "system": [{"type": "text", "text": "Be concise."}],
@@ -144,10 +159,14 @@ async def test_anthropic_system_and_blocks_are_flattened(client, router_setter):
     assert outgoing[1] == {"role": "user", "content": "Explore this"}
 
 
-async def test_anthropic_tool_blocks_are_preserved_not_degraded(client, router_setter):
+async def test_anthropic_tool_blocks_are_preserved_not_degraded(
+    client, router_setter, byok_env
+):
     """tool_use/tool_result blocks keep their structure instead of degrading
     to placeholder text, so the Router can send a valid tool conversation
     to OpenAI-compatible providers."""
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -157,7 +176,7 @@ async def test_anthropic_tool_blocks_are_preserved_not_degraded(client, router_s
     router_setter({"alpha.example.com": alpha_handler})
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={
             "model": "claude-sonnet-4",
             "messages": [
@@ -206,7 +225,11 @@ async def test_anthropic_tool_blocks_are_preserved_not_degraded(client, router_s
 # ------------------------------------------------------------------- streaming
 
 
-async def test_anthropic_streaming_returns_event_stream(client, router_setter):
+async def test_anthropic_streaming_returns_event_stream(
+    client, router_setter, byok_env
+):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(
@@ -221,14 +244,18 @@ async def test_anthropic_streaming_returns_event_stream(client, router_setter):
     )
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={**ANTHROPIC_BODY, "stream": True},
     )
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
 
 
-async def test_anthropic_streaming_emits_canonical_sequence(client, router_setter):
+async def test_anthropic_streaming_emits_canonical_sequence(
+    client, router_setter, byok_env
+):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(
@@ -244,7 +271,7 @@ async def test_anthropic_streaming_emits_canonical_sequence(client, router_sette
     )
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={**ANTHROPIC_BODY, "stream": True},
     )
     events = _anthropic_events(response)
@@ -275,7 +302,8 @@ async def test_anthropic_streaming_emits_canonical_sequence(client, router_sette
     assert events[-1] == ("message_stop", {"type": "message_stop"})
 
 
-async def test_anthropic_streamed_reply_persisted(client, router_setter):
+async def test_anthropic_streamed_reply_persisted(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
     received_payloads = []
 
     def alpha_handler(request: httpx.Request):
@@ -293,7 +321,7 @@ async def test_anthropic_streamed_reply_persisted(client, router_setter):
     router_setter({"alpha.example.com": alpha_handler})
 
     headers = {
-        "Authorization": "Bearer test-gateway-key",
+        "Authorization": f"Bearer {raw_key}",
         "X-Session-Id": "shared-convo",
     }
     response = await client.post(
@@ -304,7 +332,7 @@ async def test_anthropic_streamed_reply_persisted(client, router_setter):
     assert response.status_code == 200
 
     history = await app.state.sessions.load(
-        "shared-convo", **await local_owner_kwargs(app.state.engine))
+        "shared-convo", **await _user_kwargs(uid))
     assistant_messages = [m for m in history if m["role"] == "assistant"]
     assert len(assistant_messages) == 1
     assert assistant_messages[0]["content"] == "Hello world"
@@ -318,14 +346,15 @@ async def test_anthropic_streamed_reply_persisted(client, router_setter):
     assert [m["content"] for m in second_outgoing] == ["hi", "Hello world", "hi"]
 
 
-async def test_cross_protocol_session_sharing(client, router_setter):
+async def test_cross_protocol_session_sharing(client, router_setter, byok_env):
     """An OpenAI client on the same session id sees an Anthropic reply, and
     vice versa - because both protocols persist the same internal model."""
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
     def alpha_handler(request: httpx.Request):
         return httpx.Response(200, json=provider_body("alpha", content="Hello world"))
 
     router_setter({"alpha.example.com": alpha_handler})
-    headers = {"Authorization": "Bearer test-gateway-key", "X-Session-Id": "shared"}
+    headers = {"Authorization": f"Bearer {raw_key}", "X-Session-Id": "shared"}
 
     await client.post(
         "/v1/messages",
@@ -334,7 +363,7 @@ async def test_cross_protocol_session_sharing(client, router_setter):
     )
 
     history = await app.state.sessions.load(
-        "shared", **await local_owner_kwargs(app.state.engine))
+        "shared", **await _user_kwargs(uid))
     assert [m["role"] for m in history] == ["user", "assistant"]
     assert history[1]["content"] == "Hello world"
 
@@ -354,9 +383,11 @@ async def test_cross_protocol_session_sharing(client, router_setter):
     assert "Hello world" in contents
 
 
-async def test_claude_code_session_id_isolates_history(client, router_setter):
+async def test_claude_code_session_id_isolates_history(client, router_setter, byok_env):
     """x-claude-code-session-id is the session key: session A's history is
     never replayed into session B."""
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     received = []
 
     def recording_handler(request: httpx.Request):
@@ -367,16 +398,16 @@ async def test_claude_code_session_id_isolates_history(client, router_setter):
 
     await client.post(
         "/v1/messages",
-        headers={**AUTH, "x-claude-code-session-id": "claude-session-A"},
+        headers={**auth, "x-claude-code-session-id": "claude-session-A"},
         json={"messages": [{"role": "user", "content": "secret-from-A"}]},
     )
     history_a = await app.state.sessions.load(
-        "claude-session-A", **await local_owner_kwargs(app.state.engine))
+        "claude-session-A", **await _user_kwargs(uid))
     assert [m["role"] for m in history_a] == ["user", "assistant"]
 
     await client.post(
         "/v1/messages",
-        headers={**AUTH, "x-claude-code-session-id": "claude-session-B"},
+        headers={**auth, "x-claude-code-session-id": "claude-session-B"},
         json={"messages": [{"role": "user", "content": "what is the secret?"}]},
     )
     contents = [m["content"] for m in received[1]["messages"]]
@@ -384,9 +415,11 @@ async def test_claude_code_session_id_isolates_history(client, router_setter):
     assert "what is the secret?" in contents
 
 
-async def test_claude_code_session_continuity(client, router_setter):
+async def test_claude_code_session_continuity(client, router_setter, byok_env):
     """Reusing the same x-claude-code-session-id replays prior turns: a
     session stays continuous instead of starting fresh each request."""
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     received = []
 
     def recording_handler(request: httpx.Request):
@@ -394,7 +427,7 @@ async def test_claude_code_session_continuity(client, router_setter):
         return httpx.Response(200, json=provider_body("alpha", content="Hello Alice"))
 
     router_setter({"alpha.example.com": recording_handler})
-    headers = {**AUTH, "x-claude-code-session-id": "claude-session-cont"}
+    headers = {**auth, "x-claude-code-session-id": "claude-session-cont"}
 
     await client.post(
         "/v1/messages",
@@ -413,9 +446,11 @@ async def test_claude_code_session_continuity(client, router_setter):
 
 
 async def test_anthropic_x_session_id_used_when_claude_header_absent(
-    client, router_setter
+    client, router_setter, byok_env
 ):
     """Legacy X-Session-Id clients keep working and keep their history."""
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     received = []
 
     def recording_handler(request: httpx.Request):
@@ -425,7 +460,7 @@ async def test_anthropic_x_session_id_used_when_claude_header_absent(
         )
 
     router_setter({"alpha.example.com": recording_handler})
-    headers = {**AUTH, "X-Session-Id": "legacy-session"}
+    headers = {**auth, "X-Session-Id": "legacy-session"}
 
     await client.post(
         "/v1/messages",
@@ -442,14 +477,18 @@ async def test_anthropic_x_session_id_used_when_claude_header_absent(
     assert "Nice to meet you!" in contents
 
 
-async def test_claude_code_session_id_wins_over_x_session_id(client, router_setter):
+async def test_claude_code_session_id_wins_over_x_session_id(
+    client, router_setter, byok_env
+):
     """When both headers are present the Claude Code session id wins."""
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     def alpha_handler(request: httpx.Request):
         return httpx.Response(200, json=provider_body("alpha", content="ok"))
 
     router_setter({"alpha.example.com": alpha_handler})
     headers = {
-        **AUTH,
+        **auth,
         "x-claude-code-session-id": "claude-session",
         "X-Session-Id": "legacy-session",
     }
@@ -458,7 +497,7 @@ async def test_claude_code_session_id_wins_over_x_session_id(client, router_sett
         headers=headers,
         json={"messages": [{"role": "user", "content": "priority-secret"}]},
     )
-    owner = await local_owner_kwargs(app.state.engine)
+    owner = await _user_kwargs(uid)
     assert [m["content"] for m in
             await app.state.sessions.load("claude-session", **owner)] == [
         "priority-secret",
@@ -467,25 +506,33 @@ async def test_claude_code_session_id_wins_over_x_session_id(client, router_sett
     assert await app.state.sessions.load("legacy-session", **owner) == []
 
 
-async def test_anthropic_no_session_header_uses_default(client, router_setter):
+async def test_anthropic_no_session_header_uses_default(
+    client, router_setter, byok_env
+):
     """Clients sending neither header keep using the default session."""
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     def alpha_handler(request: httpx.Request):
         return httpx.Response(200, json=provider_body("alpha", content="ok"))
 
     router_setter({"alpha.example.com": alpha_handler})
     await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={"messages": [{"role": "user", "content": "default-convo"}]},
     )
     assert [m["content"] for m in await app.state.sessions.load(
-        "default", **await local_owner_kwargs(app.state.engine))] == [
+        "default", **await _user_kwargs(uid))] == [
         "default-convo",
         "ok",
     ]
 
 
-async def test_anthropic_midstream_error_terminates_cleanly(client, router_setter):
+async def test_anthropic_midstream_error_terminates_cleanly(
+    client, router_setter, byok_env
+):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     stream_fail = _FailingStream(
         sse_body(
             stream_chunk("alpha", {"role": "assistant"}),
@@ -504,7 +551,7 @@ async def test_anthropic_midstream_error_terminates_cleanly(client, router_sette
     )
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={**ANTHROPIC_BODY, "stream": True},
     )
     assert response.status_code == 200
@@ -556,7 +603,9 @@ EXECUTE_BASH_TOOL = {
 }
 
 
-async def test_anthropic_tools_forwarded_to_provider(client, router_setter):
+async def test_anthropic_tools_forwarded_to_provider(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -566,7 +615,7 @@ async def test_anthropic_tools_forwarded_to_provider(client, router_setter):
     router_setter({"alpha.example.com": alpha_handler})
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={
             "model": "claude-sonnet-4",
             "max_tokens": 1024,
@@ -610,7 +659,9 @@ async def test_anthropic_tools_forwarded_to_provider(client, router_setter):
     assert outgoing["tool_choice"] == "required"
 
 
-async def test_anthropic_tool_use_response(client, router_setter):
+async def test_anthropic_tool_use_response(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(
@@ -624,7 +675,7 @@ async def test_anthropic_tool_use_response(client, router_setter):
             )
         }
     )
-    response = await client.post("/v1/messages", headers=AUTH, json=ANTHROPIC_BODY)
+    response = await client.post("/v1/messages", headers=auth, json=ANTHROPIC_BODY)
     assert response.status_code == 200
     body = response.json()
     assert body["content"] == [
@@ -638,7 +689,9 @@ async def test_anthropic_tool_use_response(client, router_setter):
     assert body["stop_reason"] == "tool_use"
 
 
-async def test_anthropic_tool_turn_round_trips(client, router_setter):
+async def test_anthropic_tool_turn_round_trips(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -648,7 +701,7 @@ async def test_anthropic_tool_turn_round_trips(client, router_setter):
     router_setter({"alpha.example.com": alpha_handler})
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={
             "model": "claude-sonnet-4",
             "tools": [EXECUTE_BASH_TOOL],
@@ -701,7 +754,9 @@ async def test_anthropic_tool_turn_round_trips(client, router_setter):
     assert response.json()["content"] == [{"type": "text", "text": "/Users/sark"}]
 
 
-async def test_anthropic_streaming_tool_use_events(client, router_setter):
+async def test_anthropic_streaming_tool_use_events(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(
@@ -747,7 +802,7 @@ async def test_anthropic_streaming_tool_use_events(client, router_setter):
     )
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={**ANTHROPIC_BODY, "stream": True},
     )
     assert response.status_code == 200
@@ -777,7 +832,9 @@ async def test_anthropic_streaming_tool_use_events(client, router_setter):
     assert message_delta["delta"]["stop_reason"] == "tool_use"
 
 
-async def test_anthropic_streaming_mixed_text_and_tool(client, router_setter):
+async def test_anthropic_streaming_mixed_text_and_tool(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(
@@ -804,7 +861,7 @@ async def test_anthropic_streaming_mixed_text_and_tool(client, router_setter):
     )
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={**ANTHROPIC_BODY, "stream": True},
     )
     events = _anthropic_events(response)
@@ -824,7 +881,9 @@ async def test_anthropic_streaming_mixed_text_and_tool(client, router_setter):
     assert deltas == [(0, "text_delta"), (1, "input_json_delta")]
 
 
-async def test_anthropic_streaming_multiple_tool_calls(client, router_setter):
+async def test_anthropic_streaming_multiple_tool_calls(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(
@@ -873,7 +932,7 @@ async def test_anthropic_streaming_multiple_tool_calls(client, router_setter):
     )
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={**ANTHROPIC_BODY, "stream": True},
     )
     events = _anthropic_events(response)
@@ -894,7 +953,11 @@ async def test_anthropic_streaming_multiple_tool_calls(client, router_setter):
     }
 
 
-async def test_anthropic_malformed_tool_arguments_tolerated(client, router_setter):
+async def test_anthropic_malformed_tool_arguments_tolerated(
+    client, router_setter, byok_env
+):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(
@@ -907,7 +970,7 @@ async def test_anthropic_malformed_tool_arguments_tolerated(client, router_sette
             )
         }
     )
-    response = await client.post("/v1/messages", headers=AUTH, json=ANTHROPIC_BODY)
+    response = await client.post("/v1/messages", headers=auth, json=ANTHROPIC_BODY)
     assert response.status_code == 200
     body = response.json()
     assert body["content"] == [
@@ -916,7 +979,9 @@ async def test_anthropic_malformed_tool_arguments_tolerated(client, router_sette
     assert body["stop_reason"] == "tool_use"
 
 
-async def test_anthropic_streamed_tool_reply_persisted(client, router_setter):
+async def test_anthropic_streamed_tool_reply_persisted(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -945,7 +1010,7 @@ async def test_anthropic_streamed_tool_reply_persisted(client, router_setter):
         )
 
     router_setter({"alpha.example.com": alpha_handler})
-    headers = {**AUTH, "X-Session-Id": "tool-session"}
+    headers = {**auth, "X-Session-Id": "tool-session"}
     response = await client.post(
         "/v1/messages",
         headers=headers,
@@ -954,7 +1019,7 @@ async def test_anthropic_streamed_tool_reply_persisted(client, router_setter):
     assert response.status_code == 200
 
     history = await app.state.sessions.load(
-        "tool-session", **await local_owner_kwargs(app.state.engine))
+        "tool-session", **await _user_kwargs(uid))
     assistant_messages = [m for m in history if m["role"] == "assistant"]
     assert len(assistant_messages) == 1
     assert assistant_messages[0]["content"] is None
@@ -999,7 +1064,11 @@ async def test_anthropic_streamed_tool_reply_persisted(client, router_setter):
 # ------------------------------------------------------------------- failover
 
 
-async def test_streaming_failover_before_first_chunk(client, router_setter):
+async def test_anthropic_streaming_failover_before_first_chunk(
+    client, router_setter, byok_env
+):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router = router_setter(
         handlers={
             "alpha.example.com": httpx.Response(429),
@@ -1015,16 +1084,22 @@ async def test_streaming_failover_before_first_chunk(client, router_setter):
     )
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={**ANTHROPIC_BODY, "stream": True},
     )
     assert response.status_code == 200
     events = _anthropic_events(response)
     assert events[0][0] == "message_start"
-    assert not router.health_tracker.is_available("alpha")
+    # BYOK attempts key the health tracker by credential id; alpha is the
+    # first credential v1_user created (id 1 in a fresh table).
+    assert not router.health_tracker.is_available("byok:1")
 
 
-async def test_streaming_all_providers_fail_returns_503(client, router_setter):
+async def test_streaming_all_providers_fail_returns_503(
+    client, router_setter, byok_env
+):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(429),
@@ -1034,7 +1109,7 @@ async def test_streaming_all_providers_fail_returns_503(client, router_setter):
     )
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={**ANTHROPIC_BODY, "stream": True},
     )
     assert response.status_code == 503
@@ -1043,7 +1118,9 @@ async def test_streaming_all_providers_fail_returns_503(client, router_setter):
     assert body["error"]["type"] == "overloaded_error"
 
 
-async def test_nonstreaming_failover_to_next_tier(client, router_setter):
+async def test_nonstreaming_failover_to_next_tier(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router = router_setter(
         handlers={
             "alpha.example.com": httpx.Response(429),
@@ -1052,15 +1129,17 @@ async def test_nonstreaming_failover_to_next_tier(client, router_setter):
             ),
         }
     )
-    response = await client.post("/v1/messages", headers=AUTH, json=ANTHROPIC_BODY)
+    response = await client.post("/v1/messages", headers=auth, json=ANTHROPIC_BODY)
     assert response.status_code == 200
     assert response.json()["model"] == "claude-sonnet-4"
-    assert not router.health_tracker.is_available("alpha")
+    assert not router.health_tracker.is_available("byok:1")
 
 
-async def test_all_providers_fail_returns_overloaded(client, router_setter):
+async def test_all_providers_fail_returns_overloaded(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(handlers={"alpha.example.com": httpx.Response(429)})
-    response = await client.post("/v1/messages", headers=AUTH, json=ANTHROPIC_BODY)
+    response = await client.post("/v1/messages", headers=auth, json=ANTHROPIC_BODY)
     assert response.status_code == 503
     assert response.json() == {
         "type": "error",
@@ -1071,10 +1150,12 @@ async def test_all_providers_fail_returns_overloaded(client, router_setter):
     }
 
 
-async def test_upstream_400_is_mapped_with_detail(client, router_setter):
+async def test_upstream_400_is_mapped_with_detail(client, router_setter, byok_env):
     """The upstream provider's own error message is surfaced inside the
     Anthropic error shape (matching the OpenAI endpoint's verbatim
     passthrough); only gateway-internal exception text stays hidden."""
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
         handlers={
             "alpha.example.com": httpx.Response(
@@ -1082,7 +1163,7 @@ async def test_upstream_400_is_mapped_with_detail(client, router_setter):
             )
         }
     )
-    response = await client.post("/v1/messages", headers=AUTH, json=ANTHROPIC_BODY)
+    response = await client.post("/v1/messages", headers=auth, json=ANTHROPIC_BODY)
     assert response.status_code == 400
     body = response.json()
     assert body["type"] == "error"
@@ -1109,14 +1190,15 @@ async def test_anthropic_auth_invalid_returns_401(client):
     assert response.json()["detail"]["error"]["type"] == "auth_error"
 
 
-async def test_anthropic_auth_x_api_key_succeeds(client, router_setter):
+async def test_anthropic_auth_x_api_key_succeeds(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
     router_setter(
         handlers={"alpha.example.com": httpx.Response(200, json=provider_body("alpha"))}
     )
     response = await client.post(
         "/v1/messages",
         headers={
-            "x-api-key": "test-gateway-key",
+            "x-api-key": raw_key,
             "anthropic-version": "2023-06-01",
         },
         json=ANTHROPIC_BODY,
@@ -1134,68 +1216,83 @@ async def test_anthropic_auth_x_api_key_invalid_returns_401(client):
     assert response.json()["detail"]["error"]["type"] == "auth_error"
 
 
-async def test_anthropic_auth_open_when_key_unset(client, router_setter, monkeypatch):
+async def test_anthropic_auth_open_when_key_unset(client, router_setter):
+    """The fail-open anonymous realm is gone: no bearer at all is 401
+    even with healthy providers configured - there is no local mode."""
     router_setter(
         handlers={"alpha.example.com": httpx.Response(200, json=provider_body("alpha"))}
     )
-    monkeypatch.delenv("GATEWAY_API_KEY")
     response = await client.post("/v1/messages", json=ANTHROPIC_BODY)
-    assert response.status_code == 200
+    assert response.status_code == 401
 
 
 # ------------------------------------------------------------- invalid input
 
 
-async def test_missing_messages_returns_422(client):
-    response = await client.post("/v1/messages", headers=AUTH, json={"model": "x"})
+async def test_missing_messages_returns_422(client, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    response = await client.post("/v1/messages", headers=auth, json={"model": "x"})
     assert response.status_code == 422
 
 
-async def test_non_list_messages_returns_422(client):
+async def test_non_list_messages_returns_422(client, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     response = await client.post(
-        "/v1/messages", headers=AUTH, json={"messages": "not a list"}
+        "/v1/messages", headers=auth, json={"messages": "not a list"}
     )
     assert response.status_code == 422
 
 
-async def test_empty_messages_returns_400(client):
-    response = await client.post("/v1/messages", headers=AUTH, json={"messages": []})
+async def test_empty_messages_returns_400(client, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    response = await client.post("/v1/messages", headers=auth, json={"messages": []})
     assert response.status_code == 400
     assert response.json()["error"]["type"] == "invalid_request_error"
 
 
-async def test_useless_text_returns_400(client):
+async def test_useless_text_returns_400(client, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={"messages": [{"role": "user", "content": ""}]},
     )
     assert response.status_code == 400
     assert response.json()["error"]["type"] == "invalid_request_error"
 
 
-async def test_unknown_role_returns_400(client):
+async def test_unknown_role_returns_400(client, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={"messages": [{"role": "admin", "content": "hi"}]},
     )
     assert response.status_code == 400
     assert response.json()["error"]["type"] == "invalid_request_error"
 
 
-async def test_developer_and_foo_roles_still_rejected(client):
+async def test_developer_and_foo_roles_still_rejected(client, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     for role in ("developer", "foo"):
         response = await client.post(
             "/v1/messages",
-            headers=AUTH,
+            headers=auth,
             json={"messages": [{"role": role, "content": "hi"}]},
         )
         assert response.status_code == 400
         assert response.json()["error"]["type"] == "invalid_request_error"
 
 
-async def test_system_role_inside_messages_is_accepted(client, router_setter):
+async def test_system_role_inside_messages_is_accepted(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -1205,7 +1302,7 @@ async def test_system_role_inside_messages_is_accepted(client, router_setter):
     router_setter({"alpha.example.com": alpha_handler})
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={
             "model": "claude-sonnet-4",
             "messages": [
@@ -1221,7 +1318,9 @@ async def test_system_role_inside_messages_is_accepted(client, router_setter):
     }
 
 
-async def test_top_level_and_messages_system_combined(client, router_setter):
+async def test_top_level_and_messages_system_combined(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -1231,7 +1330,7 @@ async def test_top_level_and_messages_system_combined(client, router_setter):
     router_setter({"alpha.example.com": alpha_handler})
     response = await client.post(
         "/v1/messages",
-        headers=AUTH,
+        headers=auth,
         json={
             "model": "claude-sonnet-4",
             "system": "Top system.",
@@ -1248,9 +1347,13 @@ async def test_top_level_and_messages_system_combined(client, router_setter):
     assert systems == ["Top system.", "Inner system."]
 
 
-async def test_system_messages_not_persisted_to_session(client, router_setter):
+async def test_system_messages_not_persisted_to_session(
+    client, router_setter, byok_env
+):
     """Repeated requests with a system prompt must not accumulate system
     messages in the persisted session history - user/assistant turns stay."""
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     received = []
 
     def recording_handler(request: httpx.Request):
@@ -1258,7 +1361,7 @@ async def test_system_messages_not_persisted_to_session(client, router_setter):
         return httpx.Response(200, json=provider_body("alpha", content="ok"))
 
     router_setter({"alpha.example.com": recording_handler})
-    headers = {**AUTH, "X-Session-Id": "no-sys-accum"}
+    headers = {**auth, "X-Session-Id": "no-sys-accum"}
 
     for _ in range(3):
         response = await client.post(
@@ -1272,7 +1375,7 @@ async def test_system_messages_not_persisted_to_session(client, router_setter):
         assert response.status_code == 200
 
     history = await app.state.sessions.load(
-        "no-sys-accum", **await local_owner_kwargs(app.state.engine))
+        "no-sys-accum", **await _user_kwargs(uid))
     assert [m["role"] for m in history] == [
         "user", "assistant", "user", "assistant", "user", "assistant",
     ]
@@ -1280,10 +1383,12 @@ async def test_system_messages_not_persisted_to_session(client, router_setter):
 
 
 async def test_system_prompt_still_sent_upstream_each_request(
-    client, router_setter
+    client, router_setter, byok_env
 ):
     """Every request still sends its own current system prompt upstream, and
     prior requests' system prompts never leak in as stale copies."""
+    _, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     received = []
 
     def recording_handler(request: httpx.Request):
@@ -1291,7 +1396,7 @@ async def test_system_prompt_still_sent_upstream_each_request(
         return httpx.Response(200, json=provider_body("alpha", content="ok"))
 
     router_setter({"alpha.example.com": recording_handler})
-    headers = {**AUTH, "X-Session-Id": "sys-per-request"}
+    headers = {**auth, "X-Session-Id": "sys-per-request"}
 
     await client.post(
         "/v1/messages",
@@ -1314,9 +1419,11 @@ async def test_system_prompt_still_sent_upstream_each_request(
     assert second_systems == ["System-Two"]
 
 
-async def test_tool_history_intact_with_system(client, router_setter):
+async def test_tool_history_intact_with_system(client, router_setter, byok_env):
     """Tool-call/tool-result history stays intact in the persisted session
     while system messages are excluded."""
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     received = []
 
     def recording_handler(request: httpx.Request):
@@ -1334,7 +1441,7 @@ async def test_tool_history_intact_with_system(client, router_setter):
         return httpx.Response(200, json=provider_body("alpha", content="done"))
 
     router_setter({"alpha.example.com": recording_handler})
-    headers = {**AUTH, "X-Session-Id": "tool-sys-session"}
+    headers = {**auth, "X-Session-Id": "tool-sys-session"}
 
     await client.post(
         "/v1/messages",
@@ -1366,7 +1473,7 @@ async def test_tool_history_intact_with_system(client, router_setter):
     )
 
     history = await app.state.sessions.load(
-        "tool-sys-session", **await local_owner_kwargs(app.state.engine))
+        "tool-sys-session", **await _user_kwargs(uid))
     assert all(m.get("role") != "system" for m in history)
     assistant_with_tool = [
         m for m in history if m.get("tool_calls")
@@ -1378,10 +1485,14 @@ async def test_tool_history_intact_with_system(client, router_setter):
     assert "ai-gateway" in tool_msgs[0]["content"]
 
 
-async def test_optional_fields_ignored_but_tools_forwarded(client, router_setter):
+async def test_optional_fields_ignored_but_tools_forwarded(
+    client, router_setter, byok_env
+):
     """metadata / temperature / top_p / top_k / stop_sequences / unknown
     fields / beta query must never produce a 422, while tools and
     tool_choice are translated and forwarded to the provider."""
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     captured = []
 
     def alpha_handler(request: httpx.Request):
@@ -1392,7 +1503,7 @@ async def test_optional_fields_ignored_but_tools_forwarded(client, router_setter
     response = await client.post(
         "/v1/messages?beta=true",
         headers={
-            **AUTH,
+            **auth,
             "anthropic-version": "2023-06-01",
             "anthropic-beta": "tools-2024-04-04",
         },
@@ -1497,37 +1608,8 @@ async def test_anthropic_to_internal_rejects_empty():
 
 
 # --- Phase 6: model aliasing --------------------------------------------------
-
-
-async def test_anthropic_model_alias_routes_to_preferred_provider(
-    client, router_setter
-):
-    """model: fast on /v1/messages routes to the aliased provider; the
-    upstream payload still carries that provider's real model_id."""
-    providers = default_providers()
-    providers[1]["aliases"] = ["fast"]
-    captured = []
-
-    def beta_handler(request: httpx.Request):
-        captured.append(json.loads(request.read()))
-        return httpx.Response(200, json=provider_body("beta", content="ok"))
-
-    router_setter(
-        providers=providers,
-        handlers={
-            "alpha.example.com": httpx.Response(503),
-            "beta.example.com": beta_handler,
-            "gamma.example.com": httpx.Response(503),
-        },
-    )
-    response = await client.post(
-        "/v1/messages",
-        headers=AUTH,
-        json={
-            "model": "fast",
-            "messages": [{"role": "user", "content": "x"}],
-        },
-    )
-    assert response.status_code == 200
-    assert response.json()["model"] == "fast"
-    assert captured[0]["model"] == "beta-model"
+# Endpoint-level alias routing retired with the operator pool: BYOK
+# candidates carry no aliases (aliases are a providers.yaml concept;
+# router-level alias semantics stay covered in test_router.py and
+# test_selection_policy.py). The Anthropic model field still ECHOES the
+# client's requested string (see the header tests above).

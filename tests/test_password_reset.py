@@ -1,13 +1,13 @@
 # tests/test_password_reset.py
-"""Operator-side password recovery (the `invincible users
-reset-password` CLI and its UserService core).
+"""Host-side password recovery (the `invincible users reset-password`
+CLI and its UserService core).
 
 Design premise: a self-hosted gateway has no email infrastructure, so
-the operator IS the recovery mechanism and database access is the proof
-of authority. Pinned behaviors: the old password stops authenticating,
-the new one works, every pre-reset browser cookie dies (session_version
-bump), inv_ keys survive (separate realm), and the CLI surfaces the
-same semantics end-to-end.
+whoever holds database access IS the recovery mechanism and that access
+is the proof of authority. Pinned behaviors: the old password stops
+authenticating, the new one works, every pre-reset browser cookie dies
+(session_version bump), inv_ keys survive (separate realm), and the CLI
+surfaces the same semantics end-to-end.
 """
 import re
 
@@ -82,7 +82,7 @@ async def test_reset_password_unknown_user(client):
 
 
 async def test_cli_reset_password_end_to_end(client, monkeypatch):
-    """The real operator flow: register through HTTP, reset through the
+    """The real host flow: register through HTTP, reset through the
     Click CLI against the same database, log in with the generated
     password."""
     await register_account(client, "cli@example.com")

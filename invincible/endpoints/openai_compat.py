@@ -216,9 +216,9 @@ async def list_models(request: Request,
             },
         )
     # LOW-3: list the caller's EFFECTIVE pool, mirroring chat routing -
-    # api_key (BYOK) principals see only their own connected credentials
-    # (an empty list when they have none, matching the chat 400), while
-    # legacy/anonymous local-mode principals keep the operator pool.
+    # every principal is a BYOK (api_key) principal now, so the list is
+    # always that user's connected credentials (an empty list when they
+    # have none, matching the chat 400).
     byok = await byok_attempt_source(request, principal)
     providers = router.providers if byok is None else byok[0]
     return {"object": "list", "data": models_from_providers(providers)}
@@ -251,11 +251,11 @@ async def chat_completions(
         user_id=principal.user_id,
         project_id=principal.project_id,
     )
-    # Phase 9 BYOK: api_key-realm principals route ONLY through their own
-    # connected credentials (never the operator's shared pool - the product
-    # decision pins this); legacy/anonymous keep the operator pool as-is.
-    # Loaded before the injections so the user's per-user overrides
-    # (Phase 1) can gate memory/continuity for this request.
+    # Phase 9 BYOK: every /v1/* principal routes ONLY through its own
+    # connected credentials - there is no shared pool (the product
+    # decision pins this). Loaded before the injections so the user's
+    # per-user overrides (Phase 1) can gate memory/continuity for this
+    # request.
     byok = await byok_attempt_source(request, principal, model=body.model)
     user_overrides = {} if byok is None else byok[3]
     # Phase 4: memory + continuity injections share one budget via the

@@ -11,10 +11,16 @@ import json
 import httpx
 
 from invincible.core.continuity import ContinuityEngine
+from invincible.core.identity import ensure_default_project
 from invincible.core.run_store import RunStore
-from tests.conftest import local_owner_kwargs, provider_body, sse_body, stream_chunk
+from tests.conftest import (
+    obtain_access_token,
+    provider_body,
+    sse_body,
+    stream_chunk,
+    v1_user,
+)
 
-GATEWAY = {"Authorization": "Bearer test-gateway-key"}
 MARKER = "Session continuity"
 
 
@@ -44,13 +50,11 @@ def app_state_runs(runs):
     app.state.runs = runs
 
 
-async def seed_task(engine, session_id="default", payload=None):
-    # Phase 2: seed through ownership like MCP does - resolve-or-create
-    # the local-owner session row so scoped reads (session_pk) find it.
-    from invincible.core.db import ensure_local_owner
-
+async def seed_task(engine, uid: int, session_id="default", payload=None):
+    # Seed through ownership like MCP does - resolve-or-create the user's
+    # session row so scoped reads (session_pk) find it.
     sessions = app_state_sessions()
-    uid, pid = await ensure_local_owner(engine.engine)
+    pid = await ensure_default_project(engine.engine, uid)
     session_pk = await sessions.resolve_or_create(
         session_id, user_id=uid, project_id=pid,
     )
@@ -74,7 +78,7 @@ def capture_handler(captured, status=200):
     return handler
 
 
-async def chat(client, payload_overrides=None, headers=GATEWAY):
+async def chat(client, payload_overrides=None, headers=None):
     body = {"messages": [{"role": "user", "content": "continue"}]}
     if payload_overrides:
         body.update(payload_overrides)
@@ -82,12 +86,16 @@ async def chat(client, payload_overrides=None, headers=GATEWAY):
                              json=body)
 
 
-async def test_openai_injects_continuation_brief_upstream(client, router_setter):
+async def test_openai_injects_continuation_brief_upstream(
+    client, router_setter, byok_env
+):
+    uid, raw_key = await v1_user(client, "cont@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     engine = await attach_continuity()
-    await seed_task(engine)
+    await seed_task(engine, uid)
     captured = []
     router_setter({"beta.example.com": capture_handler(captured)})
-    resp = await chat(client)
+    resp = await chat(client, headers=auth)
     assert resp.status_code == 200
     system_texts = [
         m.get("content", "") for m in captured[0]["messages"]
@@ -97,35 +105,45 @@ async def test_openai_injects_continuation_brief_upstream(client, router_setter)
     assert any('"next_value": 6' in t for t in system_texts)
 
 
-async def test_injected_brief_is_never_persisted(client, router_setter):
+async def test_injected_brief_is_never_persisted(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "cont@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     engine = await attach_continuity()
-    await seed_task(engine)
+    await seed_task(engine, uid)
     router_setter({"alpha.example.com": lambda r: httpx.Response(
         200, json=provider_body("alpha"))})
-    await chat(client)
+    await chat(client, headers=auth)
+    pid = await ensure_default_project(app_state_sessions().engine, uid)
     history = await app_state_sessions().load(
-        "default", **await local_owner_kwargs(
-            app_state_sessions().engine))
+        "default", user_id=uid, project_id=pid)
     assert history, "assistant reply should persist"
     assert all(MARKER not in (m.get("content") or "") for m in history)
 
 
-async def test_toggle_off_removes_injection(client, router_setter, monkeypatch):
+async def test_toggle_off_removes_injection(
+    client, router_setter, monkeypatch, byok_env
+):
+    uid, raw_key = await v1_user(client, "cont@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     monkeypatch.setenv("INVINCIBLE_CONTINUITY", "0")
     engine = await attach_continuity()
-    await seed_task(engine)
+    await seed_task(engine, uid)
     captured = []
     router_setter({"alpha.example.com": capture_handler(captured)})
-    await chat(client)
+    await chat(client, headers=auth)
     assert all(
         MARKER not in (m.get("content") or "")
         for m in captured[0]["messages"]
     )
 
 
-async def test_anthropic_path_injects_continuation_brief(client, router_setter):
+async def test_anthropic_path_injects_continuation_brief(
+    client, router_setter, byok_env
+):
+    uid, raw_key = await v1_user(client, "cont@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     engine = await attach_continuity()
-    await seed_task(engine)
+    await seed_task(engine, uid)
     captured = []
 
     def ok(request: httpx.Request) -> httpx.Response:
@@ -140,7 +158,7 @@ async def test_anthropic_path_injects_continuation_brief(client, router_setter):
     router_setter({"alpha.example.com": ok})
     resp = await client.post(
         "/v1/messages",
-        headers=GATEWAY,
+        headers=auth,
         json={"max_tokens": 10,
               "messages": [{"role": "user", "content": "continue"}]},
     )
@@ -153,14 +171,16 @@ async def test_anthropic_path_injects_continuation_brief(client, router_setter):
 
 
 async def test_interrupted_signal_reaches_next_request_after_failover(
-    client, router_setter
+    client, router_setter, byok_env
 ):
     """The counting promise, e2e-lite: state says next=6; ALL providers
     die; the NEXT request's outgoing context carries the trusted progress
     plus the interruption note naming the newest failed attempt. After a
     successful attempt, the note clears for subsequent renders."""
+    uid, raw_key = await v1_user(client, "cont@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     engine = await attach_continuity(with_runs=True)
-    await seed_task(engine)
+    await seed_task(engine, uid)
 
     # Wire runs recording into whichever Router the fixture builds.
     router_setter({
@@ -174,14 +194,15 @@ async def test_interrupted_signal_reaches_next_request_after_failover(
     router.run_recorder = app.state.runs.record
 
     # Phase 1: everything fails -> 503, but attempts are recorded.
-    dead = await chat(client)
+    dead = await chat(client, headers=auth)
     assert dead.status_code == 503
     recorded = await app.state.runs.recent(session_id="default")
     assert recorded, "failover attempts must be recorded for this session"
     assert all(r["outcome"] != "ok" for r in recorded)
     assert engine._runs is app.state.runs
 
-    # Newest post-checkpoint failure is gamma (tier order alpha->beta->gamma).
+    # Newest post-checkpoint failure is gamma (credential order
+    # alpha->beta->gamma becomes tier order 1->2->3).
     note = await engine.interruption_note("default")
     assert note and "'gamma'" in note
 
@@ -194,7 +215,7 @@ async def test_interrupted_signal_reaches_next_request_after_failover(
     router = router_setter.routers[-1]
     router.run_recorder = app.state.runs.record
 
-    resp = await chat(client)
+    resp = await chat(client, headers=auth)
     assert resp.status_code == 200
     system_texts = [
         m.get("content", "") for m in captured[0]["messages"]
@@ -209,9 +230,11 @@ async def test_interrupted_signal_reaches_next_request_after_failover(
     assert "ended unexpectedly" not in cleared["content"]
 
 
-async def test_streaming_path_injects_brief_too(client, router_setter):
+async def test_streaming_path_injects_brief_too(client, router_setter, byok_env):
+    uid, raw_key = await v1_user(client, "cont@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     engine = await attach_continuity()
-    await seed_task(engine)
+    await seed_task(engine, uid)
     captured = []
 
     def stream_ok(request: httpx.Request) -> httpx.Response:
@@ -223,7 +246,7 @@ async def test_streaming_path_injects_brief_too(client, router_setter):
 
     router_setter({"alpha.example.com": stream_ok})
     req = client.build_request(
-        "POST", "/v1/chat/completions", headers=GATEWAY,
+        "POST", "/v1/chat/completions", headers=auth,
         json={"messages": [{"role": "user", "content": "go"}],
               "stream": True},
     )
@@ -254,13 +277,19 @@ def tool_text(resp):
 
 
 async def test_mcp_set_then_llm_sees_state_e2e(
-    client, router_setter, bearer_headers
+    client, router_setter, byok_env
 ):
     """The strict requirement, end to end: an MCP tool call writes canonical
-    state; the very next LLM request - via the OpenAI path - receives it."""
+    state; the very next LLM request - via the OpenAI path - receives it.
+    Both legs run as one identity: the MCP bearer's subject is the inv_
+    user whose key the LLM call authenticates with."""
+    uid, raw_key = await v1_user(client, "cont-mcp@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     await attach_continuity()
+    mcp_tokens = await obtain_access_token(client, email="cont-mcp@example.com")
+    mcp_headers = {"Authorization": f"Bearer {mcp_tokens['access_token']}"}
 
-    resp = await client.post("/mcp", headers=bearer_headers, json=rpc_call(
+    resp = await client.post("/mcp", headers=mcp_headers, json=rpc_call(
         "task_state_set",
         {
             "payload": json.dumps({
@@ -277,7 +306,7 @@ async def test_mcp_set_then_llm_sees_state_e2e(
 
     captured = []
     router_setter({"alpha.example.com": capture_handler(captured)})
-    llm_resp = await chat(client)
+    llm_resp = await chat(client, headers=auth)
     assert llm_resp.status_code == 200
     system_texts = [
         m.get("content", "") for m in captured[0]["messages"]
@@ -331,15 +360,21 @@ async def test_mcp_cas_conflict_is_tool_error_not_rpc_error(
 
 
 async def test_mcp_checkpoint_visible_in_llm_brief(
-    client, router_setter, bearer_headers
+    client, router_setter, byok_env
 ):
+    uid, raw_key = await v1_user(client, "cont-cp@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
     await attach_continuity()
-    await client.post("/mcp", headers=bearer_headers, json=rpc_call(
+    # Same identity on both legs: the MCP bearer's subject is the inv_
+    # user whose key the LLM call authenticates with.
+    mcp_tokens = await obtain_access_token(client, email="cont-cp@example.com")
+    mcp_headers = {"Authorization": f"Bearer {mcp_tokens['access_token']}"}
+    await client.post("/mcp", headers=mcp_headers, json=rpc_call(
         "task_state_set",
         {"payload": json.dumps({"completed_through": 37}),
          "session_id": "default"},
     ))
-    cp = await client.post("/mcp", headers=bearer_headers, json=rpc_call(
+    cp = await client.post("/mcp", headers=mcp_headers, json=rpc_call(
         "checkpoint_create",
         {"note": "completed through 37", "session_id": "default"},
     ))
@@ -348,7 +383,7 @@ async def test_mcp_checkpoint_visible_in_llm_brief(
 
     captured = []
     router_setter({"alpha.example.com": capture_handler(captured)})
-    await chat(client)
+    await chat(client, headers=auth)
     system_texts = [
         m.get("content", "") for m in captured[0]["messages"]
         if m["role"] == "system"

@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from invincible.core.db import ensure_local_owner
+from invincible.core.identity import ensure_default_project
 from invincible.core.memory import (
     MemoryStore,
     extract_explicit,
@@ -11,7 +12,7 @@ from invincible.core.memory import (
 )
 from invincible.core.session_store import SessionStore
 from invincible.main import app
-from tests.conftest import local_owner_kwargs
+from tests.conftest import v1_user
 
 
 def user(content):
@@ -106,11 +107,12 @@ async def test_retention_disabled_when_off(monkeypatch, pg_engine):
 
 @pytest.mark.asyncio
 async def test_retrieved_memory_injected_on_next_request(
-    client, pg_engine, monkeypatch
+    client, pg_engine, monkeypatch, byok_env
 ):
     """A saved fact reaches a LATER request's provider payload through
     lexical retrieval - matched by the new question's own terms."""
     monkeypatch.delenv("INVINCIBLE_MEMORY", raising=False)
+    uid, auth_key = await v1_user(client, "memory@example.com")
     store = app.state.sessions
 
     received = {}
@@ -127,7 +129,7 @@ async def test_retrieved_memory_injected_on_next_request(
 
     headers = {
         "X-Session-Id": "mem-e2e",
-        "Authorization": "Bearer test-gateway-key",
+        "Authorization": f"Bearer {auth_key}",
     }
     # Turn 1 plants an explicit memory.
     await client.post(
@@ -155,17 +157,20 @@ async def test_retrieved_memory_injected_on_next_request(
 
     # Injected memory must never be persisted into stored history.
     stored = await store.load(
-        "mem-e2e", **await local_owner_kwargs(app.state.engine))
+        "mem-e2e", user_id=uid,
+        project_id=await ensure_default_project(app.state.engine, uid),
+    )
     assert all("[Relevant memory" not in (m.get("content") or "") for m in stored)
 
 
 @pytest.mark.asyncio
 async def test_memory_disabled_means_no_injection(
-    client, pg_engine, monkeypatch
+    client, pg_engine, monkeypatch, byok_env
 ):
     """Master toggle off: nothing recorded, nothing retrieved, nothing
     injected - but the request still succeeds."""
     monkeypatch.setenv("INVINCIBLE_MEMORY", "0")
+    _, auth_key = await v1_user(client, "memory-off@example.com")
     received = {}
 
     def handler(request: httpx.Request):
@@ -179,7 +184,7 @@ async def test_memory_disabled_means_no_injection(
     )
     headers = {
         "X-Session-Id": "mem-off",
-        "Authorization": "Bearer test-gateway-key",
+        "Authorization": f"Bearer {auth_key}",
     }
     response = await client.post(
         "/v1/chat/completions",

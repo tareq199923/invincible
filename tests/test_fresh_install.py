@@ -5,7 +5,7 @@ The 2026-09-01 dress rehearsal walked setup -> db upgrade -> start ->
 register by hand on an isolated stack and produced findings R1-R6. This
 file pins that journey in CI: a scratch database nobody has touched,
 the real `setup` (R2 probe included), the real `db upgrade`, the real
-FastAPI lifespan, the first self-registered account, and /health.
+FastAPI lifespan, a self-registered account, and /health.
 
 Live tier: auto-skips via pg_live on machines without a local Postgres,
 same as the other scratch-database tests.
@@ -35,7 +35,7 @@ async def _drop_scratch(admin_pg) -> None:
 
 
 async def test_fresh_install_journey(admin_pg, pg_live, tmp_path, monkeypatch):
-    """setup -> db upgrade -> real lifespan -> first account is operator."""
+    """setup -> db upgrade -> real lifespan -> first account registers."""
     # Isolate from any repo-root .env: the generated file is the only
     # source of truth for this journey, exactly as on a fresh machine.
     monkeypatch.chdir(tmp_path)
@@ -50,19 +50,17 @@ async def test_fresh_install_journey(admin_pg, pg_live, tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, result.output
     assert "Database connection verified" in result.output
-    # R3: the generated gateway key is explained, not silent.
-    assert "Generated GATEWAY_API_KEY" in result.output
 
     # 2. `invincible start` exports the .env before importing the app;
     # mirror that by loading the generated values into the process env.
     values = {k: v for k, v in dotenv_values(env_file).items() if v}
-    assert set(values) >= {
-        "GATEWAY_API_KEY", "INVINCIBLE_OWNER_SECRET",
+    assert set(values) == {
+        "INVINCIBLE_OWNER_SECRET",
         "INVINCIBLE_DB_URL", "INVINCIBLE_CREDENTIAL_KEY",
     }
-    # MEDIUM-1: setup opts fresh self-hosts in to the first-human
-    # operator bootstrap, so the founder below lands operator.
-    assert values.get("INVINCIBLE_ALLOW_FIRST_OPERATOR") == "1"
+    # Phase 2: no operator bootstrap flag in fresh .env files - the
+    # operator role is gone, every account registers as a plain user.
+    assert "INVINCIBLE_ALLOW_FIRST_OPERATOR" not in values
     for key, value in values.items():
         monkeypatch.setenv(key, value)
     assert values["INVINCIBLE_DB_URL"] == scratch_url
@@ -84,8 +82,8 @@ async def test_fresh_install_journey(admin_pg, pg_live, tmp_path, monkeypatch):
             assert health.status_code == 200
             assert health.json()["status"] == "ok"
 
-            # 5. First self-registered account bootstraps to operator
-            # (FIRST-HUMAN BOOTSTRAP in core/accounts.py).
+            # 5. First self-registered account is a PLAIN user (Phase 2:
+            # no operator bootstrap - the first-human grant is gone).
             first = await client.post(
                 "/auth/register",
                 json={"email": "founder@example.com",
@@ -93,8 +91,7 @@ async def test_fresh_install_journey(admin_pg, pg_live, tmp_path, monkeypatch):
             )
             assert first.status_code == 201, first.text
 
-            # 6. A second registration must stay a plain user - the
-            # bootstrap fires exactly once.
+            # 6. A second registration is a plain user too.
             second = await client.post(
                 "/auth/register",
                 json={"email": "friend@example.com",
@@ -108,7 +105,7 @@ async def test_fresh_install_journey(admin_pg, pg_live, tmp_path, monkeypatch):
                 " WHERE is_system = false ORDER BY id"
             ))).all()
         assert roles == [
-            ("founder@example.com", "operator"),
+            ("founder@example.com", "user"),
             ("friend@example.com", "user"),
         ]
 

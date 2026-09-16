@@ -19,11 +19,9 @@ from fastapi.templating import Jinja2Templates
 
 from invincible.core.accounts import (
     MIN_PASSWORD_LEN,
-    SESSION_COOKIE,
     ProjectService,
     SessionManager,
     UserService,
-    resolve_session,
 )
 from invincible.core.identity import ApiKeyStore
 from invincible.core.memory import MAX_CONTENT_CHARS, MEMORY_KINDS
@@ -153,8 +151,8 @@ async def overview_page(
     }
     active_keys = sum(1 for k in keys if k["revoked_at"] is None)
     # First-run signpost: chat can only succeed once BOTH a provider is
-    # connected AND a key exists (BYOK-only - the operator pool is never
-    # a fallback), so the banner stays until the pair is complete.
+    # connected AND a key exists (BYOK-only - there is no shared pool
+    # fallback), so the banner stays until the pair is complete.
     from invincible.core.credential_store import ByokCredentialStore
 
     has_provider = bool(
@@ -643,20 +641,7 @@ async def settings_page(
     principal: Principal = Depends(require_user_session),
 ):
     engine = _engine(request)
-    # The test client builds app.state by hand and may not carry a
-    # registry; a missing one renders as an empty panel, never a 503.
-    registry = getattr(request.app.state, "registry", None)
-    provider_rows = []
-    routing_mode = ""
-    if registry is not None:
-        provider_rows = [
-            {"name": p.get("name", ""), "tier": p.get("tier"),
-             "enabled": bool(p.get("enabled", True))}
-            for p in registry.list()
-        ]
-        routing_mode = str((registry.routing() or {}).get("mode") or "")
     flags = [
-        ("Gateway key set", bool(settings.gateway_api_key())),
         ("Browser sessions", SessionManager.available()),
         ("GitHub login", bool(settings.github_client_id())),
         ("Memory writes", settings.memory_enabled()),
@@ -675,8 +660,6 @@ async def settings_page(
         min_password_len=MIN_PASSWORD_LEN,
         pw_error=_pw_error_text(request.query_params.get("pw_error")),
         pw_saved=request.query_params.get("pw_saved") == "1",
-        provider_rows=provider_rows,
-        routing_mode=routing_mode,
         flags=flags,
         user_overrides=user_overrides,
         defaults={
@@ -804,25 +787,11 @@ async def mcp_page(
     principal: Principal = Depends(require_user_session),
 ):
     store = _state(request, "oauth_store")
-    # Operator role gates the legacy pools: pre-Phase-5 grants were
-    # attached to the system local owner, and older rows may be unowned.
-    # Operators keep managing those; regular users see only their own
-    # clients (every user owns the clients they consented to post-Phase-5).
-    from invincible.core.db import ROLE_OPERATOR
-
-    session_user = await resolve_session(
-        _engine(request), request.cookies.get(SESSION_COOKIE))
-    is_operator = (
-        session_user is not None and session_user["role"] == ROLE_OPERATOR)
-    if is_operator:
-        from invincible.core.db import ensure_local_owner
-
-        local_uid, _ = await ensure_local_owner(_engine(request))
-        clients = await store.list_clients_manageable(
-            [principal.user_id, local_uid], include_unowned=True)
-    else:
-        clients = await store.list_clients_manageable(
-            [principal.user_id])
+    # Every user manages only the clients they own (the ones they
+    # consented to). Clients from the local-owner era - attached to the
+    # dormant system row or unowned - are nobody-manageable on purpose:
+    # harmless rows, rendered for no one.
+    clients = await store.list_clients_manageable([principal.user_id])
     manageable = {c["client_id"] for c in clients}
     active = [
         t for t in await store.list_active_tokens()
@@ -850,46 +819,16 @@ async def revoke_mcp_client_tokens(
     principal: Principal = Depends(require_user_session),
 ):
     store = _state(request, "oauth_store")
-    # Ownership predicate: foreign and unknown clients are
-    # indistinguishable (anti-enumeration). Local-owner-era (pre-Phase-5)
-    # and unowned clients are operator-managed only; regular users may
-    # revoke solely on clients they own (operator override for the
-    # legacy pools mirrors mcp_page's listing rule).
-    from invincible.core.db import ROLE_OPERATOR, ensure_local_owner
-
-    session_user = await resolve_session(
-        _engine(request), request.cookies.get(SESSION_COOKIE))
-    is_operator = (
-        session_user is not None and session_user["role"] == ROLE_OPERATOR)
-
+    # Ownership predicate: foreign, unknown, and local-owner-era (unowned
+    # or dormant-system-row) clients are all indistinguishable 404s
+    # (anti-enumeration). A user may revoke solely on clients they own.
     client_row = await store.get_client(client_id)
-    if client_row is None:
+    if client_row is None or client_row["owner_user_id"] != principal.user_id:
         raise HTTPException(
             status_code=404,
             detail={"error": {"message": "No such MCP client.",
                               "type": "not_found_error"}},
         )
-    owner = client_row["owner_user_id"]
-    if owner == principal.user_id:
-        pass  # own client: always manageable
-    elif owner is None:
-        # Unowned (local-owner-era registration): operator-only.
-        if not is_operator:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": {"message": "No such MCP client.",
-                                  "type": "not_found_error"}},
-            )
-    else:
-        # Owned by someone else: operator override applies only to the
-        # local owner's legacy clients, never to another user's.
-        local_uid, _ = await ensure_local_owner(_engine(request))
-        if not (is_operator and owner == local_uid):
-            raise HTTPException(
-                status_code=404,
-                detail={"error": {"message": "No such MCP client.",
-                                  "type": "not_found_error"}},
-            )
     count = await store.revoke_client_tokens(client_id)
     await _audit(request, "oauth.tokens_revoked",
                  actor_user_id=principal.user_id,

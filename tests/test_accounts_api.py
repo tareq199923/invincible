@@ -310,10 +310,11 @@ async def test_mcp_bearer_cannot_manage_api_keys(client, bearer_headers):
         await anon.aclose()
 
 
-async def test_gateway_key_cannot_manage_accounts(client):
-    response = await client.post(
-        "/api-keys", json={}, headers={
-            "Authorization": "Bearer test-gateway-key"})
+async def test_no_token_cannot_manage_accounts(client):
+    """The /v1/* inv_ key and the /mcp OAuth token are different realms:
+    neither grants the dashboard session /api-keys needs."""
+    response = await client.post("/api-keys", json={}, headers={
+        "Authorization": "Bearer not-a-session"})
     assert response.status_code == 401
 
 

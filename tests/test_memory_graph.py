@@ -49,9 +49,7 @@ async def test_graph_surfaces_require_session(client):
 async def test_graph_rejects_api_key_realm(client):
     from invincible.endpoints.accounts import SESSION_COOKIE
     from invincible.main import app
-    from tests.conftest import promote_operator
     made, _ = await register_account(client, "op@example.com")
-    await promote_operator(made.json()["id"])
     from invincible.core.identity import ApiKeyStore
     key = await ApiKeyStore(app.state.engine).create(
         made.json()["id"], label="graph probe")

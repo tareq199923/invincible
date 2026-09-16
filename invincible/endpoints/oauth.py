@@ -1,30 +1,24 @@
 # invincible/endpoints/oauth.py
 """Self-hosted OAuth 2.1 + PKCE authorization server for Invincible.
 
-Replaces the old per-request X-MCP-Secret header on /mcp. The operator's
-secret (INVINCIBLE_OWNER_SECRET, legacy alias MCP_SHARED_SECRET) is no
-longer sent on every /mcp call; it is used once per browser session to log
-in on /oauth/authorize, and real /mcp traffic is authorized with short-lived,
-revocable Bearer tokens.
-
-Purpose-built for a single operator - no external identity provider, no
-hosted relay. Dynamic client registration (RFC 7591), RFC 8414 metadata,
-RFC 9728 protected-resource metadata, and PKCE-only public clients are
-implemented because that is what MCP-compatible clients (including the
+Powers /mcp with short-lived, revocable Bearer tokens instead of any
+per-request shared secret. Dynamic client registration (RFC 7591), RFC 8414
+metadata, RFC 9728 protected-resource metadata, and PKCE-only public clients
+are implemented because that is what MCP-compatible clients (including the
 Claude app's custom-connector flow) expect.
 
-Consent trust boundary: approval requires either the owner secret or an
-operator-role dashboard account (``users.role``); self-registered plain
-accounts are refused even with a valid session, because approval mints
-MCP bearer tokens (host tools). See docs/SECURITY.md §2.0.
+Consent trust boundary (Phase 2): approval requires a logged-in account
+session - the same browser identity the dashboard runs under. Every user
+approves their OWN clients; the token subject is that user, and with
+INVINCIBLE_AGENT_ROUTING on confirmed tool execution routes to their paired
+agent, never the server host. The old owner-secret login is gone; the
+secret survives only as the account-session signing key (core.accounts
+SessionManager).
 """
-import hashlib
-import hmac
 import html
 import logging
 import re
-import time
-from urllib.parse import parse_qsl, urlencode, urlparse
+from urllib.parse import parse_qsl, quote, urlencode, urlparse
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -34,7 +28,6 @@ from invincible.core.accounts import (
     SESSION_COOKIE as ACCOUNT_SESSION_COOKIE,
 )
 from invincible.core.accounts import resolve_session
-from invincible.core.db import ROLE_OPERATOR
 from invincible.core.identity import LoginRateLimiter
 from invincible.core.oauth_store import (
     ACCESS_TOKEN_TTL,
@@ -42,36 +35,14 @@ from invincible.core.oauth_store import (
     OAuthStore,
     token_hash,
 )
-from invincible.core.settings import settings
 
 logger = logging.getLogger("invincible.oauth")
 
 router = APIRouter()
 
-OWNER_SECRET_ENV = "INVINCIBLE_OWNER_SECRET"
-LEGACY_OWNER_SECRET_ENV = "MCP_SHARED_SECRET"
-SESSION_COOKIE = "invincible_owner"
-SESSION_TTL = 30 * 24 * 3600  # "remember this browser" session cookie TTL
 # ACCESS_TOKEN_TTL / REFRESH_TOKEN_TTL come from core.oauth_store (single
 # source of truth for token lifetimes; the store enforces them, the
 # endpoint only reports them in the token response).
-
-_legacy_warned = False
-
-# --- owner-login rate limiting ---
-# The owner secret is the single password guarding the whole OAuth flow, so
-# the login form gets a small lockout: LOGIN_MAX_ATTEMPTS wrong guesses
-# inside LOGIN_WINDOW_SECONDS from one client IP locks that IP out for the
-# rest of the window. Since Phase 2 the counter is PERSISTENT
-# (login_attempts table via core.identity.LoginRateLimiter) - restarting
-# the process no longer clears it. Audit rows accompany every event.
-
-def _limiter(request: Request) -> "LoginRateLimiter":
-    return LoginRateLimiter(
-        request.app.state.engine,
-        max_attempts=LOGIN_MAX_ATTEMPTS,
-        window_seconds=LOGIN_WINDOW_SECONDS,
-    )
 
 
 async def _audit(request: Request, action: str, **kwargs) -> None:
@@ -80,17 +51,14 @@ async def _audit(request: Request, action: str, **kwargs) -> None:
     if log is None:
         return
     try:
-        await log.record(action, actor_kind="owner", **kwargs)
+        await log.record(action, actor_kind="user", **kwargs)
     except Exception:  # noqa: BLE001 - telemetry only
         logger.warning("audit write failed for %s", action, exc_info=True)
-
-LOGIN_MAX_ATTEMPTS = 5
-LOGIN_WINDOW_SECONDS = 15 * 60
 
 # MEDIUM-4 (2026-09-07 audit): dynamic client registration is open by
 # design (the gate is consent, not registration) but needs a per-IP cap
 # so one address cannot bloat oauth_clients with junk rows. Scoped
-# "client-register" - deliberately separate from the owner-login scope.
+# "client-register" - deliberately separate from any login scope.
 REGISTER_MAX_ATTEMPTS = 10
 REGISTER_WINDOW_SECONDS = 15 * 60
 
@@ -106,24 +74,6 @@ def _register_limiter(request: Request) -> LoginRateLimiter:
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
-
-LOGIN_FORM_HTML = """<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Invincible - Owner login</title></head>
-<body>
-<h1>Invincible</h1>
-<p>This instance is asking you to approve a connection to its MCP tools.
-Authenticate as the owner to continue.</p>
-<form method="post" action="/oauth/authorize">
-{preserved_params}
-<label for="owner_secret">Owner secret</label>
-<input type="password" id="owner_secret" name="owner_secret" autofocus required>
-<button type="submit">Log in</button>
-</form>
-{error_block}
-</body>
-</html>
-"""
 
 CONSENT_HTML = """<!doctype html>
 <html lang="en">
@@ -169,74 +119,14 @@ AUTHORIZE_PARAMS = (
 )
 
 
-def owner_secret() -> str | None:
-    """Return the owner-login secret, falling back to the legacy
-    MCP_SHARED_SECRET alias (one-time deprecation notice) so existing .env
-    values keep working. Env names live in core.settings."""
-    global _legacy_warned
-    secret = settings.owner_secret()
-    if secret:
-        return secret
-    secret = settings.legacy_owner_secret()
-    if secret and not _legacy_warned:
-        _legacy_warned = True
-        logger.warning(
-            "%s set but %s is not - using it as the owner-login secret. "
-            "Rename the key in your .env file.",
-            LEGACY_OWNER_SECRET_ENV, OWNER_SECRET_ENV,
-        )
-    return secret
-
-
-def _cookie_key() -> bytes:
-    """HMAC key for the owner session cookie, derived from the owner secret
-    so a restart keeps existing browser sessions valid (rotating the secret
-    logs every browser out - that is the expected trade-off)."""
-    return hashlib.sha256((owner_secret() or "").encode("utf-8")).digest()
-
-
-def _sign_cookie() -> str:
-    payload = str(int(time.time()))
-    signature = hmac.new(
-        _cookie_key(), payload.encode("ascii"), hashlib.sha256
-    ).hexdigest()
-    return f"{payload}.{signature}"
-
-
-def _verify_cookie(value: str) -> bool:
-    try:
-        payload, signature = value.split(".", 1)
-        expected = hmac.new(
-            _cookie_key(), payload.encode("ascii"), hashlib.sha256
-        ).hexdigest()
-        if not hmac.compare_digest(expected, signature):
-            return False
-        created = int(payload)
-    except (ValueError, TypeError):
-        return False
-    return time.time() - created < SESSION_TTL
-
-
 def _base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def _has_valid_cookie(request: Request) -> bool:
-    # No owner secret configured means no one can log in, so no cookie may
-    # ever count as valid - the HMAC key would be sha256(b""), which anyone
-    # can compute, making forged cookies trivial.
-    if not owner_secret():
-        return False
-    cookie = request.cookies.get(SESSION_COOKIE)
-    return bool(cookie and _verify_cookie(cookie))
-
-
 async def _session_user(request: Request) -> dict | None:
-    """Q3 decision (2026-08-30): a valid dashboard session cookie
-    (``invincible_session``) names the user a consent approval is granted
-    AS - the same identity the account pages run under. The owner-secret
-    cookie (``invincible_owner``) remains supported for headless/local
-    flows; it resolves to the system local owner (pre-Phase-5 behavior).
+    """The logged-in dashboard account a consent approval is granted AS -
+    the same identity the account pages run under. There is no other
+    consent identity: the owner-secret cookie path was removed in Phase 2.
 
     Full principal resolution via ``resolve_session``: the cookie must
     verify AND match a live user row whose session_version still equals
@@ -246,46 +136,6 @@ async def _session_user(request: Request) -> dict | None:
     return await resolve_session(
         request.app.state.engine,
         request.cookies.get(ACCOUNT_SESSION_COOKIE),
-    )
-
-
-async def _non_operator_response(request: Request, session_user: dict | None,
-                                 context: dict) -> HTMLResponse | None:
-    """403 for a logged-in non-operator on the consent flow, else None.
-
-    Approving a client mints MCP bearer tokens (execute_bash / write_file
-    on the host), and dashboard registration is open - so a self-registered
-    session alone must never be enough (the Phase 5 escalation closed by
-    the role gate). The owner-secret cookie path needs no check here:
-    possession of the secret already proves operator authority. A browser
-    holding BOTH cookies is still refused - silently falling back from a
-    plain session to the more-privileged owner identity would be a
-    confused deputy.
-
-    Phase 10 coupling - do not "simplify" this away: when
-    INVINCIBLE_AGENT_ROUTING is on, confirmed tool execution routes to
-    the *user's own paired agent* and no code path executes anything on
-    the server host, so a non-operator approving their own client
-    exposes only their own machine. The gate relaxes for them, and the
-    consent audit entries keep firing. With routing off (the default,
-    and every local dev workflow), the original 403 stands unchanged
-    because approval still means server-host execution."""
-    if session_user is None or session_user["role"] == ROLE_OPERATOR:
-        return None
-    if settings.agent_routing():
-        return None
-    await _audit(
-        request, "oauth.consent_forbidden",
-        actor_user_id=session_user["id"],
-        resource_type="oauth_client",
-        resource_id=context["_client"]["client_id"],
-    )
-    return HTMLResponse(
-        ERROR_HTML.format(
-            message="This account is not permitted to authorize MCP "
-            "clients. Only operator accounts may approve connections."
-        ),
-        status_code=403,
     )
 
 
@@ -352,7 +202,8 @@ async def protected_resource_metadata_path_form(request: Request, rest: str):
 @router.post("/oauth/register")
 async def oauth_register(request: Request):
     """RFC 7591 dynamic client registration. Open by design - the real
-    gate is the operator's consent on /oauth/authorize, not registration.
+    gate is the account-session consent on /oauth/authorize, not
+    registration.
     MEDIUM-4: per-IP fixed-window cap (every attempt counts, successful
     or not - each is a potential oauth_clients row) so the table cannot
     be bloated by one address hammering the endpoint."""
@@ -431,20 +282,6 @@ def _reject(message: str) -> HTMLResponse:
     )
 
 
-def _login_page(
-    params: dict, error_block: str = "", status_code: int = 200
-) -> HTMLResponse:
-    hidden = "".join(
-        f'<input type="hidden" name="{key}" value="{html.escape(value)}">'
-        for key, value in params.items()
-        if key in AUTHORIZE_PARAMS and value
-    )
-    return HTMLResponse(
-        LOGIN_FORM_HTML.format(preserved_params=hidden, error_block=error_block),
-        status_code=status_code,
-    )
-
-
 def _hidden_fields(params: dict) -> str:
     """Render the authorize params as hidden form inputs for the consent
     forms. html.escape covers the quoting; values were already validated
@@ -458,11 +295,13 @@ def _hidden_fields(params: dict) -> str:
 
 @router.get("/oauth/authorize")
 async def oauth_authorize(request: Request):
-    """Owner-login gate followed by the consent page. Approving or denying
-    is only possible via the POST forms - a GET carrying an `action` is
+    """Account-session gate followed by the consent page. Approving or
+    denying is only possible via the POST forms - a GET carrying an `action` is
     rejected, so a cross-site navigation can never grant consent (the
     SameSite=Lax session cookie is sent on top-level GET navigations, which
-    made the old GET links CSRF-able)."""
+    made the old GET links CSRF-able). Anonymous browsers bounce to /login
+    with the authorize URL as the same-origin ``next`` target, so the
+    approval funnel survives the login round-trip."""
     context = await _authorize_context(request, request.query_params)
     if context is None:
         return _reject("Invalid or unregistered authorization request.")
@@ -474,35 +313,23 @@ async def oauth_authorize(request: Request):
             ),
             status_code=405,
         )
-    if not owner_secret():
-        return HTMLResponse(
-            ERROR_HTML.format(
-                message="No owner secret is configured; set "
-                "INVINCIBLE_OWNER_SECRET and restart. Authorization is "
-                "disabled until then."
-            ),
-            status_code=503,
-        )
     session_user = await _session_user(request)
-    if not (_has_valid_cookie(request) or session_user is not None):
-        return _login_page(context)
-    forbidden = await _non_operator_response(request, session_user, context)
-    if forbidden is not None:
-        return forbidden
+    if session_user is None:
+        target = request.url.path
+        if request.url.query:
+            target += f"?{request.url.query}"
+        return RedirectResponse(
+            f"/login?next={quote(target, safe='')}", status_code=302
+        )
 
     client = context["_client"]
     client_name = client["client_name"] or client["client_id"]
-
-    if session_user is not None:
-        identity = session_user["email"]
-    else:
-        identity = "the local owner (owner-secret session)"
 
     return HTMLResponse(
         CONSENT_HTML.format(
             client_name=html.escape(client_name),
             redirect_uri=html.escape(context["redirect_uri"]),
-            identity=html.escape(identity),
+            identity=html.escape(session_user["email"]),
             hidden_fields=_hidden_fields(context),
         )
     )
@@ -517,16 +344,12 @@ def _redirect_with_params(redirect_uri: str, params: dict) -> RedirectResponse:
 
 
 @router.post("/oauth/authorize")
-async def oauth_authorize_login(request: Request):
-    """POST /oauth/authorize handles two submissions from the same page flow:
-
-    - The consent forms (``action=approve|deny`` + authorize params):
-      requires a valid owner session cookie; issues the code (or the
-      access_denied redirect). POST is what makes this safe from CSRF -
-      the SameSite=Lax session cookie is not sent on cross-site POSTs.
-    - The owner-login form (``owner_secret`` + authorize params): on the
-      correct secret, sets the signed session cookie and bounces back to
-      the GET consent flow.
+async def oauth_authorize_consent(request: Request):
+    """POST /oauth/authorize is the consent form (``action=approve|deny`` +
+    authorize params). A live account session is required; POST is what
+    makes this safe from CSRF - the SameSite=Lax session cookie is not
+    sent on cross-site POSTs. Any other body shape (no action, leftover
+    owner-secret fields from the removed login form) is a plain 400.
     """
     form = await _parse_form(request)
     context = await _authorize_context(request, form)
@@ -534,111 +357,41 @@ async def oauth_authorize_login(request: Request):
         return _reject("Invalid or unregistered authorization request.")
 
     action = form.get("action", "")
-    if action in ("approve", "deny"):
-        if not owner_secret():
-            return HTMLResponse(
-                ERROR_HTML.format(
-                    message="No owner secret is configured; set "
-                    "INVINCIBLE_OWNER_SECRET and restart. Authorization is "
-                    "disabled until then."
-                ),
-                status_code=503,
-            )
-        session_user = await _session_user(request)
-        if not (_has_valid_cookie(request) or session_user is not None):
-            return HTMLResponse(
-                ERROR_HTML.format(
-                    message="Not authenticated. Log in first."
-                ),
-                status_code=401,
-            )
-        forbidden = await _non_operator_response(request, session_user,
-                                                 context)
-        if forbidden is not None:
-            return forbidden
-        client = context["_client"]
-        if action == "approve":
-            store: OAuthStore = request.app.state.oauth_store
-            # Q3 decision (2026-08-30): the approving identity is the
-            # logged-in dashboard user when a session cookie is present;
-            # the owner-secret path keeps resolving to the system *local*
-            # owner (pre-Phase-5 behavior, headless/local flows). The
-            # role gate above guarantees the session user is an operator.
-            if session_user is not None:
-                uid = session_user["id"]
-            else:
-                from invincible.core.db import ensure_local_owner
+    if action not in ("approve", "deny"):
+        return _reject("Unknown consent action.")
 
-                uid, _ = await ensure_local_owner(request.app.state.engine)
-            await store.attach_owner(client["client_id"], uid)
-            code = await store.create_code(
-                client["client_id"],
-                context["redirect_uri"],
-                context["code_challenge"],
-                subject_user_id=uid,
-            )
-            await _audit(
-                request, "oauth.grant_approved",
-                actor_user_id=uid,
-                resource_type="oauth_client",
-                resource_id=client["client_id"],
-            )
-            return _redirect_with_params(
-                context["redirect_uri"], {"code": code, "state": context["state"]},
-            )
-        return _redirect_with_params(
-            context["redirect_uri"],
-            {"error": "access_denied", "state": context["state"]},
-        )
-
-    attempted = str(form.get("owner_secret", ""))
-    expected = owner_secret() or ""
-    if not expected:
-        return _login_page(
-            context,
-            "<p style='color:#900'>No owner secret is configured; "
-            "set INVINCIBLE_OWNER_SECRET and restart.</p>",
-            status_code=503,
-        )
-    ip = _client_ip(request)
-    limiter = _limiter(request)
-    locked_for = await limiter.locked_out(ip)
-    if locked_for is not None:
-        await _audit(request, "oauth.login_locked_out",
-                     resource_type="client_ip", resource_id=ip)
-        return _login_page(
-            context,
-            f"<p style='color:#900'>Too many failed attempts. "
-            f"Try again in {locked_for} seconds.</p>",
-            status_code=429,
-        )
-    if not hmac.compare_digest(
-        hashlib.sha256(attempted.encode("utf-8")).digest(),
-        hashlib.sha256(expected.encode("utf-8")).digest(),
-    ):
-        await limiter.record_failure(ip)
-        await _audit(request, "oauth.login_failed",
-                     resource_type="client_ip", resource_id=ip)
-        return _login_page(
-            context, "<p style='color:#900'>Incorrect owner secret.</p>",
+    session_user = await _session_user(request)
+    if session_user is None:
+        return HTMLResponse(
+            ERROR_HTML.format(message="Not authenticated. Log in first."),
             status_code=401,
         )
-    await limiter.reset(ip)
-    query = urlencode(
-        {key: value for key, value in context.items()
-         if key in AUTHORIZE_PARAMS and value}
+
+    if action == "approve":
+        store: OAuthStore = request.app.state.oauth_store
+        # Phase 2: the approving identity is always the logged-in account;
+        # tokens minted from this consent act as that user.
+        uid = session_user["id"]
+        await store.attach_owner(context["_client"]["client_id"], uid)
+        code = await store.create_code(
+            context["_client"]["client_id"],
+            context["redirect_uri"],
+            context["code_challenge"],
+            subject_user_id=uid,
+        )
+        await _audit(
+            request, "oauth.grant_approved",
+            actor_user_id=uid,
+            resource_type="oauth_client",
+            resource_id=context["_client"]["client_id"],
+        )
+        return _redirect_with_params(
+            context["redirect_uri"], {"code": code, "state": context["state"]},
+        )
+    return _redirect_with_params(
+        context["redirect_uri"],
+        {"error": "access_denied", "state": context["state"]},
     )
-    response = RedirectResponse(f"/oauth/authorize?{query}", status_code=302)
-    response.set_cookie(
-        SESSION_COOKIE,
-        _sign_cookie(),
-        max_age=SESSION_TTL,
-        httponly=True,
-        samesite="lax",
-        secure=request.url.scheme == "https",
-        path="/",
-    )
-    return response
 
 
 def _token_error(message: str, desc: str = "") -> JSONResponse:
