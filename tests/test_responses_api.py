@@ -433,6 +433,154 @@ async def test_provider_tool_calls_become_function_call_items(
     assert json.loads(calls[0]["arguments"]) == {"cmd": "ls"}
 
 
+# ------------------------------------------------- tool-call pairing repair
+#
+# DeepSeek (vLLM on NVIDIA NIM) rejects any request where an assistant
+# tool_calls turn is not immediately followed by tool messages covering
+# ALL of its ids. repair_tool_pairing() is the pre-routing invariant.
+
+
+def test_repair_tool_pairing_valid_history_is_unchanged():
+    from invincible.compat.common import repair_tool_pairing
+
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call_a", "type": "function",
+             "function": {"name": "f", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "call_a", "content": "ok"},
+        {"role": "assistant", "content": "done"},
+    ]
+    assert repair_tool_pairing(messages) == messages
+
+
+def test_repair_tool_pairing_out_of_order_tool_results_fold_back():
+    from invincible.compat.common import repair_tool_pairing
+
+    # The second tool result arrives BEFORE the first (the exact shape
+    # an interleaved client replay produces); the invariant demands it
+    # follow the assistant turn in id order.
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call_a", "type": "function",
+             "function": {"name": "f", "arguments": "{}"}},
+            {"id": "call_b", "type": "function",
+             "function": {"name": "g", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "call_b", "content": "b"},
+        {"role": "tool", "tool_call_id": "call_a", "content": "a"},
+    ]
+    repaired = repair_tool_pairing(messages)
+    # Both results now sit directly after the assistant turn (arrival
+    # order is preserved among them); no non-tool message intervenes.
+    tool_ids = [m["tool_call_id"] for m in repaired if m.get("role") == "tool"]
+    assert tool_ids == ["call_b", "call_a"]
+    roles = [m["role"] for m in repaired]
+    assert roles == ["user", "assistant", "tool", "tool"]
+
+
+def test_repair_tool_pairing_interleaved_non_tool_message_folds():
+    from invincible.compat.common import repair_tool_pairing
+
+    # A user message slipped between the assistant turn and one of its
+    # results - upstream would see an under-covered assistant turn.
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call_a", "type": "function",
+             "function": {"name": "f", "arguments": "{}"}},
+            {"id": "call_b", "type": "function",
+             "function": {"name": "g", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "call_a", "content": "a"},
+        {"role": "user", "content": "meanwhile"},
+        {"role": "tool", "tool_call_id": "call_b", "content": "b"},
+    ]
+    repaired = repair_tool_pairing(messages)
+    roles = [m["role"] for m in repaired]
+    # call_b's result moved directly after the assistant turn, before
+    # the interposed user message.
+    assert roles == ["user", "assistant", "tool", "tool", "user"]
+
+
+def test_repair_tool_pairing_missing_call_id_gets_synthetic():
+    from invincible.compat.common import repair_tool_pairing
+
+    messages = [
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "", "type": "function",
+             "function": {"name": "f", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "", "content": "ok"},
+    ]
+    repaired = repair_tool_pairing(messages)
+    call = repaired[0]["tool_calls"][0]
+    assert call["id"] == "call_missing_0_0"
+    assert repaired[1]["tool_call_id"] == "call_missing_0_0"
+
+
+def test_repair_tool_pairing_dangling_tool_call_dropped():
+    from invincible.compat.common import repair_tool_pairing
+
+    # The model announced a second call that never got a result; keeping
+    # it would make upstream reject the whole request.
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call_a", "type": "function",
+             "function": {"name": "f", "arguments": "{}"}},
+            {"id": "call_b", "type": "function",
+             "function": {"name": "g", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "call_a", "content": "a"},
+    ]
+    repaired = repair_tool_pairing(messages)
+    assistant = [m for m in repaired if m.get("tool_calls")][0]
+    assert [c["id"] for c in assistant["tool_calls"]] == ["call_a"]
+
+
+def test_repair_tool_pairing_unpairable_tool_result_raises():
+    from invincible.compat.common import repair_tool_pairing
+
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "tool", "tool_call_id": "call_ghost", "content": "?"}
+    ]
+    with pytest.raises(ValueError, match="messages\\[1\\]"):
+        repair_tool_pairing(messages)
+
+
+def test_repair_tool_pairing_result_before_call_is_buffered():
+    from invincible.compat.common import repair_tool_pairing
+
+    # A tool result arriving before its assistant turn is buffered and
+    # folded in once that turn claims its id.
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "tool", "tool_call_id": "call_late", "content": "early"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call_late", "type": "function",
+             "function": {"name": "f", "arguments": "{}"}},
+        ]},
+    ]
+    repaired = repair_tool_pairing(messages)
+    roles = [m["role"] for m in repaired]
+    assert roles == ["user", "assistant", "tool"]
+
+
+def test_repair_tool_pairing_non_dict_message_raises():
+    from invincible.compat.common import repair_tool_pairing
+
+    with pytest.raises(ValueError, match="messages\\[2\\] must be an object"):
+        repair_tool_pairing([
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": "b"},
+            "not a dict",
+        ])
+
+
 # ------------------------------------------------------------------ streaming
 
 
@@ -529,6 +677,385 @@ async def test_streaming_function_calls(client, router_setter, byok_env):
     assert json.loads(calls[0]["arguments"]) == {"cmd": "ls"}
 
     assert "response.output_item.done" in names
+
+
+async def test_streaming_split_tool_calls_across_chunks_keep_ids(
+    client, router_setter, byok_env
+):
+    """Two tool calls streamed over separate chunks (the NIM/vLLM shape
+    for a second call) keep DISTINCT ids on the wire AND in persistence -
+    the second id may not be re-allocated or merged into the first."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+
+    def alpha_handler(request: httpx.Request):
+        return httpx.Response(
+            200,
+            content=sse_body(
+                stream_chunk("alpha", {"role": "assistant"}),
+                stream_chunk("alpha", {"tool_calls": [
+                    {"index": 0, "id": "call_read", "type": "function",
+                     "function": {"name": "read_file",
+                                  "arguments": '{"path": "a.py"}'}},
+                ]}),
+                stream_chunk("alpha", {"tool_calls": [
+                    # Second call in its own chunk: NIM streams it with a
+                    # fresh index and its own id.
+                    {"index": 1, "id": "call_retry", "type": "function",
+                     "function": {"name": "read_file",
+                                  "arguments": '{"path": "a.py"}'}},
+                ]}),
+                stream_chunk("alpha", {}, finish_reason="tool_calls"),
+            ),
+        )
+
+    router_setter({"alpha.example.com": alpha_handler})
+    headers = {**auth, "X-Session-Id": "split-tools"}
+    response = await client.post(
+        "/v1/responses", headers=headers,
+        json={"model": "m", "input": "read the file", "stream": True},
+    )
+    assert response.status_code == 200
+
+    events = _responses_events(response)
+    completed = [p for name, p in events
+                 if name == "response.completed"][0]["response"]
+    calls = [i for i in completed["output"] if i["type"] == "function_call"]
+    assert [(c["call_id"], c["name"]) for c in calls] == [
+        ("call_read", "read_file"), ("call_retry", "read_file")]
+
+    # Persistence must record the very same ids the client saw.
+    history = await app.state.sessions.load(
+        "split-tools", **await _user_kwargs(uid))
+    assistant = [m for m in history if m["role"] == "assistant"][0]
+    assert [c["id"] for c in assistant["tool_calls"]] == [
+        "call_read", "call_retry"]
+
+
+async def test_streaming_missing_second_tool_call_id_single_sourced(
+    client, router_setter, byok_env
+):
+    """NIM/vLLM omitting the second tool call's id must not fork the id:
+    the wire (output_item.added, response.completed) and the persisted
+    assistant turn all carry ONE allocated id."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(
+            200,
+            content=sse_body(
+                stream_chunk("alpha", {"role": "assistant"}),
+                stream_chunk("alpha", {"tool_calls": [
+                    {"index": 0, "id": "call_first", "type": "function",
+                     "function": {"name": "read_file",
+                                  "arguments": '{"path": "a.py"}'}},
+                ]}),
+                stream_chunk("alpha", {"tool_calls": [
+                    # id missing entirely - the vLLM post-processing
+                    # failure mode.
+                    {"index": 1, "type": "function",
+                     "function": {"name": "read_file",
+                                  "arguments": '{"path": "a.py"}'}},
+                ]}),
+                stream_chunk("alpha", {}, finish_reason="tool_calls"),
+            ),
+        )
+    })
+    response = await client.post(
+        "/v1/responses", headers=auth,
+        json={"model": "m", "input": "read the file", "stream": True},
+    )
+    assert response.status_code == 200
+
+    events = _responses_events(response)
+    added = [p for p in events if p[0] == "response.output_item.added"]
+    function_added = [p[1]["item"] for p in added
+                      if p[1]["item"]["type"] == "function_call"]
+    completed = [p for name, p in events
+                 if name == "response.completed"][0]["response"]
+    completed_calls = [i for i in completed["output"]
+                       if i["type"] == "function_call"]
+
+    ids_on_wire = [item["call_id"] for item in function_added]
+    ids_completed = [c["call_id"] for c in completed_calls]
+    # Two calls, two DISTINCT ids, none empty.
+    assert len(ids_on_wire) == 2
+    assert all(ids_on_wire)
+    assert len(set(ids_on_wire)) == 2
+    assert ids_completed == ids_on_wire
+
+    # The failed second call was not merged into the first.
+    assert completed_calls[0]["call_id"] == "call_first"
+    assert completed_calls[1]["call_id"] != "call_first"
+
+
+async def test_streaming_index_collision_with_new_id_creates_new_call(
+    client, router_setter, byok_env
+):
+    """A reused upstream index carrying a DIFFERENT id is a new tool
+    call, not a merge - both calls survive with their own arguments."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(
+            200,
+            content=sse_body(
+                stream_chunk("alpha", {"role": "assistant"}),
+                stream_chunk("alpha", {"tool_calls": [
+                    {"index": 0, "id": "call_one", "type": "function",
+                     "function": {"name": "read_file",
+                                  "arguments": '{"path": "one.txt"}'}},
+                ]}),
+                stream_chunk("alpha", {"tool_calls": [
+                    # Same index 0, different id - vLLM index reuse.
+                    {"index": 0, "id": "call_two", "type": "function",
+                     "function": {"name": "read_file",
+                                  "arguments": '{"path": "two.txt"}'}},
+                ]}),
+                stream_chunk("alpha", {}, finish_reason="tool_calls"),
+            ),
+        )
+    })
+    response = await client.post(
+        "/v1/responses", headers=auth,
+        json={"model": "m", "input": "read the files", "stream": True},
+    )
+    assert response.status_code == 200
+
+    completed = [p for name, p in _responses_events(response)
+                 if name == "response.completed"][0]["response"]
+    calls = [i for i in completed["output"] if i["type"] == "function_call"]
+    assert [(c["call_id"], json.loads(c["arguments"])) for c in calls] == [
+        ("call_one", {"path": "one.txt"}),
+        ("call_two", {"path": "two.txt"}),
+    ]
+
+
+async def test_streaming_index_collision_with_empty_id_not_merged(
+    client, router_setter, byok_env
+):
+    """A second call on a REUSED index whose id the upstream omitted
+    (the NIM failure mode) still becomes its own tool state: only an
+    empty id differs from the known one, but the re-sent function name
+    is the tell - a genuine continuation delta never carries a name, so
+    a different name on an open index starts a NEW call with a freshly
+    allocated id (a missing id/name never corrupts the first call)."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(
+            200,
+            content=sse_body(
+                stream_chunk("alpha", {"role": "assistant"}),
+                stream_chunk("alpha", {"tool_calls": [
+                    {"index": 0, "id": "call_alpha", "type": "function",
+                     "function": {"name": "read_file",
+                                  "arguments": '{"path": "a.py"}'}},
+                ]}),
+                stream_chunk("alpha", {"tool_calls": [
+                    # Index reused, id omitted, different tool: new call.
+                    {"index": 0, "type": "function",
+                     "function": {"name": "list_dir",
+                                  "arguments": '{"path": "."}'}},
+                ]}),
+                stream_chunk("alpha", {}, finish_reason="tool_calls"),
+            ),
+        )
+    })
+    response = await client.post(
+        "/v1/responses", headers=auth,
+        json={"model": "m", "input": "read the files", "stream": True},
+    )
+    assert response.status_code == 200
+
+    completed = [p for name, p in _responses_events(response)
+                 if name == "response.completed"][0]["response"]
+    calls = [i for i in completed["output"] if i["type"] == "function_call"]
+    assert len(calls) == 2, calls
+    assert calls[0]["call_id"] == "call_alpha"
+    assert calls[0]["name"] == "read_file"
+    assert calls[0]["arguments"] == '{"path": "a.py"}'
+    assert calls[1]["call_id"] != "call_alpha"
+    assert calls[1]["name"] == "list_dir"
+    assert calls[1]["arguments"] == '{"path": "."}'
+
+
+async def test_streaming_same_index_empty_id_no_name_is_continuation(
+    client, router_setter, byok_env
+):
+    """The complementary protocol case: a delta on an existing index
+    with no id and no name is an arguments fragment of the call already
+    open on that index - it must continue it, never fork a new state."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(200, content=sse_body(
+            stream_chunk("alpha", {"role": "assistant"}),
+            stream_chunk("alpha", {"tool_calls": [
+                {"index": 0, "id": "call_x", "type": "function",
+                 "function": {"name": "f", "arguments": '{"a"'}},
+            ]}),
+            # Same index, no id, no name: pure arguments continuation.
+            stream_chunk("alpha", {"tool_calls": [
+                {"index": 0, "function": {"arguments": ': 1}'}},
+            ]}),
+            stream_chunk("alpha", {}, finish_reason="tool_calls"),
+        ))
+    })
+    response = await client.post(
+        "/v1/responses", headers=auth,
+        json={"model": "m", "input": "hi", "stream": True},
+    )
+    assert response.status_code == 200
+    events = _responses_events(response)
+    completed = [p for name, p in events
+                 if name == "response.completed"][0]["response"]
+    fc = [i for i in completed["output"] if i["type"] == "function_call"]
+    # Exactly one function_call item, with the full concatenated args.
+    assert len(fc) == 1
+    assert fc[0]["call_id"] == "call_x"
+    assert json.loads(fc[0]["arguments"]) == {"a": 1}
+
+
+async def test_responses_to_internal_out_of_order_fc_fco_repaired():
+    """Out-of-order/interleaved function_call/function_call_output items
+    are repaired into a DeepSeek-valid pairing instead of forwarded as
+    the strict left-to-right fold's dangling assistant turn."""
+    internal = responses_to_internal([
+        {"type": "message", "role": "user", "content":
+            [{"type": "input_text", "text": "hi"}]},
+        {"type": "function_call", "call_id": "call_a", "name": "f",
+         "arguments": "{}"},
+        {"type": "function_call", "call_id": "call_b", "name": "g",
+         "arguments": "{}"},
+        # The SECOND output arrives first - the repro's exact shape.
+        {"type": "function_call_output", "call_id": "call_b", "output": "b"},
+        {"type": "function_call_output", "call_id": "call_a", "output": "a"},
+        {"type": "message", "role": "user", "content":
+            [{"type": "input_text", "text": "go on"}]},
+    ])
+    roles = [m["role"] for m in internal]
+    # Everything folds back directly after the assistant turn; the
+    # trailing user message stays last.
+    assert roles == ["user", "assistant", "tool", "tool", "user"]
+    tool_ids = [m["tool_call_id"] for m in internal if m["role"] == "tool"]
+    assert sorted(tool_ids) == ["call_a", "call_b"]
+
+
+async def test_streaming_split_json_data_lines_no_failover(
+    client, router_setter, byok_env
+):
+    """A tool-call JSON chunk split across two data: lines is buffered
+    and parsed - the stream survives instead of triggering malformed-SSE
+    failover (reserved for a malformed FIRST chunk)."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    tool_chunk = json.dumps({
+        "id": "chatcmpl-x", "object": "chat.completion.chunk", "model": "m",
+        "choices": [{"index": 0, "delta": {"tool_calls": [
+            {"index": 0, "id": "call_split", "type": "function",
+             "function": {"name": "read_file", "arguments": '{"path"}'}}]}},
+        ],
+    })
+    done_chunk = json.dumps({
+        "id": "chatcmpl-x", "object": "chat.completion.chunk", "model": "m",
+        "choices": [{"index": 0, "delta": {},
+                     "finish_reason": "tool_calls"}],
+    })
+    # Split the tool chunk's JSON across two data: lines with NO blank
+    # line between them (a blank line would end the SSE event).
+    cut = len(tool_chunk) // 2
+    raw = (
+        f"data: {tool_chunk[:cut]}\n"
+        f"data: {tool_chunk[cut:]}\n"
+        f"data: {done_chunk}\n"
+        "data: [DONE]\n\n"
+    ).encode()
+
+    class _SplitStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield raw
+
+        async def aclose(self):
+            pass
+
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(200, content=_SplitStream())
+    })
+    response = await client.post(
+        "/v1/responses", headers=auth,
+        json={"model": "m", "input": "read the file", "stream": True},
+    )
+    # The split chunk parsed as ONE event and the stream completed
+    # normally - no failover, no malformed-SSE teardown.
+    assert response.status_code == 200
+    completed = [p for name, p in _responses_events(response)
+                 if name == "response.completed"][0]["response"]
+    calls = [i for i in completed["output"] if i["type"] == "function_call"]
+    assert calls[0]["call_id"] == "call_split"
+    assert calls[0]["name"] == "read_file"
+
+
+async def test_debug_stream_on_writes_request_id_keyed_file(
+    client, router_setter, byok_env, monkeypatch, tmp_path
+):
+    """INVINCIBLE_DEBUG_STREAM on: a per-request dump keyed by the
+    gateway request id captures the outgoing payload + raw chunks."""
+    monkeypatch.setenv("INVINCIBLE_DEBUG_STREAM", "1")
+    monkeypatch.chdir(tmp_path)
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(
+            200,
+            content=sse_body(
+                stream_chunk("alpha", {"role": "assistant"}),
+                stream_chunk("alpha", {"content": "Hi"}),
+                stream_chunk("alpha", {}, finish_reason="stop"),
+            ),
+        )
+    })
+    response = await client.post(
+        "/v1/responses", headers=auth,
+        json={"model": "m", "input": "hi", "stream": True},
+    )
+    assert response.status_code == 200
+    assert "response.completed" in response.text
+
+    dumps = list(tmp_path.glob("debug_stream_*.json"))
+    assert dumps, "expected a debug_stream_<request_id>.json dump"
+    payload = json.loads(dumps[0].read_text(encoding="utf-8"))
+    assert payload["request_id"]
+    assert payload["provider"] == "alpha"
+    assert payload["chunk_count"] == len(payload["chunks"]) > 0
+    assert payload["chunks"][0]["object"] == "chat.completion.chunk"
+
+
+async def test_debug_stream_off_writes_nothing(
+    client, router_setter, byok_env, monkeypatch, tmp_path
+):
+    """INVINCIBLE_DEBUG_STREAM unset: completely silent - no dump files,
+    no behavior change."""
+    monkeypatch.chdir(tmp_path)
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(
+            200,
+            content=sse_body(
+                stream_chunk("alpha", {"role": "assistant"}),
+                stream_chunk("alpha", {"content": "Hi"}),
+                stream_chunk("alpha", {}, finish_reason="stop"),
+            ),
+        )
+    })
+    response = await client.post(
+        "/v1/responses", headers=auth,
+        json={"model": "m", "input": "hi", "stream": True},
+    )
+    assert response.status_code == 200
+    assert "response.completed" in response.text
+    assert not list(tmp_path.glob("debug_stream_*.json"))
 
 
 async def test_stream_persists_session_history(client, router_setter, byok_env):
@@ -997,3 +1524,335 @@ async def test_auto_mode_still_reports_the_requested_model(
     )
     assert response.status_code == 200, response.text
     assert response.json()["model"] == "gpt-5.6-terra"
+
+
+# ------------------------------------- streaming tool-call assembly (NIM/vLLM)
+#
+# vLLM-backed deployments (NVIDIA NIM serving DeepSeek) have been observed
+# omitting the second tool call's id and reusing delta indices; these tests
+# pin the gateway's countermeasures: one id allocated per call and reused
+# on the wire AND in persistence, and an index reuse treated as a new call.
+
+
+async def test_streaming_split_tool_calls_ids_persisted_match_streamed(
+    client, router_setter, byok_env
+):
+    """Two tool calls streamed across separate chunks keep distinct ids,
+    and the persisted assistant turn carries exactly the ids the client
+    saw - the invariant DeepSeek validates on the next replay."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(200, content=sse_body(
+            stream_chunk("alpha", {"role": "assistant"}),
+            stream_chunk("alpha", {"tool_calls": [
+                {"index": 0, "id": "call_read", "type": "function",
+                 "function": {"name": "read_file",
+                              "arguments": '{"pa'}},
+            ]}),
+            stream_chunk("alpha", {"tool_calls": [
+                {"index": 1, "id": "call_list", "type": "function",
+                 "function": {"name": "list_dir",
+                              "arguments": '{"pa'}},
+            ]}),
+            stream_chunk("alpha", {"tool_calls": [
+                {"index": 0, "function": {"arguments": 'th": "a"}'}},
+                {"index": 1, "function": {"arguments": 'th": "."}'}},
+            ]}),
+            stream_chunk("alpha", {}, finish_reason="tool_calls"),
+        ))
+    })
+    response = await client.post(
+        "/v1/responses", headers={**auth, "X-Session-Id": "split-calls"},
+        json={"model": "m", "input": "read both", "stream": True},
+    )
+    assert response.status_code == 200
+    events = _responses_events(response)
+    added = [p for name, p in events
+             if name == "response.output_item.added"
+             and p["item"]["type"] == "function_call"]
+    streamed_ids = [p["item"]["call_id"] for p in added]
+    assert streamed_ids == ["call_read", "call_list"]
+
+    completed = [p for name, p in events
+                 if name == "response.completed"][0]["response"]
+    calls = [i for i in completed["output"] if i["type"] == "function_call"]
+    assert [c["call_id"] for c in calls] == ["call_read", "call_list"]
+    assert json.loads(calls[0]["arguments"]) == {"path": "a"}
+    assert json.loads(calls[1]["arguments"]) == {"path": "."}
+
+    assert "response.completed" in response.text
+    history = await app.state.sessions.load(
+        "split-calls", **await _user_kwargs(uid))
+    assistant = [m for m in history if m["role"] == "assistant"][0]
+    assert [c["id"] for c in assistant["tool_calls"]] == streamed_ids
+    assert [c["function"]["name"] for c in assistant["tool_calls"]] == [
+        "read_file", "list_dir"]
+
+
+async def test_streaming_missing_second_tool_call_id_gets_one_allocated(
+    client, router_setter, byok_env
+):
+    """NIM/vLLM omits the second call's id mid-stream: the gateway
+    allocates exactly one id at state creation and uses that same string
+    in the streamed item and the persisted turn - never two divergent
+    randoms."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(200, content=sse_body(
+            stream_chunk("alpha", {"role": "assistant"}),
+            stream_chunk("alpha", {"tool_calls": [
+                {"index": 0, "id": "call_read", "type": "function",
+                 "function": {"name": "read_file",
+                              "arguments": '{"path": "a"}'}},
+            ]}),
+            stream_chunk("alpha", {"tool_calls": [
+                # Second call: NO id at all (the NIM failure mode).
+                {"index": 1, "type": "function",
+                 "function": {"name": "read_file",
+                              "arguments": '{"path": "b"}'}},
+            ]}),
+            stream_chunk("alpha", {}, finish_reason="tool_calls"),
+        ))
+    })
+    response = await client.post(
+        "/v1/responses", headers={**auth, "X-Session-Id": "missing-id"},
+        json={"model": "m", "input": "retry read", "stream": True},
+    )
+    assert response.status_code == 200
+    events = _responses_events(response)
+    added = [p for name, p in events
+             if name == "response.output_item.added"
+             and p["item"]["type"] == "function_call"]
+    streamed_ids = [p["item"]["call_id"] for p in added]
+    assert len(streamed_ids) == 2
+    assert streamed_ids[0] == "call_read"
+    # The missing id got exactly one allocation - present, unique, and
+    # reused everywhere.
+    assert streamed_ids[1]
+    assert streamed_ids[1] != streamed_ids[0]
+
+    completed = [p for name, p in events
+                 if name == "response.completed"][0]["response"]
+    calls = [i for i in completed["output"] if i["type"] == "function_call"]
+    assert [c["call_id"] for c in calls] == streamed_ids
+
+    assert "response.completed" in response.text
+    history = await app.state.sessions.load(
+        "missing-id", **await _user_kwargs(uid))
+    assistant = [m for m in history if m["role"] == "assistant"][0]
+    assert [c["id"] for c in assistant["tool_calls"]] == streamed_ids
+
+
+async def test_streaming_reused_index_with_new_id_not_merged(
+    client, router_setter, byok_env
+):
+    """A provider that reuses delta index 0 for a genuinely different
+    call (new id) must get a second tool state - never a merge that
+    drops one call and corrupts the other."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(200, content=sse_body(
+            stream_chunk("alpha", {"role": "assistant"}),
+            stream_chunk("alpha", {"tool_calls": [
+                {"index": 0, "id": "call_first", "type": "function",
+                 "function": {"name": "read_file",
+                              "arguments": '{"path": "a.txt"}'}},
+            ]}),
+            stream_chunk("alpha", {"tool_calls": [
+                # SAME index 0, DIFFERENT id: a new call.
+                {"index": 0, "id": "call_second", "type": "function",
+                 "function": {"name": "read_file",
+                              "arguments": '{"path": "b.txt"}'}},
+            ]}),
+            stream_chunk("alpha", {}, finish_reason="tool_calls"),
+        ))
+    })
+    response = await client.post(
+        "/v1/responses", headers={**auth, "X-Session-Id": "index-reuse"},
+        json={"model": "m", "input": "retry read", "stream": True},
+    )
+    assert response.status_code == 200
+    events = _responses_events(response)
+    added = [p for name, p in events
+             if name == "response.output_item.added"
+             and p["item"]["type"] == "function_call"]
+    assert [p["item"]["call_id"] for p in added] == [
+        "call_first", "call_second"]
+
+    completed = [p for name, p in events
+                 if name == "response.completed"][0]["response"]
+    calls = [i for i in completed["output"] if i["type"] == "function_call"]
+    assert [c["call_id"] for c in calls] == ["call_first", "call_second"]
+    assert json.loads(calls[0]["arguments"]) == {"path": "a.txt"}
+    assert json.loads(calls[1]["arguments"]) == {"path": "b.txt"}
+
+    assert "response.completed" in response.text
+    history = await app.state.sessions.load(
+        "index-reuse", **await _user_kwargs(uid))
+    assistant = [m for m in history if m["role"] == "assistant"][0]
+    assert [c["id"] for c in assistant["tool_calls"]] == [
+        "call_first", "call_second"]
+    assert [c["function"]["arguments"] for c in assistant["tool_calls"]] == [
+        '{"path": "a.txt"}', '{"path": "b.txt"}']
+
+
+async def test_debug_stream_capture_on_writes_file_off_writes_nothing(
+    client, router_setter, byok_env, monkeypatch
+):
+    """INVINCIBLE_DEBUG_STREAM (opt-in) captures the outgoing payload plus
+    the raw upstream chunk sequence into debug_stream_<request_id>.json -
+    the evidence file the tool-call pairing investigation lacked. Unset,
+    nothing is ever written."""
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    handlers = {
+        "alpha.example.com": httpx.Response(200, content=sse_body(
+            stream_chunk("alpha", {"role": "assistant"}),
+            stream_chunk("alpha", {"content": "hi"}),
+            stream_chunk("alpha", {}, finish_reason="stop"),
+        ))
+    }
+
+    import pathlib
+
+    from invincible.core.router import _debug_stream_path
+
+    def _glob():
+        return list(pathlib.Path().glob("debug_stream_*.json"))
+
+    # OFF (default): a full streaming request leaves no capture behind.
+    router_setter(handlers=handlers)
+    await client.post(
+        "/v1/responses", headers={**auth, "X-Session-Id": "dbg-off"},
+        json={"model": "m", "input": "hi", "stream": True},
+    )
+    leftovers = _glob()
+    for path in leftovers:
+        path.unlink(missing_ok=True)
+    assert not leftovers
+
+    # ON: the capture is keyed by the gateway request id the response
+    # headers already report, and carries provider + payload + chunks.
+    monkeypatch.setenv("INVINCIBLE_DEBUG_STREAM", "1")
+    router_setter(handlers=handlers)
+    response = await client.post(
+        "/v1/responses", headers={**auth, "X-Session-Id": "dbg-on"},
+        json={"model": "m", "input": "hi", "stream": True},
+    )
+    assert response.status_code == 200
+    request_id = response.headers["x-invincible-request-id"]
+    captured = _debug_stream_path(request_id)
+    assert captured.exists()
+    try:
+        data = json.loads(captured.read_text(encoding="utf-8"))
+        assert data["request_id"] == request_id
+        assert data["provider"] == "alpha"
+        assert data["payload"]["model"] == "m"
+        assert len(data["chunks"]) == 3
+    finally:
+        captured.unlink(missing_ok=True)
+
+
+# ------------------------------------------------------------ responses fold
+
+
+def test_responses_to_internal_repairs_out_of_order_function_outputs():
+    """A function_call_output arriving before its function_call (the
+    strict left-to-right fold alone cannot pair it) is buffered and the
+    final messages still satisfy the pairing invariant."""
+    internal = responses_to_internal([
+        {"type": "function_call_output", "call_id": "call_a",
+         "output": "early"},
+        {"type": "function_call", "call_id": "call_a", "name": "f",
+         "arguments": "{}"},
+        {"type": "message", "role": "user",
+         "content": [{"type": "input_text", "text": "go"}]},
+    ])
+    roles = [m["role"] for m in internal]
+    assert roles == ["assistant", "tool", "user"]
+    assert internal[0]["tool_calls"][0]["id"] == "call_a"
+    assert internal[1]["tool_call_id"] == "call_a"
+    assert internal[1]["content"] == "early"
+
+
+def test_responses_to_internal_unpairable_output_raises():
+    """A tool output no call ever claims is unrecoverable: the fold must
+    raise (naming the index) rather than forward a request upstream is
+    guaranteed to reject."""
+    with pytest.raises(ValueError, match="messages\\[0\\]"):
+        responses_to_internal([
+            {"type": "function_call_output", "call_id": "call_ghost",
+             "output": "?"},
+            {"type": "message", "role": "user",
+             "content": [{"type": "input_text", "text": "go"}]},
+        ])
+
+
+# ----------------------------------------------------------------- SSE parse
+
+
+async def test_iter_stream_buffers_json_split_across_data_lines():
+    """A tool-call chunk split across consecutive ``data:`` lines is
+    buffered and parsed once complete - not a malformed-SSE failover."""
+    from invincible.core.router import _iter_stream
+
+    raw = (
+        b'data: {"id":"1","choices":[{"delta":{"tool_calls":[{"ind\n'
+        b'data: ex":0,"id":"call_9","function":{"name":"f"}}]}}]}\n'
+        b"\n"
+        b"data: [DONE]\n\n"
+    )
+    chunks = [c async for c in _iter_stream(httpx.Response(200, content=raw))]
+    assert chunks == [{
+        "id": "1",
+        "choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "call_9", "function": {"name": "f"}}]}},
+        ],
+    }]
+
+
+async def test_iter_stream_tolerates_done_variants():
+    """``[DONE]`` variants (case/bracket differences) terminate the
+    stream instead of being parsed as junk."""
+    from invincible.core.router import _iter_stream
+
+    raw = (
+        b'data: {"id":"1","choices":[{"delta":{"content":"hi"}}]}\n\n'
+        b"data: done\n\n"
+    )
+    chunks = [c async for c in _iter_stream(httpx.Response(200, content=raw))]
+    assert len(chunks) == 1
+    assert chunks[0]["choices"][0]["delta"]["content"] == "hi"
+
+
+async def test_iter_stream_malformed_first_chunk_raises_for_failover():
+    """A genuinely malformed FIRST chunk keeps raising - that is the
+    Router's signal that the provider is unusable and failover should
+    pick the next credential."""
+    from invincible.core.router import _iter_stream
+
+    raw = b"data: {not json ever\n\n"
+    with pytest.raises(json.JSONDecodeError):
+        chunks = [
+            c async for c in _iter_stream(httpx.Response(200, content=raw))
+        ]
+        # Force iteration so the parse actually runs.
+        assert not chunks
+
+
+async def test_iter_stream_skips_malformed_later_chunk():
+    """A malformed chunk AFTER healthy events is logged and skipped; an
+    otherwise healthy stream is not torn down."""
+    from invincible.core.router import _iter_stream
+
+    raw = (
+        b'data: {"id":"1","choices":[{"delta":{"content":"a"}}]}\n\n'
+        b"data: {oops garbage\n\n"
+        b'data: {"id":"2","choices":[{"delta":{"content":"b"}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    chunks = [c async for c in _iter_stream(httpx.Response(200, content=raw))]
+    assert [c["id"] for c in chunks] == ["1", "2"]

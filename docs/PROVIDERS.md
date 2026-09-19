@@ -135,14 +135,14 @@ Confirmed live case (root cause proven by replaying the payload directly
 against the provider, bypassing the gateway): the TokenRouter free tier
 routed large/tool-heavy requests to an internal backend model the token
 had no access to, returning
-`403 - This token has no access to model <backend>` — surfaced through the
+`403 - This token has no access to model <backend>` ï¿½ surfaced through the
 aggregator as a meaningless `400`.
 
 **Recognition pattern**: the gateway logs the upstream body via
 `_log_upstream_error_body`; if the message is generic (`openai_error`,
 `bad_response_status_code`) while smaller/simpler requests to the same
 provider succeed, suspect the aggregator's internal routing or tier
-entitlements — not your payload.
+entitlements ï¿½ not your payload.
 
 **Mitigation**: set `failover_on_400: true` on the entry (already enabled
 for TokenRouter) so affected requests degrade to the next tier instead of
@@ -150,3 +150,50 @@ failing client sessions. For definitive diagnosis, replay the exact
 payload against the provider outside the gateway (see
 `tools/replay_payload.py`), optionally with
 `INVINCIBLE_DEBUG_400=1` to capture outgoing payloads per event.
+
+## NVIDIA NIM quirks: empty tool-call ids & strict pairing (DeepSeek case study)
+
+NVIDIA NIM (`https://integrate.api.nvidia.com/v1`, e.g. the
+`nim-deepseek` entry in `invincible/providers.yaml` serving
+`deepseek-ai/deepseek-v4-flash-0731`) is a vLLM-backed OpenAI-compatible
+endpoint. Two documented vLLM failure modes combine here:
+
+1. **Empty `tool_call` fields.** When vLLM's post-processing of a
+   streamed tool call fails, the emitted delta can carry an empty or
+   missing `id` (and occasionally `name`). This is seen most often on the
+   SECOND tool call within one turn (e.g. a read_file call followed by a
+   retry-read call in the same turn).
+
+2. **Strict pairing validation (DeepSeek).** The model behind NIM rejects
+   any request whose assistant `tool_calls` turn is not immediately
+   followed by tool messages covering ALL of its ids:
+
+   ```
+   An assistant message with 'tool_calls' must be followed by tool
+   messages responding to each 'tool_call_id'.
+   (insufficient tool messages following tool_calls)
+   ```
+
+Together these made the second tool call of a turn fail deterministically
+through the gateway: the second call's id was re-allocated during stream
+assembly, so the persisted assistant turn carried one id while the client
+saw (and answered with) another â€” upstream saw `assistant{tool_calls:[Y]}`
+followed by `tool{X}` and 400'd. The same request reproduced through both
+Codex (`/v1/responses`) and Claude Code (`/v1/messages`), proving the
+defect was in gateway assembly, not the client or model.
+
+**Gateway handling** (see [ARCHITECTURE.md Â§ 3b](ARCHITECTURE.md)):
+
+- tool-call ids are allocated exactly once per streamed call and reused
+  on the wire, in the completed output, and in persistence;
+- a reused stream index carrying a different id is a new call, not a
+  merge;
+- `repair_tool_pairing` validates/repairs the assembled message list
+  before anything is routed and refuses to forward a half-paired list;
+- `_iter_stream` buffers JSON split across `data:` lines so a chunked
+  tool-call block no longer kills the stream.
+
+**Diagnosis**: set `INVINCIBLE_DEBUG_400=1` (capture the outgoing payload
+upstream rejected) and/or `INVINCIBLE_DEBUG_STREAM=1` (per-request raw
+SSE chunk sequence + assembled tool states, keyed by the request id from
+`x-invincible-request-id` and every attempt log line).

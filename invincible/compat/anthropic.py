@@ -199,10 +199,15 @@ def _assistant_to_internal(content) -> dict:
     if not tool_uses:
         return build_message("assistant", text)
     tool_calls = []
-    for block in tool_uses:
+    for position, block in enumerate(tool_uses):
         tool_calls.append(
             {
-                "id": block.get("id") or f"call_{uuid.uuid4().hex}",
+                # Deterministic placeholder: replaying the same history
+                # must translate to the SAME id every time, and the
+                # tool_result answering this call has to be able to pair
+                # with it. A throwaway random here (the previous
+                # behaviour) could never match the other side.
+                "id": block.get("id") or f"call_missing_{position}",
                 "type": "function",
                 "function": {
                     "name": block.get("name") or "",
@@ -245,7 +250,10 @@ def _user_to_internal(content) -> list:
         messages.append(
             {
                 "role": "tool",
-                "tool_call_id": block.get("tool_use_id") or f"call_{uuid.uuid4().hex}",
+                # An id-less result is forwarded id-less rather than with
+                # a throwaway random (which could match nothing at all);
+                # repair_tool_pairing binds it to the call it answers.
+                "tool_call_id": block.get("tool_use_id") or "",
                 "content": result_text,
             }
         )
@@ -436,17 +444,21 @@ def _stream_assistant_message(
 ) -> dict:
     """Assemble the internal assistant message for a finished stream.
 
-    ``tool_states`` maps upstream ``tool_calls`` index → accumulated
-    ``{block_index, id, name, arguments}``. Indexes are deterministic
-    (ascending upstream index order), matching the id the client received in
-    the SSE frames so the persisted history lines up with what was streamed.
+    ``tool_states`` maps the gateway's own first-seen sequence → the
+    accumulated ``{block_index, id, name, arguments}``. The ``id`` is
+    allocated exactly ONCE when the tool state is created and is the very
+    same string the client received in ``content_block_start``, so the
+    persisted history can never disagree with what was streamed: Claude
+    Code answers with a ``tool_result`` carrying the id it saw, and a
+    stored assistant turn with a different id is what an upstream rejects
+    as "insufficient tool messages following tool_calls".
     """
     tool_calls = []
-    for idx in sorted(tool_states):
-        state = tool_states[idx]
+    for seq in sorted(tool_states):
+        state = tool_states[seq]
         tool_calls.append(
             {
-                "id": state["id"] or f"call_{uuid.uuid4().hex}",
+                "id": state["id"],
                 "type": "function",
                 "function": {
                     "name": state["name"] or "",
@@ -493,6 +505,8 @@ async def build_stream_events(
     text_started = False
     text_block_index = None
     tool_states: dict = {}
+    current_by_index: dict = {}
+    next_tool_seq = 0
     next_block_index = 0
 
     def text_block_start():
@@ -513,6 +527,7 @@ async def build_stream_events(
 
     def feed(chunk: dict):
         nonlocal reply_text, finish_reason, next_block_index
+        nonlocal next_tool_seq
         finish_reason = _delta_finish(chunk) or finish_reason
         piece = _delta_piece(chunk)
         if piece:
@@ -528,19 +543,31 @@ async def build_stream_events(
                 },
             )
         for tool_call in _delta_tool_calls(chunk):
-            index = tool_call.get("index", 0)
-            state = tool_states.get(index)
+            upstream_index = tool_call.get("index", 0)
+            delta_id = tool_call.get("id")
+            function = tool_call.get("function") or {}
+            state = current_by_index.get(upstream_index)
+            if state is not None and delta_id and delta_id != state["id"]:
+                # Same upstream index, different id: the provider reused
+                # the index for a genuinely different call, so it must
+                # become its own tool_use block rather than merging
+                # (which would drop one call and corrupt the other).
+                state = None
             if state is None:
-                function = tool_call.get("function") or {}
                 block_index = next_block_index
                 next_block_index += 1
                 state = {
                     "block_index": block_index,
-                    "id": tool_call.get("id"),
-                    "name": function.get("name"),
+                    # Allocated ONCE here - a missing upstream id gets one
+                    # now - and reused by _stream_assistant_message so the
+                    # streamed and persisted ids are the same string.
+                    "id": delta_id or f"call_{uuid.uuid4().hex}",
+                    "name": function.get("name") or "",
                     "arguments": "",
                 }
-                tool_states[index] = state
+                tool_states[next_tool_seq] = state
+                next_tool_seq += 1
+                current_by_index[upstream_index] = state
                 yield sse_frame(
                     "content_block_start",
                     {
@@ -548,13 +575,20 @@ async def build_stream_events(
                         "index": block_index,
                         "content_block": {
                             "type": "tool_use",
-                            "id": state["id"] or "",
-                            "name": state["name"] or "",
+                            "id": state["id"],
+                            "name": state["name"],
                             "input": {},
                         },
                     },
                 )
-            function = tool_call.get("function") or {}
+            else:
+                # Late id/name arrivals only fill a gap; they never
+                # re-write what the client was already told.
+                if delta_id and not state["id"]:
+                    state["id"] = delta_id
+                name = function.get("name")
+                if name and not state["name"]:
+                    state["name"] = name
             arguments = function.get("arguments")
             if arguments:
                 state["arguments"] += arguments

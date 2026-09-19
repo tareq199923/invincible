@@ -146,6 +146,17 @@ class Settings:
             "1", "true", "on", "yes",
         )
 
+    def debug_stream(self) -> bool:
+        """Opt-in: capture every upstream SSE chunk (plus the outgoing
+        payload and the assembled assistant turn) for one request into
+        debug_stream_<request_id>.json. DEFAULT OFF - like
+        :meth:`debug_dump_400` this is an explicit allowlist because the
+        dumps contain conversation content and are gitignored. Unset means
+        the capture path is never taken and nothing is written."""
+        return os.getenv("INVINCIBLE_DEBUG_STREAM", "").strip().lower() in (
+            "1", "true", "on", "yes",
+        )
+
     def compression_enabled(self) -> bool:
         """Send-time request compression (default on)."""
         return _env_flag("INVINCIBLE_COMPRESSION")

@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from invincible.compat.common import (
     estimate_token_sum,
+    repair_tool_pairing,
     route_headers,
     upstream_error_detail,
 )
@@ -42,6 +43,7 @@ from invincible.core.router import (
     AllProvidersFailedError,
     NoCredentialsConfiguredError,
     UpstreamClientError,
+    record_stream_items,
 )
 from invincible.core.settings import settings
 from invincible.core.user_settings_store import override_flag, override_int
@@ -196,6 +198,14 @@ async def create_response(
         system_prefix.append(message)
     conversation = internal_messages[len(system_prefix):]
     full_messages = system_prefix + injections + conversation
+    try:
+        # `responses_to_internal` already repaired its own translation, but
+        # the injected system messages are spliced in afterwards - re-check
+        # the exact list that is about to be routed so a half-paired
+        # conversation can never reach a provider that validates pairing.
+        full_messages = repair_tool_pairing(full_messages)
+    except ValueError as e:
+        return _error_response(400, str(e))
     # Estimate on the compressed messages so reported usage tracks what
     # is actually sent. Per-provider trimming still makes this an upper
     # bound when a small-context provider wins the route.
@@ -252,6 +262,9 @@ async def create_response(
         new_turns = _suffix_after_history(history, internal_messages)
 
         async def save_complete(accumulated: dict):
+            # Opt-in capture: the assembled assistant turn (text +
+            # tool_calls) joins the raw-chunk dump for this request id.
+            record_stream_items(request_id, accumulated)
             await _persist(
                 store, session_id, new_turns, accumulated, memory,
                 principal, max_turns=max_turns,

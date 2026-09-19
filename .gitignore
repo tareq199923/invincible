@@ -26,6 +26,7 @@ coverage.xml
 # 400 debug dumps - contain conversation content
 debug_400_*.json
 debug_last_400_payload.json
+debug_stream_*.json
 
 # test-run output logs (verification passes) never belong in the tree
 pytest_out*.log

@@ -1064,6 +1064,89 @@ async def test_anthropic_streamed_tool_reply_persisted(client, router_setter, by
 # ------------------------------------------------------------------- failover
 
 
+async def test_anthropic_streamed_second_missing_tool_id_replays_paired(
+    client, router_setter, byok_env
+):
+    """The Claude Code stateful-replay regression (the deterministic
+    DeepSeek repro): stream a TWO-tool-call turn where the upstream omits
+    the second id, then replay the tool results the way Claude Code does.
+    The outgoing full_messages must satisfy DeepSeek's pairing invariant -
+    the stored assistant id == the id each resent tool_result references -
+    or the next upstream call 400s with 'insufficient tool messages
+    following tool_calls'."""
+    uid, raw_key = await v1_user(client, "anthropic@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    received = []
+
+    def alpha_handler(request: httpx.Request):
+        received.append(json.loads(request.read()))
+        if len(received) == 1:
+            return httpx.Response(
+                200,
+                content=sse_body(
+                    stream_chunk("alpha", {"role": "assistant"}),
+                    stream_chunk("alpha", {"tool_calls": [
+                        {"index": 0, "id": "call_read", "type": "function",
+                         "function": {"name": "read_file",
+                                      "arguments": '{"path": "a.txt"}'}},
+                    ]}),
+                    stream_chunk("alpha", {"tool_calls": [
+                        # Second call: NO id at all (the NIM failure mode).
+                        {"index": 1, "type": "function",
+                         "function": {"name": "read_file",
+                                      "arguments": '{"path": "b.txt"}'}},
+                    ]}),
+                    stream_chunk("alpha", {}, finish_reason="tool_calls"),
+                ),
+            )
+        return httpx.Response(200, json=provider_body("alpha", content="done"))
+
+    router_setter({"alpha.example.com": alpha_handler})
+    headers = {**auth, "X-Session-Id": "cc-replay"}
+    response = await client.post(
+        "/v1/messages", headers=headers, json={**ANTHROPIC_BODY, "stream": True}
+    )
+    assert response.status_code == 200
+    events = _anthropic_events(response)
+    streamed_ids = [
+        p["content_block"]["id"] for e, p in events
+        if e == "content_block_start"
+        and p["content_block"]["type"] == "tool_use"
+    ]
+    assert streamed_ids[0] == "call_read"
+    # The missing second id got exactly one allocation, reused everywhere.
+    assert streamed_ids[1]
+    assert streamed_ids[1] != streamed_ids[0]
+
+    # Claude Code resends tool_results for BOTH ids it saw on the wire.
+    await client.post(
+        "/v1/messages",
+        headers=headers,
+        json={
+            "model": "claude-sonnet-4",
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": streamed_ids[0],
+                     "content": "a"},
+                    {"type": "tool_result", "tool_use_id": streamed_ids[1],
+                     "content": "b"},
+                ]},
+            ],
+        },
+    )
+
+    # The second upstream payload IS full_messages: persisted history +
+    # the resent tool_results. Every assistant tool_call id must have a
+    # matching tool message directly behind it - what DeepSeek validates.
+    outgoing = received[1]["messages"]
+    roles = [m["role"] for m in outgoing]
+    assert roles == ["user", "assistant", "tool", "tool"]
+    stored_ids = [c["id"] for c in outgoing[1]["tool_calls"]]
+    assert stored_ids == streamed_ids
+    tool_ids = [m["tool_call_id"] for m in outgoing if m["role"] == "tool"]
+    assert tool_ids == streamed_ids
+
+
 async def test_anthropic_streaming_failover_before_first_chunk(
     client, router_setter, byok_env
 ):

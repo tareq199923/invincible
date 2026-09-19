@@ -57,20 +57,28 @@ def _log_attempt(
     status,
     failover: bool,
     level: int = logging.INFO,
+    request_id: str | None = None,
     **extra,
 ):
     """Emit one concise structured line per provider attempt.
 
     Only sizes and outcome are logged; payload content, keys, and headers
     are never included.
+
+    ``request_id`` is the gateway id generated once per incoming request
+    in :meth:`Router._iter_attempts` - the same value stored on every
+    ``runs`` row and returned as ``x-invincible-request-id``. Without it a
+    console line for an upstream 400 could not be correlated with the run
+    it belongs to or with the opt-in capture file for that request.
     """
     suffix = "".join(f" {k}={v}" for k, v in extra.items())
     logger.log(
         level,
-        "provider=%s model=%s payload_bytes=%d estimated_tokens=%d "
-        "status=%s failover=%s%s",
+        "provider=%s model=%s request_id=%s payload_bytes=%d "
+        "estimated_tokens=%d status=%s failover=%s%s",
         name,
         model_id,
+        request_id or "-",
         payload_bytes,
         estimated_tokens,
         status,
@@ -158,7 +166,116 @@ def _dump_debug_payload(name: str, status: int, payload: dict) -> None:
     except Exception as e:
         logger.warning("Failed to dump debug payload: %s", e)
 
-def _log_upstream_error_body(name: str, status: int, parsed_body: dict) -> None:
+def _debug_stream_path(request_id: str):
+    """Path of the opt-in capture file for one request (never created
+    unless the flag is on - callers check :meth:`Settings.debug_stream`).
+    """
+    import pathlib as _pathlib
+
+    return _pathlib.Path(f"debug_stream_{request_id}.json")
+
+
+def _dump_debug_stream(
+    request_id: str, provider_name: str, payload: dict, chunks: list,
+) -> None:
+    """Opt-in (INVINCIBLE_DEBUG_STREAM): dump the outgoing payload and the
+    raw upstream SSE chunk sequence for one request, keyed by the gateway
+    request id - the same id every ``runs`` row carries and every attempt
+    log line now prints.
+
+    This is the capture path the tool-call pairing investigation lacked:
+    the raw chunks show exactly which ids/indices a provider streamed
+    (vLLM deployments have been observed omitting or reusing
+    ``tool_calls`` ids), and the payload shows what was actually sent.
+
+    Silent when the flag is unset. Payloads contain conversation content;
+    the glob is gitignored and files are local-machine only. Only the
+    payload is written - API keys live in request headers and are never
+    part of it. Best-effort: never raises.
+    """
+    if not settings.debug_stream():
+        return
+    try:
+        out = _debug_stream_path(request_id)
+        out.write_text(
+            json.dumps(
+                {
+                    "request_id": request_id,
+                    "provider": provider_name,
+                    "payload": payload,
+                    "chunk_count": len(chunks),
+                    "chunks": chunks,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        logger.warning("Dumped upstream stream to %s", out.resolve())
+    except Exception as e:
+        logger.warning("Failed to dump debug stream: %s", e)
+
+
+def record_stream_items(request_id: str, items: dict) -> None:
+    """Opt-in (INVINCIBLE_DEBUG_STREAM): attach the ASSEMBLED assistant
+    turn (text + tool_calls, internal shape) to the capture file the
+    Router already wrote for ``request_id``.
+
+    The compat layer builds the tool states but must not know about the
+    Router, so the endpoint - which owns both the request id and the
+    on-complete callback - contributes the assembled result here. Silent
+    when the flag is unset; best-effort otherwise (a missing file simply
+    means the streaming capture was not written, e.g. a non-streaming
+    request).
+    """
+    if not settings.debug_stream():
+        return
+    try:
+        out = _debug_stream_path(request_id)
+        if not out.exists():
+            return
+        data = json.loads(out.read_text(encoding="utf-8"))
+        data["assembled"] = items
+        out.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception as e:
+        logger.warning("Failed to attach assembled items to debug stream: %s", e)
+
+
+async def _capture_stream(
+    request_id: str,
+    provider_name: str,
+    payload: dict,
+    first: dict | None,
+    tail: AsyncIterator[dict],
+) -> AsyncIterator[dict]:
+    """Pass a streamed attempt through unchanged while capturing it.
+
+    Only installed when INVINCIBLE_DEBUG_STREAM is on; it never alters
+    what the client receives. The payload is written immediately (a stream
+    that dies mid-turn still leaves evidence), and the full chunk
+    sequence is written again when the stream ends or is abandoned.
+    """
+    chunks: list = []
+    if first is not None:
+        chunks.append(first)
+    _dump_debug_stream(request_id, provider_name, payload, chunks)
+    try:
+        async for chunk in tail:
+            chunks.append(chunk)
+            yield chunk
+    finally:
+        _dump_debug_stream(request_id, provider_name, payload, chunks)
+        aclose = getattr(tail, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+
+def _log_upstream_error_body(
+    name: str, status: int, parsed_body: dict,
+    request_id: str | None = None,
+) -> None:
     """Log the upstream provider's own error body (error visibility fix).
 
     ``UpstreamClientError.body`` was previously only ever handed to the
@@ -166,35 +283,89 @@ def _log_upstream_error_body(name: str, status: int, parsed_body: dict) -> None:
     never written to the log, so a 400 from a provider was indistinguishable
     from any other 400 in the console. This is the single place that logs
     it: truncated, and only the parsed/raw error body - never the outgoing
-    payload, headers, or keys.
+    payload, headers, or keys. ``request_id`` ties the line to the request
+    that provoked it.
     """
     try:
         rendered = json.dumps(parsed_body, ensure_ascii=False)
     except (TypeError, ValueError):
         rendered = str(parsed_body)
     logger.warning(
-        "Upstream client error from %s (status=%s): %s",
+        "Upstream client error from %s (status=%s, request_id=%s): %s",
         name,
         status,
+        request_id or "-",
         rendered[:500],
     )
 
 async def _iter_stream(resp: httpx.Response) -> AsyncIterator[dict]:
     """Yield parsed OpenAI SSE events from a streaming httpx response.
 
-    Skips non-``data:`` lines (SSE keep-alives / comments), stops at the
-    ``[DONE]`` sentinel, and always closes the upstream response so the
+    Skips non-``data:`` lines (SSE keep-alives / comments) and stops at
+    any ``[DONE]`` variant. Always closes the upstream response so the
     connection is released even on client disconnect or mid-stream error.
+
+    A single JSON object is allowed to span several ``data:`` lines (some
+    vLLM-backed deployments split a chunk, and a chunked tool-call block
+    can arrive across them): the payload is buffered and only parsed once
+    it is complete. ``json.JSONDecodeError`` is therefore raised ONLY for
+    a genuinely malformed FIRST chunk - the Router's failover signal that
+    the provider is unusable - while a malformed chunk later in the stream
+    is logged and skipped instead of tearing down an otherwise healthy
+    stream.
     """
+    buffer = ""
+    parsed_any = False
+
+    def _flush(pending: str) -> dict | None:
+        if not pending:
+            return None
+        try:
+            return json.loads(pending)
+        except json.JSONDecodeError:
+            if not parsed_any:
+                raise
+            logger.warning(
+                "Skipping malformed SSE payload (stream already delivering): %s",
+                pending[:200],
+            )
+            return None
+
     try:
-        async for line in resp.aiter_lines():
-            line = line.strip()
+        async for raw_line in resp.aiter_lines():
+            line = raw_line.strip()
+            if not line or line.startswith(":"):
+                # Blank line ends an SSE event (comments/keep-alives carry
+                # nothing to parse).
+                chunk = _flush(buffer)
+                buffer = ""
+                if chunk is not None:
+                    parsed_any = True
+                    yield chunk
+                continue
             if not line.startswith("data:"):
                 continue
             data = line[len("data:"):].strip()
-            if not data or data == "[DONE]":
+            if data and data.upper().strip("[] \t") == "DONE":
                 break
-            yield json.loads(data)
+            if not data:
+                continue
+            candidate = f"{buffer}{data}" if buffer else data
+            try:
+                chunk = json.loads(candidate)
+            except json.JSONDecodeError:
+                # Incomplete so far - hold it and see whether the rest of
+                # the object arrives on the next data: line.
+                buffer = candidate
+                continue
+            buffer = ""
+            parsed_any = True
+            yield chunk
+
+        # EOF without a trailing blank line: flush whatever is left.
+        chunk = _flush(buffer)
+        if chunk is not None:
+            yield chunk
     finally:
         await resp.aclose()
 
@@ -835,6 +1006,7 @@ class Router:
                 await self._handle_failover_status(
                     provider, name, resp, payload_bytes, estimated_tokens,
                     pipeline_extra,
+                    request_id=request_id,
                 )
                 await self._record_run(
                     provider, attempt_index, time.time(), "failover",
@@ -865,6 +1037,7 @@ class Router:
                     "malformed_json",
                     True,
                     level=logging.WARNING,
+                    request_id=request_id,
                     **(pipeline_extra or {}),
                 )
                 self.health_tracker.record_failure(_health_key(provider))
@@ -892,6 +1065,7 @@ class Router:
                     "empty_body",
                     True,
                     level=logging.WARNING,
+                    request_id=request_id,
                     **(pipeline_extra or {}),
                 )
                 self.health_tracker.record_failure(_health_key(provider))
@@ -914,6 +1088,7 @@ class Router:
                 estimated_tokens,
                 resp.status_code,
                 False,
+                request_id=request_id,
                 **(pipeline_extra or {}),
             )
             # Phase 4 usage accounting: real upstream counts when present,
@@ -944,6 +1119,7 @@ class Router:
                     True,
                     level=logging.WARNING,
                     disabled=True,
+                    request_id=request_id,
                     **(pipeline_extra or {}),
                 )
                 self.health_tracker.disable(_health_key(provider))
@@ -966,11 +1142,13 @@ class Router:
                 status,
                 False,
                 level=logging.WARNING,
+                request_id=request_id,
                 **(pipeline_extra or {}),
             )
             body = await e.response.aread()
             parsed_body = _parse_json_or_raw(body)
-            _log_upstream_error_body(name, status, parsed_body)
+            _log_upstream_error_body(
+                name, status, parsed_body, request_id=request_id)
             if (
                 status == 400
                 and provider.get("model_override")
@@ -1013,6 +1191,7 @@ class Router:
             self._handle_network_error(
                 provider, name, payload_bytes, estimated_tokens, attempt_started, e,
                 pipeline_extra,
+                request_id=request_id,
             )
             details = _network_error_details(e)
             await self._record_run(
@@ -1066,6 +1245,7 @@ class Router:
                 await self._handle_failover_status(
                     provider, name, resp, payload_bytes, estimated_tokens,
                     pipeline_extra,
+                    request_id=request_id,
                 )
                 await self._record_run(
                     provider, attempt_index, time.time(), "failover",
@@ -1089,6 +1269,7 @@ class Router:
                     True,
                     level=logging.WARNING,
                     disabled=True,
+                    request_id=request_id,
                     **(pipeline_extra or {}),
                 )
                 self.health_tracker.disable(_health_key(provider))
@@ -1113,12 +1294,15 @@ class Router:
                     resp.status_code,
                     False,
                     level=logging.WARNING,
+                    request_id=request_id,
                     **(pipeline_extra or {}),
                 )
                 body = await resp.aread()
                 await resp.aclose()
                 parsed_body = _parse_json_or_raw(body)
-                _log_upstream_error_body(name, resp.status_code, parsed_body)
+                _log_upstream_error_body(
+                    name, resp.status_code, parsed_body,
+                    request_id=request_id)
                 if (
                     resp.status_code == 400
                     and provider.get("model_override")
@@ -1175,6 +1359,7 @@ class Router:
                     "empty_stream",
                     True,
                     level=logging.WARNING,
+                    request_id=request_id,
                     **(pipeline_extra or {}),
                 )
                 self.health_tracker.record_failure(_health_key(provider))
@@ -1196,6 +1381,7 @@ class Router:
                 estimated_tokens,
                 resp.status_code,
                 False,
+                request_id=request_id,
                 **(pipeline_extra or {}),
             )
             await self._record_run(
@@ -1210,6 +1396,10 @@ class Router:
                 input_tokens=estimated_tokens,
                 usage_estimated=True,
             )
+            if settings.debug_stream():
+                # Opt-in capture (INVINCIBLE_DEBUG_STREAM): the wrapper
+                # passes every chunk through untouched.
+                tail = _capture_stream(request_id, name, payload, first, tail)
             return first, tail
 
         except json.JSONDecodeError as e:
@@ -1224,6 +1414,7 @@ class Router:
                 "malformed_sse",
                 True,
                 level=logging.WARNING,
+                request_id=request_id,
                 **(pipeline_extra or {}),
             )
             self.health_tracker.record_failure(_health_key(provider))
@@ -1242,6 +1433,7 @@ class Router:
             self._handle_network_error(
                 provider, name, payload_bytes, estimated_tokens, attempt_started, e,
                 pipeline_extra,
+                request_id=request_id,
             )
             details = _network_error_details(e)
             await self._record_run(
@@ -1263,6 +1455,7 @@ class Router:
         payload_bytes: int,
         estimated_tokens: int,
         pipeline_extra: dict | None = None,
+        request_id: str | None = None,
     ) -> None:
         """Shared failover-status action: warn-log the attempt, record the
         failure, release the response. The caller then skips providers."""
@@ -1274,6 +1467,7 @@ class Router:
             resp.status_code,
             True,
             level=logging.WARNING,
+            request_id=request_id,
             **(pipeline_extra or {}),
         )
         self.health_tracker.record_failure(_health_key(provider))
@@ -1288,15 +1482,17 @@ class Router:
         attempt_started: float,
         exc: httpx.RequestError,
         pipeline_extra: dict | None = None,
+        request_id: str | None = None,
     ) -> None:
         """Shared network-error action: structured error log plus the
         ERROR-level attempt line (elapsed and read-timeout fields), then
         record the failure. The caller then skips providers."""
         details = _network_error_details(exc)
         logger.error(
-            "Network error with %s (%s): %s. Triggering failover.",
+            "Network error with %s (%s, request_id=%s): %s. Triggering failover.",
             name,
             details["error_type"],
+            request_id or "-",
             details["error_msg"],
         )
         _log_attempt(
@@ -1307,6 +1503,7 @@ class Router:
             "network_error",
             True,
             level=logging.ERROR,
+            request_id=request_id,
             elapsed_s=round(time.monotonic() - attempt_started, 2),
             read_timeout_s=resolve_timeout(provider).read,
             **details,

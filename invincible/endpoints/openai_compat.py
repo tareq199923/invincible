@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from invincible.compat.common import route_headers
+from invincible.compat.common import repair_tool_pairing, route_headers
 from invincible.core.context_builder import build_context_messages
 from invincible.core.memory import MemoryStore
 from invincible.core.principal import Principal
@@ -280,6 +280,20 @@ async def chat_completions(
         new_messages=body.messages,
     )
     full_messages = history + injections + body.messages
+    try:
+        # Persisted history + the client's replayed messages must satisfy
+        # the provider's tool-call pairing invariant before routing; a
+        # stored assistant tool_calls turn whose tool result only arrives
+        # later is what DeepSeek/vLLM rejects with "insufficient tool
+        # messages following tool_calls". Repaired here, or refused with a
+        # protocol-correct 400 - never forwarded half-paired.
+        full_messages = repair_tool_pairing(full_messages)
+    except ValueError as e:
+        return JSONResponse(
+            content={"error": {"message": str(e),
+                               "type": "invalid_request_error"}},
+            status_code=400,
+        )
     # Clients resend the system prompt on every request; persisting it would
     # accumulate duplicates that trimming never removes (system messages are
     # always kept). Route with it, but only persist the new turns.

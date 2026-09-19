@@ -23,6 +23,7 @@ from invincible.compat.anthropic import (
 )
 from invincible.compat.common import (
     estimate_token_sum,
+    repair_tool_pairing,
     route_headers,
     upstream_error_detail,
 )
@@ -35,6 +36,7 @@ from invincible.core.router import (
     AllProvidersFailedError,
     NoCredentialsConfiguredError,
     UpstreamClientError,
+    record_stream_items,
 )
 from invincible.core.settings import settings
 from invincible.core.user_settings_store import override_flag, override_int
@@ -162,6 +164,17 @@ async def anthropic_messages(
         new_messages=internal_messages,
     )
     full_messages = history + injections + internal_messages
+    try:
+        # Persisted history + the client's replayed turns must satisfy the
+        # provider's tool-call pairing invariant BEFORE anything is routed.
+        # A stored assistant tool_calls turn whose tool_result only arrives
+        # in the NEXT request is exactly what DeepSeek/vLLM rejects with
+        # "insufficient tool messages following tool_calls", so the
+        # assembled list is repaired (or refused) here rather than
+        # forwarded half-paired.
+        full_messages = repair_tool_pairing(full_messages)
+    except ValueError as e:
+        return _error_message(400, str(e))
     # Estimate on the compressed messages so reported usage tracks what is
     # actually sent (Phase 9). Per-provider trimming still makes this an
     # upper bound when a small-context provider wins the route — that drift
@@ -215,6 +228,9 @@ async def anthropic_messages(
         request_id = info["request_id"]
 
         async def save_complete(accumulated: dict):
+            # Opt-in capture: the assembled assistant turn (text +
+            # tool_calls) joins the raw-chunk dump for this request id.
+            record_stream_items(request_id, accumulated)
             await _persist(
                 store, session_id, internal_messages, accumulated, memory,
                 principal, max_turns=max_turns,

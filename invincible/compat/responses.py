@@ -43,6 +43,7 @@ from collections.abc import (  # noqa: F401  (AsyncGenerator re-exported for typ
 from invincible.compat.common import (
     build_message,
     estimate_token_sum,
+    repair_tool_pairing,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,7 @@ def _message_item_to_internal(item: dict) -> dict | None:
     return build_message(role, text) if text else None
 
 
-def _function_call_to_internal(item: dict) -> dict | None:
+def _function_call_to_internal(item: dict, position: int = 0) -> dict | None:
     """Translate one ``{type: "function_call"}`` input item into an
     OpenAI ``tool_calls`` entry (NOT an assistant message on its own -
     consecutive entries are folded into one assistant message by the
@@ -118,7 +119,11 @@ def _function_call_to_internal(item: dict) -> dict | None:
     so the following ``function_call_output`` (which references it via the
     same ``call_id``) maps to a matching ``role: "tool"`` message
     losslessly - the same trick the Anthropic layer uses with ``toolu_``
-    ids.
+    ids. A call item that arrives with NO id gets a deterministic
+    placeholder (``call_missing_<item position>``) instead of a random one:
+    the same input must always translate to the same ids, because the
+    following output item (and, for stateful clients, the next turn's
+    replay) has to be able to pair against it.
     """
     name = item.get("name")
     if not name:
@@ -127,7 +132,7 @@ def _function_call_to_internal(item: dict) -> dict | None:
     if not isinstance(arguments, str):
         arguments = json.dumps(arguments or {})
     return {
-        "id": item.get("call_id") or _new_id("call"),
+        "id": item.get("call_id") or f"call_missing_{position}",
         "type": "function",
         "function": {"name": name, "arguments": arguments},
     }
@@ -138,16 +143,23 @@ def _function_call_output_to_internal(item: dict) -> dict | None:
 
     ``output`` is a plain string on the wire; some clients wrap it as
     ``{"content": ...}`` or ``{"output": ...}`` - both flatten.
+
+    An output item with NO ``call_id`` is still forwarded (as a ``tool``
+    message with an empty id) rather than dropped: dropping it would lose
+    the tool's result text entirely. ``repair_tool_pairing`` binds it to
+    the assistant call it answers, or the request is refused - either way
+    a half-paired history never reaches an upstream.
     """
-    call_id = item.get("call_id")
-    if not call_id:
-        return None
     output = item.get("output")
     if isinstance(output, dict):
         output = output.get("content", output.get("output", ""))
     if not isinstance(output, str):
         output = json.dumps(output) if output is not None else ""
-    return {"role": "tool", "tool_call_id": call_id, "content": output}
+    return {
+        "role": "tool",
+        "tool_call_id": item.get("call_id") or "",
+        "content": output,
+    }
 
 
 def responses_to_internal(input_value, instructions=None) -> list:
@@ -199,7 +211,7 @@ def responses_to_internal(input_value, instructions=None) -> list:
             pending_calls = []
             pending_content = None
 
-        for item in input_value:
+        for item_index, item in enumerate(input_value):
             if not isinstance(item, dict):
                 raise ValueError("Each input item must be an object")
             item_type = item.get("type")
@@ -218,7 +230,7 @@ def responses_to_internal(input_value, instructions=None) -> list:
                 _flush_pending()
                 internal.append(translated)
             elif item_type == "function_call":
-                translated = _function_call_to_internal(item)
+                translated = _function_call_to_internal(item, item_index)
                 if translated is not None:
                     pending_calls.append(translated)
             elif item_type == "function_call_output":
@@ -238,7 +250,12 @@ def responses_to_internal(input_value, instructions=None) -> list:
 
     if not internal:
         raise ValueError("Request contains no usable text content")
-    return internal
+    # Last chance to guarantee the provider's pairing invariant: a
+    # translation that folds badly (out-of-order/interleaved calls,
+    # outputs missing their id) is repaired here, or refused with a
+    # ValueError the endpoint answers as a 400 - half-paired history is
+    # never forwarded upstream.
+    return repair_tool_pairing(internal)
 
 
 def responses_tools_to_openai(tools: list | None) -> list | None:
@@ -437,17 +454,21 @@ async def _complete(
 def _stream_assistant_message(reply_text: str, tool_states: dict) -> dict:
     """Assemble the internal assistant message for a finished stream.
 
-    ``tool_states`` maps upstream ``tool_calls`` index → accumulated
-    ``{call_id, name, arguments}``. Call ids are deterministic (ascending
-    upstream index order), matching what the client received in the SSE
-    frames so the persisted history lines up with what was streamed.
+    ``tool_states`` maps the gateway's own first-seen sequence → the
+    accumulated ``{call_id, name, arguments}``. The ``call_id`` is
+    allocated exactly ONCE when the tool state is created and is the very
+    same string the client received in the SSE frames, so the persisted
+    history can never disagree with what was streamed (an id generated
+    here instead would make the client's next ``tool_result`` reference
+    an id the stored assistant turn does not carry - which is what an
+    upstream rejects as "insufficient tool messages").
     """
     tool_calls = []
-    for idx in sorted(tool_states):
-        state = tool_states[idx]
+    for seq in sorted(tool_states):
+        state = tool_states[seq]
         tool_calls.append(
             {
-                "id": state["call_id"] or _new_id("call"),
+                "id": state["call_id"],
                 "type": "function",
                 "function": {
                     "name": state["name"] or "",
@@ -530,6 +551,8 @@ async def build_stream_events(
     text_output_index = None
     text_started = False
     tool_states: dict = {}
+    current_by_index: dict = {}
+    next_tool_seq = 0
     completed_items: list = []
     next_output_index = 0
 
@@ -550,6 +573,7 @@ async def build_stream_events(
         the caller can ``yield from`` it inside the async loop)."""
         nonlocal reply_text, finish_reason, text_started
         nonlocal text_item_id, text_output_index, next_output_index
+        nonlocal next_tool_seq
         finish_reason = _delta_finish(chunk) or finish_reason
         piece = _delta_piece(chunk)
         if piece:
@@ -595,19 +619,39 @@ async def build_stream_events(
                 },
             )
         for tool_call in _delta_tool_calls(chunk):
-            index = tool_call.get("index", 0)
-            state = tool_states.get(index)
+            upstream_index = tool_call.get("index", 0)
+            delta_id = tool_call.get("id")
+            function = tool_call.get("function") or {}
+            state = current_by_index.get(upstream_index)
+            if state is not None and delta_id and delta_id != state["call_id"]:
+                # The provider reused an upstream index for a DIFFERENT
+                # call (fallback/broken post-processing): that is a new
+                # tool call, never a merge into the one already open -
+                # merging would corrupt both calls' arguments and ids.
+                state = None
+            if (state is not None and function.get("name")
+                    and state["name"]
+                    and function.get("name") != state["name"]):
+                # A genuine continuation delta never re-sends the function
+                # name. A NEW name on an index that already has an open
+                # call is the NIM failure mode (second call, same index,
+                # id omitted): it starts a NEW call, not a merge.
+                state = None
             if state is None:
-                function = tool_call.get("function") or {}
                 state = {
                     "output_index": next_output_index,
                     "item_id": _new_id("fc"),
-                    "call_id": tool_call.get("id"),
-                    "name": function.get("name"),
+                    # Allocated ONCE here (a missing upstream id gets one
+                    # now), and reused verbatim by the close loop and by
+                    # _stream_assistant_message.
+                    "call_id": delta_id or _new_id("call"),
+                    "name": function.get("name") or "",
                     "arguments": "",
                 }
                 next_output_index += 1
-                tool_states[index] = state
+                tool_states[next_tool_seq] = state
+                next_tool_seq += 1
+                current_by_index[upstream_index] = state
                 yield sse_frame(
                     "response.output_item.added",
                     {
@@ -616,14 +660,22 @@ async def build_stream_events(
                         "item": {
                             "type": "function_call",
                             "id": state["item_id"],
-                            "call_id": state["call_id"] or "",
-                            "name": state["name"] or "",
+                            "call_id": state["call_id"],
+                            "name": state["name"],
                             "arguments": "",
                             "status": "in_progress",
                         },
                     },
                 )
-            function = tool_call.get("function") or {}
+            else:
+                # Late id/name arrivals only fill a gap; they never
+                # re-write what the client was already told, so the
+                # streamed and persisted ids stay identical.
+                if delta_id and not state["call_id"]:
+                    state["call_id"] = delta_id
+                name = function.get("name")
+                if name and not state["name"]:
+                    state["name"] = name
             arguments = function.get("arguments")
             if arguments:
                 state["arguments"] += arguments
@@ -693,9 +745,11 @@ async def build_stream_events(
         )
         completed_items.append(_message_item(text_item_id, reply_text))
 
-    for index in sorted(tool_states):
-        state = tool_states[index]
-        call_id = state["call_id"] or _new_id("call")
+    for seq in sorted(tool_states):
+        state = tool_states[seq]
+        # The same id the client already saw in output_item.added - never
+        # re-generated, so the SSE frames and the persisted turn agree.
+        call_id = state["call_id"]
         arguments = state["arguments"] or "{}"
         yield sse_frame(
             "response.function_call_arguments.done",

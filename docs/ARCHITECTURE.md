@@ -242,6 +242,89 @@ touching the core.
 
 ---
 
+## 3b. Streaming tool-call assembly & the pairing invariant
+
+### Tool-call ids are allocated exactly once
+
+A streamed assistant tool call crosses three surfaces: the SSE frame the
+client sees live, the assembled `response.completed` / `message_stop`
+output, and the persisted history the next turn replays. If the id is
+generated independently on each surface, an upstream that omits the id in
+its deltas (see the NIM/vLLM note in [PROVIDERS.md](PROVIDERS.md)) yields
+a client-visible id that differs from the persisted one — the exact shape
+DeepSeek rejects with "insufficient tool messages following tool_calls".
+
+Both streaming state machines therefore allocate the id ONCE, at tool
+state creation, and reuse that single string everywhere:
+
+- `compat/responses.py` — `feed()` keys per-index states; the id is set
+  when the state is created and reused by the initial
+  `response.output_item.added`, the close loop, and
+  `_stream_assistant_message` (persistence).
+- `compat/anthropic.py` — same discipline for `content_block_start` and
+  `_stream_assistant_message`; the request-side translators never mint
+  throwaway `call_…` ids either (a missing `tool_use_id` becomes an
+  empty string that `repair_tool_pairing` handles, see below).
+
+Feed hardening: an upstream index that reappears carrying a DIFFERENT
+non-empty id is treated as a NEW call (its own state/block), never a
+merge of the first; a missing id/name on a later delta only fills a gap
+and never rewrites what the client was already told.
+
+### The pairing invariant (`repair_tool_pairing`)
+
+`compat/common.py::repair_tool_pairing(messages)` is a pure
+validate-and-repair pass run on every fully assembled outgoing message
+list, before routing:
+
+- Invariant: every assistant message with `tool_calls` is immediately
+  followed by tool messages covering ALL of its ids before any non-tool
+  message; every tool message's `tool_call_id` exists in the
+  immediately-preceding assistant turn.
+- Repair: misplaced/buffered tool outputs are folded into the nearest
+  under-covered assistant turn; a call whose result never arrives is
+  dropped; a missing call id is synthesized and matched to its result.
+- If still unsatisfiable it raises `ValueError` naming the offending
+  message index; the endpoints map that to a protocol-correct 400
+  (`invalid_request_error`). A half-paired list is never forwarded.
+
+Wired at: the end of `responses_to_internal`, and on the assembled
+`full_messages` in all three endpoints (`responses_compat.py`,
+`anthropic_compat.py`, `openai_compat.py`).
+
+### Stateless vs stateful asymmetry
+
+- `/v1/responses` (Codex) is **stateless**: the client resends the full
+  conversation, and the endpoint does NOT prepend stored history. The
+  pairing risk lives in the request's own item order (out-of-order /
+  interleaved `function_call` / `function_call_output`), which the fold
+  in `responses_to_internal` plus `repair_tool_pairing` handles.
+- `/v1/messages` (Claude Code) and `/v1/chat/completions` are
+  **stateful**: the endpoint prepends persisted history. A streamed id
+  mismatch (persisted Y vs client-resent X) used to surface here as
+  `assistant{tool_calls:[Y]} tool{X}` — DeepSeek's exact 400. Id
+  single-sourcing removes the divergence; `repair_tool_pairing` on the
+  assembled `full_messages` is the backstop.
+
+### `_iter_stream` split-JSON buffering
+
+`router.py::_iter_stream` buffers a JSON object across `data:` lines
+before `json.loads` (vLLM-backed deployments split chunks, and a chunked
+tool-call block can arrive straddling lines), tolerates `[DONE]`
+variants, and flushes at EOF. `JSONDecodeError` is raised only for a
+genuinely malformed FIRST chunk (the failover signal); a malformed chunk
+later in an otherwise healthy stream is logged and skipped instead of
+tearing the stream down.
+
+`INVINCIBLE_DEBUG_STREAM=1` (via `core/settings.py`) opt-in dumps a
+per-request file (`debug_stream_<request_id>.json`: outgoing payload +
+raw upstream SSE chunks + assembled tool states), gitignored (like the
+`debug_400_*.json` dumps) and silent when unset. Every attempt log line
+and `runs` row carries the same `request_id` (also returned as
+`x-invincible-request-id`).
+
+---
+
 ## 4. Context trimming (`router.py`)
 
 Purpose: each provider has its own context window (`max_context`); the
