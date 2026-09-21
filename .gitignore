@@ -20,6 +20,7 @@ build/
 .pytest_cache/
 .ruff_cache/
 .verify/
+.pgdev/
 .coverage
 coverage.xml
 
