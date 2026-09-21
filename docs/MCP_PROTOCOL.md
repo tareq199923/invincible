@@ -1,8 +1,8 @@
 # MCP Protocol — client-facing spec
 
 This is the contract for anything that wants to call Invincible's tools over
-HTTP: a cloud-hosted AI reaching your machine through a tunnel, a script, or
-a manual `curl`. The server speaks a **minimal JSON-RPC 2.0 subset** over a
+HTTP: the hosted service, your own deployed server, a script, or a manual
+`curl`. The server speaks a **minimal JSON-RPC 2.0 subset** over a
 single `POST /mcp` — it is not a general-purpose MCP transport (no
 streaming/SSE, no subscriptions, no batch).
 
@@ -15,15 +15,19 @@ own built-in authorization server. This matches what MCP-compatible clients
 
 ## 1. Discovery
 
+Every URL below is **derived from the request's own base URL**: the hosted
+service answers with `https://invincible-ai.me`, a deployed server with its
+own domain, and a local `invincible start` with `http://127.0.0.1:8000`.
+
 ### Protected-resource metadata (RFC 9728) — the MCP server
 
 `GET /.well-known/oauth-protected-resource`:
 
 ```json
 {
-  "resource": "http://127.0.0.1:8000/mcp",
-  "canonical_uri": "http://127.0.0.1:8000/mcp",
-  "authorization_servers": ["http://127.0.0.1:8000"]
+  "resource": "https://invincible-ai.me/mcp",
+  "canonical_uri": "https://invincible-ai.me/mcp",
+  "authorization_servers": ["https://invincible-ai.me"]
 }
 ```
 
@@ -31,7 +35,7 @@ This is where a client starts after hitting a `401` with this header:
 
 ```http
 HTTP/1.1 401 Unauthorized
-WWW-Authenticate: Bearer resource_metadata="http://127.0.0.1:8000/.well-known/oauth-protected-resource"
+WWW-Authenticate: Bearer resource_metadata="https://invincible-ai.me/.well-known/oauth-protected-resource"
 ```
 
 ### Authorization-server metadata (RFC 8414) — the OAuth server
@@ -40,11 +44,11 @@ WWW-Authenticate: Bearer resource_metadata="http://127.0.0.1:8000/.well-known/oa
 
 ```json
 {
-  "issuer": "http://127.0.0.1:8000",
-  "authorization_endpoint": "http://127.0.0.1:8000/oauth/authorize",
-  "token_endpoint": "http://127.0.0.1:8000/oauth/token",
-  "registration_endpoint": "http://127.0.0.1:8000/oauth/register",
-  "revocation_endpoint": "http://127.0.0.1:8000/oauth/revoke",
+  "issuer": "https://invincible-ai.me",
+  "authorization_endpoint": "https://invincible-ai.me/oauth/authorize",
+  "token_endpoint": "https://invincible-ai.me/oauth/token",
+  "registration_endpoint": "https://invincible-ai.me/oauth/register",
+  "revocation_endpoint": "https://invincible-ai.me/oauth/revoke",
   "response_types_supported": ["code"],
   "grant_types_supported": ["authorization_code", "refresh_token"],
   "code_challenge_methods_supported": ["S256"],
@@ -653,7 +657,15 @@ errors — they are successful calls whose `result.isError` is `true`.
 
 ---
 
-## 7. End-to-end example (tunnel)
+## 7. End-to-end example (hosted URL or self-host tunnel)
+
+### Hosted / deployed server (the normal case)
+
+Point the client at `https://your-domain/mcp` — the hosted service is
+`https://invincible-ai.me/mcp` — and approve the connector in the browser.
+Discovery (§1) takes it from there; no tunnel is involved.
+
+### Self-host on a machine without a public URL
 
 `invincible start` launches a named Cloudflare tunnel alongside the server
 (`cloudflared tunnel run <name>`, default name `invincible`; override with
@@ -682,7 +694,10 @@ curl -i -X POST https://random-name.trycloudflare.com/mcp \
 
 A compliant MCP client then auto-discovers the authorization server and
 runs the OAuth flow (§3) in the browser. For **manual testing without a
-browser**, use the built-in helper:
+browser on a local/self-hosted server**, use the built-in helper (it
+registers a client against *that server's* database and prints a
+ready-to-paste token — hosted users get their token from the browser
+connector flow instead):
 
 ```bash
 invincible oauth test-client

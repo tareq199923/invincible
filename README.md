@@ -4,19 +4,26 @@
 > `ai-gateway`). Throughout this repo the project is referred to as
 > **Invincible**.
 
-> **Project direction:** Invincible is evolving into a **remote-first,
-> multi-user AI continuity platform** — accounts, projects, shared memory
-> across models, context intelligence, and a web dashboard
-> (invincible-ai.me). The release documented below is the current,
-> working **local gateway**. See [docs/ROADMAP.md](docs/ROADMAP.md) for
-> the direction, what is implemented today, and what is planned.
+> **Project direction:** Invincible is a **remote-first, multi-user AI
+> continuity platform** — accounts, projects, shared memory across models,
+> context intelligence, and a web dashboard (invincible-ai.me). Users
+> install one CLI command on their own PC and pair with the hosted service;
+> the database, provider credentials, and all state live server-side. The
+> same code runs as a single-user self-host. See
+> [docs/ROADMAP.md](docs/ROADMAP.md) for the direction, what is implemented
+> today, and what is planned.
 
 ---
 
 ## What is Invincible?
 
-A local, Python (FastAPI) server that runs on your development machine and
-serves two roles in one process:
+A **remote-first, multi-user AI gateway**: one Python (FastAPI) service that
+many users sign into, each with their own projects, API keys, provider
+credentials, memory, and continuity — served over HTTPS from any host. The
+same code runs as a single-user self-host on a laptop (the local/self-hosted
+mode is supported indefinitely); nothing else changes between the two.
+
+It serves three roles in one process:
 
 1. **Self-Service BYOK Gateway** — an OpenAI-compatible `/v1/chat/completions`
    endpoint where every user authenticates with their own `inv_` API key and
@@ -26,10 +33,15 @@ serves two roles in one process:
    **Anthropic Messages API** (`POST /v1/messages`) and the **OpenAI
    Responses API** (`POST /v1/responses`), so Claude Code, Codex CLI, and
    other native clients plug in with a one-line config change.
-2. **Local MCP Tool Server** — a JSON-RPC 2.0 `/mcp` endpoint exposing
-   `read_file`, `execute_bash`, and `write_file` to a cloud-hosted AI that
-   reaches your machine through a tunnel, letting it read local files, write
-   code, and run commands on your box.
+2. **Multi-user account platform** — browser accounts (email + password, or
+   GitHub), a dashboard for sessions, memory, usage, and provider
+   credentials, and strict per-user ownership: one account can never read
+   another's sessions, memory, or history.
+3. **MCP Tool Server** — a JSON-RPC 2.0 `/mcp` endpoint exposing
+   `read_file`, `execute_bash`, and `write_file` to a cloud-hosted AI. With
+   `INVINCIBLE_AGENT_ROUTING=1` (required on any public multi-user
+   deployment) the tools execute on **the user's own paired machine**, so a
+   remote AI acts on *their* files under *their* account.
 
 ### Why it exists
 
@@ -40,10 +52,10 @@ serves two roles in one process:
   credential in the user's own routing order. The agent sees a single,
   stable endpoint.
 - **The cloud-to-local gap.** Cloud AI tools (e.g. the Claude web/mobile app)
-  can reason well but cannot read your local files, write to disk, or run
+  can reason well but cannot read the user's files, write to disk, or run
   terminal commands. Invincible's MCP server exposes those capabilities over
-  HTTP, so a remote model can act on the local machine — under owner
-  confirmation for anything destructive.
+  HTTPS, so a remote model can act on each user's own machine — under that
+  user's confirmation for anything destructive.
 
 ---
 
@@ -51,6 +63,7 @@ serves two roles in one process:
 
 | Feature | What it gives you |
 |---|---|
+| **Remote-first, multi-user** | One deployment serves many accounts over HTTPS: browser accounts (email+password or GitHub), per-user projects/API keys/provider credentials, a dashboard, and strict per-user ownership — one account can never read another's data (audited; see [docs/MULTI-TENANT-AUDIT.md](docs/MULTI-TENANT-AUDIT.md)). The same core self-hosts on a laptop, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers running it on a host. |
 | **BYOK routing** | Every user connects their own provider credentials (dashboard → Providers) and routes only through them: `auto`/`pinned`/`chain` routing per user, 429/5xx → cooldown + next credential, 401/403 → skip, network errors → next. No credentials connected → HTTP 400. All credentials exhausted → HTTP 503. |
 | **Exponential cooldown** | 30s → 60s → 120s → 240s → capped at 300s; a success resets the counter (in-memory, process-scoped). |
 | **Conversation memory** | PostgreSQL-backed (Phase 16), keyed by the `X-Session-Id` header (default `default`). History is merged into every request and the assistant reply is persisted back. |
@@ -64,33 +77,87 @@ serves two roles in one process:
 
 ## Installation
 
-Requires Python 3.10+ **and** a PostgreSQL database (all state —
+**Users: one install command. That's all.**
+
+```bash
+pip install invincible-ai
+invincible agent
+```
+
+The first run pairs your machine with the hosted service
+(`https://invincible-ai.me` — the default): your browser opens, you
+register or sign in, click **Approve**, and the agent starts. There is
+**no database to set up, no `.env`, no provider configuration** on your
+machine — your account, connected provider keys, memory, and sessions all
+live on the hosted service. The local agent only executes confirmed tool
+actions on your PC. Finish by adding `https://invincible-ai.me/mcp` as the
+MCP connector in Claude (or any MCP client) — see
+[Quick Start](#quick-start). (`invincible login` does the same pairing
+without starting the agent loop.)
+
+**Operators only: running your own server.** Everything above works
+against the hosted service without it. If you self-host or operate an
+instance, you need Python 3.10+ **and** a PostgreSQL database (all state —
 conversations, OAuth grants, task state, staged approvals — lives there;
-`INVINCIBLE_DB_URL` is required to start).
+`INVINCIBLE_DB_URL` is required to start):
 
 ```bash
 pip install -e .
-invincible --version                 # verify
+invincible setup --db-url postgresql://user:pass@your-db-host:5432/invincible
+invincible db upgrade                # create/migrate the schema (explicit, never auto-run)
+invincible start --host 0.0.0.0      # omit --host for a loopback-only dev server
 ```
 
-Easiest local database setup (pick one):
-
-```bash
-invincible dev-db                    # provisions/verifies local Postgres, prints the URL
-docker compose up                    # or: bundled app + postgres pair; the app upgrades its own schema
-```
+TLS, `$PORT`, proxy headers, the two-role database split, the container
+start command, required secrets, and the go-live checklist:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Development shortcuts
+(`invincible dev-db`, `docker compose up`) and the full CLI reference:
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ---
 
 ## Quick Start
 
-```bash
-cp .env.example .env                # then fill in API keys
+### A. Use the hosted service (one install command)
 
-invincible setup                    # secrets, provider keys, and your DB URL choice
-invincible dev-db                   # local Postgres ready + URL (or use docker compose)
+```bash
+pip install invincible-ai
+invincible agent       # first run: browser opens → sign in or register → Approve
+```
+
+Pairing registers your account on `https://invincible-ai.me` and saves the
+minted key to `~/.invincible/config.json`. Then, in the dashboard:
+
+1. **Providers** — connect your own provider keys (BYOK).
+2. **MCP connector** — add `https://invincible-ai.me/mcp` to Claude (or any
+   MCP client) and approve the client when the browser asks.
+
+With the agent running, a remote AI can read/write files and run commands
+**on your machine**, under your account's approvals. Prefer raw API access
+instead? Mint an `inv_` key (dashboard → Account → API keys) and call the
+gateway directly:
+
+```bash
+export INVINCIBLE_BASE=https://invincible-ai.me
+export INVINCIBLE_API_KEY=inv_...        # dashboard -> Account -> API keys
+
+curl $INVINCIBLE_BASE/v1/chat/completions \
+  -H "Authorization: Bearer $INVINCIBLE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
+```
+
+Every account is independent: the same commands work for every user with
+their own `inv_` key, their own connected provider credentials, and their own
+sessions — no account can see or route through another's.
+
+### B. Run your own server (operators / self-hosters — users never do this)
+
+```bash
+invincible setup --db-url postgresql://user:pass@db-host:5432/invincible
 invincible db upgrade               # create/migrate the schema (explicit, never auto-run)
-invincible start                    # http://127.0.0.1:8000
+invincible start                    # http://127.0.0.1:8000 (dev loopback)
+invincible start --host 0.0.0.0     # reachable from other machines
 ```
 
 `invincible setup` writes missing secret values (`INVINCIBLE_OWNER_SECRET`)
@@ -100,11 +167,15 @@ via `--db-url` (non-interactive) — preserving your existing `.env` comments
 and values. `INVINCIBLE_OWNER_SECRET` signs account browser sessions
 (dashboard login, OAuth consent) — not something `/mcp` requests send.
 
-The bundled `docker compose up` pair needs none of the manual DB steps: the
-app container runs `invincible db upgrade` before serving. The Dockerfile
-CMD honors `INVINCIBLE_MIGRATE_DB_URL` the same way — when set, that DSN
-(schema-owner role) is used for the one `db upgrade` command while the app
-itself always serves on `INVINCIBLE_DB_URL`.
+For a real host — TLS, `$PORT`, proxy headers, the two-role database split,
+the container start command (`0.0.0.0:$PORT`), and the go-live checklist —
+follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Development-only database
+shortcuts are covered in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
+Clients of your own server point at it explicitly:
+`invincible agent --server https://mycompany.ai` (and
+`ANTHROPIC_BASE_URL=https://mycompany.ai` for Claude Code). The hosted
+service is the CLI default, so your users pass no flag at all.
 
 See [Examples](#examples) for ready-to-run `curl` calls, or continue reading
 for the full configuration, API, and tooling reference.
@@ -119,11 +190,12 @@ Everything is environment variables plus one YAML file — no other config.
 
 | Variable | Required by | Purpose |
 |---|---|---|
-| `INVINCIBLE_DB_URL` | startup (**required since Phase 16**) | PostgreSQL DSN for all persistent state, e.g. `postgresql+asyncpg://invincible@localhost:5433/invincible`. Provision with `invincible dev-db` or the bundled compose pair; masked in `doctor` output. |
+| `INVINCIBLE_DB_URL` | startup (**required since Phase 16**) | PostgreSQL DSN for all persistent state. Use a **managed/reachable** PostgreSQL on a remote deployment, e.g. `postgresql+asyncpg://invincible_app:***@your-db-host:5432/invincible` (Neon, RDS, Azure Database for PostgreSQL, a container, or your own cluster). `invincible dev-db` (local, dev-only) or the bundled compose pair are the laptop shortcuts. Masked in `doctor` output. |
+| `INVINCIBLE_MIGRATE_DB_URL` | container/platform deploys | Schema-owner DSN used **only** for the one `db upgrade` the image runs at startup (falling back to `INVINCIBLE_DB_URL` when unset), so migrations run as the migrate role while the server serves as the CRUD-only runtime role. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §Database. |
 | `INVINCIBLE_OWNER_SECRET` | account sessions | Signs account browser sessions (dashboard login, OAuth consent). **Not** sent on `/mcp` — requests use short-lived OAuth Bearer tokens. **If unset, browser sessions fail closed (no login, no consent).** The legacy `MCP_SHARED_SECRET` key is still read as a fallback. Rotating it logs every browser out but does **not** revoke MCP grants — use `invincible oauth revoke <client_id>` for that. |
 | `INVINCIBLE_CREDENTIAL_KEY` | BYOK | Fernet master key encrypting stored provider credentials at rest. Generated by `invincible setup` (or `invincible secret credential-key`); **back it up** — losing it makes every saved provider key undecryptable. Never rotated by `setup --force`. |
 | `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the PostgreSQL database (`pending_actions` table) and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
-| `INVINCIBLE_AGENT_ROUTING` | startup | **Opt-in** (Phase 10): route confirmed tool execution to the caller's paired local agent (`invincible agent`) instead of running it on the server host. **Off by default** — tools execute locally on the server, exactly as before. |
+| `INVINCIBLE_AGENT_ROUTING` | startup (**required on public multi-user deployments**) | Routes confirmed tool execution to the caller's paired agent (`invincible agent`) instead of the server host. Unset/off is the single-user self-host posture (a one-person `invincible start`), where tools run on the server host under the server's privileges — **never acceptable when strangers can register**. Set `1` on every public/hosted deployment: see [docs/SECURITY.md](docs/SECURITY.md) §10 and the checklist in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). |
 | `INVINCIBLE_AGENT_ROOT` | agent | Sandbox root for the local agent (default: the user's home directory). Reads and writes outside it are blocked; `.env*`, `.git`, `.ssh`, SSH keys, `*.pem`, `*credentials*` are blocked by name everywhere. |
 
 `/v1/*` requests authenticate with **per-user `inv_` API keys** (minted on
@@ -133,8 +205,9 @@ own provider credentials on the dashboard's Providers page (BYOK) and
 routes only through them — there is no shared gateway key and no shared
 provider pool.
 
-The secrets are **independent**: a leaked tunnel URL alone is not enough
-to reach tool execution, and rotating one secret never affects the other.
+The secrets are **independent**: a leaked `/mcp` URL alone is not enough to
+reach tool execution (a live OAuth bearer token is required as well), and
+rotating one secret never affects the other.
 
 ### `providers.yaml`
 
@@ -158,9 +231,9 @@ Two commands, both exposed as `invincible` and `inv`:
 |---|---|
 | `invincible setup` | Create/update `.env`: generates missing secrets (`token_urlsafe(32)`, never echoed), prompts for provider keys, preserves existing comments/values; carries a legacy `MCP_SHARED_SECRET` over to `INVINCIBLE_OWNER_SECRET` automatically. `--force` re-prompts existing values. |
 | `invincible secret rotate` | Generate a brand-new `INVINCIBLE_OWNER_SECRET` and rewrite it in place — no manual `.env` editing, never echoes the value (unless `--show`). Preserves every other line; migrates a legacy `MCP_SHARED_SECRET` key away. Does **not** revoke already-issued OAuth grants (that's `invincible oauth revoke`). |
-| `invincible start` | Start the server **and** a Cloudflare tunnel (named `invincible` by default) so the gateway is reachable remotely. Options: `--host` (default `127.0.0.1`), `--port` (default `8000`), `--reload`, `--log-level`, `--env-file`, `--config` (custom providers.yaml), `--tunnel/--no-tunnel`, `--tunnel-name` (or `INVINCIBLE_TUNNEL_NAME`). The tunnel is shut down with the server (Ctrl+C or a crash); a dead tunnel is reported as soon as it exits. There is no database flag — `INVINCIBLE_DB_URL` comes from the env/.env. |
+| `invincible start` | Start the server. `--host` (default `127.0.0.1`; pass `0.0.0.0` to be reachable from other machines), `--port` (default `8000`), `--reload`, `--log-level`, `--env-file`, `--config` (custom providers.yaml), `--tunnel/--no-tunnel` (local convenience: starts a Cloudflare tunnel named `invincible` by default so a laptop can be reached from the internet), `--tunnel-name` (or `INVINCIBLE_TUNNEL_NAME`). The tunnel is shut down with the server (Ctrl+C or a crash); a dead tunnel is reported as soon as it exits. There is no database flag — `INVINCIBLE_DB_URL` comes from the env/.env. **Hosted platforms do not use this command**: the container command in `Dockerfile`/`railway.json`/`Procfile` binds `0.0.0.0:$PORT` with proxy headers — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). |
 | `invincible doctor` | Environment/config diagnostics: providers.yaml, secrets, and PostgreSQL connectivity + schema revision (DSN always password-masked); loud FAIL on a stale/unmanaged schema. |
-| `invincible dev-db` | Provision or verify a local Postgres development database (Docker fallback included) and print/write a working `INVINCIBLE_DB_URL`. |
+| `invincible dev-db` | Provision or verify a local Postgres **development** database (Docker fallback included) and print/write a working `INVINCIBLE_DB_URL`. Loopback-only and dev-credential by design — never the provisioning path for a remote/hosted database ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)). |
 | `invincible db upgrade` | Run the packaged Alembic migrations to head against `INVINCIBLE_DB_URL`. Explicit by design — nothing auto-migrates. |
 | `invincible db import <sessions.db>` | One-shot legacy SQLite importer (sessions/turns/messages, facts, OAuth rows). |
 | `invincible oauth list` | Show registered OAuth clients, their redirect URIs, and active/revoked grants. |
@@ -172,7 +245,7 @@ Two commands, both exposed as `invincible` and `inv`:
 | `invincible users list` | List accounts (host tool; roles are informational only). |
 | `invincible users reset-password <email>` | Reset an account's password (host recovery path — database access is the proof of authority; `--generate` prints a strong password once). Every browser session for the account is signed out; `inv_` keys and MCP tokens are untouched. |
 | `invincible login [--server URL]` | Pair this machine with an Invincible server (device flow): opens the approval page in your browser — click Approve and the command finishes, saving the `inv_` key to `~/.invincible/config.json`. Defaults to the hosted service (`https://invincible-ai.me`); pass `--server` for a self-hosted or local server. URL + code are printed for headless terminals; the Account page also has a "Pair a device" box for typing a code by hand. |
-| `invincible agent` | Run the local agent (Phase 10): polls the paired server for confirmed tool jobs and executes them on **this machine** with your own user privileges — denylist re-checked locally, reads/writes sandboxed to your home. Ctrl+C to stop. Requires `invincible login` first. |
+| `invincible agent` | Run the local agent (Phase 10): polls the paired server for confirmed tool jobs and executes them on **this machine** with your own user privileges — denylist re-checked locally, reads/writes sandboxed to your home. Ctrl+C to stop. First run pairs automatically (device flow); `invincible login` is the explicit pairing/repair tool. |
 
 ```bash
 invincible setup --force
@@ -378,17 +451,25 @@ Deep dive (failover state machine, context trimming): [docs/ARCHITECTURE.md](doc
 
 ## Examples
 
+Every call below uses `$INVINCIBLE_BASE` — the hosted service, or your own
+server:
+
+```bash
+export INVINCIBLE_BASE=https://invincible-ai.me   # or http://127.0.0.1:8000 locally
+export INVINCIBLE_API_KEY=inv_...                 # dashboard -> Account -> API keys
+```
+
 ### 1. Health check
 
 ```bash
-curl http://127.0.0.1:8000/
+curl $INVINCIBLE_BASE/
 # {"status": "healthy"}
 ```
 
 ### 2. List models
 
 ```bash
-curl http://127.0.0.1:8000/v1/models \
+curl $INVINCIBLE_BASE/v1/models \
   -H "Authorization: Bearer $INVINCIBLE_API_KEY"
 # {
 #   "object": "list",
@@ -407,7 +488,7 @@ configured.
 ### 3. Chat with session memory
 
 ```bash
-curl http://127.0.0.1:8000/v1/chat/completions \
+curl $INVINCIBLE_BASE/v1/chat/completions \
   -H "Authorization: Bearer $INVINCIBLE_API_KEY" \
   -H "Content-Type: application/json" \
   -H "X-Session-Id: my-conversation" \
@@ -421,7 +502,7 @@ conversation.
 ### 4. Stream a chat (SSE)
 
 ```bash
-curl -N http://127.0.0.1:8000/v1/chat/completions \
+curl -N $INVINCIBLE_BASE/v1/chat/completions \
   -H "Authorization: Bearer $INVINCIBLE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "Hello!"}], "stream": true}'
@@ -443,14 +524,14 @@ data: [DONE]
 ### 5. Use it from Claude Code (Anthropic)
 
 ```bash
-ANTHROPIC_BASE_URL=http://127.0.0.1:8000 claude
+ANTHROPIC_BASE_URL=https://invincible-ai.me claude   # or your own server URL
 ```
 
 Claude Code probes `HEAD /`, then calls `POST /v1/messages` with streaming.
 You can send the same call directly:
 
 ```bash
-curl http://127.0.0.1:8000/v1/messages \
+curl $INVINCIBLE_BASE/v1/messages \
   -H "Authorization: Bearer $INVINCIBLE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"claude-sonnet-4","max_tokens":1024,
@@ -462,16 +543,19 @@ And stream it (`stream: true`) to receive Anthropic SSE events ending in
 
 ### 6. List MCP tools
 
-First get an MCP access token (one-time browser consent, or the headless
-helper):
+First get an MCP access token. On the hosted service, add the connector in
+your MCP client at `$INVINCIBLE_BASE/mcp` and approve it in the browser —
+the client then holds the token. On a **local/self-hosted** server the
+headless helper registers a client against *that* server's database and
+prints a ready-to-use Bearer token:
 
 ```bash
-invincible oauth test-client   # outputs a Bearer token + curl command
+invincible oauth test-client --env-file .env   # prints a token + curl example
 export ACCESS_TOKEN=...
 ```
 
 ```bash
-curl -X POST http://127.0.0.1:8000/mcp \
+curl -X POST $INVINCIBLE_BASE/mcp \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
@@ -480,7 +564,7 @@ curl -X POST http://127.0.0.1:8000/mcp \
 ### 7. Run a command via MCP
 
 ```bash
-curl -X POST http://127.0.0.1:8000/mcp \
+curl -X POST $INVINCIBLE_BASE/mcp \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call",
@@ -492,7 +576,7 @@ approve it, call `confirm_action` with that token (or deny with
 `approve: false`):
 
 ```bash
-curl -X POST http://127.0.0.1:8000/mcp \
+curl -X POST $INVINCIBLE_BASE/mcp \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call",
@@ -503,15 +587,19 @@ curl -X POST http://127.0.0.1:8000/mcp \
 The command runs (or the file is written) only after approval; the token is
 single-use and expires after 10 minutes.
 
-### 8. Expose to a cloud AI over a tunnel
+### 8. Reach it from a cloud AI
 
-`invincible start` brings the tunnel up automatically: it runs
-`cloudflared tunnel run <name>` (name defaults to `invincible`, override
-with `--tunnel-name` or `INVINCIBLE_TUNNEL_NAME`) alongside the server and
-shuts it down again when the server stops. cloudflared's log lines (and the
-public URL when cloudflared prints one) appear prefixed `[tunnel]`; a
-tunnel that dies is reported as soon as it exits. To skip the tunnel, pass
-`--no-tunnel`.
+On a deployed server the plain HTTPS URL is the entry point: point the MCP
+client at `https://your-domain/mcp` (or `https://invincible-ai.me/mcp` on the
+hosted service) and approve the connector in the browser.
+
+A laptop has no public URL, so `invincible start` starts a Cloudflare tunnel
+alongside the server by default: `cloudflared tunnel run <name>` (name
+defaults to `invincible`, override with `--tunnel-name` or
+`INVINCIBLE_TUNNEL_NAME`). cloudflared's log lines (and the public URL when
+cloudflared prints one) appear prefixed `[tunnel]`; a tunnel that dies is
+reported as soon as it exits, and it is shut down with the server. To skip
+the tunnel, pass `--no-tunnel`.
 
 For a one-off quick tunnel instead (no named-tunnel config required):
 
@@ -520,8 +608,8 @@ cloudflared tunnel --url http://127.0.0.1:8000
 # → https://random-name.trycloudflare.com  — call /mcp on this URL
 ```
 
-The tunnel URL alone is useless without an access token — and any valid
-token can be revoked immediately with `invincible oauth revoke <client_id>`.
+Tunnel or not, the URL alone is useless without an access token — and any
+valid token can be revoked immediately with `invincible oauth revoke <client_id>`.
 
 More MCP protocol details: [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md).
 
@@ -586,9 +674,10 @@ store, and trimming logic consume.
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module map, request flows, context-trimming deep dive, failover state machine. |
 | [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | The `/v1/chat/completions` contract: request, response, status codes, failover semantics. |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | `.env` variables, `providers.yaml` schema, timeouts, session database, CLI reference. |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | `.env` variables, `providers.yaml` schema, timeouts, database options, CLI reference. |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Running it remotely: required env vars, ports/TLS/proxy headers, two-role database, migrations, single-instance constraints, go-live checklist. |
 | [docs/PROVIDERS.md](docs/PROVIDERS.md) | Adding providers, the full schema, model aliases, auth types, supported shapes, troubleshooting. |
-| [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md) | Client-facing `/mcp` spec: JSON-RPC shape, tools, notifications, tunnel setup. |
+| [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md) | Client-facing `/mcp` spec: JSON-RPC shape, tools, notifications, hosted URL vs. self-host tunnel. |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, auth realms, denylist inventory, approval flow, known limits. |
 | [docs/TESTING.md](docs/TESTING.md) | How tests work, fixtures, per-file coverage map. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Current platform direction, a verified snapshot of what is implemented, and the phased plan (identity, isolation, accounts, memory/context intelligence, dashboard, deployment). |
@@ -615,6 +704,11 @@ store, and trimming logic consume.
   multi-tenant audit, every store path is ownership-scoped per principal —
   one user can never read another's sessions, graph, or history, and the
   former operator override is gone.
+- **In-memory server state.** Provider cooldowns, staged approvals (unless
+  `INVINCIBLE_PERSIST_PENDING_ACTIONS` is set), and the agent registry live
+  in the process, so a remote deployment runs a **single instance** (no
+  horizontal autoscaling) and clients simply retry across a restart — see
+  [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 Full details: [docs/SECURITY.md](docs/SECURITY.md) → *Known limits*.
 

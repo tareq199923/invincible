@@ -31,16 +31,55 @@ acceptance journey smoke-tested. Details in
 
 ---
 
+## Recently completed
+
+### Remote-first documentation pass (2026-09-21)
+
+The product was already multi-user and remote (accounts, isolation, BYOK,
+dashboard, agent, container/`$PORT` deploy files) but the entry docs still
+taught a one-machine local setup, and several pages described surfaces that
+had been deleted. Fixed:
+
+- **New [docs/DEPLOYMENT.md](DEPLOYMENT.md)** — host-agnostic remote runbook:
+  required env vars, ports/TLS/proxy headers, the two-role database, the
+  single-instance constraint, operations, and a go-live checklist.
+- **README** — remote-first description, hosted-service + self-host quick
+  starts, `$INVINCIBLE_BASE` in every example, `INVINCIBLE_AGENT_ROUTING=1`
+  marked as required on public deployments, `INVINCIBLE_MIGRATE_DB_URL`
+  documented, dev-db marked dev-only.
+- **CONFIGURATION.md** — managed-Postgres-first database guidance, agent env
+  vars added, accurate CLI surface, remote `start` notes.
+- **MCP_PROTOCOL.md** — discovery/metadata examples now use the hosted URL
+  (they are request-derived), §7 is hosted-first with the tunnel as the
+  self-host path.
+- **Stale facts corrected** — ROADMAP auth/control-plane/CLI/packaging rows
+  and Phase 6 status; ARCHITECTURE module map + migration range;
+  AGENTS.md module map, docs index, and a new deployment-posture convention;
+  a dated post-audit note in MULTI-TENANT-AUDIT.md; and MIGRATION-AZURE.md,
+  which still told the operator to use the removed `GATEWAY_API_KEY`.
+
+---
+
 ## Decisions pending
+
+### `invincible start` remote ergonomics (small, optional)
+
+`start` still defaults to `--host 127.0.0.1`, spawns a Cloudflare tunnel,
+and opens a browser — right for a laptop, irrelevant on a host (deployments
+use the container command). Options if it becomes annoying: a `--remote`
+preset (`0.0.0.0`, `--no-tunnel`, `--no-open-browser`) and honoring `$PORT`.
+Touches pinned CLI tests, so it is deliberately not part of the doc pass.
 
 ### Distribution (#2) — the strategic frontier
 
-"Anyone can use Invincible" currently requires Python + clone + venv +
-a Postgres. With R1 fixed, the journey is now
+The **user** journey against the hosted service is already one command:
+`pip install invincible-ai` + `invincible agent` (device-flow pairing with
+`https://invincible-ai.me` — no database, no `.env`, no provider setup on
+the user's machine). The **operator** journey is
 `install → setup --db-url <DSN> → start` — one command, one argument.
 
 Open decisions (multi-day project, fold into Phase 6/7 planning):
-- **Publishing:** PyPI (`pip install invincible`) vs one-file `.exe`
+- **Publishing:** PyPI (`pip install invincible-ai`) vs one-file `.exe`
   vs both.
 - **The database:** remote-first is now the setup story (Neon etc.),
   matching the roadmap's hosted direction. Remaining question: is a

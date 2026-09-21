@@ -4,6 +4,13 @@
 > 2026-09-02 runs on free trials that expire around **October 2, 2026**.
 > This is the countdown checklist for moving `invincible-ai.me` to
 > Azure for Students before that deadline.
+>
+> **2026-09-21 update:** the auth and env facts below were corrected against
+> the current code — the shared `GATEWAY_API_KEY` no longer exists (removed
+> with the operator role; `/v1/*` takes per-user `inv_` keys only), and the
+> server holds **no provider keys** (users connect their own, BYOK). The
+> host-agnostic runbook for any remote target is
+> [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Deadline
 
@@ -19,7 +26,7 @@
 | App (uvicorn/FastAPI) | Railway, `invincible-gateway` service | Dockerfile deploy, healthcheck `/health` |
 | Domain | `invincible-ai.me` | Cloudflare CNAME, DNS-only mode |
 | Database | Neon ap-southeast-1, `ep-bold-field-azoysw7g` | Two roles: `invincible_app` (runtime), `invincible_migrate` (schema) |
-| Env vars | Railway service variables | 11 secrets (gateway key, owner secret, credential key, DB URL, 6 provider keys) — readable via `railway variables --kv` |
+| Env vars | Railway service variables | `INVINCIBLE_DB_URL` (runtime role), `INVINCIBLE_OWNER_SECRET`, `INVINCIBLE_CREDENTIAL_KEY`, `INVINCIBLE_AGENT_ROUTING=1`, plus optional `INVINCIBLE_MIGRATE_DB_URL`, `INVINCIBLE_PERSIST_PENDING_ACTIONS`, and the GitHub OAuth pair — read them with `railway variables --kv`. There is **no gateway key** (removed) and **no provider keys on the server**: every user connects their own (BYOK). Canonical list: [DEPLOYMENT.md](DEPLOYMENT.md) §2 |
 
 ## Migration checklist
 
@@ -41,8 +48,12 @@
 
 ### 3. App hosting (target: Azure Container Apps or App Service)
 - [ ] Container Apps (recommended): deploy the same Dockerfile, min replicas 1
-- [ ] Set all 11 env vars (copy from `railway variables --kv` before
-      the Railway trial dies — after that they are unreachable)
+- [ ] Set the required env vars (copy from `railway variables --kv` before
+      the Railway trial dies — after that they are unreachable):
+      `INVINCIBLE_DB_URL`, `INVINCIBLE_OWNER_SECRET`,
+      `INVINCIBLE_CREDENTIAL_KEY`, `INVINCIBLE_AGENT_ROUTING=1`, and
+      `INVINCIBLE_MIGRATE_DB_URL` (schema owner) — see
+      [DEPLOYMENT.md](DEPLOYMENT.md) §2
 - [ ] Healthcheck: `/health` (already in `railway.json`, replicate it)
 - [ ] Confirm autoscale min instances = 1 so the site stays up on zero traffic
 
@@ -56,11 +67,19 @@
       `/v1/chat/completions` round-trip
 
 ### 5. Verification (same smoke tests as Phase 7)
-- [ ] `GET /health` → `{"service":"Invincible","status":"ok"}`
-- [ ] `GET /v1/models` with `Authorization: Bearer <GATEWAY_API_KEY>` → 200
-- [ ] Garbage key → 401 (auth gate armed)
-- [ ] Login flow via owner secret on the dashboard
+
+Full checklist: [DEPLOYMENT.md](DEPLOYMENT.md) §7.
+
+- [ ] `GET /health` → `{"service":"Invincible","status":"ok",…}`
+- [ ] Register a throwaway account, log in, and mint an `inv_` key on the
+      Account page
+- [ ] `GET /v1/models` with `Authorization: Bearer inv_…` (that account's
+      key) → 200 after the account has connected its own provider credential
+- [ ] Garbage key → 401 (auth gate armed; per-user `inv_` keys only — the
+      shared gateway key no longer exists)
 - [ ] One BYOK provider round-trip through `/v1/chat/completions`
+- [ ] `INVINCIBLE_AGENT_ROUTING=1` present in the new host's variables, and
+      a paired `invincible agent` shows online on the dashboard MCP page
 
 ### 6. Cleanup
 - [ ] Shut down the Railway service (avoid surprise charges if it converts to paid)

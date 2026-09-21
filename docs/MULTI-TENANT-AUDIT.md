@@ -4,6 +4,27 @@
 **Auditor scope:** all 41 source modules (~18.3k lines), 8 Alembic migrations, test suite.
 **Status:** AUDIT FULLY CLOSED 2026-09-07. Steps 1-5 + MEDIUM-3 all APPLIED (commits 0583bb5, 382cd1d, e113842, fcee36d, 8d623f4 — all deployed to production; suite 1071 passing). §5 manual two-account prod verification PASSED 2026-09-07: two accounts on invincible-ai.me each sent a non-streaming POST /v1/messages with the same session string "default"; each dashboard showed only its own session (B's turn in B's row, absent from A's; BYOK isolation also held — neither account's request ever fell back to the other's or the operator's pool, including during an upstream provider failure). This document is retained as the record.
 
+> **2026-09-21 update — what changed after this audit.** Two surfaces
+> described below no longer exist in the code; they are kept only as the
+> historical record of how the isolation work was reasoned about:
+>
+> - **The operator role, the shared `GATEWAY_API_KEY`, the anonymous
+>   fail-open "local mode", the admin API (`endpoints/admin_api.py`), and
+>   the shared provider pool were all removed** (commit `c3e768f`).
+>   `/v1/*` accepts per-user `inv_` keys only and fails closed in every
+>   mode; the `role` column survives solely on the system local-owner row
+>   and there is no promotion path. The only `/api/v1/*` route left is the
+>   owner-scoped continuity graph. So the "Admin API" row in §2 and the
+>   operator-override references in §3 describe a surface that is gone.
+> - **Routing is per user since Phase 9 (BYOK)**: a deployment has no
+>   provider keys of its own, so "the operator's pool" has no successor.
+>
+> Everything this audit established as the invariant is unchanged and still
+> binding: every store path is ownership-scoped, foreign resources are
+> 404-shaped (never 403-shaped), and no code path may fall back to a shared
+> identity. Current realms and posture: [SECURITY.md](SECURITY.md);
+> remote-deployment requirements: [DEPLOYMENT.md](DEPLOYMENT.md).
+
 ---
 
 ## 1. Background — why these problems exist
@@ -50,7 +71,7 @@ Do not change these — they are the model the fixes should imitate.
 
 | Surface | Where | Verdict |
 |---|---|---|
-| Dual-realm gateway auth | `endpoints/auth.py` | legacy gateway key → local owner; `inv_` key → its user; fail-open anonymous only when `GATEWAY_API_KEY` unset (documented local mode) |
+| Gateway auth | `endpoints/auth.py` | per-user `inv_` key → its user; **fails closed** with no key. *(As audited it was a dual realm with a legacy gateway key and an anonymous local mode — both removed in `c3e768f`.)* |
 | MCP auth | `endpoints/mcp.py:302-345` `require_mcp_auth` | OAuth 2.1 + PKCE bearer tokens resolve to the consenting user's `subject_user_id` |
 | Agent dispatch | `core/agent_registry.py`, `endpoints/agents.py` | **Structurally isolated**: queues/futures keyed by `user_id`; `/agent/poll` + `/agent/result` auth via inv_ key (`require_agent_auth`); `submit_result` rejects wrong-owner/unknown/timed-out jobs indistinguishably. No code path can route user A's job to user B's machine |
 | Agent sandbox | `agent/sandbox.py` | reads/writes confined to user home (or `INVINCIBLE_AGENT_ROOT`), credential-file denylist, client-side re-run of server denylist (wall 2) |
@@ -60,7 +81,7 @@ Do not change these — they are the model the fixes should imitate.
 | Memory store | `core/memory.py` | every method takes mandatory `user_id`, no local-owner fallback; delete is ownership-predicated, foreign = 404 |
 | Continuity/runs reads | `core/continuity.py`, `core/run_store.py` | scoped by `session_pk` resolved under acting principal; `usage_summary`/`list_for_user` isolate via `sessions` join; NULL-`session_pk` legacy rows are inert |
 | Dashboard | `endpoints/dashboard.py` | all routes `require_user_session`; session detail via `lookup_by_pk` with full ownership triple; anti-enumeration everywhere (foreign = 404-shaped) |
-| Admin API | `endpoints/admin_api.py` | fail-closed 503 without `INVINCIBLE_OWNER_SECRET`; operator-role session/key only; 403 for plain users |
+| Admin API | *removed* | `endpoints/admin_api.py` and the operator-role gate are gone (`c3e768f`); host administration is environment variables + the CLI, and no `/api/v1/*` management surface exists. *(Audited state: fail-closed 503 without `INVINCIBLE_OWNER_SECRET`, operator-only.)* |
 | OAuth flow | `endpoints/oauth.py`, `core/oauth_store.py` | PKCE-only, single-use codes, hashed tokens, subject stamped at consent, POST-only consent (SameSite=Lax CSRF posture), per-scope persistent login lockouts |
 | Browser sessions | `core/accounts.py` `SessionManager` | HMAC-signed v2 cookies with `session_version` pinning — password change orphans all prior cookies |
 | Migration 0003 | `migrations/versions/20260826_0003_isolation.py` | backfills all legacy rows to the local owner (correct for single-operator era); NULL-owned rows never match user-scoped queries |
@@ -164,6 +185,10 @@ Do not change these — they are the model the fixes should imitate.
   `test_secret_set_flag_absent_first_registration_is_plain_user` and
   `test_no_secret_bootstraps_without_the_flag`
   (tests/test_first_operator_bootstrap.py).
+- *(Historical note, 2026-09-21: the operator role and the
+  `INVINCIBLE_ALLOW_FIRST_OPERATOR` bootstrap were later removed entirely in
+  `c3e768f` — every registered account is a plain user, and there is no
+  promotion path to race for.)*
 
 ### 🟡 MEDIUM-2 — Legacy pending actions with `owner_subject=None` confirmable by anyone (fail-open)
 
@@ -248,6 +273,9 @@ Do not change these — they are the model the fixes should imitate.
   local mode still works. Regression tests in tests/test_dual_realm.py
   (`test_fail_open_survives_exactly_one_human_account`,
   `test_fail_open_refused_once_multi_user`).
+- *(Historical note, 2026-09-21: the anonymous principal itself was later
+  removed with the gateway key (`c3e768f`) — `require_auth` has no fail-open
+  branch at all any more.)*
 
 ### 🟢 LOW-2 — `ProjectService.rename`/`archive` UPDATE lacks `user_id` predicate
 

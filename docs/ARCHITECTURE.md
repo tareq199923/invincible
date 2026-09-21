@@ -13,7 +13,7 @@ invincible/
 ├── cli.py                      Click CLI (setup / start / login / doctor / dev-db / db / oauth / secret / api-key / users)
 ├── providers.yaml              Static provider config (packaged test fixture)
 ├── templates/                  Jinja2 UI (login/register/account/device pages + dashboard)
-├── migrations/                 Packaged Alembic environment (0001 baseline … 0008 operator_role)
+├── migrations/                 Packaged Alembic environment (0001 baseline … 0009 user_settings)
 ├── endpoints/
 │   ├── auth.py                 require_auth: per-user inv_ API-key Principal resolution for /v1/* (fail closed)
 │   ├── accounts.py             Phase 3: /auth/*, /projects, /api-keys, /sessions,
@@ -33,9 +33,15 @@ invincible/
 │   ├── oauth.py                Built-in OAuth 2.1 + PKCE authorization server
 │   │                           (/.well-known/oauth-*, /oauth/register|authorize|token|revoke;
 │   │                           self-service consent since Phase 2)
+│   ├── agents.py               Phase 10 agent surface: POST /agent/poll + /agent/result
+│   │                           (inv_ key realm), GET /agent/status (session realm)
 │   └── graph.py                GET /api/v1/sessions/{id}/graph (continuity projection, owner-scoped)
 ├── models/
-│   └── anthropic.py            Pydantic request model (ignores unknown fields)
+│   ├── anthropic.py            Pydantic request model (ignores unknown fields)
+│   └── responses.py            OpenAI Responses request model
+├── agent/                      Phase 10 — runs on the USER's machine (`invincible agent`)
+│   ├── runner.py               pairing config + long-poll loop + local denylist re-check
+│   └── sandbox.py              home-confined path scoping + credential-file denylist
 ├── compat/
 │   ├── common.py               Protocol-neutral internal-message helpers
 │   └── anthropic.py            Pure Anthropic translators + SSE streaming
@@ -74,6 +80,16 @@ invincible/
     ├── continuity.py           Task-state/checkpoint engine + continuation brief
     │                           + reactive failover checkpoints (Phase 4)
     └── tool_executor.py        MCP tool execution + denylists + approval
+    ├── agent_registry.py       Per-user agent queues/futures (in-memory, long-poll transport)
+    ├── credential_store.py     BYOK credential persistence (ciphertext at rest)
+    ├── credential_crypto.py    Fernet primitives + the INVINCIBLE_CREDENTIAL_KEY gate
+    ├── user_settings_store.py  Per-user settings (routing mode/order, overrides)
+    ├── provider_catalog.py     Operator-supplied provider constants (never user input)
+    ├── selection.py            Pure auto/pinned/chain attempt ordering
+    ├── trimming.py             Token estimation + turn grouping + per-provider trim
+    ├── config.py               providers.yaml schema validation/loading
+    ├── url_safety.py           SSRF guards for user-supplied provider URLs
+    └── db_import.py            One-shot legacy SQLite → PostgreSQL importer
 ```
 
 Packaging (`pyproject.toml`):

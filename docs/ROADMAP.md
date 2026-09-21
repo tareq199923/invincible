@@ -103,11 +103,11 @@ Verified snapshot of shipped capability (file pointers in
 | Continuity | ContinuityEngine: versioned `task_states` per `(session, task_key)` with optimistic CAS (UNIQUE constraint + advisory locks), immutable checkpoints pinning versions, size-bounded continuation-brief injection, interruption detection from runs; MCP tools `task_state_set/get/checkpoint_create`. |
 | Memory | Phase 4: scoped `memories` (user/project scope, explicit/auto layers, kind, confidence, provenance) written at persist time by the deterministic extractor **and** explicit "remember this"/"save this" triggers; lexical retrieval (`RetrievalService`: generated-tsvector FTS × recency half-life × kind weight × confidence, AND→OR query fallback, relevance floor, top-N); unified-budget injection via `ContextBuilder` (memory + continuity brief under one token cap); the legacy per-session `facts` table is inert history. |
 | MCP | `POST /mcp` JSON-RPC 2.0, ten tools: machine-plane `read_file`, `execute_bash`, `write_file`, `confirm_action` (text-pattern denylists; single-use token approvals bound to the staging subject, audit-written; opt-in PG persistence of staged actions; Phase 10 agent routing moves confirmed execution to the caller's paired local agent); continuity tools `task_state_set`/`task_state_get`/`checkpoint_create`; memory tools `memory_save`/`memory_search`/`memory_list` (data-plane, no confirm gate — confidence 0.9, `mcp:<client>` provenance, ownership-predicated, kill-switch-gated saves, no MCP delete; documented in SECURITY.md §2.0b). |
-| Auth | Four separate realms: `/v1/*` accepts only per-user `inv_` API keys via bearer/x-api-key (SHA-256 hashed at rest, shown once, revocable via CLI), resolving a **Principal** bound to the key's user and default project; fail-closed (401 for missing, invalid, or revoked keys), with no legacy gateway-key fallback or anonymous local-owner access; browser sessions on `/auth/*` + `/projects` + `/api-keys` (Phase 3: HMAC-signed HttpOnly cookies, fail-closed without the owner secret); the `/api/v1/*` management surface authenticates through the operator account realm (operator-role session cookie or the operator's own `inv_` key; fail-closed without the owner secret — the retired `INVINCIBLE_ADMIN_KEY` bearer's successor); OAuth 2.1 + PKCE authorization server on `/oauth/*` (dynamic registration, owner-secret browser consent, hashed tokens, refresh rotation, revocation) with consent-stamped user subjects and persistent lockouts (`login_attempts`, scoped per realm since 0004); GitHub login (OAuth App, verified-email auto-link); GitHub-only accounts adopt a first password via `POST /auth/password` (Phase 5), and every password write bumps the per-user `session_version` (migration `0006`) so browser cookies minted before the change stop resolving immediately. Anonymous browser GETs that hit a 401 anywhere are redirected to `/login?next=<path>` (`Accept: text/html` → 302, HTMX → `HX-Redirect`; API clients keep the JSON body; POSTs never redirect) — see `main.py`'s exception handler. |
+| Auth | Four separate realms: `/v1/*` accepts only per-user `inv_` API keys via bearer/x-api-key (SHA-256 hashed at rest, shown once, revocable via CLI), resolving a **Principal** bound to the key's user and default project; fail-closed (401 for missing, invalid, or revoked keys), with no legacy gateway-key fallback or anonymous local-owner access; browser sessions on `/auth/*` + `/projects` + `/api-keys` (Phase 3: HMAC-signed HttpOnly cookies, fail-closed without the owner secret); the operator/admin surface is **gone** (removed with the operator role in commit `c3e768f`; the only `/api/v1/*` route left is the owner-scoped continuity graph, and host administration is the environment variables plus the CLI); OAuth 2.1 + PKCE authorization server on `/oauth/*` (dynamic registration, owner-secret browser consent, hashed tokens, refresh rotation, revocation) with consent-stamped user subjects and persistent lockouts (`login_attempts`, scoped per realm since 0004); GitHub login (OAuth App, verified-email auto-link); GitHub-only accounts adopt a first password via `POST /auth/password` (Phase 5), and every password write bumps the per-user `session_version` (migration `0006`) so browser cookies minted before the change stop resolving immediately. Anonymous browser GETs that hit a 401 anywhere are redirected to `/login?next=<path>` (`Accept: text/html` → 302, HTMX → `HX-Redirect`; API clients keep the JSON body; POSTs never redirect) — see `main.py`'s exception handler. |
 | Dashboard | Phase 5 (Jinja2 + HTMX; script vendored at `/static/htmx.min.js`): `/dashboard` overview (owned count cards + 10 recent sessions), sessions index + per-session detail rendering the shared projection (`core/projection.py`, also backing the graph endpoint), cross-session task board, memory management (browse/filter/search, explicit create, audited owner-scoped delete — `INVINCIBLE_MEMORY=0` blocks creation only), memory-graph view (2026-09-06: `/dashboard/memory/graph` server-rendered SVG — center-radial project clusters, source-colored dots, timeline strip; Level 1 derived relationships via `core/memory_projection.py`, JSON sibling `GET /memories/graph` as the permanent contract for a future UI redesign), usage view with UTC day buckets (JSON sibling `GET /usage`, window clamped 1–90 days), settings page (system flags, read-only provider/routing panel, password forms). The whole surface resolves **session cookies only** (`require_user_session`) — foreign resources are byte-identical to unknown ones. |
-| Control plane | File-backed ProviderRegistry (CRUD/enable/disable/connectivity-test), `auto`/`pinned`/`chain` routing modes, `GET /api/v1/sessions/{id}/graph` projection. |
-| CLI | `setup` (non-interactive since 2026-09-01: zero prompts, secrets auto-generated, provider keys configured later via the dashboard/env, DB URL via `--db-url` — remote-first; scriptable on Windows), `start` (uvicorn + Cloudflare tunnel with an orphan-free lifecycle; opens `/dashboard` in the browser — anonymous sessions land on `/login`), `login` (device-flow pairing, Phase 3), `doctor`, `dev-db`, `db upgrade`, `db import` (legacy SQLite), `secret rotate`, `oauth list/revoke/test-client`, `api-key create/list/revoke`, `users list/promote/demote/reset-password`. Both `invincible` and `inv`. |
-| Packaging/deploy | pyproject (name `invincible-ai`), packaged `providers.yaml` + migrations + Jinja2 templates, Dockerfile, docker-compose app+postgres pair. |
+| Control plane | Static provider config (packaged `providers.yaml` fixture + `core/provider_catalog.py` operator constants). Routing is **per user** since Phase 9: each account's own BYOK credentials with `auto`/`pinned`/`chain` settings in `user_settings`, managed on the dashboard's Providers page. `GET /api/v1/sessions/{id}/graph` projection. There is no admin API and no shared provider pool. |
+| CLI | `setup` (non-interactive since 2026-09-01: zero prompts, secrets auto-generated, provider keys configured later via the dashboard/env, DB URL via `--db-url` — remote-first; scriptable on Windows), `start` (uvicorn + Cloudflare tunnel with an orphan-free lifecycle; opens `/dashboard` in the browser — anonymous sessions land on `/login`), `login` (device-flow pairing, Phase 3; defaults to the hosted service `https://invincible-ai.me`, `--server` for a self-hosted server), `agent` (runs confirmed tool jobs on the user's own machine, Phase 10), `doctor`, `dev-db`, `db upgrade`, `db import` (legacy SQLite), `secret rotate` / `secret credential-key`, `oauth list/revoke/test-client`, `api-key create/list/revoke`, `users list/reset-password`. Both `invincible` and `inv`. |
+| Packaging/deploy | pyproject (name `invincible-ai`), packaged `providers.yaml` + migrations + Jinja2 templates, Dockerfile, docker-compose app+postgres pair, `Procfile` + `railway.json` (platform start command with `$PORT` and proxy headers). Remote runbook: [DEPLOYMENT.md](DEPLOYMENT.md). |
 | Quality gates | pytest + pytest-asyncio against real Postgres; CI runs ruff check + pytest × Python 3.10–3.14 with a postgres:17 service; coverage artifact (~92% at last measurement). |
 
 Honest limitations remaining:
@@ -248,9 +248,12 @@ actions are audit-written; usage day buckets stay identical under three
 different session timezones (UTC regression test).
 
 ### Phase 6 — CLI Client Experience
-`inv setup` device-code pairing through the browser; `inv start` client
-mode; PostgreSQL/Alembic/tunnel/OAuth details hidden from ordinary users.
-*(Planned)*
+**Status: In progress (partly shipped).** Shipped: hosted-by-default device
+pairing (`invincible login`, with `--server` for a self-hosted server) and
+the agent's one-command self-pairing (`invincible agent`), so an ordinary
+user never touches PostgreSQL/Alembic/tunnel/OAuth details. Remaining: an
+`inv` client-mode pass so the CLI reads as a client of the hosted service
+rather than a server launcher.
 
 ### Phase 7 — Deployment
 **Status: Deployed 2026-09-02 — one month free trial; host migration
@@ -276,7 +279,8 @@ on Railway the `?sslmode=require` URL param must stay out of the
 asyncpg DSN (migrations no-op at head anyway).
 
 Deployment acceptance criteria (explicit; permission model detailed in
-[SECURITY.md](SECURITY.md) §8):
+[SECURITY.md](SECURITY.md) §8; operational version and go-live checklist in
+[DEPLOYMENT.md](DEPLOYMENT.md) §7):
 
 - (a) **Persistent managed Postgres** (Neon or equivalent) with a backup
   story — never a temp-directory or otherwise ephemeral cluster.
@@ -287,8 +291,8 @@ Deployment acceptance criteria (explicit; permission model detailed in
 - (c) **Enforced password auth** (`scram-sha-256`) on every connection —
   `trust` never leaves an isolated dev loopback.
 - (d) **Fresh secrets for the target environment** — DB credentials and
-  all `INVINCIBLE_*`/gateway secrets generated per environment, never
-  carried over from dev.
+  all `INVINCIBLE_*` secrets generated per environment, never carried over
+  from dev.
 
 ### Phase 8 — Cleanup
 The shared gateway-key and anonymous fail-open paths have been removed;
@@ -382,7 +386,7 @@ stands.
 | 11 Repo hygiene | Done | Lockfile strategy deferred |
 | 12 Correctness/security fixes | Done | Streamed tool_calls persisted; `failover_on_400` flag; timing-safe compare; bounded limiter |
 | 13 Failover unification + Settings | Done | One `_iter_attempts`; `core/config` + `core/trimming` split; `settings.py` |
-| 13.5 Provider control plane | Done | Registry, routing modes, runs table, x-invincible-* headers, admin API |
+| 13.5 Provider control plane | Partly superseded | Registry, routing modes, runs table, x-invincible-* headers landed; the admin API and the shared provider pool were later removed (`c3e768f`) with the operator role — routing is per-user BYOK now |
 | 14 Continuous integration | Done | Matrix 3.10–3.14; Postgres service folded into the test job; coverage artifact |
 | 15a/b/c Canonical sessions · ContinuityEngine · Graph API | Done | Landed work previously unrecorded here; recorded now |
 | 15 Observability (/metrics etc.) | Not started | Folded into platform backlog (candidate around P5/P7) |

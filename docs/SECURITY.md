@@ -665,7 +665,8 @@ sandbox:
 
 Required for any deployment beyond an isolated dev loopback. The shipped
 compose pair enforces all four points; hosted-mode acceptance is
-[Phase 7](ROADMAP.md):
+[Phase 7](ROADMAP.md), with the operational steps and checklist in
+[DEPLOYMENT.md](DEPLOYMENT.md) §4 and §7:
 
 1. **Least-privilege roles — never a superuser app connection.** Two
    non-superuser roles: a schema owner for migrations

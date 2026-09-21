@@ -1,7 +1,33 @@
 # Adding Providers (Phase 6)
 
-Adding a plain OpenAI-compatible provider is a **config-only** task: edit
-`providers.yaml`, restart, done. No code changes.
+Adding a plain OpenAI-compatible provider **shape** is a **config-only**
+task: edit `providers.yaml`, restart, done. No code changes.
+
+## Where providers live now (read this first)
+
+Since Phase 9 (BYOK), **live `/v1/*` traffic never reads
+`providers.yaml`**. Every request routes through the calling user's own
+connected credentials:
+
+- A user connects a provider on the dashboard's **Providers page** — either
+  a pre-filled **catalog card** (`core/provider_catalog.py`, the
+  operator-supplied starter set) or a **custom** `base_url` + `model_id` +
+  key. A custom URL must pass the SSRF guard
+  (`core/url_safety.py::validate_public_https_url`: public HTTPS only,
+  and re-checked on every request because DNS can be rebound).
+- Keys are Fernet-encrypted at rest under `INVINCIBLE_CREDENTIAL_KEY`, and
+  the same surface is available over HTTP at `/providers/mine`. A remote
+  deployment therefore needs **no provider keys of its own**.
+- Each user then chooses their own routing — `auto`, `pinned`, or `chain` —
+  stored per user in `user_settings` (see
+  [CONFIGURATION.md](CONFIGURATION.md) → Routing modes).
+
+`invincible/providers.yaml` is consequently a **static fixture**: the
+packaged config the tests and direct `Router` construction use, the schema
+`invincible doctor` validates, and the shape per-user credentials mirror.
+The rest of this document is the reference for that schema and for adding a
+provider *shape*; to also surface it as a one-click card, add the entry to
+both `core/provider_catalog.py` and the packaged `providers.yaml`.
 
 ## The 10-minute task
 

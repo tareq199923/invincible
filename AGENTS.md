@@ -6,13 +6,17 @@ Guide for contributors and coding agents working in this repository.
 - Console scripts: `invincible` and `inv` (identical entry points).
 - Python **3.10+** (`requires-python = ">=3.10"`; CI tests 3.10–3.14).
 
-Invincible today is a **multi-user self-service AI gateway**: an OpenAI-,
-Anthropic-, and Responses-compatible BYOK failover proxy (every user
-authenticates with their own `inv_` API key and routes through their own
-connected provider credentials) with PostgreSQL-backed conversation
+Invincible today is a **remote-first, multi-user self-service AI gateway**:
+an OpenAI-, Anthropic-, and Responses-compatible BYOK failover proxy (every
+user authenticates with their own `inv_` API key and routes through their
+own connected provider credentials) with PostgreSQL-backed conversation
 memory, a continuity engine (versioned task state + checkpoints), and an
-MCP tool server. See
-[docs/ROADMAP.md](docs/ROADMAP.md) for the direction and phase status.
+MCP tool server that executes confirmed tools on each user's own paired
+machine. It is deployed as a hosted multi-user service and also runs as a
+single-user self-host on a laptop. See
+[docs/ROADMAP.md](docs/ROADMAP.md) for the direction and phase status,
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for what a remote deployment must
+set.
 
 **Documentation follows implementation.** Never document a feature as
 existing before its code and tests land.
@@ -67,6 +71,9 @@ Fixture semantics (`tests/conftest.py`):
 | `endpoints/accounts.py` | `/auth/*`, `/projects`, `/api-keys`, `/sessions`, device pairing, GitHub login (session realm) |
 | `endpoints/byok.py` | Per-user provider-credential management (connect, test, order, routing config, per-user overrides) |
 | `endpoints/graph.py` | `GET /api/v1/sessions/{id}/graph` continuity projection (owner-scoped) |
+| `endpoints/dashboard.py` | Phase 5 Jinja2 + HTMX dashboard (overview, sessions, tasks, memory, usage, settings) — session-cookie realm only |
+| `endpoints/agents.py` | Phase 10 agent transport: `POST /agent/poll` + `/agent/result` (inv_ key realm), `GET /agent/status` (session realm) |
+| `agent/runner.py`, `agent/sandbox.py` | The local agent that runs on the **user's** machine: pairing config + long-poll loop + home-confined sandbox |
 | `core/router.py` | THE single tiered-failover loop (`_iter_attempts`); run recording |
 | `core/provider_health.py` | Failure counts + exponential cooldowns (in-memory) |
 | `core/selection.py` | Pure auto/pinned/chain routing decisions |
@@ -86,10 +93,17 @@ Fixture semantics (`tests/conftest.py`):
 | `core/tool_compression.py` | Send-time tool-schema compression (description caps + noise-key stripping, LRU-cached) |
 | `core/relay.py` | Context relay: digests all but the newest N turns into one bounded system digest; system messages pass through untouched |
 | `core/db_import.py` | One-shot legacy SQLite → PostgreSQL importer |
-| `cli.py` | Click CLI: setup/start(+tunnel)/login(device flow)/doctor/dev-db/db/secret/oauth |
-| `compat/common.py`, `compat/anthropic.py` | Protocol-neutral internal message model; Anthropic translators/SSE |
-| `models/anthropic.py` | Lenient Anthropic request model (unknown fields ignored) |
-| `migrations/` | Packaged Alembic environment (baseline revision `0001`) |
+| `core/agent_registry.py` | Per-user agent queues/futures (in-memory; long-poll transport, single instance by design) |
+| `core/credential_store.py`, `core/credential_crypto.py` | BYOK credential persistence + Fernet crypto (`INVINCIBLE_CREDENTIAL_KEY`) |
+| `core/user_settings_store.py` | Per-user settings (routing mode/order, provider overrides) |
+| `core/projection.py`, `core/memory_projection.py` | Continuity-graph and memory-graph projections (graph endpoint + dashboard views) |
+| `core/url_safety.py` | SSRF guards for user-supplied provider URLs |
+| `core/provider_catalog.py` | Operator-supplied provider constants (never user input) |
+| `Dockerfile`, `Procfile`, `railway.json` | Remote deployment: container/platform start commands (`0.0.0.0:$PORT`, proxy headers) + `/health` healthcheck |
+| `cli.py` | Click CLI: setup/start(+tunnel)/login(device flow)/agent/doctor/dev-db/db/secret/oauth/api-key/users |
+| `compat/common.py`, `compat/anthropic.py`, `compat/responses.py` | Protocol-neutral internal message model; Anthropic and Responses translators/SSE |
+| `models/anthropic.py`, `models/responses.py` | Lenient request models (unknown fields ignored) |
+| `migrations/` | Packaged Alembic environment (baseline `0001` … current `0009`) |
 
 ---
 
@@ -128,6 +142,15 @@ Fixture semantics (`tests/conftest.py`):
    `/v1/chat/completions`, `/v1/messages`, and `/mcp` (SSE event order,
    tool-call round-trips, error mapping) are guarded by tests. Change them
    only deliberately, updating those tests — never by weakening them.
+9. **Deployment posture is part of the product.** A public/multi-user
+   deployment MUST set `INVINCIBLE_AGENT_ROUTING=1` (otherwise confirmed
+   tool calls execute on the server host), run a single instance (provider
+   cooldowns, staged approvals, and the agent registry are in-process), and
+   connect to PostgreSQL as the CRUD-only role with a separate schema-owner
+   role for migrations. Reminders live in
+   [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md); changes to required env vars,
+   bind/port behavior, or the database role split update that doc in the
+   same PR.
 
 ---
 
@@ -153,8 +176,9 @@ Fixture semantics (`tests/conftest.py`):
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module map, request flows, trimming/failover deep dives |
 | [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | Chat endpoints contract, sessions, failover semantics |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Env vars, providers.yaml schema, CLI reference |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Running it remotely: required env vars, ports/TLS/proxy headers, two-role database, single-instance rules, go-live checklist |
 | [docs/PROVIDERS.md](docs/PROVIDERS.md) | Adding providers; full provider schema |
-| [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md) | /mcp client-facing spec, tools, tunnel setup |
+| [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md) | /mcp client-facing spec, tools, hosted URL vs. self-host tunnel |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, auth realms, denylists, known limits |
 | [docs/TESTING.md](docs/TESTING.md) | Test infrastructure and per-file coverage map |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Platform direction, current state, phase plan |
