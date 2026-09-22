@@ -20,6 +20,13 @@ REACHABLE_LABEL = "PostgreSQL reachable"
 REVISION_LABEL = "schema revision matches head"
 
 
+def _flat(text: str) -> str:
+    """Strip all whitespace: rich soft-wraps captured doctor output at
+    80 columns, folding even long path tokens mid-token, so assertions
+    must survive a wrap landing anywhere."""
+    return "".join(text.split())
+
+
 def _head_revision_label() -> str:
     """Hermetic stand-in for doctor's live revision line; tracks whatever
     the packaged migrations currently stamp at head."""
@@ -138,7 +145,9 @@ def test_doctor_legacy_alias_counts_as_owner_secret(monkeypatch, tmp_path):
 
     result = _invoke()
     assert result.exit_code == 0
-    assert f"OK  {OWNER_LABEL}  (falling back to MCP_SHARED_SECRET)" in result.output
+    assert _flat(
+        f"OK  {OWNER_LABEL}  (falling back to MCP_SHARED_SECRET)"
+    ) in _flat(result.output)
 
 
 def test_doctor_missing_providers_yaml_fails(monkeypatch, tmp_path):
@@ -150,9 +159,10 @@ def test_doctor_missing_providers_yaml_fails(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
     result = _invoke()
+    flat = _flat(result.output)
     assert result.exit_code == 1
-    assert f"FAIL  providers.yaml exists  ({missing})" in result.output
-    assert "FAIL  providers.yaml loads" in result.output
+    assert _flat(f"FAIL  providers.yaml exists  ({missing})") in flat
+    assert _flat("FAIL  providers.yaml loads") in flat
 
 
 def test_doctor_malformed_providers_yaml_fails(monkeypatch, tmp_path):
@@ -165,9 +175,10 @@ def test_doctor_malformed_providers_yaml_fails(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
     result = _invoke()
+    flat = _flat(result.output)
     assert result.exit_code == 1
-    assert f"OK  providers.yaml exists  ({bad})" in result.output
-    assert "FAIL  providers.yaml loads" in result.output
+    assert _flat(f"OK  providers.yaml exists  ({bad})") in flat
+    assert _flat("FAIL  providers.yaml loads") in flat
 
 
 # --- database checks ---------------------------------------------------------
@@ -225,12 +236,11 @@ async def test_doctor_live_schema_mismatch_is_loud(
         ln for ln in result.output.splitlines() if REVISION_LABEL in ln
     )
     assert line.startswith("FAIL")
+    flat = _flat(result.output)
     from invincible.core.db import migration_heads
 
-    assert (
-        f"database at 9999, expected {migration_heads()[0]}" in line
-    )
-    assert "`invincible db upgrade`" in line
+    assert _flat(f"database at 9999, expected {migration_heads()[0]}") in flat
+    assert _flat("`invincible db upgrade`") in flat
 
 
 async def test_doctor_live_unmanaged_populated_schema_is_loud(
@@ -248,8 +258,9 @@ async def test_doctor_live_unmanaged_populated_schema_is_loud(
         ln for ln in result.output.splitlines() if REVISION_LABEL in ln
     )
     assert line.startswith("FAIL")
-    assert "unmanaged by Alembic" in line
-    assert "`invincible db upgrade`" in line
+    flat = _flat(result.output)
+    assert _flat("unmanaged by Alembic") in flat
+    assert _flat("`invincible db upgrade`") in flat
 
 
 def test_doctor_live_unreachable_database_fails(pg_live, monkeypatch, tmp_path):
@@ -272,7 +283,7 @@ def test_doctor_live_unreachable_database_fails(pg_live, monkeypatch, tmp_path):
     )
     assert reachable_line.startswith("FAIL")
     # The masked URL is shown, never the raw secret-bearing one.
-    assert "deadbeef" in reachable_line
+    assert "deadbeef" in _flat(result.output)
     assert ":" + str(make_url(dead_url).password) not in result.output
 
 
@@ -426,7 +437,7 @@ def test_doctor_credential_key_present_warns_to_back_up(
     result = _invoke()
     assert result.exit_code == 0
     assert f"OK  {CREDENTIAL_LABEL}" in result.output
-    assert "back this key up" in result.output
+    assert _flat("back this key up") in _flat(result.output)
 
 
 def test_doctor_env_file_without_keys_still_fails(monkeypatch, tmp_path):
