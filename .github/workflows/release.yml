@@ -1,10 +1,11 @@
 name: Release
 
-# Tag push (`git tag v0.2.0 && git push --tags`) or a manual run builds the
-# sdist + wheel, validates them with twine, and uploads the artifacts. The
-# publish job is opt-in: only a manual run with publish=true reaches PyPI,
-# and only after the "pypi" environment is bound as a trusted publisher on
-# pypi.org (see docs/RELEASING.md).
+# Tag push (`git tag v0.3.0 && git push origin v0.3.0`) or a manual run builds
+# the sdist + wheel, validates them with twine, runs the packaging smoke test,
+# and uploads the artifacts. The publish job is opt-in: only a manual run with
+# publish=true reaches PyPI, and only after the "pypi" environment is bound as
+# a trusted publisher on pypi.org (see docs/RELEASING.md). Dispatch the manual
+# run against the TAG, not a branch — the build checks out the ref you pick.
 
 on:
   push:
@@ -27,13 +28,27 @@ jobs:
           python-version: "3.12"
 
       - name: Install build tooling
-        run: python -m pip install --upgrade pip build twine
+        # The dev extra carries build, twine, pytest and setuptools>=77 —
+        # the smoke test below builds --no-isolation and imports invincible
+        # in this interpreter, so the runtime deps have to be here too.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
 
       - name: Build sdist and wheel
         run: python -m build
 
       - name: Check distributions
         run: twine check dist/*
+
+      # The actual correctness gate: rebuilds the artifacts, installs the
+      # wheel into a scratch venv and asserts the packaged surface from
+      # inside it. Slow-marked, so `-m slow` is required to override
+      # pytest.ini's default deselect. It runs here, before the artifact
+      # exists, because `publish` needs this job and a PyPI version is
+      # immutable — a wheel missing a template can only be yanked.
+      - name: Packaging smoke test
+        run: pytest -q -m slow tests/test_wheel_contents.py
 
       - uses: actions/upload-artifact@v7
         with:

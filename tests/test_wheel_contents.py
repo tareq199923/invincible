@@ -12,7 +12,8 @@ that venv — the exact way a user's machine receives the package.
 
 Slow and network-using (a scratch venv pip-installs the wheel's runtime
 dependencies), so it is marked `slow` and excluded from the default run;
-CI executes it in the release workflow's packaging job.
+the release workflow's `build` job runs it explicitly with `-m slow`,
+before the `publish` job that depends on that job can upload anything.
 """
 import json
 import os
