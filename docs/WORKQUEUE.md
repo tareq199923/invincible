@@ -79,11 +79,11 @@ the user's machine). The **operator** journey is
 `install → setup --db-url <DSN> → start` — one command, one argument.
 
 Open decisions (multi-day project, fold into Phase 6/7 planning):
-- **Publishing — resolved 2026-09-21: PyPI** (`pip install invincible-ai`);
-  the one-file `.exe` is deferred. Packaging, metadata, the wheel smoke
-  test, and a tag-triggered release workflow are in place
-  ([RELEASING.md](RELEASING.md)); only the human-decision upload to
-  pypi.org remains (name still unclaimed — publish promptly).
+- **Publishing — DONE 2026-09-23: `invincible-ai` 0.3.0 is live on PyPI.**
+  The upload claimed the name (it was unclaimed until then); the one-file
+  `.exe` stays deferred. Packaging, metadata, the wheel smoke test, a
+  tag-triggered release workflow, and trusted publishing are all in place
+  ([RELEASING.md](RELEASING.md)).
 - **The database:** remote-first is now the setup story (Neon etc.),
   matching the roadmap's hosted direction. Remaining question: is a
   bundled/local option still worth offering for offline users?

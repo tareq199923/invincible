@@ -9,10 +9,11 @@ The version lives **only** in `invincible/__init__.py`
 (`__version__ = "0.3.0"`). `pyproject.toml` reads it dynamically
 (`[tool.setuptools.dynamic]`); never edit a version anywhere else.
 
-**The `v0.1.0` and `v0.2.0` tags are already taken** by early-history
-commits (`v0.2.0` sits 202 commits behind the packaging work), and neither
-was ever uploaded to PyPI. Never move an existing tag — the first PyPI
-release is therefore `0.3.0`.
+**Never move an existing tag.** `v0.1.0` and `v0.2.0` are taken by
+early-history commits (`v0.2.0` sits 202 commits behind the packaging
+work) and were never uploaded to PyPI. `v0.3.0` is taken too — it was the
+first PyPI release, published 2026-09-23. Each release takes the next
+unused number.
 
 ## Build + verify locally
 
@@ -43,8 +44,9 @@ template + static asset, and that `invincible --version` /
 ## Release flow (CI)
 
 1. Bump `invincible/__init__.py`, commit.
-2. Tag and push: `git tag v0.3.0 && git push origin v0.3.0` (pick an
-   unused tag — see the version note above).
+2. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`, where
+   `vX.Y.Z` is the next **unused** number (see the version note above;
+   `v0.3.0` is already published).
 3. The `Release` workflow (`.github/workflows/release.yml`) builds the
    distributions, `twine check`s them, runs the packaging smoke test, and
    uploads `dist/` as an artifact.
@@ -53,10 +55,21 @@ template + static asset, and that `invincible --version` /
    publishing) — no API token is stored in the repo.
 
 Step 4 rebuilds from the ref you dispatch against, so dispatch against the
-**tag**, never a branch:
+**tag**, never a branch. Either route works — the web UI needs nothing
+installed:
+
+**Via the web UI**
+
+Repo → *Actions* → *Release* → *Run workflow*. In the panel that opens,
+switch the ref dropdown from `main` to the tag, tick `publish`, then click
+*Run workflow*. If the `publish` job never appears in the run, the
+checkbox did not register.
+
+**Via the GitHub CLI** (`gh`, if you have it)
 
 ```bash
-gh workflow run release.yml --ref v0.3.0 -f publish=true
+TAG=v0.3.0        # the tag pushed in step 2
+gh workflow run release.yml --ref "$TAG" -f publish=true
 ```
 
 `workflow_dispatch` accepts a tag ref — *"once a workflow has run at least
@@ -68,7 +81,7 @@ commit. Dispatching from `main` instead builds whatever `main`'s head is at
 that moment — if anything landed after the tag, you publish untagged code
 under a version number PyPI will never let you reuse.
 
-### Arming trusted publishing (one time, before the first publish)
+### Arming trusted publishing (one time — done before the 0.3.0 publish)
 
 Two halves, both required:
 
@@ -94,7 +107,7 @@ Pending Publisher exactly.
 
 (Also add the same entry on test.pypi.org if you want CI dry-runs there.)
 
-## Publish dry run (recommended before the first real upload)
+## Publish dry run (optional — a rehearsal against test.pypi.org)
 
 ```bash
 twine upload --repository testpypi dist/*
@@ -119,11 +132,15 @@ only yanked and superseded by `0.3.1`. The release workflow's `build` job
 runs the smoke test above for exactly that reason, and `publish` needs
 `build`, so a broken wheel fails the run instead of reaching PyPI.
 
-## ⚠️ The PyPI name is currently unclaimed
+## PyPI release status
 
-`invincible-ai` had no project on pypi.org as of **2026-09-22**
-(re-verified: `GET /pypi/invincible-ai/json` → 404). Until this package
-is uploaded, **anyone can claim the name** and the README's
-`pip install invincible-ai` journey stays false. Publish promptly; the
-metadata here is complete and validated (`twine check` PASS) so the
-upload is ready when you are.
+`invincible-ai` **0.3.0 was published on 2026-09-23** — the first upload,
+which claimed the name (it was unclaimed until then, so anyone could have
+taken it). The README's `pip install invincible-ai` journey is real now,
+verified by installing from PyPI into a scratch venv outside the repo:
+`invincible --version`, the packaged `providers.yaml` and `templates/`,
+and a migration head matching the source tree.
+
+Everything from here is immutable: `0.3.0` can never be replaced or
+re-uploaded, only yanked and superseded. Bump `invincible/__init__.py` to
+the next unused number before tagging the next release.
