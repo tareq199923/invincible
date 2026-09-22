@@ -1,0 +1,9 @@
+# MANIFEST.in — what the sdist carries beyond setuptools' defaults.
+# The wheel gets its data files from [tool.setuptools.package-data]; this
+# file pins the sdist so a `pip install invincible-ai --no-binary :all:`
+# build from the tarball finds everything the wheel would have had.
+include LICENSE
+include README.md
+include providers.yaml.example
+recursive-include invincible/templates *.html *.js
+recursive-include invincible/migrations *.mako *.py

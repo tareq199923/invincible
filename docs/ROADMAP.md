@@ -391,7 +391,7 @@ stands.
 | 15a/b/c Canonical sessions · ContinuityEngine · Graph API | Done | Landed work previously unrecorded here; recorded now |
 | 15 Observability (/metrics etc.) | Not started | Folded into platform backlog (candidate around P5/P7) |
 | 16 PostgreSQL storage migration | Done | Slips honored elsewhere: audit_log → Platform P2; provider-health persistence → backlog; TIMESTAMPTZ deferred |
-| 2 Zero-clone distribution (PyPI) | Not started | Folds into P6/P7 packaging |
+| 2 Zero-clone distribution (PyPI) | In progress | Packaging/metadata/CI landed 2026-09-21 (`docs/RELEASING.md`); only the actual pypi.org upload remains |
 | 3 Documentation site | Deferred | Revisit post-platform |
 | 4 Multi-user system | Superseded | Realized as Platform Phases 1–3 |
 | 5 Dashboard | Superseded | Realized as Platform Phase 5 |
