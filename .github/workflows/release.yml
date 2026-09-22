@@ -57,8 +57,13 @@ jobs:
 
   publish:
     # Deliberately unreachable by tag pushes: publishing is a human
-    # decision made through a manual run with publish=true.
-    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
+    # decision made through a manual run with publish=true. The string
+    # comparison is not redundant — the UI checkbox arrives as a real
+    # boolean, but a REST/`gh` dispatch submits inputs as strings, and a
+    # type mismatch here would skip this job silently.
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.publish == true || inputs.publish == 'true')
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
