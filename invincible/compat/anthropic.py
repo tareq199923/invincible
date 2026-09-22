@@ -327,7 +327,7 @@ def build_message_skeleton(message_id: str, model: str, input_tokens: int) -> di
 
 
 def internal_to_anthropic(
-    openai_body: dict, requested_model: str | None, input_tokens: int
+    openai_body: dict, served_model: str | None, input_tokens: int
 ) -> dict:
     """Translate an internal (OpenAI-shaped) Router response into an
     Anthropic Messages response.
@@ -337,8 +337,16 @@ def internal_to_anthropic(
     turn that emitted tool calls always closes with ``stop_reason:
     "tool_use"`` - a client like Claude Code only executes tools when it
     sees that stop reason, regardless of the provider's own finish reason.
-    The ``model`` field echoes the client's model hint; it never influences
-    routing and never requires the provider to expose Claude model names.
+
+    ``model`` reports the model that ACTUALLY served the request (the
+    Router's winning attempt), not the client's requested hint. Under
+    pinned/chain routing a step's own ``model`` answers, so the two differ
+    whenever the request's model did not match the step that replied -
+    echoing the request instead would make that fallback invisible. Claude
+    Code renders this field, so it is the client's only signal that a
+    different model answered. It never requires the provider to expose
+    Claude model names.
+
     ``usage`` token counts are estimates (the Router's own heuristic) since
     upstream responses may omit usage entirely.
     """
@@ -369,7 +377,7 @@ def internal_to_anthropic(
         )
 
     output_tokens = estimate_token_sum([build_message("assistant", content)])
-    model = requested_model or openai_body.get("model") or "invincible"
+    model = served_model or openai_body.get("model") or "invincible"
     stop_reason = translate_finish_reason(first_choice.get("finish_reason"))
     if tool_calls:
         stop_reason = "tool_use"
@@ -475,7 +483,7 @@ def _stream_assistant_message(
 async def build_stream_events(
     first: dict | None,
     tail: AsyncIterator[dict],
-    requested_model: str | None,
+    served_model: str | None,
     input_tokens: int,
     on_complete: Callable[[dict], Awaitable[None]] | None = None,
 ) -> AsyncGenerator[str, None]:
@@ -497,9 +505,14 @@ async def build_stream_events(
     failure - so the caller can persist the session once. A mid-stream
     upstream failure emits a well-formed ``error`` event and stops; the
     stream never emits malformed SSE and always closes.
+
+    ``served_model`` is the model the winning attempt actually called (not
+    the client's requested hint) and is what ``message_start``'s ``model``
+    field reports - see :func:`internal_to_anthropic` for why the
+    difference matters to the client.
     """
     message_id = _message_id()
-    model = requested_model or "invincible"
+    model = served_model or "invincible"
     reply_text = ""
     finish_reason = None
     text_started = False

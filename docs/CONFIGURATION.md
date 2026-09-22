@@ -152,9 +152,10 @@ exact `model_id` match behaves the same way. Unknown model names (e.g.
 Claude Code's `claude-sonnet-4`) change nothing — normal order applies.
 
 Both protocols accept it: OpenAI `{"model": "fast", ...}` and Anthropic
-`{"model": "fast", ...}` (echoed back in the response as before). Aliases
-also appear in `GET /v1/models` after the real model ids. Full guide and
-supported provider shapes: [docs/PROVIDERS.md](PROVIDERS.md).
+`{"model": "fast", ...}` (the response reports the model that actually
+served, not the alias string). Aliases also appear in `GET /v1/models` after
+the real model ids. Full guide and supported provider shapes:
+[docs/PROVIDERS.md](PROVIDERS.md).
 
 ### Routing modes (per user, Phase 1)
 

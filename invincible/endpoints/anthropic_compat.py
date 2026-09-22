@@ -249,7 +249,8 @@ async def anthropic_messages(
 
         return StreamingResponse(
             build_stream_events(
-                first, tail, body.model, input_tokens, on_complete=save_complete
+                first, tail, info.get("model_id"), input_tokens,
+                on_complete=save_complete,
             ),
             media_type="text/event-stream",
             headers={
@@ -294,5 +295,9 @@ async def anthropic_messages(
             max_turns=max_turns,
         )
 
-    anthropic_response = internal_to_anthropic(result, body.model, input_tokens)
+    # Report the model that actually served (the winning attempt), not the
+    # requested hint: under pinned/chain routing a step's own model answers,
+    # and Claude Code renders this field.
+    anthropic_response = internal_to_anthropic(
+        result, info.get("model_id"), input_tokens)
     return JSONResponse(content=anthropic_response, headers=route_headers(info))

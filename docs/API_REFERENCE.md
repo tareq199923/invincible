@@ -218,7 +218,7 @@ Content-Type: application/json
 | Field | Type | Notes |
 |---|---|---|
 | `messages` | array | **Required.** `role` (`user`/`assistant`) + `content` (string or content blocks). See flattening below. |
-| `model` | string, optional | **Client hint only.** Echoed in the response; never affects routing and never requires the provider to expose Claude model names. |
+| `model` | string, optional | **Client hint only.** It never affects routing beyond preferring a matching credential and never requires the provider to expose Claude model names. The response reports the model that **actually served** (see below), not this hint. |
 | `system` | string \| [blocks], optional | Becomes a leading `system` message (always kept by trimming). |
 | `max_tokens` | int, optional | Accepted; the Router controls the upstream output budget per provider. |
 | `stream` | bool, optional | `true` → Anthropic SSE events; otherwise JSON. |
@@ -266,6 +266,12 @@ cases.
 - `stop_reason` maps from OpenAI `finish_reason`: `stop`→`end_turn`,
   `length`→`max_tokens`, `tool_calls`→`tool_use` (see
   `translate_finish_reason`), unknown/absent→`end_turn`.
+- `model` is the model that **actually served** the request — the Router's
+  winning attempt — not the `model` hint the client sent. Under pinned/chain
+  routing a step carries its own model, so a cross-model fallback shows up
+  here (and in `x-invincible-model`); in auto mode the two are the same
+  string. `message_start.message.model` reports the same value when
+  streaming.
 - `usage` token counts are **estimates** (the Router's own `estimate_tokens`
   heuristic) because upstream streaming responses rarely report usage.
 

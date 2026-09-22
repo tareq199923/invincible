@@ -9,7 +9,9 @@ from invincible.compat.anthropic import (
     flatten_content_blocks,
     translate_finish_reason,
 )
+from invincible.core.credential_store import ByokCredentialStore
 from invincible.core.identity import ensure_default_project
+from invincible.core.user_settings_store import UserSettingsStore
 from invincible.main import app
 from tests.conftest import (
     provider_body,
@@ -99,9 +101,13 @@ async def test_anthropic_completion_success(client, router_setter, byok_env):
     assert body["usage"]["output_tokens"] >= 1
 
 
-async def test_anthropic_echoes_requested_model_as_hint(
+async def test_auto_mode_still_reports_the_requested_model(
     client, router_setter, byok_env
 ):
+    """The auto-mode complement to the chain cases below: with no routing
+    configured, the per-request model override makes every candidate call
+    the requested model, so requested and served are the same string and
+    the reported ``model`` is unchanged."""
     uid, raw_key = await v1_user(client, "anthropic@example.com")
     auth = {"Authorization": f"Bearer {raw_key}"}
     router_setter(
@@ -1694,5 +1700,89 @@ async def test_anthropic_to_internal_rejects_empty():
 # Endpoint-level alias routing retired with the operator pool: BYOK
 # candidates carry no aliases (aliases are a providers.yaml concept;
 # router-level alias semantics stay covered in test_router.py and
-# test_selection_policy.py). The Anthropic model field still ECHOES the
-# client's requested string (see the header tests above).
+# test_selection_policy.py). The Anthropic model field reports the
+# SERVING model, not the client's requested string - see the
+# served-model reporting section below.
+
+
+# ------------------------- served-model reporting (Claude Code status line)
+
+
+async def _chain_user(client, email, step_models, providers=None):
+    """A v1 user whose saved chain pairs the first ``len(step_models)``
+    connected credentials with ``step_models`` in order. Returns the raw
+    inv_ key."""
+    uid, raw_key = await v1_user(client, email, providers=providers)
+    rows = await ByokCredentialStore(app.state.engine).list_for_user(uid)
+    chained = rows[:len(step_models)]
+    assert len(chained) == len(step_models), (
+        "not enough connected credentials for the requested chain steps")
+    await UserSettingsStore(app.state.engine).save_routing(uid, {
+        "mode": "chain",
+        "chain": [{"credential_id": row["id"], "model": model}
+                  for row, model in zip(chained, step_models, strict=True)],
+    })
+    return raw_key
+
+
+async def test_anthropic_reports_serving_model_not_requested(
+    client, router_setter, byok_env
+):
+    """``model`` reports the step that actually served, not the request's
+    hint.
+
+    Under chain routing a step carries its own model, so the two differ
+    whenever the request names no step (or a step other than the one that
+    replied). Claude Code renders this field, so echoing the request would
+    make a cross-model fallback invisible.
+    """
+    raw_key = await _chain_user(
+        client, "served-msg@example.com", ["alpha-step"])
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(
+            200, json=provider_body("alpha", content="Hello world"))
+    })
+    response = await client.post(
+        "/v1/messages",
+        headers={"Authorization": f"Bearer {raw_key}"},
+        json={
+            "model": "requested-elsewhere",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    assert response.status_code == 200, response.text
+    # The step's model ran, and the body agrees with the route headers.
+    assert response.headers["x-invincible-model"] == "alpha-step"
+    assert response.json()["model"] == "alpha-step"
+
+
+async def test_anthropic_stream_reports_serving_model_not_requested(
+    client, router_setter, byok_env
+):
+    """The SSE path reports the serving model too: ``message_start`` fires
+    before the first upstream chunk, but the winning attempt is already
+    known, so Claude Code's status line stays honest mid-stream."""
+    raw_key = await _chain_user(
+        client, "served-msg-stream@example.com", ["alpha-step"])
+    router_setter(handlers={
+        "alpha.example.com": httpx.Response(200, content=sse_body(
+            stream_chunk("alpha", {"role": "assistant"}),
+            stream_chunk("alpha", {"content": "Hi"}),
+            stream_chunk("alpha", {}, finish_reason="stop"),
+        ))
+    })
+    response = await client.post(
+        "/v1/messages",
+        headers={"Authorization": f"Bearer {raw_key}"},
+        json={
+            "model": "requested-elsewhere",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+    )
+    assert response.status_code == 200
+    events = _anthropic_events(response)
+    start = [p for name, p in events if name == "message_start"][0]
+    assert start["message"]["model"] == "alpha-step"

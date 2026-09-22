@@ -310,12 +310,14 @@ are served. Supported request fields: `model`, `system`, `messages`,
 `stop_sequences`, unknown fields, `anthropic-beta` / `anthropic-version`
 headers, the `?beta=true` query) is **accepted and ignored** — never a 422.
 
-The `model` field is treated as a **client hint**: it is echoed back in
-the response, and if it matches one of **your** connected credentials (an
-alias or an exact `model_id`) that credential is *preferred* — the Router
-still fails over through the rest of your routing order if it is down. An
-unknown model name (like Claude Code's own model ids) changes nothing.
-The upstream model always comes from your connected credentials.
+The `model` field is treated as a **client hint**: if it matches one of
+**your** connected credentials (an alias or an exact `model_id`) that
+credential is *preferred* — the Router still fails over through the rest of
+your routing order if it is down. An unknown model name (like Claude Code's
+own model ids) changes nothing. The upstream model always comes from your
+connected credentials, and the response reports **that** model — the one
+that actually served — so a fallback across models stays visible to the
+client instead of being masked by an echo of what you asked for.
 
 - **Streaming**: `stream: true` returns Anthropic SSE events in the
   canonical order — `message_start` → `content_block_start` →

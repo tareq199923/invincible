@@ -104,8 +104,8 @@ Requesting an unknown model name (e.g. Claude Code sending
 Aliases are accepted from both protocols:
 
 - OpenAI: `{"model": "fast", "messages": [...]}`
-- Anthropic: `{"model": "fast", "messages": [...]}` (echoed back in the
-  response as before)
+- Anthropic: `{"model": "fast", "messages": [...]}` (the response reports the
+  model that actually served — the provider's `model_id` — not the alias)
 
 They also appear in `GET /v1/models`, listed after the real model ids, so
 clients can discover them.
