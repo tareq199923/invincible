@@ -2,9 +2,23 @@
 FROM python:3.12-slim
 
 WORKDIR /app
-COPY pyproject.toml ./
+
+# pip hardening for the build step: a transient PyPI blip inside the
+# builder must not fail the deploy (2026-09-22: the build-dep download
+# broke mid-stream -> BrokenPipeError -> deploy failed).
+ENV PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=10
+
+# README.md and LICENSE back pyproject.toml's PEP 639 metadata
+# (readme = "README.md", license-files = ["LICENSE"]).
+COPY pyproject.toml README.md LICENSE ./
 COPY invincible ./invincible
-RUN pip install --no-cache-dir .
+
+# Install the build backend as its own cacheable layer and build without
+# isolation, so pip never re-downloads setuptools into a throwaway env
+# on every build (the step that failed on Railway).
+RUN pip install --no-cache-dir "setuptools>=77"
+RUN pip install --no-cache-dir --no-build-isolation .
 
 EXPOSE 8000
 # Migrations run as the schema-owner role when INVINCIBLE_MIGRATE_DB_URL is
