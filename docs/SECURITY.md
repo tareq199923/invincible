@@ -803,10 +803,10 @@ when strangers can register. The current production deploy
 variables; losing it would silently revert every confirmed tool call
 to server-host execution. The flag stays opt-in rather than
 defaulting on at multi-user detection (considered and rejected in the
-audit): settings are live env reads with no startup user-count gate,
-and local dev workflows depend on the off default. Verify the flag
-after any platform migration (Railway → Azure, October 2026) via the
-deploy checklist: `invincible doctor` output plus the dashboard's MCP
-clients page showing per-user agents online.
+audit): settings are live env reads with no startup user-count gate, and
+local dev workflows depend on the off default. Verify the flag after any
+platform or account ownership transfer via the deploy checklist:
+`invincible doctor` output plus the dashboard's MCP clients page showing
+per-user agents online.
 
 ---

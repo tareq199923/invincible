@@ -4,33 +4,34 @@ The single ordered list of actionable work. Everything to do, in
 priority order, with detail. Strategic context (phases, direction,
 what's implemented) lives in [ROADMAP.md](ROADMAP.md).
 
-Last updated: 2026-09-23.
+Last updated: 2026-09-24.
 
 ---
 
 ## Open work — in fix order
 
-### 1. Phase 7 wrap-up — host migration before the trial ends
+### 1. Phase 7 wrap-up — transfer production ownership to the destination Railway account
 
-**The deployment is live and on its own domain** (2026-09-02): Neon
-Postgres (ap-southeast-1, least-privilege roles verified by probe) +
-the app on Railway's one-month trial, serving
-`invincible-ai.me` (Cloudflare CNAME → Railway, DNS-only; verified
-end-to-end including a chat round-trip). Fresh-start database; full
-acceptance journey smoke-tested. Details in
-[ROADMAP.md](ROADMAP.md) §Phase 7. Remaining:
+**The deployment remains live and on its own domain** (2026-09-02): Neon
+Postgres (ap-southeast-1, least-privilege roles verified by probe) + the app
+on Railway, serving `invincible-ai.me` (Cloudflare CNAME → Railway, DNS-only;
+verified end-to-end including a chat round-trip). Neon has a two-year term;
+there is no current Azure or AWS migration. The remaining operational task is
+to transfer Railway project ownership to a different Railway account. Details
+in [ROADMAP.md](ROADMAP.md) §Phase 7 and the
+[RAILWAY-ACCOUNT-TRANSFER.md](RAILWAY-ACCOUNT-TRANSFER.md) runbook.
 
-- **Host migration before the trial ends (~2026-10-02):** move the
-  container to Azure for Students (no card needed, $100 credit; a
-  reminder is set for 2026-09-25). The Neon DB is host-agnostic —
-  nothing changes there. Then update the DNS record to the new host.
+- **Pending Railway ownership transfer:** keep the application, Neon database,
+  database roles, and public domain in place while transferring Railway
+  project ownership. Verify the destination deployment and environment before
+  removing access from the current account.
 - The dev/test Postgres is **already out of `%TEMP%`** — verified
   2026-09-23. Two clusters live in home directories:
   `C:\Users\SARK\pgdev` (PG 18, port 5433 — the one the suite runs
   against) and `C:\Users\SARK\inv-pg-portable` (PG 17). Only stray
   `pgctl.out`/`pgerr.txt` logs remain in Temp. It holds no live data
-  (live data is on Neon), is manual-start and does not survive a
-  reboot. Nothing to do here.
+  (live data is on Neon), is manual-start and does not automatically restart
+  after a reboot. Nothing to do here.
 
 ### 2. Phase 8 — retire the superseded local-era pieces
 
@@ -107,8 +108,9 @@ had been deleted. Fixed:
 - **Stale facts corrected** — ROADMAP auth/control-plane/CLI/packaging rows
   and Phase 6 status; ARCHITECTURE module map + migration range;
   AGENTS.md module map, docs index, and a new deployment-posture convention;
-  a dated post-audit note in MULTI-TENANT-AUDIT.md; and MIGRATION-AZURE.md,
-  which still told the operator to use the removed `GATEWAY_API_KEY`.
+  a dated post-audit note in MULTI-TENANT-AUDIT.md; and the then-current
+  migration runbook, which still told the operator to use the removed
+  `GATEWAY_API_KEY`.
 
 ---
 

@@ -530,7 +530,7 @@ token can never execute the action twice.
 #### `memory_save`
 
 ```json
-"arguments": {"content": "Tareq prefers Python, deploys via Railway→Azure", "kind": "preference", "project": "invincible"}
+"arguments": {"content": "Tareq prefers Python and runs the service on Railway", "kind": "preference", "project": "invincible"}
 ```
 
 Deliberately stores a fact into the user's memory store — the same

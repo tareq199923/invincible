@@ -39,9 +39,9 @@ Key pieces already shipped (per ROADMAP.md, all marked Implemented/Complete as o
 - **Phase 10 — Local Agent**: moves confirmed tool execution off the server and onto the user's own machine via long-poll (`POST /agent/poll` / `POST /agent/result`), zero inbound ports, home-relative sandbox, local denylist re-check.
 - **BYOK provider connections (Phase 9, complete)**: encrypted credential storage (Fernet), connect/list/test/remove API, SSRF guard, per-user router candidate pool, dashboard Providers UI.
 - **Dashboard**: Jinja2 + HTMX — sessions, tasks, memory browse/search, memory graph (visual), usage, settings.
-- **Deployment**: live on Railway + Neon Postgres at `invincible-ai.me`; Railway trial ends ~2026-10-02, migration to Azure for Students planned.
+- **Deployment**: live on Railway + Neon Postgres at `invincible-ai.me`; Neon has a two-year term, and Railway project ownership transfer to a different Railway account is pending. No Azure or AWS migration is currently planned.
 
-Not yet productized: no public sign-up funnel, no pricing tiers, single hosted instance you manage directly rather than a self-serve SaaS.
+Not yet productized: no public sign-up funnel, no pricing tiers, single hosted instance operated by the project team rather than a self-serve SaaS.
 
 ---
 
@@ -74,7 +74,7 @@ Not yet productized: no public sign-up funnel, no pricing tiers, single hosted i
 4. **Screenshots / vision** — useful for UI/testing workflows; heavier lift (Chrome dependency, image handling through the MCP pipeline).
 5. **SSH access** — nice-to-have parity feature, but doesn't map naturally onto the long-poll agent architecture the way it does onto flexx's persistent WebSocket. Bigger architectural lift for comparatively modest benefit — lower priority unless specifically requested.
 6. **Productized packaging/pricing tiers** — not a technical feature, but relevant: this is exactly what Invincible's own Phase 6 (Distribution) and the pending WORKQUEUE.md decision (PyPI vs. `.exe`, hosted vs. self-hosted) are already gesturing toward. Worth using flexx's tier boundaries as a reference point.
-7. **Unified coding-harness UI ("Agent")** — flexx built this almost by accident once Remote+Router+Memory existed. Invincible has the same underlying substrate; a thin harness UI on top could be a natural next step, but isn't currently queued and would compete for attention with the Azure migration and semantic memory work.
+7. **Unified coding-harness UI ("Agent")** — flexx built this almost by accident once Remote+Router+Memory existed. Invincible has the same underlying substrate; a thin harness UI on top could be a natural next step, but isn't currently queued and would compete for attention with the Railway ownership transfer and semantic memory work.
 
 ---
 

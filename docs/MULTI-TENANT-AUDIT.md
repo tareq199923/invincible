@@ -395,7 +395,7 @@ obvious errors, not silent cross-user data mixing:
    rejected — live env reads, no startup user-count gate, and it would
    flip the OAuth consent relaxation as a side effect). Public-deploy
    requirement documented in docs/SECURITY.md §10 ("Deployment
-   posture"), including the Railway → Azure migration check.
+   posture"), including the then-planned Railway-to-Azure migration check.
 
 ### Step 4 — Smaller cleanups (APPLIED 2026-09-07)
 
@@ -442,7 +442,9 @@ states, checkpoints, runs, facts, approval subject, api keys). Add:
 
 - Production: invincible-ai.me (Railway + Neon since 2026-09-02).
   `INVINCIBLE_AGENT_ROUTING=1` must stay set in Railway vars; 1 replica max
-  while the agent registry is in-memory; push = auto-deploy.
+  while the agent registry is in-memory; push = auto-deploy. Railway
+  project ownership transfer to a different Railway account is pending; Neon
+  remains the production database for the two-year term.
 - Local test Postgres: start `C:\Users\SARK\pgdev` via pg_ctl (dies on reboot);
   port 5433; drop/recreate `invincible_test` when tests hit
   `UndefinedColumnError` (create_all is non-additive; pytest truncates the DB
