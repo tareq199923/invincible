@@ -6,7 +6,7 @@ pypi.org upload is deliberately a human decision.
 ## Version — one source of truth
 
 The version lives **only** in `invincible/__init__.py`
-(`__version__ = "0.3.0"`). `pyproject.toml` reads it dynamically
+(the `__version__` literal). `pyproject.toml` reads it dynamically
 (`[tool.setuptools.dynamic]`); never edit a version anywhere else.
 
 **Never move an existing tag.** `v0.1.0` and `v0.2.0` are taken by

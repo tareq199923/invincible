@@ -240,7 +240,7 @@ anthropic_compat::anthropic_messages
 router (identical to section 3 — failover, cooldowns, trimming all apply)
   ▼
 anthropic_compat
-  │  non-stream: internal_to_anthropic(result, model_hint, input_tokens)
+  │  non-stream: internal_to_anthropic(result, served_model, input_tokens)
   │              → message payload (id msg_*, stop_reason, estimated usage)
   │  stream: build_stream_events() → message_start → content_block_start
   │          → content_block_delta* → content_block_stop → message_delta
