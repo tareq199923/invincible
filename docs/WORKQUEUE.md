@@ -4,7 +4,7 @@ The single ordered list of actionable work. Everything to do, in
 priority order, with detail. Strategic context (phases, direction,
 what's implemented) lives in [ROADMAP.md](ROADMAP.md).
 
-Last updated: 2026-09-21.
+Last updated: 2026-09-23.
 
 ---
 
@@ -24,14 +24,66 @@ acceptance journey smoke-tested. Details in
   container to Azure for Students (no card needed, $100 credit; a
   reminder is set for 2026-09-25). The Neon DB is host-agnostic —
   nothing changes there. Then update the DNS record to the new host.
-- The Temp-folder portable PG is now dev/test-only (it holds no live
-  data; live data lives on Neon). It stays for the local test suite;
-  moving it out of Temp before a disk cleanup eats it remains a nice-
-  to-have, no longer urgent.
+- The dev/test Postgres is **already out of `%TEMP%`** — verified
+  2026-09-23. Two clusters live in home directories:
+  `C:\Users\SARK\pgdev` (PG 18, port 5433 — the one the suite runs
+  against) and `C:\Users\SARK\inv-pg-portable` (PG 17). Only stray
+  `pgctl.out`/`pgerr.txt` logs remain in Temp. It holds no live data
+  (live data is on Neon), is manual-start and does not survive a
+  reboot. Nothing to do here.
+
+### 2. Phase 8 — retire the superseded local-era pieces
+
+The hosted flow is stable (0.3.1 live on PyPI and in production, suite
+green at 1136), so the deprecations whose trigger was *"after hosted
+launch stabilizes"* are now actionable. The table in
+[ROADMAP.md](ROADMAP.md) §Deprecated is the source of truth; what it
+still owes:
+
+- **Legacy SQLite importer (`db import`)** — superseded by direct
+  hosted signup/onboarding. Its scheduled "when" was exactly this
+  point, so this is the one genuinely due item.
+- **Owner-secret-only MCP consent** — `INVINCIBLE_OWNER_SECRET` as a
+  *sole identity* is superseded by user-bound OAuth subjects; listed as
+  Phase 2+, so it is overdue. The env var itself **stays** — it still
+  signs sessions. Only the identity path retires.
+- **`facts` triple store** — injection is already retired and the table
+  is inert with no backfill. Decide between dropping it and keeping it
+  as history; no code depends on it either way.
+- **Client-supplied `session_id` as storage identity** — relational
+  session identity landed in Phase 1 and the transitional helper was
+  only meant to be retained briefly. Check whether it is still there.
+
+Local/self-hosted mode itself is **not** deprecated and stays.
 
 ---
 
 ## Recently completed
+
+### 0.3.1 released — Anthropic messages report the serving model (2026-09-23)
+
+`invincible-ai` **0.3.1** is on PyPI, published from tag `v0.3.1`
+(`1bb027a`) via the trusted-publisher dispatch, and production is
+serving it (`/health` → 0.3.1). It carries `f26eca4`, which makes
+`/v1/messages` report the model that actually served the request
+instead of echoing the requested one — mirroring `0f4e094` for
+`/v1/responses`, so a cross-model fallback is now visible to Claude
+Code and Codex in both APIs. That closes the last status-line
+follow-up.
+
+Verified: full suite 1136 passed; packaging smoke test passed; install
+from PyPI into a scratch venv outside the repo reports 0.3.1 with
+`providers.yaml` and all 20 templates packaged.
+
+Two traps worth remembering, both of which cost time this round:
+a Railway build+swap takes ~7 min, so `/health` serves the OLD version
+right after a push (do not read that as a broken deploy); and
+`pypi.org/pypi/<name>/json` is CDN-cached after a publish, so read
+`pypi.org/simple/<name>/` instead.
+
+Also retired: the stale `feature/inv-doctor` branch (merged via PR #8
+on 2026-08-05, no unique commits) — deleted locally, remote ref was
+already gone.
 
 ### Remote-first documentation pass (2026-09-21)
 
@@ -79,19 +131,16 @@ the user's machine). The **operator** journey is
 `install → setup --db-url <DSN> → start` — one command, one argument.
 
 Open decisions (multi-day project, fold into Phase 6/7 planning):
-- **Publishing — DONE 2026-09-23: `invincible-ai` 0.3.0 is live on PyPI.**
-  The upload claimed the name (it was unclaimed until then); the one-file
-  `.exe` stays deferred. Packaging, metadata, the wheel smoke test, a
-  tag-triggered release workflow, and trusted publishing are all in place
+- **Publishing — DONE 2026-09-23: `invincible-ai` 0.3.0 and 0.3.1 are
+  live on PyPI.** The first upload claimed the name (it was unclaimed
+  until then); the one-file `.exe` stays deferred. Packaging, metadata,
+  the wheel smoke test, a tag-triggered release workflow, and trusted
+  publishing are all in place and now exercised twice
   ([RELEASING.md](RELEASING.md)).
 - **The database:** remote-first is now the setup story (Neon etc.),
   matching the roadmap's hosted direction. Remaining question: is a
   bundled/local option still worth offering for offline users?
 
-### Housekeeping (10 min, whenever)
+### Housekeeping (5 min, whenever)
 
-- Move the dev database out of the Temp folder before a disk cleanup
-  eats it (portable PG on 5433, manual start, dies on reboot) —
-  superseded by the Phase 7 deployment item above, which retires this
-  PG entirely.
 - Revoke stale Claude/Grok OAuth connectors (`invincible oauth list`).
