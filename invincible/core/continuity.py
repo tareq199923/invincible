@@ -458,10 +458,28 @@ class ContinuityEngine:
             return None
         cps = await self.checkpoints(session_id, limit=1,
                                      session_pk=session_pk)
-        cp_after = cps[0]["created_at"] if cps else 0.0
         recent = await self._runs.recent(
             session_id=session_id, limit=10, session_pk=session_pk)
-        for run in recent:  # newest-first
+        return self._interruption_from(cps[0] if cps else None, recent)
+
+    @staticmethod
+    def _interruption_from(
+        latest_checkpoint: dict | None, recent_runs: list[dict] | None,
+    ) -> str | None:
+        """The note text for an upstream failure newer than the last
+        checkpoint, decided from rows already in hand.
+
+        Shared tail of :meth:`interruption_note` and
+        :meth:`context_snapshot` so the graph projection and the
+        continuation brief can never disagree about whether the previous
+        attempt ended badly.
+        """
+        if recent_runs is None:
+            return None
+        cp_after = (
+            latest_checkpoint["created_at"] if latest_checkpoint else 0.0
+        )
+        for run in recent_runs:  # newest-first
             if float(run.get("finished_at") or 0) <= cp_after:
                 continue
             if run.get("outcome") == "ok":
@@ -475,6 +493,127 @@ class ContinuityEngine:
             )
         return None
 
+    async def context_snapshot(
+        self, session_id: str,
+        *, session_pk: int | None | _Unscoped = UNSCOPED,
+        task_limit: int = _MAX_TASK_KEYS_RENDERED,
+    ) -> dict:
+        """Everything :meth:`context_message` renders, in a FIXED four
+        queries.
+
+        The brief used to await ``get_state`` and ``checkpoints`` once per
+        task key - 13 round-trips at the five keys it renders, on the
+        critical path of every chat request (deep code review 2026-09-24,
+        finding 7). PostgreSQL's ``DISTINCT ON`` is the "latest row per
+        ``task_key``" primitive that collapses those per-key reads, so the
+        brief now costs the same whether the session tracks one task or
+        five: the key list, the heads, the newest checkpoint per key, and
+        the recent runs.
+
+        Returns ``{"task_keys", "states", "checkpoints",
+        "latest_checkpoint", "runs"}``. ``runs`` is ``None`` when no run
+        store is attached. ``latest_checkpoint`` is the session's newest
+        checkpoint row - also the max-``id`` row of the per-key result,
+        since the globally newest checkpoint belongs to some key and for
+        that key it *is* the newest.
+
+        Scope follows ``core/scope.py`` exactly as the reads it replaces:
+        ``session_pk=None`` (scoped, owner unresolved) returns an empty
+        snapshot and issues NO SQL, the same fail-closed answer
+        ``get_state``/``checkpoints`` give, while an omitted ``session_pk``
+        keeps the legacy string-keyed path.
+        """
+        if session_pk is None:
+            return self._empty_snapshot()
+        task_keys = await self.active_task_keys(
+            session_id, limit=task_limit, session_pk=session_pk
+        )
+        if not task_keys:
+            # Same answer ``context_message`` gives, without the rest.
+            return self._empty_snapshot()
+
+        state_scope = (
+            task_states.c.session_pk == session_pk
+            if session_pk is not UNSCOPED
+            else task_states.c.session_id == session_id
+        )
+        checkpoint_scope = (
+            checkpoints_table.c.session_pk == session_pk
+            if session_pk is not UNSCOPED
+            else checkpoints_table.c.session_id == session_id
+        )
+        heads = (
+            select(
+                task_states.c.task_key,
+                task_states.c.status,
+                task_states.c.payload,
+                task_states.c.version,
+                task_states.c.updated_by,
+                task_states.c.updated_at,
+            )
+            .distinct(task_states.c.task_key)
+            .where(state_scope, task_states.c.task_key.in_(task_keys))
+            .order_by(task_states.c.task_key,
+                      task_states.c.version.desc())
+        )
+        # One row per task key for the WHOLE session, not just the rendered
+        # five: the newest checkpoint may belong to a key outside that
+        # window, and the interruption note must still see it.
+        newest_checkpoint = (
+            select(checkpoints_table)
+            .distinct(checkpoints_table.c.task_key)
+            .where(checkpoint_scope)
+            .order_by(checkpoints_table.c.task_key,
+                      checkpoints_table.c.id.desc())
+        )
+        async with self.engine.connect() as conn:
+            head_rows = (await conn.execute(heads)).mappings().all()
+            cp_rows = (await conn.execute(newest_checkpoint)).mappings().all()
+
+        states = {
+            row["task_key"]: {
+                "session_id": session_id,
+                "task_key": row["task_key"],
+                "status": row["status"],
+                "payload": row["payload"],   # JSONB -> dict already
+                "version": row["version"],
+                "updated_by": row["updated_by"],
+                "updated_at": row["updated_at"],
+            }
+            for row in head_rows
+        }
+        by_key: dict[str, dict] = {}
+        latest = None
+        for row in cp_rows:
+            cp = dict(row)
+            by_key[cp["task_key"]] = cp
+            if latest is None or cp["id"] > latest["id"]:
+                latest = cp
+
+        runs = None
+        if self._runs is not None:
+            runs = await self._runs.recent(
+                session_id=session_id, limit=10, session_pk=session_pk)
+        return {
+            "task_keys": task_keys,
+            "states": states,
+            "checkpoints": by_key,
+            "latest_checkpoint": latest,
+            "runs": runs,
+        }
+
+    @staticmethod
+    def _empty_snapshot() -> dict:
+        """The no-tasks / unresolved-owner answer: nothing to render, and
+        no query worth issuing to find that out."""
+        return {
+            "task_keys": [],
+            "states": {},
+            "checkpoints": {},
+            "latest_checkpoint": None,
+            "runs": None,
+        }
+
     @staticmethod
     def _render_payload(payload: dict) -> str:
         rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -486,31 +625,39 @@ class ContinuityEngine:
                               session_pk: int | None | _Unscoped = UNSCOPED,
                               ) -> dict | None:
         """The injectable system message carrying the continuation brief,
-        or None when the session tracks no tasks."""
+        or None when the session tracks no tasks.
+
+        Composed from ONE :meth:`context_snapshot` (a fixed four queries)
+        rather than a ``get_state``/``checkpoints`` pair per task key -
+        13 round-trips per chat request at the five rendered keys (deep
+        code review 2026-09-24, finding 7). Rendering, the whole-brief
+        char cap, and the omission marker are unchanged.
+        """
         from invincible.core.settings import settings
 
         if not settings.continuity_enabled() or session_pk is None:
             return None
-        task_keys = await self.active_task_keys(
-            session_id, limit=_MAX_TASK_KEYS_RENDERED, session_pk=session_pk
+        snap = await self.context_snapshot(
+            session_id, session_pk=session_pk,
+            task_limit=_MAX_TASK_KEYS_RENDERED,
         )
+        task_keys = snap["task_keys"]
         if not task_keys:
             return None
 
-        interruption = await self.interruption_note(session_id,
-                                                    session_pk=session_pk)
         lines = [
             "[Session continuity — canonical task state maintained by "
             "Invincible. Trust this over reconstructed transcript details.]"
         ]
+        interruption = self._interruption_from(
+            snap["latest_checkpoint"], snap["runs"])
         if interruption:
             lines.append(interruption)
 
         used = sum(len(line) + 1 for line in lines)
         omitted = False
         for idx, task_key in enumerate(task_keys):
-            state = await self.get_state(session_id, task_key,
-                                         session_pk=session_pk)
+            state = snap["states"].get(task_key)
             if state is None:
                 continue
             chunk_lines = [
@@ -518,13 +665,11 @@ class ContinuityEngine:
                 f"v{state['version']}):",
                 self._render_payload(state["payload"]),
             ]
-            cps = await self.checkpoints(session_id, task_key, limit=1,
-                                         session_pk=session_pk)
-            if cps:
-                cp = cps[0]
+            cp = snap["checkpoints"].get(task_key)
+            if cp:
                 chunk_lines.append(
-                    f"Latest checkpoint #{cp['id']} (at v{cp['state_version']}): "
-                    f"{cp['note']}"
+                    f"Latest checkpoint #{cp['id']} "
+                    f"(at v{cp['state_version']}): {cp['note']}"
                 )
             chunk = "\n".join(chunk_lines)
             if used + len(chunk) > _BRIEF_TOTAL_CHAR_CAP and idx > 0:

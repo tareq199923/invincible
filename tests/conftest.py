@@ -172,6 +172,35 @@ async def pg_engine():
 
 
 @pytest.fixture
+async def statements(pg_engine):
+    """Every statement executed against ``pg_engine`` while this test holds
+    it, as ``(sql, executemany)`` pairs (deep code review 2026-09-24,
+    finding 7).
+
+    The finding-7 hot-path changes preserve behaviour, so the honest proof
+    is not "the rows changed" - it is "the same rows cost fewer round
+    trips". Counting through ``before_cursor_execute`` on the sync engine
+    is what makes that measurable: reset with ``del statements[:]`` around
+    the call under test and assert on the result. ``executemany`` is kept
+    so a test can tell a single multi-VALUES statement from a per-row
+    cursor.executemany loop.
+    """
+    from sqlalchemy import event
+
+    seen: list[tuple[str, bool]] = []
+    sync_engine = pg_engine.sync_engine
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        seen.append((statement, bool(executemany)))
+
+    event.listen(sync_engine, "before_cursor_execute", _record)
+    try:
+        yield seen
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _record)
+
+
+@pytest.fixture
 async def stamp_revision(pg_engine):
     """Async callable: force the schema's recorded alembic revision (None
     drops the table). Clears the stamp afterwards so revision tests never

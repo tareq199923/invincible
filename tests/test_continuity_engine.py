@@ -268,3 +268,99 @@ async def test_failover_hook_note_marks_the_checkpoint_automatic(stack):
     assert cps, "the failover hook pinned no checkpoint"
     assert cps[0]["note"].startswith("auto: pre-failover")
     assert "alpha" in cps[0]["note"] and "429" in cps[0]["note"]
+
+
+# --- the brief's round-trip cost (finding 7) ---------------------------------
+
+
+async def _seed_keys(eng, session_id, count):
+    """``count`` tracked tasks with a checkpoint each, recency-ordered."""
+    import asyncio as _aio
+
+    for i in range(count):
+        await eng.set_state(session_id, {"i": i}, actor="x",
+                            task_key=f"k{i}")
+        await eng.create_checkpoint(session_id, task_key=f"k{i}",
+                                    note=f"note-{i}")
+        await _aio.sleep(0.001)  # distinct updated_at for stable recency
+
+
+async def test_context_snapshot_matches_the_per_key_reads(stack):
+    """The batched snapshot is the per-key reads, reassembled.
+
+    ``context_message`` composes its brief from this dict instead of
+    awaiting ``get_state`` / ``checkpoints`` once per task key, so the two
+    must agree row-for-row (deep code review 2026-09-24, finding 7).
+    """
+    _, _, eng = stack
+    await _seed_keys(eng, "s", 5)
+
+    snap = await eng.context_snapshot("s")
+
+    assert snap["task_keys"] == await eng.active_task_keys("s", limit=5)
+    assert sorted(snap["states"]) == sorted(snap["task_keys"])
+    for key in snap["task_keys"]:
+        assert snap["states"][key] == await eng.get_state("s", key)
+        assert snap["checkpoints"][key] == (
+            await eng.checkpoints("s", key, limit=1))[0]
+    # The session-wide newest checkpoint drives the interruption note; it
+    # must be the same row ``checkpoints(limit=1)`` returns, including when
+    # the newest one belongs to a key outside the rendered five.
+    assert snap["latest_checkpoint"] == (await eng.checkpoints("s", limit=1))[0]
+
+
+async def test_context_snapshot_is_empty_when_nothing_is_tracked(stack):
+    _, _, eng = stack
+    snap = await eng.context_snapshot("s")
+    assert snap["task_keys"] == []
+    assert snap["states"] == {} and snap["checkpoints"] == {}
+    assert snap["latest_checkpoint"] is None and snap["runs"] is None
+
+
+async def test_context_brief_costs_a_fixed_number_of_queries(pg_engine,
+                                                             statements):
+    """Finding 7: the brief was 13 round-trips at five task keys.
+
+    It awaited ``active_task_keys`` (1), then ``interruption_note`` - which
+    itself did ``checkpoints(limit=1)`` (1) and ``runs.recent`` (1) - then
+    ``get_state`` and ``checkpoints`` PER KEY (5 + 5). That is 13 queries on
+    the critical path of every chat request, and it grew with the key count.
+
+    Now it is a fixed four: keys, heads (DISTINCT ON task_key), newest
+    checkpoint per task key, recent runs. This test is the only proof that
+    the round-trips dropped - the rows are identical either way - so it
+    counts them rather than asserting the shape in a comment.
+    """
+    from invincible.core.continuity import ContinuityEngine
+    from invincible.core.run_store import RunStore
+
+    runs = RunStore(engine=pg_engine)
+    eng = ContinuityEngine(engine=pg_engine, runs=runs)
+    await _seed_keys(eng, "one-key", 1)
+    await _seed_keys(eng, "five-keys", 5)
+    await runs.record({
+        "request_id": "r1", "session_id": "five-keys",
+        "provider_name": "alpha", "model_id": "m", "attempt_index": 1,
+        "outcome": "ok", "started_at": 1.0, "finished_at": 2.0,
+    })
+
+    def selects() -> list[str]:
+        return [sql for sql, _ in statements
+                if sql.lstrip().upper().startswith("SELECT")]
+
+    del statements[:]
+    assert await eng.context_message("one-key") is not None
+    one = len(selects())
+
+    del statements[:]
+    assert await eng.context_message("five-keys") is not None
+    five = len(selects())
+
+    assert five == 4, f"5-key brief issued {five} queries, expected the 4 above"
+    assert one == five, (
+        f"query count must not scale with task keys (1 key: {one}, "
+        f"5 keys: {five})"
+    )
+    await eng.close()
+    await runs.close()
+
