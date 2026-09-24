@@ -101,8 +101,26 @@ def make_router(provider_config, monkeypatch):
 def router_setter(make_router):
     routers = []
 
+    async def _record(entry):
+        """Stand-in for the lifespan's ``runs.record``, resolved late.
+
+        ``client`` builds the router before ``app.state.runs`` exists, and
+        tests re-set the router at arbitrary points afterwards, so the
+        recorder has to look the store up per call rather than close over
+        it."""
+        runs = getattr(app.state, "runs", None)
+        if runs is None:
+            return None
+        return await runs.record(entry)
+
     def _set(handlers=None, providers=None):
         routers.append(make_router(handlers=handlers, providers=providers))
+        # invincible/main.py's lifespan does
+        # ``app.state.router.run_recorder = runs.record``. A fixture router
+        # without it drops every run row, which makes ownership assertions
+        # over ``runs`` pass against an empty table instead of against an
+        # isolation predicate.
+        routers[-1].run_recorder = _record
         app.state.router = routers[-1]
         return routers[-1]
 

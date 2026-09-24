@@ -188,6 +188,73 @@ async def test_graph_operator_role_reads_nothing(
     assert resp.json()["known"] is False and resp.json()["nodes"] == []
 
 
+async def test_graph_foreign_session_serves_no_owner_rows(client,
+                                                          router_setter):
+    """HIGH-1 regression (deep code review 2026-09-24).
+
+    ``known: false`` was being wrapped around the OWNER's rows: the
+    handler resolved ``session_pk = None`` for a foreign string and
+    carried on, and the run/state/checkpoint reads fell back to an
+    unscoped ``session_id == <string>`` predicate. The three sibling
+    tests above could not catch it because they only ever assert against
+    tables that happen to be empty.
+
+    This one seeds every row type the projection reads - a run (through
+    the router's ``run_recorder``, as the lifespan wires it), a task
+    state, and a checkpoint - all stamped with A's surrogate session,
+    then reads the same client string as B."""
+    def _ok(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=provider_body())
+
+    router_setter({"a-secret-provider.example.com": _ok,
+                   "b.example.com": _ok})
+    a = await _mint_user_and_key(client, "leak-a@example.com",
+                                 host="a-secret-provider.example.com",
+                                 model_id="a-secret-model")
+    b = await _mint_user_and_key(client, "leak-b@example.com",
+                                 host="b.example.com", model_id="b-model")
+
+    chat = await _chat(client, auth_for(a["raw"]), "a-private", "hi")
+    assert chat.status_code == 200, chat.text
+
+    pk_a = await app.state.sessions.lookup(
+        "a-private", user_id=a["user_id"], project_id=a["project_id"])
+    assert pk_a is not None
+    await app.state.continuity.set_state(
+        "a-private", {"secret": "A-CONFIDENTIAL-PAYLOAD"},
+        actor="a", task_key="default", session_pk=pk_a)
+    await app.state.continuity.create_checkpoint(
+        "a-private", note="A-SECRET-NOTE", session_pk=pk_a)
+
+    # Precondition: the rows exist and A can see all three kinds. Without
+    # this the negative assertions below could pass on an empty table.
+    own = await client.get("/api/v1/sessions/a-private/graph",
+                           headers=auth_for(a["raw"]))
+    own_body = own.json()
+    assert own_body["known"] is True
+    assert {n["kind"] for n in own_body["nodes"]} >= {
+        "run", "task_state", "checkpoint"}
+
+    foreign = await client.get("/api/v1/sessions/a-private/graph",
+                               headers=auth_for(b["raw"]))
+    assert foreign.status_code == 200
+    body = foreign.json()
+    assert body["known"] is False
+    assert body["nodes"] == []
+    assert body["edges"] == []
+    assert body["timeline"] == []
+    assert body["summary"]["providers_used"] == []
+    assert body["summary"]["attempts"] == 0
+    assert body["summary"]["failovers"] == 0
+    assert body["summary"]["tasks"] == {}
+    assert body["summary"]["turns"] == 0
+    assert body["summary"]["interruption_note"] is None
+    rendered = json.dumps(body)
+    for secret in ("A-CONFIDENTIAL-PAYLOAD", "A-SECRET-NOTE",
+                   "Cred a-secret-provider", "a-secret-model"):
+        assert secret not in rendered, f"{secret} reached a foreign principal"
+
+
 # --- task states / checkpoints (MCP surface) --------------------------------------
 
 
