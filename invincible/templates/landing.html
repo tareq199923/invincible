@@ -4,342 +4,285 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Invincible — One gateway. Every provider. Your AI agents.</title>
-  <meta name="description" content="A self-hosted AI gateway: tiered
-    provider failover for chat, MCP tool execution for agents, session
-    continuity and memory — behind your own login.">
+  <meta name="description" content="A self-hosted AI gateway: tiered provider failover for chat, MCP tool execution for agents, session continuity and memory — behind your own login.">
   <style>
     :root {
-      --ink: #0e1116;
-      --muted: #5b6570;
-      --line: #e4e8ee;
-      --accent: #4f46e5;
-      --accent-ink: #3730a3;
-      --soft: #f6f7fb;
-      --ok: #12833f;
-      --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+      color-scheme: light;
+      --ink: #111318;
+      --ink-soft: #2e323a;
+      --night: #0b0d12;
+      --night-raised: #151922;
+      --muted: #6b7078;
+      --line: #deddd7;
+      --line-strong: #c5c4bd;
+      --paper: #fffefa;
+      --canvas: #f2f0e9;
+      --wash: #e9e7df;
+      --accent: #c8ff53;
+      --accent-dark: #354f00;
+      --link: #3444bb;
+      --ok: #176b4b;
+      --mono: "SFMono-Regular", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
-      margin: 0; font-family: system-ui, -apple-system, sans-serif;
-      color: var(--ink); background: #fff; line-height: 1.55;
+      margin: 0;
+      color: var(--ink);
+      background: radial-gradient(circle at 8% -10%, rgba(200, 255, 83, 0.1), transparent 28rem), var(--canvas);
+      font-family: var(--sans);
+      line-height: 1.55;
     }
-    .wrap { max-width: 62rem; margin: 0 auto; padding: 0 1.25rem; }
+    a { color: var(--link); text-underline-offset: 3px; }
+    .wrap { width: min(1320px, calc(100% - 48px)); margin: 0 auto; }
 
-    /* top bar */
-    .topbar {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 1rem 0; border-bottom: 1px solid var(--line);
+    .site-header {
+      position: sticky;
+      z-index: 40;
+      top: 0;
+      color: #fff;
+      background: rgba(11, 13, 18, 0.97);
+      border-bottom: 1px solid #252a34;
+      backdrop-filter: blur(14px);
     }
-    .logo { font-weight: 800; font-size: 1.15rem; letter-spacing: -0.02em;
-            text-decoration: none; color: var(--ink); }
-    .logo span { color: var(--accent); }
-    .topbar nav { display: flex; gap: 1.1rem; align-items: center; }
-    .topbar nav a { color: var(--muted); text-decoration: none;
-                    font-size: 0.95rem; }
-    .topbar nav a:hover { color: var(--ink); }
-    .topbar nav a.cta { color: #fff; background: var(--accent);
-                        padding: 0.45rem 0.95rem; border-radius: 6px;
-                        font-weight: 600; }
-    .topbar nav a.cta:hover { background: var(--accent-ink); }
+    .site-header__inner { display: flex; min-height: 72px; align-items: center; justify-content: space-between; }
+    .logo { display: inline-flex; gap: 11px; align-items: center; color: #fff; text-decoration: none; }
+    .logo__mark { display: grid; width: 36px; height: 36px; place-items: center; color: var(--night); background: var(--accent); border-radius: 7px; box-shadow: 0 0 0 4px rgba(200, 255, 83, 0.09); font-family: var(--mono); font-size: 0.77rem; font-weight: 900; letter-spacing: -0.06em; }
+    .logo__name { display: flex; gap: 5px; align-items: baseline; font-size: 0.84rem; }
+    .logo__name strong { letter-spacing: -0.02em; }
+    .logo__name em { color: var(--accent); font-style: normal; font-weight: 800; }
+    .topnav { display: flex; gap: 4px; align-items: center; }
+    .topnav a { padding: 8px 11px; color: #b8bec7; border: 1px solid transparent; border-radius: 6px; font-size: 0.76rem; font-weight: 730; text-decoration: none; transition: color .15s ease, background .15s ease, transform .15s ease; }
+    .topnav a:hover { color: #fff; background: #1c212a; transform: translateY(-1px); }
+    .topnav a.cta { color: var(--night); background: var(--accent); border-color: var(--accent); }
+    .topnav a.cta:hover { color: var(--night); background: #d5ff7b; }
 
-    /* hero */
-    .hero { padding: 4.5rem 0 3.5rem; text-align: center;
-            border-bottom: 1px solid var(--line); }
-    .hero h1 {
-      font-size: clamp(2.1rem, 5vw, 3.3rem); line-height: 1.12;
-      letter-spacing: -0.03em; margin: 0 0 1rem;
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: 84px max(24px, calc((100% - 1320px) / 2)) 32px;
+      color: #fff;
+      background-color: var(--night);
+      background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+      background-size: 34px 34px;
+      border-bottom: 1px solid #252a34;
     }
-    .hero h1 em { font-style: normal; color: var(--accent); }
-    .hero p.lead {
-      font-size: 1.2rem; color: var(--muted); max-width: 42rem;
-      margin: 0 auto 1.8rem;
-    }
-    .hero .actions { display: flex; gap: 0.9rem; justify-content: center;
-                     flex-wrap: wrap; }
-    .btn {
-      display: inline-block; text-decoration: none; font-weight: 600;
-      padding: 0.7rem 1.5rem; border-radius: 8px; font-size: 1rem;
-    }
-    .btn.primary { background: var(--accent); color: #fff; }
-    .btn.primary:hover { background: var(--accent-ink); }
-    .btn.ghost { border: 1px solid var(--line); color: var(--ink); }
-    .btn.ghost:hover { border-color: var(--accent); color: var(--accent); }
+    .hero::after { content: ""; position: absolute; width: 420px; height: 420px; right: -180px; bottom: -260px; background: var(--accent); border-radius: 50%; filter: blur(115px); opacity: 0.13; pointer-events: none; }
+    .hero__content { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(0, .82fr) minmax(480px, 1.18fr); gap: clamp(48px, 8vw, 116px); align-items: center; }
+    .eyebrow { margin: 0 0 8px; color: var(--link); font-size: 0.65rem; font-weight: 860; letter-spacing: 0.14em; text-transform: uppercase; }
+    .hero .eyebrow { color: var(--accent); }
+    .hero h1 { max-width: 700px; margin: 10px 0 22px; font-size: clamp(3.25rem, 6.6vw, 6rem); line-height: .92; letter-spacing: -.075em; }
+    .hero h1 em { color: var(--accent); font-style: normal; }
+    .hero__copy > p:last-of-type { max-width: 620px; margin: 0; color: #adb4bf; font-size: clamp(1rem, 1.6vw, 1.16rem); line-height: 1.62; }
+    .hero .actions { display: flex; gap: 9px; margin-top: 28px; flex-wrap: wrap; }
+    .btn { display: inline-flex; min-height: 44px; padding: 8px 15px; align-items: center; justify-content: center; color: var(--night); background: var(--accent); border: 1px solid var(--accent); border-radius: 6px; font-size: 0.74rem; font-weight: 850; text-decoration: none; transition: background .15s ease, transform .15s ease, box-shadow .15s ease; }
+    .btn:hover { background: #d8ff82; box-shadow: 0 6px 0 rgba(200, 255, 83, 0.18); transform: translateY(-2px); }
+    .btn.ghost { color: #c9ced6; background: transparent; border-color: #414752; }
+    .btn.ghost:hover { color: #fff; background: #272c35; }
 
-    /* terminal window */
-    .terminal {
-      max-width: 34rem; margin: 2.5rem auto 0; background: var(--ink);
-      color: #d6deeb; border-radius: 10px; overflow: hidden;
-      box-shadow: 0 12px 40px rgba(14,17,22,0.25);
-      font-family: var(--mono); font-size: 0.85rem; text-align: left;
-    }
-    .terminal .bar {
-      display: flex; gap: 0.45rem; padding: 0.6rem 0.9rem;
-      background: #1c222b;
-    }
-    .terminal .bar i { width: 0.7rem; height: 0.7rem; border-radius: 50%;
-                       display: block; }
-    .terminal .bar i:nth-child(1) { background: #ff5f56; }
-    .terminal .bar i:nth-child(2) { background: #ffbd2e; }
-    .terminal .bar i:nth-child(3) { background: #27c93f; }
-    .terminal pre { margin: 0; padding: 1rem 1.1rem; line-height: 1.75;
-                    overflow-x: auto; }
+    .terminal { overflow: hidden; background: #151922; border: 1px solid #343a47; border-top: 3px solid var(--accent); border-radius: 12px; box-shadow: 0 30px 80px rgba(0,0,0,.42), 10px 10px 0 rgba(200,255,83,.1); font-family: var(--mono); font-size: 0.8rem; text-align: left; }
+    .terminal .bar { display: flex; min-height: 40px; padding: 0 15px; gap: 7px; align-items: center; background: #10131a; border-bottom: 1px solid #2a303b; }
+    .terminal .bar i { display: block; width: 8px; height: 8px; background: #3c424d; border-radius: 50%; }
+    .terminal .bar i:nth-child(1) { background: #ff6e5e; }
+    .terminal .bar i:nth-child(2) { background: #f2ba45; }
+    .terminal .bar i:nth-child(3) { background: var(--accent); }
+    .terminal .bar strong { margin-left: 6px; color: #777f8c; font-size: 0.62rem; font-weight: 600; }
+    .terminal pre { margin: 0; padding: 22px 24px 25px; overflow-x: auto; color: #c7ccd4; line-height: 1.72; }
     .terminal .cmd { color: #7dcfff; }
-    .terminal .ok { color: #27c93f; }
-    .terminal .dim { color: #8b98a5; }
+    .terminal .ok { color: var(--accent); }
+    .terminal .dim { color: #747c88; }
+    .badges { display: flex; gap: 6px; margin-top: 20px; flex-wrap: wrap; }
+    .badge { padding: 6px 9px; color: #c4cad3; background: #1e232d; border: 1px solid #363d49; border-radius: 5px; font-family: var(--mono); font-size: 0.62rem; }
 
-    /* badges */
-    .badges { display: flex; gap: 0.6rem; justify-content: center;
-              flex-wrap: wrap; margin: 2.2rem 0 0; }
-    .badge {
-      border: 1px solid var(--line); border-radius: 999px;
-      padding: 0.3rem 0.9rem; font-size: 0.85rem; color: var(--muted);
-      background: var(--soft);
-    }
+    .hero__footer { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(420px, .8fr) minmax(520px, 1.2fr); gap: 38px; margin-top: 58px; padding-top: 22px; align-items: center; border-top: 1px solid #2b303a; }
+    .hero-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
+    .hero-stats div { padding: 0 16px; border-left: 1px solid #2e3440; }
+    .hero-stats div:first-child { padding-left: 0; border-left: 0; }
+    .hero-stats dt { color: #fff; font-family: var(--mono); font-size: 0.88rem; font-weight: 800; }
+    .hero-stats dd { margin: 4px 0 0; color: #7f8792; font-size: 0.64rem; line-height: 1.35; }
+    .capability-tabs { display: flex; gap: 6px; max-width: 100%; padding: 3px 0; overflow-x: auto; }
+    .capability-tab { display: inline-flex; flex: 0 0 auto; gap: 7px; padding: 8px 10px; align-items: center; color: #a6adb7; background: #151922; border: 1px solid #303641; border-radius: 6px; font-size: 0.69rem; font-weight: 730; text-decoration: none; }
+    .capability-tab i { width: 7px; height: 7px; background: #8a8f98; border-radius: 50%; }
+    .capability-tab:nth-child(2) i { background: #19a994; }
+    .capability-tab:nth-child(3) i { background: #dc704d; }
+    .capability-tab:nth-child(4) i { background: #5977ff; }
+    .capability-tab:hover { color: var(--night); background: var(--accent); border-color: var(--accent); }
 
-    /* sections */
-    section { padding: 3.5rem 0; border-bottom: 1px solid var(--line); }
-    section.alt { background: var(--soft); }
-    h2 {
-      text-align: center; font-size: 1.75rem; letter-spacing: -0.02em;
-      margin: 0 0 0.6rem;
-    }
-    .sub { text-align: center; color: var(--muted); margin: 0 auto 2.2rem;
-           max-width: 38rem; }
+    section.content-section { padding: 66px 0; border-bottom: 1px solid var(--line); }
+    .section-heading { display: flex; gap: 24px; margin-bottom: 22px; align-items: end; justify-content: space-between; }
+    .section-heading h2 { margin: 0; font-size: clamp(1.65rem, 3vw, 2.35rem); letter-spacing: -.05em; }
+    .section-heading > p { max-width: 470px; margin: 0; color: var(--muted); font-size: 0.8rem; line-height: 1.58; }
+    .steps, .features { display: grid; gap: 11px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .step, .feature { min-height: 250px; padding: 22px; background: var(--paper); border: 1px solid var(--line); border-top: 4px solid var(--accent-dark); border-radius: 9px; box-shadow: 0 8px 22px rgba(33,36,42,.05); }
+    .step .num { display: grid; width: 29px; height: 29px; place-items: center; color: var(--night); background: var(--accent); border-radius: 50%; font-family: var(--mono); font-size: 0.66rem; font-weight: 900; }
+    .step h3, .feature h3 { margin: 27px 0 9px; font-size: 1.08rem; letter-spacing: -.03em; }
+    .step p, .feature p { margin: 0 0 17px; color: var(--muted); font-size: 0.8rem; line-height: 1.6; }
+    .step code { display: block; padding: 9px 10px; overflow: hidden; color: #eef1f5; background: var(--night-raised); border-left: 3px solid var(--accent); border-radius: 5px; font-size: 0.69rem; text-overflow: ellipsis; white-space: nowrap; }
+    .step .note { margin: 10px 0 0; font-size: 0.7rem; font-style: italic; }
 
-    /* how it works steps */
-    .steps { display: grid; gap: 1.2rem;
-             grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); }
-    .step { border: 1px solid var(--line); border-radius: 10px;
-            padding: 1.4rem 1.5rem; background: #fff; }
-    .step .num {
-      display: inline-block; width: 1.9rem; height: 1.9rem;
-      border-radius: 50%; background: var(--accent); color: #fff;
-      text-align: center; line-height: 1.9rem; font-weight: 700;
-      font-size: 0.9rem; margin-bottom: 0.7rem;
-    }
-    .step h3 { margin: 0 0 0.4rem; font-size: 1.05rem; }
-    .step p { margin: 0 0 0.8rem; color: var(--muted); font-size: 0.93rem; }
-    .step code {
-      display: block; background: var(--ink); color: #d6deeb;
-      border-radius: 6px; padding: 0.55rem 0.8rem; font-family: var(--mono);
-      font-size: 0.8rem; overflow-x: auto; white-space: nowrap;
-    }
-    .step .note { font-size: 0.82rem; color: var(--muted); margin: 0.6rem
-                  0 0; font-style: italic; }
-
-    /* architecture diagram */
-    .arch { display: flex; align-items: center; justify-content: center;
-            gap: 0; flex-wrap: wrap; margin: 1.5rem 0 1rem; }
-    .arch .node {
-      border: 1px solid var(--line); border-radius: 10px; padding: 1rem
-      1.3rem; text-align: center; background: #fff; min-width: 9rem;
-    }
+    .architecture-shell { display: grid; grid-template-columns: minmax(210px, .35fr) minmax(0, 1fr); gap: 22px; }
+    .architecture-note { padding: 18px 20px; color: #dce1e7; background: var(--night-raised); border-left: 5px solid var(--accent); border-radius: 0 8px 8px 0; font-size: 0.78rem; line-height: 1.55; }
+    .architecture-note strong { display: block; margin-bottom: 5px; color: #fff; }
+    .architecture-note span { color: #9fa7b2; }
+    .arch { display: flex; align-items: center; justify-content: center; margin: 0; flex-wrap: wrap; }
+    .arch .node { min-width: 150px; padding: 20px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); box-shadow: 0 3px 0 #e2e0d8; text-align: center; }
     .arch .node strong { display: block; font-size: 0.95rem; }
-    .arch .node small { color: var(--muted); font-size: 0.78rem;
-                        display: block; margin-top: 0.15rem; }
-    .arch .arrow {
-      color: var(--accent); font-weight: 700; padding: 0 0.7rem;
-      font-size: 1.1rem; white-space: nowrap;
+    .arch .node small { display: block; margin-top: 5px; color: var(--muted); font-size: 0.7rem; }
+    .arch .arrow { padding: 0 10px; color: var(--accent-dark); font-family: var(--mono); font-size: 1.1rem; font-weight: 800; white-space: nowrap; }
+    .arch .arrow small { display: block; color: var(--muted); font-family: var(--sans); font-size: 0.65rem; font-weight: 500; }
+
+    .features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .feature { min-height: 0; }
+    .feature h3 { margin-top: 0; }
+    .feature:nth-child(3) { border-top-color: var(--ok); }
+    .feature:nth-child(4) { border-top-color: var(--link); }
+    .feature:nth-child(5) { border-top-color: #d18a17; }
+    .feature:nth-child(6) { border-top-color: #a33737; }
+
+    footer { padding: 28px 0 38px; color: var(--muted); font-size: 0.7rem; }
+    footer .wrap { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); }
+    .live-dot { display: inline-block; width: 7px; height: 7px; margin-right: 7px; background: var(--accent); border-radius: 50%; }
+
+    :focus-visible { outline: 3px solid rgba(200,255,83,.72); outline-offset: 3px; }
+    @media (max-width: 1000px) {
+      .hero__content { grid-template-columns: 1fr; gap: 38px; }
+      .hero__copy, .terminal { max-width: 780px; }
+      .hero__footer { grid-template-columns: 1fr; gap: 18px; }
+      .architecture-shell { grid-template-columns: 1fr; }
     }
-    .arch .arrow small { display: block; color: var(--muted);
-                         font-size: 0.72rem; font-weight: 400; }
-    .arch-note { text-align: center; color: var(--muted);
-                 font-size: 0.88rem; max-width: 40rem; margin: 0 auto; }
-
-    /* features grid */
-    .features { display: grid; gap: 1.2rem;
-                grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); }
-    .feature { padding: 1.2rem 1.3rem; border: 1px solid var(--line);
-               border-radius: 10px; background: #fff; }
-    .feature h3 { margin: 0 0 0.4rem; font-size: 1rem; }
-    .feature p { margin: 0; color: var(--muted); font-size: 0.9rem; }
-
-    /* footer */
-    footer { padding: 2.5rem 0 3rem; color: var(--muted);
-             font-size: 0.88rem; }
-    footer .wrap { display: flex; justify-content: space-between;
-                   flex-wrap: wrap; gap: 1rem; }
-    footer a { color: var(--muted); }
-    footer a:hover { color: var(--ink); }
-    .live-dot { display: inline-block; width: 0.5rem; height: 0.5rem;
-                border-radius: 50%; background: var(--ok);
-                margin-right: 0.35rem; vertical-align: middle; }
-
-    @media (max-width: 40rem) {
-      .hero { padding: 3rem 0 2.5rem; }
-      section { padding: 2.5rem 0; }
+    @media (max-width: 700px) {
+      .site-header__inner, .content-section, .hero__footer, footer .wrap { width: min(100% - 28px, 1320px); }
+      .site-header__inner { min-height: 64px; }
+      .logo__name { display: none; }
+      .topnav a { padding: 7px; }
+      .hero { padding: 44px 14px 28px; }
+      .hero h1 { font-size: clamp(2.9rem, 16vw, 4.45rem); }
+      .hero-stats { grid-template-columns: 1fr 1fr; gap: 17px 0; }
+      .hero-stats div:nth-child(3) { padding-left: 0; border-left: 0; }
+      .steps, .features { grid-template-columns: 1fr; }
+      .step { min-height: 0; }
+      .section-heading { align-items: start; flex-direction: column; gap: 9px; }
+      .arch { align-items: stretch; flex-direction: column; }
+      .arch .arrow { align-self: center; transform: rotate(90deg); }
+      footer .wrap { align-items: start; flex-direction: column; gap: 8px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      * { transition: none !important; }
     }
   </style>
 </head>
 <body>
-
-<div class="wrap">
-  <header class="topbar">
-    <a class="logo" href="/">Invincible<span>.</span></a>
-    <nav>
-      <a href="#how">How it works</a>
-      <a href="#architecture">Architecture</a>
-      <a href="/login">Sign in</a>
-      <a class="cta" href="/register">Get started</a>
-    </nav>
-  </header>
-</div>
-
-<section class="hero">
-  <div class="wrap">
-    <h1>One gateway.<br>Every provider. <em>Your rules.</em></h1>
-    <p class="lead">
-      Invincible sits between your AI clients and your providers — routing
-      chat across a tiered failover chain, executing agent tools under
-      per-client approval, and remembering context across sessions.
-    </p>
-    <div class="actions">
-      <a class="btn primary" href="/register">Get started</a>
-      <a class="btn ghost" href="#how">See how it works</a>
+  <header class="site-header">
+    <div class="site-header__inner wrap">
+      <a class="logo" href="/">
+        <span class="logo__mark" aria-hidden="true">I/</span>
+        <span class="logo__name"><strong>Invincible</strong><em>Gateway</em></span>
+      </a>
+      <nav class="topnav" aria-label="Primary navigation">
+        <a href="#how">How it works</a>
+        <a href="#architecture">Architecture</a>
+        <a href="/login">Sign in</a>
+        <a class="cta" href="/register">Get started</a>
+      </nav>
     </div>
+  </header>
 
-    <div class="terminal">
-      <div class="bar"><i></i><i></i><i></i></div>
-      <pre><span class="dim">$</span> <span class="cmd">pip install invincible &amp;&amp; invincible start</span>
+  <main>
+    <section class="hero">
+      <div class="hero__content wrap">
+        <div class="hero__copy">
+          <p class="eyebrow">Remote-first · Self-service · BYOK</p>
+          <h1>One gateway.<br>Every provider. <em>Your rules.</em></h1>
+          <p>Invincible sits between your AI clients and your providers — routing chat across a tiered failover chain, executing agent tools under per-client approval, and remembering context across sessions.</p>
+          <div class="actions">
+            <a class="btn" href="/register">Get started</a>
+            <a class="btn ghost" href="#how">See how it works</a>
+          </div>
+        </div>
+        <div class="terminal" aria-label="Invincible quick start terminal">
+          <div class="bar"><i></i><i></i><i></i><strong>invincible / start</strong></div>
+          <pre><span class="dim">$</span> <span class="cmd">pip install invincible &amp;&amp; invincible start</span>
 <span class="ok">✓</span> Gateway listening on :8000
 <span class="ok">✓</span> Providers loaded: 5 (tiered failover armed)
 <span class="ok">✓</span> MCP tool server ready at /mcp
 <span class="dim">→</span> Point any OpenAI-compatible client at
    <span class="cmd">http://localhost:8000/v1</span></pre>
-    </div>
+        </div>
+      </div>
+      <div class="hero__footer wrap">
+        <dl class="hero-stats">
+          <div><dt>1</dt><dd>gateway endpoint</dd></div>
+          <div><dt>BYOK</dt><dd>your provider keys</dd></div>
+          <div><dt>3</dt><dd>compatible protocols</dd></div>
+          <div><dt>0</dt><dd>shared credentials</dd></div>
+        </dl>
+        <div class="capability-tabs" aria-label="Gateway capabilities">
+          <a class="capability-tab" href="#how"><i aria-hidden="true"></i>OpenAI</a>
+          <a class="capability-tab" href="#how"><i aria-hidden="true"></i>Anthropic</a>
+          <a class="capability-tab" href="#architecture"><i aria-hidden="true"></i>MCP</a>
+          <a class="capability-tab" href="#how"><i aria-hidden="true"></i>Responses</a>
+        </div>
+      </div>
+    </section>
 
-    <div class="badges">
-      <span class="badge">OpenAI-compatible</span>
-      <span class="badge">Anthropic Messages API</span>
-      <span class="badge">MCP-native</span>
-      <span class="badge">Self-hosted</span>
-      <span class="badge">Your database, your keys</span>
-    </div>
-  </div>
-</section>
+    <section id="how" class="content-section">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><p class="eyebrow">Three-step setup</p><h2>Running in under two minutes</h2></div>
+          <p>From install to AI-ready with zero cloud lock-in. Register an account, connect your keys, and route.</p>
+        </div>
+        <div class="steps">
+          <article class="step"><span class="num">01</span><h3>Install &amp; start</h3><p>One pip install, one command. Works on macOS, Linux, and Windows.</p><code>pip install invincible<br>invincible start</code></article>
+          <article class="step"><span class="num">02</span><h3>Register</h3><p>Create an account and bring your own provider keys. Your data stays isolated per account.</p><code>→ /register in your browser</code><p class="note">Your keys, your billing, your account.</p></article>
+          <article class="step"><span class="num">03</span><h3>Connect your clients</h3><p>Point any compatible client at the gateway and approve MCP clients one by one.</p><code>base_url: http://localhost:8000/v1<br>api_key: &lt;your key&gt;</code></article>
+        </div>
+      </div>
+    </section>
 
-<section id="how">
-  <div class="wrap">
-    <h2>Running in under two minutes</h2>
-    <p class="sub">
-      From install to AI-ready with zero cloud lock-in. Register an
-      account, connect your keys, and route — no extra setup.
-    </p>
-    <div class="steps">
-      <div class="step">
-        <span class="num">1</span>
-        <h3>Install &amp; start</h3>
-        <p>One pip install, one command. Works on macOS, Linux, Windows.</p>
-        <code>pip install invincible<br>invincible start</code>
+    <section id="architecture" class="content-section" style="background: var(--wash);">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><p class="eyebrow">Secure by design</p><h2>One boundary. Three isolated realms.</h2></div>
+          <p>Every surface carries its own realm, so chat credentials never reach management or tool-execution controls.</p>
+        </div>
+        <div class="architecture-shell">
+          <aside class="architecture-note"><strong>Ownership stays explicit.</strong><span>A chat key spends only its owner's credits. A tool client runs only approved operations. The dashboard answers only to the account session.</span></aside>
+          <div class="arch">
+            <div class="node"><strong>AI Client</strong><small>Claude Code, scripts, apps</small></div>
+            <div class="arrow">→<small>chat: /v1/*</small></div>
+            <div class="node"><strong>Invincible</strong><small>failover · tools · memory</small></div>
+            <div class="arrow">→<small>per-tier</small></div>
+            <div class="node"><strong>Providers</strong><small>OpenAI · Anthropic · Gemini</small></div>
+          </div>
+        </div>
       </div>
-      <div class="step">
-        <span class="num">2</span>
-        <h3>Register</h3>
-        <p>Create an account and the dashboard opens up — bring your
-           own provider keys, they stay yours.</p>
-        <code>→ /register in your browser</code>
-        <p class="note">Your keys, your data — isolated per account.</p>
-      </div>
-      <div class="step">
-        <span class="num">3</span>
-        <h3>Connect your clients</h3>
-        <p>Point any OpenAI-compatible or Anthropic-native client at the
-           gateway. Approve MCP clients one by one from the dashboard.</p>
-        <code>base_url: http://localhost:8000/v1<br>api_key:  &lt;your key&gt;</code>
-      </div>
-    </div>
-  </div>
-</section>
+    </section>
 
-<section id="architecture" class="alt">
-  <div class="wrap">
-    <h2>Secure by design</h2>
-    <p class="sub">
-      Every surface carries its own realm — a chat key can only spend
-      credits, a tool client can only run what you approved, and the
-      dashboard answers only to your login.
-    </p>
-    <div class="arch">
-      <div class="node">
-        <strong>AI Client</strong>
-        <small>Claude Code, scripts, apps</small>
+    <section class="content-section">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><p class="eyebrow">Complete control plane</p><h2>Everything an agent workflow needs</h2></div>
+          <p>One process, one database, and provider credentials that remain under your control.</p>
+        </div>
+        <div class="features">
+          <article class="feature"><h3>Tiered failover</h3><p>Requests cascade across providers on rate limits and errors, using the cheapest live tier automatically.</p></article>
+          <article class="feature"><h3>MCP tool execution</h3><p>read_file, write_file, and execute_bash sit behind per-client OAuth tokens, denylists, and approvals.</p></article>
+          <article class="feature"><h3>Session continuity</h3><p>Task state, checkpoints, and failover history persist per session so agents resume where they left off.</p></article>
+          <article class="feature"><h3>Scoped memory</h3><p>Each user's memories inject only into their prompts, with budget caps and provenance tracking.</p></article>
+          <article class="feature"><h3>Provider management</h3><p>Add, test, disable, and order providers at runtime. Route auto, pinned, or chained without restarts.</p></article>
+          <article class="feature"><h3>Usage analytics</h3><p>Provider attempts, failovers, token spend, and latency are recorded per run and visible in the dashboard.</p></article>
+        </div>
       </div>
-      <div class="arrow">
-        →<small>chat: /v1/*</small>
-      </div>
-      <div class="node">
-        <strong>Invincible</strong>
-        <small>failover · tools · memory</small>
-      </div>
-      <div class="arrow">
-        →<small>per-tier</small>
-      </div>
-      <div class="node">
-        <strong>Providers</strong>
-        <small>OpenRouter · Groq · Gemini…</small>
-      </div>
-    </div>
-    <p class="arch-note">
-      A rate-limited free tier no longer kills an agent's workflow:
-      requests fail over down the chain automatically. MCP tool clients
-      pair through an owner-consent OAuth flow — every client is
-      individually revocable. Chat credentials can never touch
-      management surfaces.
-    </p>
-  </div>
-</section>
+    </section>
+  </main>
 
-<section>
-  <div class="wrap">
-    <h2>Everything an agent workflow needs</h2>
-    <p class="sub">One process, one database — no external services.</p>
-    <div class="features">
-      <div class="feature">
-        <h3>Tiered failover</h3>
-        <p>Requests cascade across providers on 429s and errors — pick the
-           cheapest tier that's alive, automatically.</p>
-      </div>
-      <div class="feature">
-        <h3>MCP tool execution</h3>
-        <p>read_file, write_file, execute_bash — behind per-client OAuth
-           tokens and a denylist + approval safety net.</p>
-      </div>
-      <div class="feature">
-        <h3>Session continuity</h3>
-        <p>Task state, checkpoints, and failover history persist per
-           session — agents resume where they left off.</p>
-      </div>
-      <div class="feature">
-        <h3>Scoped memory</h3>
-        <p>Each user's memories inject into their own prompts only —
-           budget-capped, provenance-tracked.</p>
-      </div>
-      <div class="feature">
-        <h3>Provider management</h3>
-        <p>Add, disable, and test providers at runtime; route auto,
-           pinned, or chained — no restarts.</p>
-      </div>
-      <div class="feature">
-        <h3>Usage analytics</h3>
-        <p>Per-provider attempts, failovers, token spend, and latency —
-           visible in the dashboard, recorded per run.</p>
-      </div>
+  <footer>
+    <div class="wrap">
+      <div><span class="live-dot"></span>Invincible — remote-first AI gateway</div>
+      <div><a href="/login">Sign in</a> · <a href="/register">Register</a> · <a href="/health">Status</a></div>
     </div>
-  </div>
-</section>
-
-<footer>
-  <div class="wrap">
-    <div>
-      <span class="live-dot"></span>Invincible — self-hosted AI gateway
-    </div>
-    <div>
-      <a href="/login">Sign in</a> ·
-      <a href="/register">Register</a> ·
-      <a href="/health">Status</a>
-    </div>
-  </div>
-</footer>
-
+  </footer>
 </body>
 </html>
