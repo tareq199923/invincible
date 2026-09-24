@@ -48,8 +48,10 @@ async def test_root_serves_landing_page_to_browsers(client):
     assert "https://invincible-ai.me/v1" in body
     assert "OAuth-protected MCP tools" in body
     assert "Per-user BYOK failover" in body
+    assert "OpenAI Responses (Codex)" in body
     assert "Every provider" not in body
-    assert "pip install" not in body
+    assert "pip install invincible-ai" in body
+    assert "invincible agent" in body
     assert "invincible start" not in body
     assert 'href="/register"' in body
     assert 'href="/login"' in body

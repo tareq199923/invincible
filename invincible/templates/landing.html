@@ -85,6 +85,10 @@
     .btn:hover { color: var(--night); background: #aeb4ff; box-shadow: 0 6px 0 rgba(139, 147, 255, 0.18); transform: translateY(-2px); }
     .btn.ghost { color: #c9ced6; background: transparent; border-color: #414752; }
     .btn.ghost:hover { color: #fff; background: #272c35; box-shadow: none; }
+    .install-strip { margin-top: 18px; max-width: 640px; }
+    .install-strip pre { margin: 0; padding: 12px 14px; overflow-x: auto; color: #eef1f5; background: var(--night-raised); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; font-family: var(--mono); font-size: 0.76rem; line-height: 1.7; }
+    .install-strip pre .c { color: var(--accent-ink, #b7bcff); }
+    .install-strip small { display: block; margin-top: 7px; color: #7f8792; font-size: 0.7rem; line-height: 1.5; }
 
     .terminal { overflow: hidden; background: var(--paper); border: 1px solid var(--line-strong); border-top: 3px solid var(--accent); border-radius: 12px; box-shadow: 0 30px 80px rgba(0,0,0,.42), 10px 10px 0 rgba(139,147,255,.1); font-family: var(--mono); font-size: 0.8rem; text-align: left; }
     .terminal .bar { display: flex; min-height: 40px; padding: 0 15px; gap: 7px; align-items: center; background: var(--night-raised); border-bottom: 1px solid var(--line); }
@@ -209,12 +213,17 @@
             <a class="btn" href="/register">Create your account</a>
             <a class="btn ghost" href="#setup">See the hosted setup</a>
           </div>
+          <div class="install-strip" aria-label="User install command">
+            <pre><span class="c">pip install invincible-ai</span>
+<span class="c">invincible agent</span>  <span class="dim" style="color:#747c88;"># pairs your machine — no database, no .env</span></pre>
+            <small>One command pairs your PC with invincible-ai.me. Your account, provider keys, and memory live on the hosted service.</small>
+          </div>
         </div>
         <div class="terminal" aria-label="Invincible hosted client configuration">
           <div class="bar"><i></i><i></i><i></i><strong>invincible / client-config</strong></div>
           <pre><span class="dim">base</span>  <span class="cmd">https://invincible-ai.me/v1</span>
 <span class="dim">key</span>   <span class="cmd">inv_…</span> <span class="ok">✓ shown once · revocable</span>
-<span class="dim">chat</span>  OpenAI Chat · Anthropic Messages · Responses
+<span class="dim">chat</span>  OpenAI Chat · Anthropic Messages · Responses (Codex)
 <span class="dim">tools</span> <span class="cmd">https://invincible-ai.me/mcp</span> <span class="ok">✓ OAuth</span></pre>
         </div>
       </div>
@@ -227,8 +236,8 @@
         </dl>
         <div class="capability-tabs" aria-label="Client and tool protocol surfaces">
           <span class="capability-tab"><i aria-hidden="true"></i>OpenAI Chat</span>
-          <span class="capability-tab"><i aria-hidden="true"></i>Anthropic Messages</span>
-          <span class="capability-tab"><i aria-hidden="true"></i>OpenAI Responses</span>
+          <span class="capability-tab"><i aria-hidden="true"></i>Anthropic Messages (Claude Code)</span>
+          <span class="capability-tab"><i aria-hidden="true"></i>OpenAI Responses (Codex)</span>
           <span class="capability-tab"><i aria-hidden="true"></i>MCP Tools</span>
         </div>
       </div>
@@ -244,7 +253,7 @@
           <article class="step"><span class="num">01</span><h3>Create an account</h3><p>Register with email and password, or sign in with GitHub when your deployment enables it. Your account owns its keys, providers, sessions, and state.</p><code>/register</code></article>
           <article class="step"><span class="num">02</span><h3>Connect providers</h3><p>Choose a provider from the catalog or add any OpenAI-compatible Chat Completions endpoint. Each key is encrypted at rest and used only for your account's requests.</p><code>dashboard → providers</code></article>
           <article class="step"><span class="num">03</span><h3>Create an API key</h3><p>Generate a per-user <code>inv_</code> key from Account. The raw value is shown once, stored as a hash, and can be revoked immediately.</p><code>dashboard → account → API keys</code></article>
-          <article class="step"><span class="num">04</span><h3>Connect your client</h3><p>Point an OpenAI-compatible client, Claude Code, or Codex at Invincible. Use the separate MCP endpoint only when your client supports OAuth tools.</p><code>https://invincible-ai.me/v1</code></article>
+          <article class="step"><span class="num">04</span><h3>Connect your client</h3><p>Point any OpenAI-compatible client or Codex at <code>https://invincible-ai.me/v1</code>, or Claude Code via <code>ANTHROPIC_BASE_URL=https://invincible-ai.me</code>. Use the separate MCP endpoint only when your client supports OAuth tools.</p><code>https://invincible-ai.me/v1</code></article>
         </div>
       </div>
     </section>
@@ -274,8 +283,8 @@
         </div>
         <div class="features">
           <article class="feature"><h3>Per-user BYOK failover</h3><p>Choose <code>auto</code>, <code>pinned</code>, or <code>chain</code> routing. Invincible tries the next available credential after rate limits, server errors, network failures, or disabled authentication—without claiming to optimize for price.</p></article>
-          <article class="feature"><h3>Versioned continuity</h3><p>Task state is updated with optimistic version checks, immutable checkpoints pin important states, and a pre-switch checkpoint can capture the provider failure before failover continues.</p></article>
-          <article class="feature"><h3>Scoped lexical memory</h3><p>PostgreSQL stores memories with layer, confidence, provenance, and project scope. Lexical retrieval combines full-text relevance, recency, kind, confidence, and a bounded top-N result set.</p></article>
+          <article class="feature"><h3>Versioned continuity</h3><p>Task state is versioned with optimistic checks, immutable checkpoints pin important states, and one pre-failover snapshot captures the provider failure before routing continues — only when task state exists.</p></article>
+          <article class="feature"><h3>Scoped lexical memory</h3><p>PostgreSQL stores memories with layer, confidence, provenance, and project scope. Lexical retrieval combines full-text relevance, recency, kind, confidence, and a bounded top-N result set. Say "remember this" to save explicitly.</p></article>
           <article class="feature"><h3>OAuth-protected MCP tools</h3><p>Ten tools cover file reads, approved shell execution, approved writes, task state, checkpoints, and memory. <code>execute_bash</code> and <code>write_file</code> require a single-use confirmation token.</p></article>
           <article class="feature"><h3>Paired machine execution</h3><p>When the hosted deployment routes tool jobs to your paired agent, confirmed commands and writes execute on your machine inside a home-relative sandbox. Reads and data-plane tools do not use that second approval.</p></article>
           <article class="feature"><h3>Usage and run history</h3><p>The dashboard aggregates attempts, failovers, and input/output token counts by day and provider/model. Provider-attempt history and continuity projections show how tracked work moved forward.</p></article>
@@ -286,7 +295,7 @@
 
   <footer>
     <div class="wrap">
-      <div><span class="live-dot"></span>Invincible — remote-first AI continuity gateway</div>
+      <div><span class="live-dot"></span>Invincible — remote-first AI continuity gateway · Lexical memory today · No shared provider keys</div>
       <div><a href="/login">Sign in</a> · <a href="/register">Create account</a> · <a href="/health">Service health</a></div>
     </div>
   </footer>
