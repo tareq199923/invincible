@@ -26,6 +26,7 @@ from collections.abc import (  # noqa: F401  (AsyncGenerator re-exported for typ
 from invincible.compat.common import (
     build_message,
     build_usage,
+    estimate_assistant_tokens,
     estimate_token_sum,
 )
 
@@ -376,7 +377,7 @@ def internal_to_anthropic(
             }
         )
 
-    output_tokens = estimate_token_sum([build_message("assistant", content)])
+    output_tokens = estimate_assistant_tokens(content, tool_calls)
     model = served_model or openai_body.get("model") or "invincible"
     stop_reason = translate_finish_reason(first_choice.get("finish_reason"))
     if tool_calls:
@@ -666,7 +667,10 @@ async def build_stream_events(
             },
             "usage": build_usage(
                 input_tokens,
-                estimate_token_sum([build_message("assistant", reply_text)]),
+                # Measure the assembled turn, not just its text: a
+                # tool-call-only reply has no text at all (finding 5).
+                estimate_token_sum(
+                    [_stream_assistant_message(reply_text, tool_states)]),
             ),
         },
     )

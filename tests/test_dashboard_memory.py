@@ -135,6 +135,37 @@ async def test_filters_and_pagination(client):
     assert bad_layer.status_code == 400
 
 
+async def test_memories_limit_and_offset_are_bounded(client, monkeypatch):
+    """`GET /memories` takes limit/offset straight from the query string
+    and hands them to SQL (deep code review 2026-09-24, finding 8).
+
+    The cap is monkeypatched down to 2 rather than seeded past, so the
+    test stays quick while still proving the clamp is APPLIED - asking for
+    a million rows must return the cap, not a million.
+    """
+    from invincible.endpoints import dashboard
+
+    monkeypatch.setattr(dashboard, "_MEMORY_API_MAX_LIMIT", 2)
+    await make_user(client, "bounded@example.com")
+    for index in range(3):
+        await add_memory(client, f"memory {index}")
+
+    huge = (await client.get(
+        "/memories", params={"limit": 10 ** 6})).json()
+    assert len(huge["memories"]) == 2, "the limit was not clamped"
+    assert huge["total"] == 3  # total still reports the true count
+
+    # A negative offset must not reach the store either.
+    negative = (await client.get(
+        "/memories", params={"offset": -5, "limit": 2})).json()
+    assert len(negative["memories"]) == 2
+
+    # And a zero/negative limit still yields at least one row.
+    zero = (await client.get(
+        "/memories", params={"limit": 0})).json()
+    assert len(zero["memories"]) == 1
+
+
 # --- Search -----------------------------------------------------------------
 
 

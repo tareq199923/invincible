@@ -58,6 +58,13 @@ templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 register_template_filters(templates)
 
 _MEMORY_PAGE_SIZE = 20
+# Ceiling on the JSON /memories page size. The HTML table renders a fixed
+# _MEMORY_PAGE_SIZE, but GET /memories takes limit/offset straight from the
+# query string - unbounded, one request could ask the store for every row
+# the user owns (deep code review 2026-09-24, finding 8). Deliberately looser
+# than the MCP memory caps (10/20): those land in an AI's context window,
+# this is a browse API whose own default is 50.
+_MEMORY_API_MAX_LIMIT = 200
 # Shared with the MCP memory_save path (core/memory.py) so both write
 # paths enforce the same cap and kind vocabulary.
 _MEMORY_MAX_CHARS = MAX_CONTENT_CHARS
@@ -404,6 +411,10 @@ async def list_memories(
     principal: Principal = Depends(require_user_session),
 ):
     store = _state(request, "memory")
+    # Both come from the query string, so bound them here - the stores
+    # forward limit/offset straight to SQL.
+    limit = max(1, min(limit, _MEMORY_API_MAX_LIMIT))
+    offset = max(0, offset)
     layer = _checked_layer(layer)
     kind = kind or None  # "" is the form's "any kind" option
     query = q.strip()

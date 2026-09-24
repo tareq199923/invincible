@@ -8,7 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from invincible.compat.common import repair_tool_pairing, route_headers
+from invincible.compat.common import (
+    estimate_token_sum,
+    repair_tool_pairing,
+    route_headers,
+)
 from invincible.core.context_builder import build_context_messages
 from invincible.core.memory import MemoryStore
 from invincible.core.principal import Principal
@@ -102,10 +106,19 @@ def _stream_assistant_message(content: str, states: dict) -> dict:
 
 
 async def _persist_new_turns(
-    new_turns, store, session_id, memory: MemoryStore | None,
+    to_persist, assistant_message, store, session_id, memory: MemoryStore | None,
     principal: Principal, *, runs_store=None, request_id: str | None = None,
     max_turns: int | None = None,
 ):
+    """Append this request's new turns, then record the streamed usage.
+
+    ``assistant_message`` is passed separately from the turns it joins
+    because the usage estimate must measure THE REPLY ALONE. It used to be
+    measured off the completed list, ``to_persist + [assistant]``, which
+    counted the caller's own input turns as output (deep code review
+    2026-09-24, finding 5).
+    """
+    new_turns = to_persist + [assistant_message]
     try:
         await store.append(
             session_id,
@@ -129,9 +142,12 @@ async def _persist_new_turns(
         try:
             await runs_store.attach_output(
                 # Streaming never sees real upstream counts without a wire
-                # change: chars/4 over what actually accumulated, flagged.
+                # change: a chars/4 estimate of the reply that actually
+                # accumulated, flagged in the run row's meta. Measuring the
+                # message (not its text) counts tool calls too, which is
+                # most of a coding agent's output.
                 request_id=request_id,
-                output_tokens=len(json.dumps(new_turns)) // 4,
+                output_tokens=estimate_token_sum([assistant_message]),
                 estimated=True,
             )
         except Exception as exc:
@@ -146,8 +162,8 @@ async def _stream_body(
     content = ""
     tool_states = {}
 
-    def new_turns():
-        return to_persist + [_stream_assistant_message(content, tool_states)]
+    def assistant_turn():
+        return _stream_assistant_message(content, tool_states)
 
     try:
         if first is not None:
@@ -167,13 +183,13 @@ async def _stream_body(
         # Persist what accumulated before the failure so history matches
         # what the client saw (mirrors the Anthropic path's on_complete).
         await _persist_new_turns(
-            new_turns(), store, session_id, memory, principal,
+            to_persist, assistant_turn(), store, session_id, memory, principal,
             runs_store=runs_store, request_id=request_id,
             max_turns=max_turns,
         )
         return
     await _persist_new_turns(
-        new_turns(), store, session_id, memory, principal,
+        to_persist, assistant_turn(), store, session_id, memory, principal,
         runs_store=runs_store, request_id=request_id,
         max_turns=max_turns,
     )

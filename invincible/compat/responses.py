@@ -42,6 +42,7 @@ from collections.abc import (  # noqa: F401  (AsyncGenerator re-exported for typ
 
 from invincible.compat.common import (
     build_message,
+    estimate_assistant_tokens,
     estimate_token_sum,
     repair_tool_pairing,
 )
@@ -380,8 +381,8 @@ def internal_to_responses(
 
     output = _output_items_from_message(message)
     content = message.get("content") or ""
-    output_tokens = estimate_token_sum(
-        [build_message("assistant", content)])
+    output_tokens = estimate_assistant_tokens(
+        content, message.get("tool_calls"))
 
     return {
         "id": _new_id("resp"),
@@ -783,8 +784,10 @@ async def build_stream_events(
             },
         )
 
+    # Measure the assembled turn, not just its text: a tool-call-only reply
+    # has no text at all (finding 5).
     output_tokens = estimate_token_sum(
-        [build_message("assistant", reply_text)])
+        [_stream_assistant_message(reply_text, tool_states)])
     final = _response_skeleton("completed", completed_items)
     final["usage"] = {
         "input_tokens": input_tokens,

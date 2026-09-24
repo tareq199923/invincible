@@ -33,8 +33,32 @@ def estimate_token_sum(messages: list) -> int:
     so the compatibility layer never maintains its own token-counting logic.
     Always returns at least 1 per message, identical to the trimmers'
     estimate.
+
+    Note what this measures: ``estimate_tokens`` serializes the WHOLE message
+    dict, so a message carrying ``tool_calls`` has them counted. That is why
+    the tool-call accounting bug (deep code review 2026-09-24, finding 5) was
+    never in the heuristic - see :func:`estimate_assistant_tokens`.
     """
     return sum(estimate_tokens(m) for m in messages)
+
+
+def estimate_assistant_tokens(
+    content: str, tool_calls: list | None = None
+) -> int:
+    """Token estimate for one assistant turn, TOOL CALLS INCLUDED.
+
+    Every call site used to build ``build_message("assistant", content)``,
+    which carries no ``tool_calls`` at all. A turn that was nothing but tool
+    calls (the normal shape for Claude Code and Codex) therefore estimated
+    the empty-message floor - the length of the serialized envelope itself,
+    single digits - while the call arguments it actually produced could run
+    to thousands of tokens. The heuristic was fine; it was being handed an
+    incomplete message.
+    """
+    message = build_message("assistant", content)
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    return estimate_tokens(message)
 
 
 def upstream_error_detail(body: object, limit: int = 300) -> str | None:
