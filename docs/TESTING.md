@@ -71,6 +71,14 @@ every upstream is faked.
 - **`pg_live`** — skip-gate for tests that need more than `pg_engine`
   (scratch databases, CLI provisioning flows); skips cleanly when no local
   Postgres is reachable.
+- **`statements`** — every statement executed against `pg_engine` while the
+  test holds it, as `(sql, executemany)` pairs, captured by a
+  `before_cursor_execute` listener on `pg_engine.sync_engine`. The
+  finding-7 hot-path tests reset it (`del statements[:]`) around the call
+  under test and assert on the count: those changes are
+  behaviour-preserving, so counting round-trips is the only proof they
+  landed. The `executemany` flag is what separates a single multi-VALUES
+  statement from a per-row loop.
 - **`provider_body(name, content)`** — a canned OpenAI-shaped success body.
 
 ### Pattern: pending-action approval tests
@@ -116,7 +124,7 @@ sleeping.
 | `test_cli_login.py` | **Phase 3 CLI pairing**: `_pair_device` happy path against the ASGI app (code printed once, key minted and usable on chat), denied request fails loudly, config save round-trip (`{"server", "api_key"}`), default path under `~/.invincible`, Click wiring (server normalization, output text, failure exit codes). |
 | `test_accounts_ui.py` | **Phase 3 pages**: `/login` renders the form and shows the GitHub button only when configured; `/register` page; form-mode register/login (303 redirects, error re-render with messages); `/account` requires a session and shows email/projects/keys; device approval page template with code + forms; unknown-code result page (404). |
 | `test_phase4_schema.py` | **Phase 4 migration acceptance** (`0005`, scratch DBs): upgrade from 0004 preserves seeded rows while adding `runs.input_tokens`/`output_tokens` and the generated-`tsvector` + GIN index on `memories` — existing content becomes searchable immediately; downgrade restores 0004; runtime `create_all` exposes identical columns to the migrated shape. Hermetic metadata assertions pin the computed expression, persistence, and GIN dialect option. |
-| `test_memory_v2.py` | **Phase 4 memory writes**: explicit-trigger extraction (user messages only, deduplicated, short noise rejected); triple→`(kind, content)` rendering; `record_memories` lands auto (confidence 0.6) + explicit (1.0) rows with user scope, provenance `chat:<session>`, no explicit/auto double-capture; per-user idempotency; cross-user content independence; project-scope rows via `save_memory`; layer validation; master/explicit toggle semantics. |
+| `test_memory_v2.py` | **Phase 4 memory writes**: explicit-trigger extraction (user messages only, deduplicated, short noise rejected); triple→`(kind, content)` rendering; `record_memories` lands auto (confidence 0.6) + explicit (1.0) rows with user scope, provenance `chat:<session>`, no explicit/auto double-capture; per-user idempotency; cross-user content independence; project-scope rows via `save_memory`; layer validation; master/explicit toggle semantics; **finding 7**: a whole batch of rows lands in ONE multi-VALUES `INSERT` (counted via the `statements` fixture), one `created_at` per batch. |
 | `test_retrieval.py` | **Phase 4 retrieval acceptance**: pure scoring matrix (recency half-life math, confidence scaling, kind weights, never-negative); SQL path — relevant memories outrank stale/low-confidence matches by a decisive margin while the default floor drops the weak row entirely; user+project scope predicates with zero cross-user leakage under any passed project id; top-N/floor env knobs; blank query and unmatched terms return nothing. |
 | `test_context_builder.py` | **Phase 4 budget acceptance**: both injections fit a generous budget; continuity brief wins priority when tight (memory dropped); oversized brief truncated with marker and actually fits the Router's own estimator; zero budget → nothing; 20-hit block still totals under budget; latest-user-message query selection; orchestrator tolerates absent stores. |
 | `test_phase4_runs.py` | **Phase 4 run accounting + reactive checkpoints**: non-streaming success records real upstream usage (no flag) vs flagged chars/4 estimates when usage is absent; streaming records the input estimate at open and `attach_output` stamps the winning `ok` row post-completion (no-op without one); failover through two broken providers creates exactly ONE pre-switch checkpoint naming the first failure, only when a task_state exists; shared client strings keep independent checkpoint chains per owning session; a raising hook never breaks routing. |
