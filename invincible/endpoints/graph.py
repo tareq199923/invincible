@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from invincible.core.projection import (
     build_session_projection,
     fetch_session_view,
+    unknown_session_payload,
 )
 from invincible.endpoints.auth import require_auth
 
@@ -67,13 +68,15 @@ async def session_graph(session_id: str, request: Request,
         user_id=principal.user_id,
         project_id=principal.project_id,
     )
-    owner = (
-        (principal.user_id, principal.project_id)
-        if found is not None
-        else None
-    )
-    session_pk = found
+    if found is None:
+        # Not this principal's session: stop here. Projecting past a
+        # failed ownership check is what leaked one user's runs, task
+        # states and checkpoints into another user's response (deep code
+        # review 2026-09-24, finding 1) - the projection's store reads
+        # fall back to an unscoped string match when session_pk is None.
+        return unknown_session_payload(session_id)
 
+    owner = (principal.user_id, principal.project_id)
     session_row, turns = await fetch_session_view(
         sessions_store, session_id, owner=owner)
 
@@ -82,6 +85,6 @@ async def session_graph(session_id: str, request: Request,
         session_id=session_id,
         session_row=session_row,
         turns=turns,
-        session_pk=session_pk,
+        session_pk=found,
         limit=limit,
     )

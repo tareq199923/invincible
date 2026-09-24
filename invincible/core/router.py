@@ -22,6 +22,7 @@ from invincible.core.config import (  # noqa: F401 - re-exports
 from invincible.core.provider_health import HealthTracker
 from invincible.core.relay import relay_enabled, relay_messages
 from invincible.core.run_store import new_run_entry
+from invincible.core.scope import UNSCOPED, _Unscoped
 from invincible.core.selection import (
     AUTO_ROUTING,
     PinnedUnavailableError,
@@ -566,7 +567,7 @@ class Router:
         model: str | None = None,
         *,
         session_id: str | None = None,
-        session_pk: int | None = None,
+        session_pk: int | None | _Unscoped = UNSCOPED,
         byok_candidates: list[dict] | None = None,
         byok_key_resolver=None,
         byok_routing: RoutingConfig | None = None,
@@ -610,7 +611,7 @@ class Router:
         model: str | None = None,
         *,
         session_id: str | None = None,
-        session_pk: int | None = None,
+        session_pk: int | None | _Unscoped = UNSCOPED,
         byok_candidates: list[dict] | None = None,
         byok_key_resolver=None,
         byok_routing: RoutingConfig | None = None,
@@ -639,7 +640,7 @@ class Router:
         model: str | None = None,
         *,
         session_id: str | None = None,
-        session_pk: int | None = None,
+        session_pk: int | None | _Unscoped = UNSCOPED,
         byok_candidates: list[dict] | None = None,
         byok_key_resolver=None,
         byok_routing: RoutingConfig | None = None,
@@ -680,7 +681,7 @@ class Router:
         model: str | None = None,
         *,
         session_id: str | None = None,
-        session_pk: int | None = None,
+        session_pk: int | None | _Unscoped = UNSCOPED,
         byok_candidates: list[dict] | None = None,
         byok_key_resolver=None,
         byok_routing: RoutingConfig | None = None,
@@ -710,7 +711,7 @@ class Router:
         model: str | None,
         stream: bool,
         session_id: str | None = None,
-        session_pk: int | None = None,
+        session_pk: int | None | _Unscoped = UNSCOPED,
         byok_candidates: list[dict] | None = None,
         byok_key_resolver=None,
         byok_routing: RoutingConfig | None = None,
@@ -948,7 +949,7 @@ class Router:
                 if (
                     self.failover_hook is not None
                     and not checkpoint_fired
-                    and (session_pk is not None or session_id is not None)
+                    and (session_pk is not UNSCOPED or session_id is not None)
                 ):
                     checkpoint_fired = True
                     try:
@@ -980,7 +981,7 @@ class Router:
         attempt_started: float,
         request_id: str = "",
         session_id: str | None = None,
-        session_pk: int | None = None,
+        session_pk: int | None | _Unscoped = UNSCOPED,
         attempt_index: int = 0,
         pipeline_extra: dict | None = None,
     ) -> dict:
@@ -1216,7 +1217,7 @@ class Router:
         attempt_started: float,
         request_id: str = "",
         session_id: str | None = None,
-        session_pk: int | None = None,
+        session_pk: int | None | _Unscoped = UNSCOPED,
         attempt_index: int = 0,
         pipeline_extra: dict | None = None,
     ) -> tuple[dict | None, AsyncIterator[dict]]:
@@ -1520,7 +1521,7 @@ class Router:
         error_class: str | None = None,
         request_id: str = "",
         session_id: str | None = None,
-        session_pk: int | None = None,
+        session_pk: int | None | _Unscoped = UNSCOPED,
         started_at: float | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
@@ -1550,7 +1551,10 @@ class Router:
                 new_run_entry(
                     request_id=request_id,
                     session_id=session_id,
-                    session_pk=session_pk,
+                    # The legacy unscoped path records a NULL surrogate -
+                    # the sentinel itself is not a SQL value.
+                    session_pk=(
+                        None if session_pk is UNSCOPED else session_pk),
                     provider_name=provider["name"],
                     model_id=provider["model_id"],
                     attempt_index=attempt_index,

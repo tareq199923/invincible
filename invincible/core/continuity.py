@@ -18,6 +18,11 @@ import time
 from sqlalchemy import and_, func, select
 
 from invincible.core.db import checkpoints, sessions, task_states
+from invincible.core.scope import (
+    UNSCOPED,
+    UnresolvedScopeError,
+    _Unscoped,
+)
 
 logger = logging.getLogger("invincible.continuity")
 
@@ -60,7 +65,7 @@ class ContinuityEngine:
         status: str = "active",
         expected_version: int | None = None,
         request_id: str | None = None,
-        session_pk: int | None = None,
+        session_pk: int | None | _Unscoped = UNSCOPED,
     ) -> dict:
         """Versioned upsert. Returns the new head
         ``{session_id,task_key,status,payload,version}``.
@@ -68,13 +73,22 @@ class ContinuityEngine:
         ``session_pk`` (Phase 2): the owning surrogate session resolved by
         the caller under the acting principal - when given, the version
         chain, advisory lock, and uniqueness all scope to it, so two
-        principals sharing a client string never interact. None keeps the
-        pre-isolation string-keyed path (tests / local-only callers).
+        principals sharing a client string never interact. OMITTED keeps
+        the pre-isolation string-keyed path (tests / local-only callers);
+        ``None`` means the caller asked for ownership scoping and resolved
+        no owner, which raises rather than writing unscoped
+        (``core/scope.py``).
 
         Raises ValueError for oversized/non-dict payloads/bad statuses.
         Raises :class:`ContinuityConflictError` when ``expected_version``
         no longer matches, or when a concurrent writer wins the insert race.
         """
+        if session_pk is None:
+            raise UnresolvedScopeError(
+                "set_state needs a resolved owning session: session_pk=None "
+                "means the caller is not the owner. Omit session_pk entirely "
+                "for the legacy single-tenant path."
+            )
         if not isinstance(payload, dict):
             raise ValueError("payload must be a JSON object (dict)")
         # Size guard only - the column is JSONB, so the dict itself is bound
@@ -93,9 +107,13 @@ class ContinuityEngine:
         from sqlalchemy import text
         from sqlalchemy.exc import IntegrityError
 
+        # The legacy path stores a NULL surrogate (never the sentinel, which
+        # is not a SQL value); ``scope_pk`` is what the column takes and what
+        # the predicates below differ on.
+        scope_pk = None if session_pk is UNSCOPED else session_pk
         pk_filter = (
-            task_states.c.session_pk == session_pk
-            if session_pk is not None
+            task_states.c.session_pk == scope_pk
+            if scope_pk is not None
             else task_states.c.session_id == session_id
         )
 
@@ -105,10 +123,10 @@ class ContinuityEngine:
             # head and race for version N+1. The transaction-scoped advisory
             # lock replaces the SQLite era's process-wide write lock; CAS
             # callers with expected_version still conflict deterministically.
-            if session_pk is not None:
+            if scope_pk is not None:
                 await conn.execute(
                     text("SELECT pg_advisory_xact_lock(:p, hashtext(:k))"),
-                    {"p": session_pk, "k": task_key},
+                    {"p": scope_pk, "k": task_key},
                 )
             else:
                 await conn.execute(
@@ -133,7 +151,7 @@ class ContinuityEngine:
                 await conn.execute(
                     task_states.insert().values(
                         session_id=session_id,
-                        session_pk=session_pk,
+                        session_pk=scope_pk,
                         task_key=task_key,
                         status=status,
                         payload=payload,
@@ -161,24 +179,27 @@ class ContinuityEngine:
 
     async def get_state(
         self, session_id: str, task_key: str = "default",
-        *, session_pk: int | None = None,
+        *, session_pk: int | None | _Unscoped = UNSCOPED,
     ) -> dict | None:
         return next(iter(await self.history(
             session_id, task_key, limit=1, session_pk=session_pk)), None)
 
     async def history(
         self, session_id: str, task_key: str = "default", limit: int = 20,
-        *, session_pk: int | None = None,
+        *, session_pk: int | None | _Unscoped = UNSCOPED,
     ) -> list[dict]:
         """Newest-first version history for one task key."""
         return await self._history_rows(
             session_id, task_key, limit, session_pk=session_pk)
 
     async def _history_rows(self, session_id, task_key, limit,
-                            session_pk=None):
+                            session_pk=UNSCOPED):
+        if session_pk is None:
+            # Unresolved scope: a scoped caller with no owner sees nothing.
+            return []
         scope = (
             task_states.c.session_pk == session_pk
-            if session_pk is not None
+            if session_pk is not UNSCOPED
             else task_states.c.session_id == session_id
         )
         async with self.engine.connect() as conn:
@@ -210,11 +231,13 @@ class ContinuityEngine:
 
     async def active_task_keys(
         self, session_id: str, limit: int = 5,
-        *, session_pk: int | None = None,
+        *, session_pk: int | None | _Unscoped = UNSCOPED,
     ) -> list[str]:
+        if session_pk is None:
+            return []
         scope = (
             task_states.c.session_pk == session_pk
-            if session_pk is not None
+            if session_pk is not UNSCOPED
             else task_states.c.session_id == session_id
         )
         async with self.engine.connect() as conn:
@@ -285,12 +308,24 @@ class ContinuityEngine:
         note: str = "",
         actor: str = "user",
         *,
-        session_pk: int | None = None,
+        session_pk: int | None | _Unscoped = UNSCOPED,
     ) -> dict:
-        """Pin the CURRENT head version (0 = nothing tracked yet)."""
+        """Pin the CURRENT head version (0 = nothing tracked yet).
+
+        ``session_pk=None`` raises rather than pinning unscoped - see
+        ``core/scope.py``.
+        """
+        if session_pk is None:
+            raise UnresolvedScopeError(
+                "create_checkpoint needs a resolved owning session: "
+                "session_pk=None means the caller is not the owner. Omit "
+                "session_pk entirely for the legacy single-tenant path."
+            )
+        # NULL on the legacy path - the sentinel is not a SQL value.
+        scope_pk = None if session_pk is UNSCOPED else session_pk
         scope = (
-            task_states.c.session_pk == session_pk
-            if session_pk is not None
+            task_states.c.session_pk == scope_pk
+            if scope_pk is not None
             else task_states.c.session_id == session_id
         )
         async with self.engine.begin() as conn:
@@ -304,7 +339,7 @@ class ContinuityEngine:
             result = await conn.execute(
                 checkpoints.insert().values(
                     session_id=session_id,
-                    session_pk=session_pk,
+                    session_pk=scope_pk,
                     task_key=task_key,
                     state_version=version,
                     note=(note or "")[:500],
@@ -322,11 +357,13 @@ class ContinuityEngine:
 
     async def checkpoints(
         self, session_id: str, task_key: str | None = None, limit: int = 20,
-        *, session_pk: int | None = None,
+        *, session_pk: int | None | _Unscoped = UNSCOPED,
     ) -> list[dict]:
+        if session_pk is None:
+            return []
         scope = (
             checkpoints.c.session_pk == session_pk
-            if session_pk is not None
+            if session_pk is not UNSCOPED
             else checkpoints.c.session_id == session_id
         )
         query = (
@@ -345,7 +382,8 @@ class ContinuityEngine:
     # Reactive failover checkpointing (Platform Phase 4)
 
     async def reactive_checkpoint(
-        self, session_id: str, *, session_pk: int | None = None,
+        self, session_id: str,
+        *, session_pk: int | None | _Unscoped = UNSCOPED,
         note: str = "",
     ) -> list[dict]:
         """Snapshot every tracked task's current head BEFORE work moves to
@@ -369,7 +407,8 @@ class ContinuityEngine:
         lifespan - the Router stays continuity-agnostic (layering rule)."""
 
         async def _hook(*, request_id: str, session_id: str,
-                        session_pk: int | None, failed_provider: str | None,
+                        session_pk: int | None | _Unscoped,
+                        failed_provider: str | None,
                         error_class: str | None) -> None:
             await self.reactive_checkpoint(
                 session_id,
@@ -386,11 +425,13 @@ class ContinuityEngine:
     # ------------------------------------------------------------------
     # Continuation brief
 
-    async def interruption_note(self, session_id: str,
-                                *, session_pk: int | None = None) -> str | None:
+    async def interruption_note(
+        self, session_id: str,
+        *, session_pk: int | None | _Unscoped = UNSCOPED,
+    ) -> str | None:
         """Public projection hook: describe the post-checkpoint upstream
         failure for this session, if one exists."""
-        if self._runs is None:
+        if self._runs is None or session_pk is None:
             return None
         cps = await self.checkpoints(session_id, limit=1,
                                      session_pk=session_pk)
@@ -419,12 +460,13 @@ class ContinuityEngine:
         return rendered
 
     async def context_message(self, session_id: str, *,
-                              session_pk: int | None = None) -> dict | None:
+                              session_pk: int | None | _Unscoped = UNSCOPED,
+                              ) -> dict | None:
         """The injectable system message carrying the continuation brief,
         or None when the session tracks no tasks."""
         from invincible.core.settings import settings
 
-        if not settings.continuity_enabled():
+        if not settings.continuity_enabled() or session_pk is None:
             return None
         task_keys = await self.active_task_keys(
             session_id, limit=_MAX_TASK_KEYS_RENDERED, session_pk=session_pk
@@ -474,7 +516,8 @@ class ContinuityEngine:
 
 
 async def context_system_message(
-    engine_or_engine_holder, session_id: str, *, session_pk: int | None = None
+    engine_or_engine_holder, session_id: str, *,
+    session_pk: int | None | _Unscoped = UNSCOPED,
 ) -> dict | None:
     """Toggle-aware wrapper used by endpoints."""
     engine = engine_or_engine_holder

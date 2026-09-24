@@ -15,6 +15,7 @@ import time
 from sqlalchemy import text
 
 from invincible.core.db import runs
+from invincible.core.scope import UNSCOPED, _Unscoped
 
 
 class RunStore:
@@ -88,16 +89,25 @@ class RunStore:
 
     async def recent(
         self, session_id: str | None = None, limit: int = 50,
-        *, session_pk: int | None = None,
+        *, session_pk: int | None | _Unscoped = UNSCOPED,
     ) -> list[dict]:
         """Most recent runs, newest first; optionally scoped to a session.
 
         ``session_pk`` (Phase 2) scopes to the owning surrogate session -
-        the isolation predicate. The loose string filter remains for
-        unscoped callers.
+        the isolation predicate. Three cases, per ``core/scope.py``:
+
+        - OMITTED (:data:`UNSCOPED`) - a single-tenant caller with no
+          principal to resolve; the loose string filter applies.
+        - an ``int`` - scoped to that owning session.
+        - ``None`` - the caller asked for ownership scoping and resolved
+          no owner (a foreign or absent session). Returns ``[]`` rather
+          than falling back to an unscoped string match, which would hand
+          the caller another user's rows.
         """
+        if session_pk is None:
+            return []
         query = runs.select().order_by(runs.c.id.desc()).limit(limit)
-        if session_pk is not None:
+        if session_pk is not UNSCOPED:
             query = (
                 runs.select()
                 .where(runs.c.session_pk == session_pk)

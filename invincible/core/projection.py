@@ -31,6 +31,33 @@ async def fetch_session_view(store, session_id: str,
     return session_row, turns
 
 
+def unknown_session_payload(session_id: str) -> dict:
+    """The projection payload for a session the caller does not own.
+
+    NOTHING is read: a foreign session and a nonexistent one must be
+    indistinguishable, and an unscoped read here would hand the caller the
+    owner's runs, task states and checkpoints (deep code review
+    2026-09-24, finding 1). The caller resolves ownership first and
+    returns this instead of projecting.
+    """
+    return {
+        "session_id": session_id,
+        "known": False,
+        "generated_at": time.time(),
+        "nodes": [],
+        "edges": [],
+        "timeline": [],
+        "summary": {
+            "providers_used": [],
+            "attempts": 0,
+            "failovers": 0,
+            "tasks": {},
+            "interruption_note": None,
+            "turns": 0,
+        },
+    }
+
+
 async def build_session_projection(
     sessions_store,
     runs_store,
@@ -45,20 +72,28 @@ async def build_session_projection(
     """Assemble the nodes/edges/timeline/summary payload for one session.
 
     ``session_row``/``turns`` come from :func:`fetch_session_view`;
-    ``session_pk`` scopes attempt/state/checkpoint reads (None only when
-    the caller could not resolve an owning row)."""
-    known = bool(session_row)
+    ``session_pk`` scopes attempt/state/checkpoint reads.
+
+    Ownership is settled BEFORE any read: a caller that resolved no owning
+    row (``session_row`` None) or no owning surrogate (``session_pk``
+    None) gets the empty payload and no store is touched. Projecting past
+    a failed ownership check is what leaked one user's session into
+    another's response (deep code review 2026-09-24, finding 1), so the
+    two guards are deliberate - ``session_pk`` alone is the isolation
+    predicate, and neither may be None here.
+    """
+    if not session_row or session_pk is None:
+        return unknown_session_payload(session_id)
 
     nodes: list[dict] = []
     edges: list[dict] = []
     state_node_ids: set[str] = set()
 
-    if known:
-        nodes.append({
-            "id": "session", "kind": "session", "label": session_id,
-            "created_at": session_row.get("created_at"),
-            "updated_at": session_row.get("updated_at"),
-        })
+    nodes.append({
+        "id": "session", "kind": "session", "label": session_id,
+        "created_at": session_row.get("created_at"),
+        "updated_at": session_row.get("updated_at"),
+    })
 
     run_rows = list(reversed(await runs_store.recent(
         session_id=session_id, limit=limit, session_pk=session_pk)))
@@ -196,7 +231,7 @@ async def build_session_projection(
 
     return {
         "session_id": session_id,
-        "known": known,
+        "known": True,
         "generated_at": time.time(),
         "nodes": nodes,
         "edges": edges,
