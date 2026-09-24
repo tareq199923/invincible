@@ -293,7 +293,7 @@ async def test_context_snapshot_matches_the_per_key_reads(stack):
     must agree row-for-row (deep code review 2026-09-24, finding 7).
     """
     _, _, eng = stack
-    await _seed_keys(eng, "s", 5)
+    await _seed_keys(eng, "s", 6)   # k0 ages out of the five-key window
 
     snap = await eng.context_snapshot("s")
 
@@ -303,10 +303,39 @@ async def test_context_snapshot_matches_the_per_key_reads(stack):
         assert snap["states"][key] == await eng.get_state("s", key)
         assert snap["checkpoints"][key] == (
             await eng.checkpoints("s", key, limit=1))[0]
-    # The session-wide newest checkpoint drives the interruption note; it
-    # must be the same row ``checkpoints(limit=1)`` returns, including when
-    # the newest one belongs to a key outside the rendered five.
     assert snap["latest_checkpoint"] == (await eng.checkpoints("s", limit=1))[0]
+
+    # The checkpoint query spans the WHOLE session on purpose: a newer
+    # checkpoint on a key outside the rendered five must still be the one
+    # ``checkpoints(limit=1)`` returns, because that is what the
+    # interruption note compares the recent runs against.
+    await eng.create_checkpoint("s", task_key="k0", note="outside window")
+    snap = await eng.context_snapshot("s")
+    assert "k0" not in snap["task_keys"]
+    assert "k0" in snap["checkpoints"]
+    assert snap["latest_checkpoint"]["note"] == "outside window"
+    assert snap["latest_checkpoint"] == (await eng.checkpoints("s", limit=1))[0]
+
+
+async def test_context_snapshot_unresolved_scope_reads_nothing(stack,
+                                                               statements):
+    """``session_pk=None`` is "scoped, owner unresolved" - not "no scope".
+
+    The snapshot is the brief's only read path now, so it must fail closed
+    exactly as ``get_state``/``checkpoints`` do: an empty snapshot, and
+    crucially no SQL at all, so a foreign client string can never be
+    matched (``core/scope.py``, finding 1).
+    """
+    _, _, eng = stack
+    await _seed_keys(eng, "s", 1)
+
+    del statements[:]
+    snap = await eng.context_snapshot("s", session_pk=None)
+
+    assert statements == []
+    assert snap["task_keys"] == [] and snap["states"] == {}
+    assert snap["checkpoints"] == {} and snap["latest_checkpoint"] is None
+    assert snap["runs"] is None
 
 
 async def test_context_snapshot_is_empty_when_nothing_is_tracked(stack):
