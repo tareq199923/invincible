@@ -84,11 +84,6 @@ class Settings:
         e.g. postgresql+asyncpg://invincible:pw@localhost:5433/invincible"""
         return os.getenv("INVINCIBLE_DB_URL")
 
-    def db_path(self) -> str | None:
-        """Legacy SQLite path - retained ONLY as input for
-        ``invincible db import``. The server never opens SQLite files."""
-        return os.getenv("INVINCIBLE_DB_PATH")
-
     def config_path(self) -> str | None:
         """Explicit providers.yaml override (INVINCIBLE_CONFIG_PATH)."""
         return os.getenv("INVINCIBLE_CONFIG_PATH")

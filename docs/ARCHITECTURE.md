@@ -86,10 +86,9 @@ invincible/
     ├── user_settings_store.py  Per-user settings (routing mode/order, overrides)
     ├── provider_catalog.py     Operator-supplied provider constants (never user input)
     ├── selection.py            Pure auto/pinned/chain attempt ordering
-    ├── trimming.py             Token estimation + turn grouping + per-provider trim
+    ├── trimming.py             Token estimation, turn grouping, and per-provider trim
     ├── config.py               providers.yaml schema validation/loading
     ├── url_safety.py           SSRF guards for user-supplied provider URLs
-    └── db_import.py            One-shot legacy SQLite → PostgreSQL importer
 ```
 
 Packaging (`pyproject.toml`):

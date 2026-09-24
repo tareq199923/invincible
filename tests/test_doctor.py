@@ -56,7 +56,6 @@ def _clean_invincible_env(monkeypatch):
         "MCP_SHARED_SECRET",
         "INVINCIBLE_CREDENTIAL_KEY",
         "INVINCIBLE_CONFIG_PATH",
-        "INVINCIBLE_DB_PATH",
         "INVINCIBLE_DB_URL",
     ):
         monkeypatch.delenv(key, raising=False)

@@ -12,8 +12,7 @@ coexistence on one engine, and a seeded property-equivalence test against
 the blob-era semantics.
 
 SQLite-era mechanics tests (blob-table migration, _invincible_schema
-marker, shared-connection lock) were retired with the SQLite backend; the
-legacy-data path is covered by `invincible db import` tests instead.
+marker, shared-connection lock) were retired with the SQLite backend.
 
 Ownership: SessionStore takes a REQUIRED owner on every call (the
 local-owner fallback was removed - multi-tenant audit Step 2). These

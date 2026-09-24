@@ -41,20 +41,16 @@ launch stabilizes"* are now actionable. The table in
 [ROADMAP.md](ROADMAP.md) §Deprecated is the source of truth; what it
 still owes:
 
-- **Legacy SQLite importer (`db import`)** — superseded by direct
-  hosted signup/onboarding. Its scheduled "when" was exactly this
-  point, so this is the one genuinely due item.
 - **Owner-secret-only MCP consent** — `INVINCIBLE_OWNER_SECRET` as a
   *sole identity* is superseded by user-bound OAuth subjects; listed as
   Phase 2+, so it is overdue. The env var itself **stays** — it still
   signs sessions. Only the identity path retires.
-- **`facts` triple store** — **DECIDED 2026-09-24: keep as legacy-import
-  history.** No request-serving code reads or writes the table, and no
-  backfill was performed. The legacy importer above remains its only
-  production writer, so retain the table and importer path together. This
-  adds no request-path cost, but the table still occupies schema/storage
-  and importer runs can add rows. If the importer is retired, drop both
-  together then.
+- **`facts` triple store** — **DECIDED 2026-09-24: keep temporarily while
+  production data is audited.** No request-serving code reads or writes the
+  table, and no backfill was performed. The legacy importer is now removed,
+  so the table has no supported writer; it still occupies schema/storage.
+  After checking and backing up production data, decide whether to drop it
+  in a future migration.
 - **Client-supplied `session_id` as storage identity** — relational
   session identity landed in Phase 1 and the transitional helper was
   only meant to be retained briefly. Check whether it is still there.
@@ -64,6 +60,12 @@ Local/self-hosted mode itself is **not** deprecated and stays.
 ---
 
 ## Recently completed
+
+### Legacy SQLite importer retired — 2026-09-24
+
+The deprecated `invincible db import` command and its SQLite importer module
+were removed. The legacy PostgreSQL `facts` table remains temporarily while
+production data is audited and backed up; no request-serving code uses it.
 
 ### 0.3.1 released — Anthropic messages report the serving model (2026-09-23)
 

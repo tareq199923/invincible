@@ -235,7 +235,6 @@ Two commands, both exposed as `invincible` and `inv`:
 | `invincible doctor` | Environment/config diagnostics: providers.yaml, secrets, and PostgreSQL connectivity + schema revision (DSN always password-masked); loud FAIL on a stale/unmanaged schema. |
 | `invincible dev-db` | Provision or verify a local Postgres **development** database (Docker fallback included) and print/write a working `INVINCIBLE_DB_URL`. Loopback-only and dev-credential by design — never the provisioning path for a remote/hosted database ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)). |
 | `invincible db upgrade` | Run the packaged Alembic migrations to head against `INVINCIBLE_DB_URL`. Explicit by design — nothing auto-migrates. |
-| `invincible db import <sessions.db>` | One-shot legacy SQLite importer (sessions/turns/messages, facts, OAuth rows). |
 | `invincible oauth list` | Show registered OAuth clients, their redirect URIs, and active/revoked grants. |
 | `invincible oauth revoke <client_id>` | Revoke every access/refresh token for a client immediately. |
 | `invincible oauth test-client` | Headless helper: registers a client, approves it, and prints a ready-to-use Bearer token + curl for `/mcp` (no browser needed). |

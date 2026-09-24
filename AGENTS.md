@@ -92,7 +92,6 @@ Fixture semantics (`tests/conftest.py`):
 | `core/compression.py` | Send-time-only request compression (stored history stays verbatim) |
 | `core/tool_compression.py` | Send-time tool-schema compression (description caps + noise-key stripping, LRU-cached) |
 | `core/relay.py` | Context relay: digests all but the newest N turns into one bounded system digest; system messages pass through untouched |
-| `core/db_import.py` | One-shot legacy SQLite → PostgreSQL importer |
 | `core/agent_registry.py` | Per-user agent queues/futures (in-memory; long-poll transport, single instance by design) |
 | `core/credential_store.py`, `core/credential_crypto.py` | BYOK credential persistence + Fernet crypto (`INVINCIBLE_CREDENTIAL_KEY`) |
 | `core/user_settings_store.py` | Per-user settings (routing mode/order, provider overrides) |

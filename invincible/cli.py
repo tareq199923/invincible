@@ -43,7 +43,6 @@ from invincible.core.db import (
     stored_schema_revision,
 )
 from invincible.core.db import metadata as db_metadata
-from invincible.core.db_import import import_legacy_sqlite
 from invincible.core.identity import ApiKeyStore
 from invincible.core.identity import AuditLog as _AuditLog
 from invincible.core.oauth_store import OAuthStore
@@ -1953,7 +1952,7 @@ def dev_db(port, env_file, write_env):
                    "environment always wins).")
 @click.pass_context
 def db(ctx, env_file):
-    """Database maintenance: Alembic migrations and legacy SQLite import."""
+    """Database maintenance: explicit Alembic migrations."""
     _load_env_file(env_file)
 
 
@@ -1978,30 +1977,6 @@ def db_upgrade():
         ) from exc
     click.echo(f"Database upgraded to revision {'/'.join(heads)} "
                f"({_mask_url(url)})")
-
-
-@db.command("import")
-@click.argument("sqlite_path", type=click.Path(exists=True, dir_okay=False))
-def db_import_cmd(sqlite_path):
-    """Import a legacy Phase <= 15 sessions.db (SQLite) into PostgreSQL.
-
-    One-shot importer covering sessions/turns/messages, facts, and OAuth
-    rows; row ids are preserved and identity sequences re-synced. Existing
-    target rows are left untouched."""
-    url = _resolve_db_url()
-    engine = make_engine(url)
-    try:
-        counts = run_coro_sync(import_legacy_sqlite(engine, sqlite_path))
-    except Exception as exc:
-        raise click.ClickException(
-            f"Import failed: {str(exc).splitlines()[0][:200]}"
-        ) from exc
-    finally:
-        run_coro_sync(engine.dispose())
-    for table in sorted(counts):
-        click.echo(f"{table}: imported {counts[table]} row(s)")
-    total = sum(counts.values())
-    click.echo(f"Import complete ({total} row(s) total) into {_mask_url(url)}")
 
 
 @click.group()
