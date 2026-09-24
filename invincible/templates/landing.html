@@ -7,21 +7,21 @@
   <meta name="description" content="A self-hosted AI gateway: tiered provider failover for chat, MCP tool execution for agents, session continuity and memory — behind your own login.">
   <style>
     :root {
-      color-scheme: light;
-      --ink: #111318;
-      --ink-soft: #2e323a;
-      --night: #0b0d12;
-      --night-raised: #151922;
-      --muted: #6b7078;
-      --line: #deddd7;
-      --line-strong: #c5c4bd;
-      --paper: #fffefa;
-      --canvas: #f2f0e9;
-      --wash: #e9e7df;
-      --accent: #c8ff53;
-      --accent-dark: #354f00;
-      --link: #3444bb;
-      --ok: #176b4b;
+      color-scheme: dark;
+      --ink: #d9dfeb;
+      --ink-soft: #b7bcff;
+      --night: #0a0d13;
+      --night-raised: #0e121a;
+      --muted: #7e8a9e;
+      --line: #232b3a;
+      --line-strong: #343d50;
+      --paper: #11161f;
+      --canvas: #0a0d13;
+      --wash: #171d29;
+      --accent: #8b93ff;
+      --accent-dark: #b7bcff;
+      --link: #b7bcff;
+      --ok: #3fd68f;
       --mono: "SFMono-Regular", "Cascadia Code", Consolas, "Liberation Mono", monospace;
       --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
@@ -30,7 +30,9 @@
     body {
       margin: 0;
       color: var(--ink);
-      background: radial-gradient(circle at 8% -10%, rgba(200, 255, 83, 0.1), transparent 28rem), var(--canvas);
+      background:
+        radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.022) 1px, transparent 0) 0 0 / 26px 26px,
+        var(--canvas);
       font-family: var(--sans);
       line-height: 1.55;
     }
@@ -42,13 +44,13 @@
       z-index: 40;
       top: 0;
       color: #fff;
-      background: rgba(11, 13, 18, 0.97);
-      border-bottom: 1px solid #252a34;
+      background: rgba(14, 18, 26, 0.97);
+      border-bottom: 1px solid #232b3a;
       backdrop-filter: blur(14px);
     }
     .site-header__inner { display: flex; min-height: 72px; align-items: center; justify-content: space-between; }
     .logo { display: inline-flex; gap: 11px; align-items: center; color: #fff; text-decoration: none; }
-    .logo__mark { display: grid; width: 36px; height: 36px; place-items: center; color: var(--night); background: var(--accent); border-radius: 7px; box-shadow: 0 0 0 4px rgba(200, 255, 83, 0.09); font-family: var(--mono); font-size: 0.77rem; font-weight: 900; letter-spacing: -0.06em; }
+    .logo__mark { display: grid; width: 36px; height: 36px; place-items: center; color: var(--night); background: var(--accent); border-radius: 7px; box-shadow: 0 0 0 4px rgba(139, 147, 255, 0.09); font-family: var(--mono); font-size: 0.77rem; font-weight: 900; letter-spacing: -0.06em; }
     .logo__name { display: flex; gap: 5px; align-items: baseline; font-size: 0.84rem; }
     .logo__name strong { letter-spacing: -0.02em; }
     .logo__name em { color: var(--accent); font-style: normal; font-weight: 800; }
@@ -56,7 +58,7 @@
     .topnav a { padding: 8px 11px; color: #b8bec7; border: 1px solid transparent; border-radius: 6px; font-size: 0.76rem; font-weight: 730; text-decoration: none; transition: color .15s ease, background .15s ease, transform .15s ease; }
     .topnav a:hover { color: #fff; background: #1c212a; transform: translateY(-1px); }
     .topnav a.cta { color: var(--night); background: var(--accent); border-color: var(--accent); }
-    .topnav a.cta:hover { color: var(--night); background: #d5ff7b; }
+    .topnav a.cta:hover { color: var(--night); background: #aeb4ff; }
 
     .hero {
       position: relative;
@@ -66,23 +68,24 @@
       background-color: var(--night);
       background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
       background-size: 34px 34px;
-      border-bottom: 1px solid #252a34;
+      border-bottom: 1px solid #232b3a;
     }
     .hero::after { content: ""; position: absolute; width: 420px; height: 420px; right: -180px; bottom: -260px; background: var(--accent); border-radius: 50%; filter: blur(115px); opacity: 0.13; pointer-events: none; }
     .hero__content { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(0, .82fr) minmax(480px, 1.18fr); gap: clamp(48px, 8vw, 116px); align-items: center; }
     .eyebrow { margin: 0 0 8px; color: var(--link); font-size: 0.65rem; font-weight: 860; letter-spacing: 0.14em; text-transform: uppercase; }
     .hero .eyebrow { color: var(--accent); }
-    .hero h1 { max-width: 700px; margin: 10px 0 22px; font-size: clamp(3.25rem, 6.6vw, 6rem); line-height: .92; letter-spacing: -.075em; }
+    .hero h1 { display: flex; max-width: 760px; margin: 10px 0 22px; flex-direction: column; font-size: clamp(3rem, 6vw, 5.5rem); line-height: .94; letter-spacing: -.07em; overflow-wrap: normal; }
+    .hero h1 span, .hero h1 em { display: block; max-width: 100%; }
     .hero h1 em { color: var(--accent); font-style: normal; }
     .hero__copy > p:last-of-type { max-width: 620px; margin: 0; color: #adb4bf; font-size: clamp(1rem, 1.6vw, 1.16rem); line-height: 1.62; }
     .hero .actions { display: flex; gap: 9px; margin-top: 28px; flex-wrap: wrap; }
     .btn { display: inline-flex; min-height: 44px; padding: 8px 15px; align-items: center; justify-content: center; color: var(--night); background: var(--accent); border: 1px solid var(--accent); border-radius: 6px; font-size: 0.74rem; font-weight: 850; text-decoration: none; transition: background .15s ease, transform .15s ease, box-shadow .15s ease; }
-    .btn:hover { background: #d8ff82; box-shadow: 0 6px 0 rgba(200, 255, 83, 0.18); transform: translateY(-2px); }
+    .btn:hover { background: #aeb4ff; box-shadow: 0 6px 0 rgba(139, 147, 255, 0.18); transform: translateY(-2px); }
     .btn.ghost { color: #c9ced6; background: transparent; border-color: #414752; }
     .btn.ghost:hover { color: #fff; background: #272c35; }
 
-    .terminal { overflow: hidden; background: #151922; border: 1px solid #343a47; border-top: 3px solid var(--accent); border-radius: 12px; box-shadow: 0 30px 80px rgba(0,0,0,.42), 10px 10px 0 rgba(200,255,83,.1); font-family: var(--mono); font-size: 0.8rem; text-align: left; }
-    .terminal .bar { display: flex; min-height: 40px; padding: 0 15px; gap: 7px; align-items: center; background: #10131a; border-bottom: 1px solid #2a303b; }
+    .terminal { overflow: hidden; background: #11161f; border: 1px solid #343d50; border-top: 3px solid var(--accent); border-radius: 12px; box-shadow: 0 30px 80px rgba(0,0,0,.42), 10px 10px 0 rgba(139,147,255,.1); font-family: var(--mono); font-size: 0.8rem; text-align: left; }
+    .terminal .bar { display: flex; min-height: 40px; padding: 0 15px; gap: 7px; align-items: center; background: #0e121a; border-bottom: 1px solid #232b3a; }
     .terminal .bar i { display: block; width: 8px; height: 8px; background: #3c424d; border-radius: 50%; }
     .terminal .bar i:nth-child(1) { background: #ff6e5e; }
     .terminal .bar i:nth-child(2) { background: #f2ba45; }
@@ -93,16 +96,16 @@
     .terminal .ok { color: var(--accent); }
     .terminal .dim { color: #747c88; }
     .badges { display: flex; gap: 6px; margin-top: 20px; flex-wrap: wrap; }
-    .badge { padding: 6px 9px; color: #c4cad3; background: #1e232d; border: 1px solid #363d49; border-radius: 5px; font-family: var(--mono); font-size: 0.62rem; }
+    .badge { padding: 6px 9px; color: #c4cad3; background: #1e232d; border: 1px solid #343d50; border-radius: 5px; font-family: var(--mono); font-size: 0.62rem; }
 
-    .hero__footer { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(420px, .8fr) minmax(520px, 1.2fr); gap: 38px; margin-top: 58px; padding-top: 22px; align-items: center; border-top: 1px solid #2b303a; }
+    .hero__footer { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(420px, .8fr) minmax(520px, 1.2fr); gap: 38px; margin-top: 58px; padding-top: 22px; align-items: center; border-top: 1px solid #232b3a; }
     .hero-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
-    .hero-stats div { padding: 0 16px; border-left: 1px solid #2e3440; }
+    .hero-stats div { padding: 0 16px; border-left: 1px solid #232b3a; }
     .hero-stats div:first-child { padding-left: 0; border-left: 0; }
     .hero-stats dt { color: #fff; font-family: var(--mono); font-size: 0.88rem; font-weight: 800; }
     .hero-stats dd { margin: 4px 0 0; color: #7f8792; font-size: 0.64rem; line-height: 1.35; }
     .capability-tabs { display: flex; gap: 6px; max-width: 100%; padding: 3px 0; overflow-x: auto; }
-    .capability-tab { display: inline-flex; flex: 0 0 auto; gap: 7px; padding: 8px 10px; align-items: center; color: #a6adb7; background: #151922; border: 1px solid #303641; border-radius: 6px; font-size: 0.69rem; font-weight: 730; text-decoration: none; }
+    .capability-tab { display: inline-flex; flex: 0 0 auto; gap: 7px; padding: 8px 10px; align-items: center; color: #a6adb7; background: #11161f; border: 1px solid #343d50; border-radius: 6px; font-size: 0.69rem; font-weight: 730; text-decoration: none; }
     .capability-tab i { width: 7px; height: 7px; background: #8a8f98; border-radius: 50%; }
     .capability-tab:nth-child(2) i { background: #19a994; }
     .capability-tab:nth-child(3) i { background: #dc704d; }
@@ -126,7 +129,7 @@
     .architecture-note strong { display: block; margin-bottom: 5px; color: #fff; }
     .architecture-note span { color: #9fa7b2; }
     .arch { display: flex; align-items: center; justify-content: center; margin: 0; flex-wrap: wrap; }
-    .arch .node { min-width: 150px; padding: 20px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); box-shadow: 0 3px 0 #e2e0d8; text-align: center; }
+    .arch .node { min-width: 150px; padding: 20px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); box-shadow: 0 3px 0 #1b2330; text-align: center; }
     .arch .node strong { display: block; font-size: 0.95rem; }
     .arch .node small { display: block; margin-top: 5px; color: var(--muted); font-size: 0.7rem; }
     .arch .arrow { padding: 0 10px; color: var(--accent-dark); font-family: var(--mono); font-size: 1.1rem; font-weight: 800; white-space: nowrap; }
@@ -144,7 +147,7 @@
     footer .wrap { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); }
     .live-dot { display: inline-block; width: 7px; height: 7px; margin-right: 7px; background: var(--accent); border-radius: 50%; }
 
-    :focus-visible { outline: 3px solid rgba(200,255,83,.72); outline-offset: 3px; }
+    :focus-visible { outline: 3px solid rgba(139,147,255,.72); outline-offset: 3px; }
     @media (max-width: 1000px) {
       .hero__content { grid-template-columns: 1fr; gap: 38px; }
       .hero__copy, .terminal { max-width: 780px; }
@@ -194,7 +197,7 @@
       <div class="hero__content wrap">
         <div class="hero__copy">
           <p class="eyebrow">Remote-first · Self-service · BYOK</p>
-          <h1>One gateway.<br>Every provider. <em>Your rules.</em></h1>
+          <h1><span>One gateway.</span><span>Every provider.</span><em>Your rules.</em></h1>
           <p>Invincible sits between your AI clients and your providers — routing chat across a tiered failover chain, executing agent tools under per-client approval, and remembering context across sessions.</p>
           <div class="actions">
             <a class="btn" href="/register">Get started</a>
