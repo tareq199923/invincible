@@ -42,7 +42,15 @@ async def test_root_serves_landing_page_to_browsers(client):
     assert "text/html" in response.headers["content-type"]
     # Hero + CTA anchors render from the template, not a blank shell.
     body = response.text
-    assert "One gateway" in body
+    assert "One gateway." in body
+    assert "Your providers." in body
+    assert "Your continuity." in body
+    assert "https://invincible-ai.me/v1" in body
+    assert "OAuth-protected MCP tools" in body
+    assert "Per-user BYOK failover" in body
+    assert "Every provider" not in body
+    assert "pip install" not in body
+    assert "invincible start" not in body
     assert 'href="/register"' in body
     assert 'href="/login"' in body
 
