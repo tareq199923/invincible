@@ -202,3 +202,20 @@ async def test_memory_disabled_means_no_injection(
     async with pg_engine.connect() as conn:
         rows = (await conn.execute(select(memories.c.id))).all()
     assert rows == []
+
+
+async def test_save_memory_rejects_an_unknown_kind(memory, pg_engine):
+    """``kind`` was the one write-path field with no vocabulary check, so
+    an arbitrary string could be stored and then appear as its own facet
+    in the dashboard's by_kind breakdown. Both other write paths already
+    validated (deep code review 2026-09-24, finding 9).
+    """
+    uid, _pid = await ensure_local_owner(pg_engine)
+
+    with pytest.raises(ValueError, match="kind must be one of"):
+        await memory.save_memory(user_id=uid, content="x", kind="wibble")
+
+    # The declared vocabulary still saves.
+    saved = await memory.save_memory(
+        user_id=uid, content="prefers concise answers", kind="preference")
+    assert saved is not None

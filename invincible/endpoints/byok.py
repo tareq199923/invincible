@@ -392,7 +392,8 @@ async def test_provider(
     try:
         validate_public_https_url(row["base_url"])
     except UnsafeUrlError:
-        await store.update_test_outcome(credential_id, "failed")
+        await store.update_test_outcome(credential_id, "failed",
+                                        user_id=principal.user_id)
         await _audit(request, "byok.credential.tested",
                      actor_user_id=principal.user_id,
                      resource_type="user_provider_credential",
@@ -427,7 +428,8 @@ async def test_provider(
 
     report = await _probe(request, row["base_url"], api_key)
     credential_status = "ok" if report["ok"] else "failed"
-    await store.update_test_outcome(credential_id, credential_status)
+    await store.update_test_outcome(credential_id, credential_status,
+                                    user_id=principal.user_id)
     await _audit(
         request, "byok.credential.tested",
         actor_user_id=principal.user_id,

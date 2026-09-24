@@ -65,7 +65,7 @@ async def seed_task(engine, uid: int, session_id="default", payload=None):
         session_pk=session_pk,
     )
     await engine.create_checkpoint(
-        session_id, note="through 5", actor="mcp:checkpoint_create",
+        session_id, note="through 5",
         session_pk=session_pk,
     )
     return session_pk

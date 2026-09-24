@@ -84,13 +84,51 @@ class AgentRegistry:
         # job_id -> owner user_id, for the single-use/owner checks in
         # submit_result. Entries live until resolved or swept.
         self._jobs: dict[str, dict] = {}
+        self._last_prune = 0.0
         self._clock = clock
+
+    # How long a user must have been offline, holding nothing in flight,
+    # before their bookkeeping is forgotten. Without a sweep these three
+    # dicts gain an entry per user who ever polls and keep it forever -
+    # small each, unbounded over time (deep code review 2026-09-24,
+    # finding 9).
+    STALE_USER_SECONDS = 3600.0
+    # The sweep is O(tracked users), so it runs at most this often rather
+    # than on every heartbeat: a poll is the hot path, a stale entry is
+    # not urgent.
+    PRUNE_INTERVAL_SECONDS = 60.0
 
     # --- liveness -------------------------------------------------------
 
     def heartbeat(self, user_id: int) -> None:
         """Record that this user's agent just polled."""
         self._last_seen[user_id] = self._clock()
+        self._prune()
+
+    def _prune(self) -> None:
+        """Forget users who are long gone and hold nothing in flight.
+
+        Deliberately conservative. A user is only forgotten once they have
+        been offline past STALE_USER_SECONDS AND hold no held poll, no
+        queued job and no waiting dispatcher - anything else may still be
+        live. The event object in particular is kept for that reason: a
+        dispatch and the next poll are meant to share one.
+        """
+        now = self._clock()
+        if now - self._last_prune < self.PRUNE_INTERVAL_SECONDS:
+            return
+        self._last_prune = now
+        cutoff = now - self.STALE_USER_SECONDS
+        for user_id, seen in list(self._last_seen.items()):
+            if seen > cutoff:
+                continue
+            if (self._pollers.get(user_id)
+                    or self._queues.get(user_id)
+                    or self._futures.get(user_id)):
+                continue
+            self._last_seen.pop(user_id, None)
+            self._events.pop(user_id, None)
+            self._queues.pop(user_id, None)
 
     def online(self, user_id: int) -> bool:
         last = self._last_seen.get(user_id)

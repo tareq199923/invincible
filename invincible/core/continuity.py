@@ -17,7 +17,13 @@ import time
 
 from sqlalchemy import and_, func, select
 
-from invincible.core.db import checkpoints, sessions, task_states
+from invincible.core.db import (
+    checkpoints as checkpoints_table,
+)
+from invincible.core.db import (
+    sessions,
+    task_states,
+)
 from invincible.core.scope import (
     UNSCOPED,
     UnresolvedScopeError,
@@ -306,11 +312,20 @@ class ContinuityEngine:
         session_id: str,
         task_key: str = "default",
         note: str = "",
-        actor: str = "user",
         *,
         session_pk: int | None | _Unscoped = UNSCOPED,
     ) -> dict:
         """Pin the CURRENT head version (0 = nothing tracked yet).
+
+        There is deliberately no ``actor`` parameter. It used to be accepted
+        and silently dropped, so callers believed they were recording who
+        made the checkpoint while nothing was stored (deep code review
+        2026-09-24, finding 6). The ``checkpoints`` table has no column for
+        it, and for the one caller that cared the information is already in
+        the note text - the failover hook writes "auto: pre-failover
+        snapshot (...)". Recording it properly is a schema change for a
+        field nothing reads; delete the parameter rather than let the
+        signature keep lying.
 
         ``session_pk=None`` raises rather than pinning unscoped - see
         ``core/scope.py``.
@@ -337,7 +352,7 @@ class ContinuityEngine:
             version = head or 0
             now = time.time()
             result = await conn.execute(
-                checkpoints.insert().values(
+                checkpoints_table.insert().values(
                     session_id=session_id,
                     session_pk=scope_pk,
                     task_key=task_key,
@@ -359,21 +374,29 @@ class ContinuityEngine:
         self, session_id: str, task_key: str | None = None, limit: int = 20,
         *, session_pk: int | None | _Unscoped = UNSCOPED,
     ) -> list[dict]:
+        """Newest-first checkpoints for this session.
+
+        The table is imported as ``checkpoints_table`` so this method's own
+        name does not shadow it inside the class body (deep code review
+        2026-09-24, finding 9) - the shadowing was harmless, since a class
+        attribute is not a module global, but it read as though the body
+        were calling itself.
+        """
         if session_pk is None:
             return []
         scope = (
-            checkpoints.c.session_pk == session_pk
+            checkpoints_table.c.session_pk == session_pk
             if session_pk is not UNSCOPED
-            else checkpoints.c.session_id == session_id
+            else checkpoints_table.c.session_id == session_id
         )
         query = (
-            checkpoints.select()
+            checkpoints_table.select()
             .where(scope)
-            .order_by(checkpoints.c.id.desc())
+            .order_by(checkpoints_table.c.id.desc())
             .limit(limit)
         )
         if task_key is not None:
-            query = query.where(checkpoints.c.task_key == task_key)
+            query = query.where(checkpoints_table.c.task_key == task_key)
         async with self.engine.connect() as conn:
             rows = (await conn.execute(query)).mappings().all()
         return [dict(r) for r in rows]
@@ -397,7 +420,7 @@ class ContinuityEngine:
         created = []
         for task_key in task_keys:
             created.append(await self.create_checkpoint(
-                session_id, task_key, note=note, actor="system-failover",
+                session_id, task_key, note=note,
                 session_pk=session_pk,
             ))
         return created

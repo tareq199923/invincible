@@ -395,3 +395,34 @@ async def test_delete_removes_row_and_audits_metadata_only(
     assert "api.groq.com" not in blob
     assert "encrypted" not in blob
     assert created["meta"]["provider_name"] == "My Groq"
+
+
+async def test_update_test_outcome_is_ownership_predicated(
+    client, pg_engine, credential_key
+):
+    """It was the one write in the store with no ``user_id`` predicate,
+    contradicting the module docstring's "ownership predicates go through
+    user_id on every read/write". Both call sites resolve the row first, so
+    nothing was exploitable - this pins the predicate so it cannot quietly
+    become a cross-user write later (deep code review 2026-09-24, finding 9).
+    """
+    from invincible.core.credential_store import ByokCredentialStore
+    from invincible.core.db import ensure_local_owner
+
+    store = ByokCredentialStore(pg_engine)
+    uid, _pid = await ensure_local_owner(pg_engine)
+    row = await store.create(
+        user_id=uid, provider_name="alpha", model_id="alpha-model",
+        base_url="https://alpha.example.com/v1", api_key=RAW_KEY)
+
+    # Another owner cannot stamp this row...
+    assert await store.update_test_outcome(
+        row["id"], "failed", user_id=uid + 1) is False
+    # ...and the row is untouched by the attempt.
+    mine = await store.get_for_user(row["id"], uid)
+    assert mine["status"] != "failed"
+
+    # The real owner still can.
+    assert await store.update_test_outcome(
+        row["id"], "ok", user_id=uid) is True
+    assert (await store.get_for_user(row["id"], uid))["status"] == "ok"

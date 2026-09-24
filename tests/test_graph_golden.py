@@ -124,7 +124,7 @@ async def seed_rich_session(runs, engine, uid):
     await engine.set_state("default", {"through": 9}, actor="mcp:tss",
                            session_pk=session_pk)
     await engine.create_checkpoint(
-        "default", note="through 9", actor="mcp:checkpoint_create",
+        "default", note="through 9",
         session_pk=session_pk)
     # ...then a post-checkpoint upstream failure (interruption note).
     await attempt("req-3", "error", "delta", 1, 8.0, err="timeout")

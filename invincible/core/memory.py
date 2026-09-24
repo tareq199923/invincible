@@ -19,6 +19,7 @@ from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from invincible.core.db import MEMORY_FTS_CONFIG, memories
+from invincible.core.retrieval import or_query_text
 from invincible.core.settings import settings
 
 _TARGET_MAX_CHARS = 160
@@ -168,6 +169,13 @@ class MemoryStore:
         """
         if layer not in ("explicit", "auto"):
             raise ValueError("layer must be 'explicit' or 'auto'")
+        # ``kind`` was the one write-path field with no vocabulary check, so
+        # an arbitrary string could be stored and then surface as its own
+        # facet in the dashboard's by_kind breakdown (deep code review
+        # 2026-09-24, finding 9). Both other write paths already validate.
+        if kind not in MEMORY_KINDS:
+            raise ValueError(
+                f"kind must be one of: {', '.join(MEMORY_KINDS)}")
         async with self.engine.begin() as conn:
             result = await conn.execute(
                 pg_insert(memories).values(
@@ -182,7 +190,10 @@ class MemoryStore:
                     created_at=time.time(),
                 )
             )
-            return result.inserted_primary_key[0] if result.rowcount else None
+            # An INSERT that returned at all inserted a row: ``rowcount`` is
+            # always 1 here, so the old ``if result.rowcount else None``
+            # guard could never take its other branch.
+            return result.inserted_primary_key[0]
 
     async def record_memories(
         self,
@@ -385,8 +396,12 @@ class MemoryStore:
             " ORDER BY rank DESC, created_at DESC, id DESC"
             " LIMIT :limit"
         )
-        tokens = re.findall(r"[A-Za-z0-9]{3,40}", query)
-        or_expr = " | ".join(f"'{tok}'" for tok in tokens) or None
+        # Shared with RetrievalService rather than re-spelled here: these
+        # were two copies of the same tokenizer and tsquery construction,
+        # which is a silent divergence waiting to happen (deep code review
+        # 2026-09-24, finding 9). ``or_query_text`` uses an identical
+        # pattern and returns None when nothing survives.
+        or_expr = or_query_text(query)
         or_sql = text(
             "SELECT id, scope, layer, kind, content, confidence,"
             " provenance, created_at,"

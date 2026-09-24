@@ -27,6 +27,14 @@ _OPTIONAL_PROVIDER_FIELDS = {
 
 _ROUTING_MODES = ("auto", "pinned", "chain")
 
+# Headers the gateway sets itself. ``extra_headers`` exists for providers
+# that gate access behind client-fingerprint headers, not for auth: letting
+# an entry set ``Authorization`` would redirect a credential the Router
+# believes it is sending upstream, and ``Content-Type`` would corrupt the
+# request body's framing. Rejected at load time so a bad config fails loudly
+# at startup instead of silently at request time.
+_RESERVED_HEADERS = frozenset({"authorization", "content-type"})
+
 
 def validate_providers_config(config: dict) -> None:
     """Validate the ``providers`` mapping shape (Phase 6).
@@ -163,6 +171,16 @@ def validate_providers_config(config: dict) -> None:
                 f"Provider '{name}': 'extra_headers' must be a mapping of "
                 "string header names to string values"
             )
+        if extra_headers:
+            reserved = sorted(
+                header for header in extra_headers
+                if header.strip().lower() in _RESERVED_HEADERS
+            )
+            if reserved:
+                raise ValueError(
+                    f"Provider '{name}': 'extra_headers' may not set "
+                    f"{', '.join(reserved)} - the gateway sets those itself"
+                )
 
         unknown_fields = set(provider) - (
             _REQUIRED_PROVIDER_FIELDS | _OPTIONAL_PROVIDER_FIELDS

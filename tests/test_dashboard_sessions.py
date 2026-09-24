@@ -79,7 +79,7 @@ async def test_detail_page_renders_projection_pieces(client):
     await continuity.set_state("detail-1", {"through": 9}, actor="mcp:t",
                                session_pk=pk)
     await continuity.create_checkpoint(
-        "detail-1", note="through 9", actor="mcp:c", session_pk=pk)
+        "detail-1", note="through 9", session_pk=pk)
     # Runs stamped AFTER the checkpoint instant (C): interruption_note
     # skips any attempt whose finished_at <= latest checkpoint time.
     base = time.time() + 10

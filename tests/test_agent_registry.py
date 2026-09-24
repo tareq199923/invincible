@@ -230,3 +230,61 @@ async def test_cancelled_dispatch_drops_queued_job(registry):
     # ...and the bookkeeping is as clean as the timeout path's.
     assert not reg._futures.get(42, {})
     assert not reg._jobs
+
+
+# --- bookkeeping is swept, not accumulated forever --------------------------
+# (deep code review 2026-09-24, finding 9)
+
+
+async def test_stale_users_are_eventually_forgotten(registry):
+    """``_last_seen`` / ``_events`` / ``_queues`` used to gain an entry per
+    user who ever polled and keep every one of them for the life of the
+    process."""
+    reg, clock = registry
+    reg.heartbeat(1)
+    reg.heartbeat(2)
+    assert set(reg._last_seen) == {1, 2}
+
+    clock.advance(reg.PRUNE_INTERVAL_SECONDS + 1)
+    clock.advance(reg.STALE_USER_SECONDS + 1)
+    reg.heartbeat(3)  # a later poll runs the sweep
+
+    assert set(reg._last_seen) == {3}
+    assert 1 not in reg._events
+    assert 1 not in reg._queues
+    assert 2 not in reg._events
+
+
+async def test_a_user_holding_work_is_never_pruned(registry):
+    """The sweep must not eat live state. A user with a queued job looks
+    'stale' by last-seen alone, but the job still has to reach their
+    agent - so the guards keep them until it does.
+    """
+    reg, clock = registry
+    # The timeout must outlast the whole sweep window: advancing the clock
+    # past STALE_USER_SECONDS also advances it past the job's own deadline,
+    # and an expired job is refused by submit_result for an unrelated (and
+    # correct) reason.
+    task = asyncio.ensure_future(
+        reg.dispatch(7, "read_file", {"path": "a"}, timeout=10_000))
+    await asyncio.sleep(0.01)  # staged and parked on its future
+
+    clock.advance(reg.PRUNE_INTERVAL_SECONDS + 1)
+    clock.advance(reg.STALE_USER_SECONDS + 1)
+    reg.heartbeat(99)  # another user triggers the sweep
+
+    job = await reg.poll(7, hold=0.01)
+    assert job is not None and job["args"]["path"] == "a"
+    assert reg.submit_result(7, job["job_id"], {"status": "read"})
+    assert await task == {"status": "read"}
+
+
+async def test_the_sweep_is_rate_limited(registry):
+    """It is O(tracked users) and heartbeat is the hot path, so it runs at
+    most once per PRUNE_INTERVAL_SECONDS - not on every poll."""
+    reg, clock = registry
+    reg.heartbeat(1)
+    first = reg._last_prune
+    clock.advance(1)
+    reg.heartbeat(2)
+    assert reg._last_prune == first  # not swept again yet

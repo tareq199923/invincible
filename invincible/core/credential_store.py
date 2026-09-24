@@ -128,18 +128,35 @@ class ByokCredentialStore:
             )
         return bool(result.rowcount)
 
-    async def update_test_outcome(self, credential_id: int, status: str) -> None:
+    async def update_test_outcome(
+        self, credential_id: int, status: str, *, user_id: int,
+    ) -> bool:
+        """Record a connection-test result; True iff the caller's own row
+        was updated.
+
+        Ownership-predicated like every other write in this module. Both
+        call sites resolve the row through :meth:`get_for_user` first, so
+        this changes no behaviour today - it removes the one write that
+        contradicted the rule the module docstring states ("ownership
+        predicates go through ``user_id`` on every read/write"), so it
+        cannot quietly become a cross-user write later (deep code review
+        2026-09-24, finding 9).
+        """
         now = time.time()
         async with self.engine.begin() as conn:
-            await conn.execute(
+            result = await conn.execute(
                 update(user_provider_credentials)
-                .where(user_provider_credentials.c.id == credential_id)
+                .where(
+                    user_provider_credentials.c.id == credential_id,
+                    user_provider_credentials.c.user_id == user_id,
+                )
                 .values(
                     status=status,
                     last_tested_at=now,
                     updated_at=now,
                 )
             )
+        return bool(result.rowcount)
 
     async def routing_rows(self, user_id: int) -> list[dict]:
         """Full rows (INCLUDING ciphertext) in routing order - the router's

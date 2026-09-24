@@ -120,10 +120,10 @@ async def test_active_task_keys_most_recent_first(stack):
 
 async def test_checkpoint_pins_current_version_and_lists_newest_first(stack):
     _, _, eng = stack
-    cp0 = await eng.create_checkpoint("s", note="started", actor="user")
+    cp0 = await eng.create_checkpoint("s", note="started")
     assert cp0["state_version"] == 0  # nothing tracked yet
     await eng.set_state("s", {"through": 5}, actor="llm:a")
-    cp1 = await eng.create_checkpoint("s", note="through 5", actor="llm:a")
+    cp1 = await eng.create_checkpoint("s", note="through 5")
     assert cp1["state_version"] == 1
 
     cps = await eng.checkpoints("s")
@@ -148,7 +148,7 @@ async def test_context_renders_state_and_latest_checkpoint(stack):
     await eng.set_state(
         "s", {"completed_through": 5, "next_value": 6}, actor="llm:a"
     )
-    await eng.create_checkpoint("s", note="through 5", actor="llm:a")
+    await eng.create_checkpoint("s", note="through 5")
     msg = await eng.context_message("s")
     assert msg["role"] == "system"
     body = msg["content"]
@@ -192,7 +192,7 @@ async def test_context_global_budget_omits_overflow_tasks(stack):
 async def test_interruption_signal_from_runs_after_last_checkpoint(stack):
     _, runs, eng = stack
     await eng.set_state("s", {"next": 6}, actor="mcp:task_state_set")
-    await eng.create_checkpoint("s", note="before resume", actor="mcp")
+    await eng.create_checkpoint("s", note="before resume")
     # Failure strictly after the checkpoint timestamp.
     await runs.record(run_entry("r1", outcome="failover", provider="alpha",
                                 offset=5.0))
@@ -211,7 +211,7 @@ async def test_no_interruption_when_failure_predates_checkpoint(stack):
     await runs.record(run_entry("r1", outcome="error", provider="groq",
                                 finished_at=1_000_000_000.0))  # ancient
     await eng.set_state("s", {"next": 7}, actor="mcp:x")
-    await eng.create_checkpoint("s", note="after failure", actor="user")
+    await eng.create_checkpoint("s", note="after failure")
     msg = await eng.context_message("s")
     assert "ended unexpectedly" not in msg["content"]
 
@@ -234,3 +234,37 @@ async def test_concurrent_sets_serialize_versions(stack):
     )
     versions = sorted(h["version"] for h in await eng.history("s", limit=10))
     assert versions == [1, 2, 3, 4, 5]
+
+
+# --- checkpoints record no actor, on purpose ---------------------------------
+# (deep code review 2026-09-24, finding 6)
+
+
+async def test_create_checkpoint_no_longer_takes_an_actor(stack):
+    """It used to accept ``actor`` and silently drop it, so callers
+    believed they were recording provenance that went nowhere. The table
+    has no column for it, and nothing reads one - so the parameter is
+    gone rather than left lying in the signature.
+    """
+    _, _, eng = stack
+    with pytest.raises(TypeError):
+        await eng.create_checkpoint("s", note="x", actor="user")
+
+
+async def test_failover_hook_note_marks_the_checkpoint_automatic(stack):
+    """The provenance the removed parameter would have carried is already
+    present: the hook writes it into the note. This is the claim
+    ``create_checkpoint``'s docstring makes for deleting ``actor``.
+    """
+    from invincible.core.scope import UNSCOPED
+
+    _, _, eng = stack
+    await eng.set_state("s", {"next": 6}, actor="t")
+    await eng.failover_hook()(
+        request_id="req-1", session_id="s", session_pk=UNSCOPED,
+        failed_provider="alpha", error_class="429")
+
+    cps = await eng.checkpoints("s")
+    assert cps, "the failover hook pinned no checkpoint"
+    assert cps[0]["note"].startswith("auto: pre-failover")
+    assert "alpha" in cps[0]["note"] and "429" in cps[0]["note"]

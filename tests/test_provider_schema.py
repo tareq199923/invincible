@@ -192,3 +192,29 @@ def test_shipped_providers_yaml_validates():
     assert alias_tiers == {
         "agentrouter": 1, "strong": 3, "fast": 4, "free": 5, "backup": 6,
     }
+
+
+# --- extra_headers may not set the gateway's own headers ---------------------
+# (deep code review 2026-09-24, finding 9)
+
+
+def test_extra_headers_accepts_client_fingerprint_headers():
+    validate_providers_config({"providers": [valid_provider(
+        extra_headers={"X-Title": "invincible", "HTTP-Referer": "https://x"}
+    )]})
+
+
+@pytest.mark.parametrize("header", [
+    "Authorization", "authorization", "AUTHORIZATION", " Content-Type ",
+])
+def test_extra_headers_rejects_reserved_headers(header):
+    """``auth_headers`` merges extra_headers last, so an entry setting
+    Authorization would replace the credential the Router believes it is
+    sending upstream, and Content-Type would corrupt the body framing.
+    Rejected at LOAD time so a bad config fails at startup, naming the
+    field, rather than silently at request time.
+    """
+    with pytest.raises(ValueError, match="may not set"):
+        validate_providers_config({"providers": [valid_provider(
+            extra_headers={header: "Bearer attacker-value"}
+        )]})

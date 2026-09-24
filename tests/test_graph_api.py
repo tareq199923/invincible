@@ -168,7 +168,6 @@ async def test_state_versions_and_checkpoint_pins(client, graph_stack, byok_env)
     await engine.set_state("default", {"through": 37}, actor="mcp:tss",
                            session_pk=session_pk)
     cp = await engine.create_checkpoint("default", note="through 37",
-                                        actor="mcp:checkpoint_create",
                                         session_pk=session_pk)
 
     resp = await client.get(
@@ -203,7 +202,7 @@ async def test_interruption_note_surfaces_in_summary(client, graph_stack, byok_e
     await engine.set_state("default", {"next": 6}, actor="mcp:x",
                            session_pk=session_pk)
     await engine.create_checkpoint("default", note="before resume",
-                                   actor="mcp", session_pk=session_pk)
+                                   session_pk=session_pk)
     await record_run(runs, "req-x", "error", provider="groq",
                      session_pk=session_pk)
 

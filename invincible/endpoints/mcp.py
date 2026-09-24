@@ -659,7 +659,6 @@ async def _dispatch(method, rpc_id, params, request,
                         session_id,
                         task_key=task_key,
                         note=args.get("note") or "",
-                        actor=f"mcp:{principal.user_id}:checkpoint_create",
                         session_pk=session_pk,
                     )
                     return _result(rpc_id, _tool_content(json.dumps(cp)))
