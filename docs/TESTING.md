@@ -66,7 +66,7 @@ every upstream is faked.
   (account sessions — and therefore OAuth consent — fail closed without it),
   and wires every store to `pg_engine` (including `app.state.engine` and
   `app.state.api_keys`, so `inv_` auth resolves against the test DB).
-  `/v1/*` tests mint per-user keys via `byok_user` /
+  `/v1/*` tests mint per-user keys via `v1_user` /
   `register_account` + `ApiKeyStore.create`.
 - **`pg_live`** — skip-gate for tests that need more than `pg_engine`
   (scratch databases, CLI provisioning flows); skips cleanly when no local

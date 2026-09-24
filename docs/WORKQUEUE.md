@@ -48,9 +48,13 @@ still owes:
   *sole identity* is superseded by user-bound OAuth subjects; listed as
   Phase 2+, so it is overdue. The env var itself **stays** — it still
   signs sessions. Only the identity path retires.
-- **`facts` triple store** — injection is already retired and the table
-  is inert with no backfill. Decide between dropping it and keeping it
-  as history; no code depends on it either way.
+- **`facts` triple store** — **DECIDED 2026-09-24: keep as legacy-import
+  history.** No request-serving code reads or writes the table, and no
+  backfill was performed. The legacy importer above remains its only
+  production writer, so retain the table and importer path together. This
+  adds no request-path cost, but the table still occupies schema/storage
+  and importer runs can add rows. If the importer is retired, drop both
+  together then.
 - **Client-supplied `session_id` as storage identity** — relational
   session identity landed in Phase 1 and the transitional helper was
   only meant to be retained briefly. Check whether it is still there.
