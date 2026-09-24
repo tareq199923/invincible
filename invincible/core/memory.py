@@ -259,26 +259,36 @@ class MemoryStore:
                     )
                 )).all()
             }
-            added = 0
+            # Build the survivors first, then land them in ONE multi-VALUES
+            # INSERT. The loop this replaces issued a statement per row, so
+            # a request that extracted N memories cost N round-trips after
+            # the dedupe lookup (deep code review 2026-09-24, finding 7).
+            # ``existing.add`` stays inside the walk: it is what stops two
+            # rows with the same (layer, content) WITHIN this batch from
+            # both landing.
+            created_at = time.time()
+            batch = []
             for row in rows:
                 key = (row["layer"], row["content"])
                 if key in existing:
                     continue
-                await conn.execute(
-                    pg_insert(memories).values(
-                        user_id=user_id,
-                        project_id=None,
-                        scope="user",
-                        layer=row["layer"],
-                        kind=row["kind"],
-                        content=row["content"],
-                        confidence=row["confidence"],
-                        provenance=provenance,
-                        created_at=time.time(),
-                    )
-                )
                 existing.add(key)
-                added += 1
+                batch.append({
+                    "user_id": user_id,
+                    "project_id": None,
+                    "scope": "user",
+                    "layer": row["layer"],
+                    "kind": row["kind"],
+                    "content": row["content"],
+                    "confidence": row["confidence"],
+                    "provenance": provenance,
+                    # One stamp for the whole batch, where the old loop
+                    # gave each row its own time.time() as it went.
+                    "created_at": created_at,
+                })
+            if batch:
+                await conn.execute(pg_insert(memories).values(batch))
+            added = len(batch)
         return added
 
     # ------------------------------------------------------------------

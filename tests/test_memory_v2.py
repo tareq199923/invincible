@@ -190,3 +190,43 @@ def test_legacy_extraction_still_yields_triples():
     # retires it; its behavior must not drift while memories land beside it.
     triples = extract_facts([user("my name is Sark")])
     assert ("user", "name", "Sark") in triples
+
+
+# --------------------------------------- finding 7: write round-trips
+
+
+async def test_record_memories_batches_its_inserts(statements, memory,
+                                                   owner_ids):
+    """The write path issued one INSERT per extracted row (finding 7).
+
+    Five rows (four auto, one explicit) used to cost five INSERTs run one
+    after another inside the transaction, behind the dedupe SELECT. They
+    now go in as ONE multi-VALUES statement (``executemany=False``). The
+    rows themselves are unchanged - which is why this test counts
+    statements: it is the only visible proof the round-trips dropped.
+    """
+    uid, _pid = owner_ids
+    msgs = [user(
+        "my name is Sark. I prefer dark themes. I use Python. "
+        "we decided to ship on Friday. "
+        "Remember that deploys freeze on Fridays"
+    )]
+
+    del statements[:]
+    added = await memory.record_memories(
+        user_id=uid, client_session_id="sess-1", messages_list=msgs)
+
+    inserts = [(sql, ex) for sql, ex in statements
+               if sql.lstrip().upper().startswith("INSERT")]
+    assert added == 5
+    assert len(inserts) == 1, inserts
+    assert inserts[0][1] is False, inserts
+
+    async with memory.engine.connect() as conn:
+        from invincible.core.db import memories
+
+        rows = (await conn.execute(memories.select())).mappings().all()
+    assert len(rows) == 5
+    assert {r["layer"] for r in rows} == {"auto", "explicit"}
+    assert {r["created_at"] for r in rows} == {rows[0]["created_at"]}
+
