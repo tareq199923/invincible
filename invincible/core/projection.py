@@ -97,7 +97,8 @@ async def build_session_projection(
 
     run_rows = list(reversed(await runs_store.recent(
         session_id=session_id, limit=limit, session_pk=session_pk)))
-    prev_run_id = None
+    prev_run = None
+    prev_run_node_id = None
     for run in run_rows:
         node_id = f"run:{run['id']}"
         nodes.append({
@@ -120,15 +121,20 @@ async def build_session_projection(
         })
         edges.append({"source": "session", "target": node_id,
                       "kind": "attempted_for"})
-        if prev_run_id is not None:
-            previous = next(n for n in nodes if n["id"] == prev_run_id)
-            same_request = previous["request_id"] == run["request_id"]
+        if prev_run is not None:
+            same_request = prev_run["request_id"] == run["request_id"]
             edges.append({
-                "source": prev_run_id,
+                "source": prev_run_node_id,
                 "target": node_id,
                 "kind": "failover_from" if same_request else "followed_by",
             })
-        prev_run_id = node_id
+        # Carry the previous row and its node id forward instead of looking
+        # the node back up: the old code used ``next(n for n in nodes ...)``,
+        # rescanning every node built so far on every iteration - O(n^2)
+        # over a limit that reaches 1000 (deep code review 2026-09-24,
+        # finding 7).
+        prev_run = run
+        prev_run_node_id = node_id
 
     task_keys = await continuity.active_task_keys(session_id, limit=10,
                                                   session_pk=session_pk)

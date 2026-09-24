@@ -263,6 +263,44 @@ async def test_retention_disabled_via_off(monkeypatch, store, owner):
     assert await turn_count(store) == 5
 
 
+async def test_retention_resequences_surviving_turns_densely(
+    monkeypatch, store, owner
+):
+    """Retention renumbers the turns it keeps.
+
+    That renumbering used to be one UPDATE per surviving turn - roughly 200
+    at the default cap, inside the transaction already holding FOR UPDATE
+    on the session row. It is now a single window-function statement (deep
+    code review 2026-09-24, finding 7), and the RESULT must be unchanged:
+    dense, 0-based, in order, so the walker's MAX(seq)+1 stays trivial.
+    """
+    monkeypatch.setenv("INVINCIBLE_HISTORY_MAX_TURNS", "2")
+    for index in range(6):
+        await store.append(
+            "s", [user(f"q{index}"), assistant(f"a{index}")], **owner)
+
+    pk = await local_pk(store)
+    async with store.engine.connect() as conn:
+        seqs = list((await conn.execute(
+            select(turns_table.c.seq)
+            .where(turns_table.c.session_id == pk)
+            .order_by(turns_table.c.seq.asc())
+        )).scalars().all())
+    assert seqs == [0, 1]
+
+    # A later append still opens at MAX(seq)+1 and trims again - the second
+    # pass proves the first one left the sequence usable.
+    await store.append("s", [user("q9"), assistant("a9")], **owner)
+    assert await turn_count(store) == 2
+    async with store.engine.connect() as conn:
+        again = list((await conn.execute(
+            select(turns_table.c.seq)
+            .where(turns_table.c.session_id == pk)
+            .order_by(turns_table.c.seq.asc())
+        )).scalars().all())
+    assert again == [0, 1]
+
+
 # ------------------------------------------------- save full replace (#3)
 
 

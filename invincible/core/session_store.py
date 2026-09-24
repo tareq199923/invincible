@@ -24,7 +24,7 @@ serialize instead of racing on MAX(seq)+1.
 """
 import time
 
-from sqlalchemy import Text, delete, func, select, update
+from sqlalchemy import Text, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from invincible.core.db import (
@@ -390,16 +390,19 @@ class SessionStore:
             )
         )
         # Re-sequence remaining turns densely (ordering stable, arithmetic
-        # for MAX(seq)+1 stays trivial).
-        ids = (await conn.execute(
-            select(turns.c.id)
-            .where(turns.c.session_id == session_pk)
-            .order_by(turns.c.seq.asc())
-        )).scalars().all()
-        for new_seq, turn_pk in enumerate(ids):
-            await conn.execute(
-                update(turns).where(turns.c.id == turn_pk).values(seq=new_seq)
-            )
+        # for MAX(seq)+1 stays trivial) in ONE statement. The old loop read
+        # the ids back and issued an UPDATE per turn - roughly 200 at the
+        # default cap, inside the transaction already holding FOR UPDATE on
+        # the session row (deep code review 2026-09-24, finding 7).
+        await conn.execute(
+            text(
+                "UPDATE turns AS t SET seq = ranked.rn - 1"
+                " FROM (SELECT id, ROW_NUMBER() OVER (ORDER BY seq) AS rn"
+                "         FROM turns WHERE session_id = :pk) AS ranked"
+                " WHERE ranked.id = t.id"
+            ),
+            {"pk": session_pk},
+        )
 
     @staticmethod
     async def _delete_turn_rows(conn, session_pk: int) -> None:

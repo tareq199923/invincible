@@ -463,6 +463,10 @@ runs = Table(
 Index("idx_runs_session", runs.c.session_id, runs.c.started_at)
 Index("idx_runs_outcome", runs.c.outcome)
 Index("idx_runs_session_pk", runs.c.session_pk, runs.c.id.desc())
+# attach_output looks the winning attempt up by request_id on EVERY
+# streamed request; without this it scans the whole (ever-growing) table
+# (deep code review 2026-09-24, finding 7). Schema half in migration 0010.
+Index("idx_runs_request_id", runs.c.request_id)
 
 task_states = Table(
     "task_states",
@@ -569,6 +573,13 @@ oauth_tokens = Table(
     Column("revoked", Boolean, nullable=False, server_default="false"),
     Column("created_at", Float, nullable=False),
 )
+
+# The OAuth sweep deletes expired rows by expires_at and token revocation
+# filters by client_id; both were full scans (deep code review 2026-09-24,
+# finding 7). Schema half in migration 0010.
+Index("idx_oauth_codes_expires", oauth_codes.c.expires_at)
+Index("idx_oauth_tokens_expires", oauth_tokens.c.expires_at)
+Index("idx_oauth_tokens_client", oauth_tokens.c.client_id)
 
 
 # ---------------------------------------------------------------------------
