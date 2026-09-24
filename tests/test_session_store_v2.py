@@ -419,3 +419,67 @@ async def test_property_equivalence_with_blob_semantics(store, owner):
     stored_sizes = await turn_sizes(store)
     grouped_sizes = [len(t) for t in group_into_turns(reference)]
     assert stored_sizes == grouped_sizes
+
+
+# --------------------------------------- finding 7: append round-trips
+
+
+async def test_grouped_insert_is_one_statement_per_table(statements, store,
+                                                         owner):
+    """The append walker was one INSERT per message plus a ``MAX(seq)``
+    probe per turn it opened (deep code review 2026-09-24, finding 7).
+
+    A 10-message append opening 3 turns cost 17 statements: the last-turn
+    probe, three MAX(seq) probes, three turn INSERTs, ten message INSERTs.
+    It now costs 3 - one probe, one multi-VALUES turn INSERT, one
+    multi-VALUES message INSERT - and the count does not move with the
+    batch. Both INSERTs are single statements (``executemany=False``), so
+    this is round-trips saved rather than merely a batched API call.
+
+    The rows are identical either way, which is why this test counts
+    statements: it is the only proof the round-trips actually dropped.
+    """
+    pk = await store.resolve_or_create("s", **owner)
+
+    def inserts() -> list[tuple[str, bool]]:
+        return [(sql, ex) for sql, ex in statements
+                if sql.lstrip().upper().startswith("INSERT")]
+
+    def selects() -> list[str]:
+        return [sql for sql, _ in statements
+                if sql.lstrip().upper().startswith("SELECT")]
+
+    # 10 messages / 3 turns: T1(q0,a0,a1,a2) T2(q1,b0,b1,b2) T3(q2,c0).
+    big = ([user("q0")] + [assistant(f"a{i}") for i in range(3)]
+           + [user("q1")] + [assistant(f"b{i}") for i in range(3)]
+           + [user("q2"), assistant("c0")])
+    assert len(group_into_turns(big)) == 3
+
+    del statements[:]
+    async with store.engine.begin() as conn:
+        inserted = await store._insert_grouped(conn, pk, big)
+
+    big_inserts, big_selects = inserts(), selects()
+    assert inserted == 10
+    assert len(big_inserts) == 2, (big_inserts, big_selects)
+    assert len(big_selects) == 1, (big_selects, big_inserts)
+    assert not any(ex for _, ex in big_inserts), big_inserts
+
+    # A much smaller append into the same session: same statement count.
+    small = [user("q3"), assistant("d0")]
+    del statements[:]
+    async with store.engine.begin() as conn:
+        assert await store._insert_grouped(conn, pk, small) == 2
+
+    small_inserts, small_selects = inserts(), selects()
+    assert len(small_selects) == 1, small_selects
+    assert len(small_inserts) == 2, small_inserts
+    assert not any(ex for _, ex in small_inserts), small_inserts
+
+    # And the grouping the walker wrote is still the trimming rule's.
+    flat = await store.load("s", **owner)
+    assert flat == big + small
+    assert await turn_sizes(store) == [
+        len(t) for t in group_into_turns(big + small)
+    ]
+

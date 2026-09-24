@@ -289,10 +289,19 @@ class SessionStore:
         )
 
     async def _last_turn(self, conn, session_pk: int):
-        """Newest ``(turn_id, has_messages, next_msg_seq)`` or None."""
+        """Newest ``(turn_id, has_messages, next_msg_seq, seq)`` or None.
+
+        ``seq`` is the newest turn's own sequence, which lets the append
+        walker number the turns it opens by counting up instead of
+        re-querying ``MAX(seq)`` once per turn (deep code review
+        2026-09-24, finding 7). Selecting it under ``GROUP BY turns.id``
+        is fine: the id is the primary key, so every other column of
+        ``turns`` is functionally dependent on it.
+        """
         row = (await conn.execute(
             select(
                 turns.c.id,
+                turns.c.seq,
                 func.count(messages.c.id) > 0,
                 func.coalesce(func.max(messages.c.seq) + 1, 0),
             )
@@ -304,49 +313,78 @@ class SessionStore:
         )).first()
         if row is None:
             return None
-        turn_id, any_msg, next_seq = row
-        return turn_id, bool(any_msg), int(next_seq or 0)
+        turn_id, seq, any_msg, next_seq = row
+        return turn_id, bool(any_msg), int(next_seq or 0), int(seq)
 
     async def _insert_grouped(
         self, conn, session_pk: int, msgs: list
     ) -> int:
+        """Insert ``msgs``, opening a turn wherever the boundary rule says.
+
+        The rule is ``core.trimming.group_into_turns`` exactly: a new turn
+        opens on a user message that follows a turn with messages. It is
+        walked FIRST, then the turns this batch opens go in as one
+        multi-VALUES INSERT and the messages as one more - three statements
+        for any batch. The loop this replaces issued one INSERT per message
+        plus a ``MAX(seq)`` probe per turn opened: 17 statements for a
+        10-message batch that opens 3 turns (deep code review 2026-09-24,
+        finding 7). Turn sequences count up from the newest turn already on
+        the session instead of re-probing, which is safe because the caller
+        holds ``FOR UPDATE`` on the session row.
+
+        Turn ids are mapped back by ``seq`` rather than trusting the order
+        RETURNING hands them back. ``payload`` is JSONB: the message dict is
+        bound as-is and serialized once by SQLAlchemy, never pre-dumped.
+        """
         current = await self._last_turn(conn, session_pk)
         if current is None:
-            turn_id, has_msgs, position = None, False, 0
+            turn_id, has_msgs, position, next_seq = None, False, 0, 0
         else:
-            turn_id, has_msgs, position = current
-        inserted = 0
+            turn_id, has_msgs, position, last_seq = current
+            next_seq = last_seq + 1
+
+        # Walk the boundary rule once, recording where every message lands.
+        # ``new_turns`` holds the sequence of each turn opened, in order; a
+        # message placed in one refers to it by index.
+        plan = []        # (turn_ref, position, message)
+        new_turns = []   # seq of each newly opened turn
         for message in msgs:
             role = message.get("role")
-            open_new = turn_id is None or (role == "user" and has_msgs)
-            if open_new:
-                max_seq = (await conn.execute(
-                    select(func.max(turns.c.seq)).where(
-                        turns.c.session_id == session_pk)
-                )).scalar_one()
-                result = await conn.execute(
-                    turns.insert()
-                    .values(session_id=session_pk,
-                            seq=(max_seq if max_seq is not None else -1) + 1)
-                    .returning(turns.c.id)
-                )
-                turn_id = result.scalar_one()
+            if turn_id is None or (role == "user" and has_msgs):
+                turn_id = ("new", len(new_turns))
+                new_turns.append(next_seq)
+                next_seq += 1
                 has_msgs = False
                 position = 0
-            await conn.execute(
-                messages.insert().values(
-                    turn_id=turn_id,
-                    seq=position,
-                    role=role if isinstance(role, str) else str(role),
-                    # JSONB column: bind the message object; SQLAlchemy
-                    # serializes once. Never pre-dump into a JSONB column.
-                    payload=message,
-                )
-            )
+            plan.append((turn_id, position, message))
             has_msgs = True
             position += 1
-            inserted += 1
-        return inserted
+
+        ids_by_seq: dict[int, int] = {}
+        if new_turns:
+            result = await conn.execute(
+                turns.insert()
+                .values([{"session_id": session_pk, "seq": seq}
+                         for seq in new_turns])
+                .returning(turns.c.id, turns.c.seq)
+            )
+            ids_by_seq = {int(seq): int(tid) for tid, seq in result.all()}
+
+        rows = []
+        for turn_ref, position, message in plan:
+            role = message.get("role")
+            rows.append({
+                "turn_id": (
+                    ids_by_seq[new_turns[turn_ref[1]]]
+                    if isinstance(turn_ref, tuple) else turn_ref
+                ),
+                "seq": position,
+                "role": role if isinstance(role, str) else str(role),
+                "payload": message,
+            })
+        if rows:
+            await conn.execute(messages.insert().values(rows))
+        return len(rows)
 
     async def _enforce_retention(
         self, conn, session_pk: int, max_turns: int | None = None,
