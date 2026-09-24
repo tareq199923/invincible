@@ -79,7 +79,8 @@
     .hero h1 { display: flex; max-width: 760px; margin: 10px 0 22px; flex-direction: column; font-size: clamp(3rem, 6vw, 5.5rem); line-height: .94; letter-spacing: -.07em; overflow-wrap: normal; }
     .hero h1 span, .hero h1 em { display: block; max-width: 100%; }
     .hero h1 em { color: var(--accent); font-style: normal; }
-    .hero__copy > p:last-of-type { max-width: 640px; margin: 0; color: #adb4bf; font-size: clamp(1rem, 1.6vw, 1.16rem); line-height: 1.62; }
+    .hero__copy > p.sub { max-width: 640px; margin: 0; color: #adb4bf; font-size: clamp(1rem, 1.6vw, 1.16rem); line-height: 1.62; }
+    .hero__copy > p.hint { max-width: 640px; margin: 12px 0 0; color: #7f8792; font-size: 0.8rem; line-height: 1.6; }
     .hero .actions { display: flex; gap: 9px; margin-top: 28px; flex-wrap: wrap; }
     .btn { display: inline-flex; min-height: 44px; padding: 8px 15px; align-items: center; justify-content: center; color: var(--night); background: var(--accent); border: 1px solid var(--accent); border-radius: 6px; font-size: 0.74rem; font-weight: 850; text-decoration: none; transition: background .15s ease, transform .15s ease, box-shadow .15s ease; }
     .btn:hover { color: var(--night); background: #aeb4ff; box-shadow: 0 6px 0 rgba(139, 147, 255, 0.18); transform: translateY(-2px); }
@@ -102,7 +103,11 @@
     .terminal .ok { color: var(--ok); }
     .terminal .dim { color: #747c88; }
 
-    .hero__footer { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(420px, .8fr) minmax(520px, 1.2fr); gap: 38px; margin-top: 58px; padding-top: 22px; align-items: center; border-top: 1px solid var(--line); }
+    .trust-chips { position: relative; z-index: 1; display: flex; gap: 8px; margin-top: 26px; flex-wrap: wrap; }
+    .trust-chips span { display: inline-flex; gap: 7px; padding: 7px 12px; align-items: center; color: #a6adb7; background: rgba(17, 22, 31, 0.8); border: 1px solid var(--line-strong); border-radius: 999px; font-size: 0.7rem; font-weight: 700; }
+    .trust-chips i { width: 7px; height: 7px; background: var(--ok); border-radius: 50%; }
+
+    .hero__footer { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(420px, .8fr) minmax(520px, 1.2fr); gap: 38px; margin-top: 34px; padding-top: 22px; align-items: center; border-top: 1px solid var(--line); }
     .hero-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
     .hero-stats div { padding: 0 16px; border-left: 1px solid var(--line); }
     .hero-stats div:first-child { padding-left: 0; border-left: 0; }
@@ -117,13 +122,32 @@
     .section-heading h2 { margin: 0; font-size: clamp(1.65rem, 3vw, 2.35rem); letter-spacing: -.05em; }
     .section-heading > p { max-width: 520px; margin: 0; color: var(--muted); font-size: 0.8rem; line-height: 1.58; }
     .steps { display: grid; gap: 11px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
-    .step { min-height: 285px; padding: 22px; background: var(--paper); border: 1px solid var(--line); border-top: 4px solid var(--accent-dark); border-radius: 9px; box-shadow: 0 8px 22px rgba(33,36,42,.12); }
+    .step { display: flex; min-height: 285px; padding: 22px; background: var(--paper); border: 1px solid var(--line); border-top: 4px solid var(--accent-dark); border-radius: 9px; box-shadow: 0 8px 22px rgba(33,36,42,.12); flex-direction: column; }
+    .step:nth-child(2) { border-top-color: var(--ok); }
+    .step:nth-child(3) { border-top-color: var(--warn); }
+    .step:nth-child(4) { border-top-color: #a277ff; }
     .step .num { display: grid; width: 29px; height: 29px; place-items: center; color: var(--night); background: var(--accent); border-radius: 50%; font-family: var(--mono); font-size: 0.66rem; font-weight: 900; }
-    .step h3, .feature h3 { margin: 27px 0 9px; font-size: 1.08rem; letter-spacing: -.03em; }
-    .step p, .feature p { margin: 0 0 17px; color: var(--muted); font-size: 0.8rem; line-height: 1.6; }
-    .step code { display: block; padding: 9px 10px; overflow: hidden; color: #eef1f5; background: var(--night-raised); border-left: 3px solid var(--accent); border-radius: 5px; font-size: 0.67rem; text-overflow: ellipsis; white-space: nowrap; }
-    .step p code { display: inline; padding: 2px 5px; border: 0; border-radius: 3px; font-size: 0.8em; white-space: normal; }
-    .step .note { margin: 10px 0 0; font-size: 0.7rem; font-style: italic; }
+    .step h3, .feature h3, .product h3, .journey h3 { margin: 27px 0 9px; font-size: 1.08rem; letter-spacing: -.03em; }
+    .step p, .feature p, .product p, .journey p { margin: 0 0 17px; color: var(--muted); font-size: 0.8rem; line-height: 1.6; }
+    .step code.block { display: block; margin-top: auto; padding: 9px 10px; overflow: hidden; color: #eef1f5; background: var(--night-raised); border-left: 3px solid var(--accent); border-radius: 5px; font-family: var(--mono); font-size: 0.67rem; text-overflow: ellipsis; white-space: nowrap; }
+    .step p code, .feature p code, .product p code, .journey p code { padding: 2px 5px; color: var(--ink-soft); background: var(--night-raised); border-radius: 3px; font-family: var(--mono); font-size: 0.9em; }
+    .step .unlocks { margin: auto 0 0; padding-top: 12px; color: #9fa7b2; font-size: 0.7rem; font-style: italic; }
+    .step .unlocks + code.block { margin-top: 10px; }
+
+    .products { display: grid; gap: 11px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .product { display: flex; min-height: 300px; padding: 22px; background: var(--paper); border: 1px solid var(--line); border-top: 4px solid var(--accent); border-radius: 9px; box-shadow: 0 8px 22px rgba(33,36,42,.12); flex-direction: column; }
+    .product:nth-child(2) { border-top-color: var(--ok); }
+    .product:nth-child(3) { border-top-color: var(--link); }
+    .product:nth-child(4) { border-top-color: var(--warn); }
+    .product .needs { margin: auto 0 0; padding-top: 12px; border-top: 1px dashed var(--line-strong); color: #9fa7b2; font-size: 0.7rem; line-height: 1.55; }
+    .product .needs strong { color: var(--ink-soft); }
+
+    .journeys { display: grid; gap: 11px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .journey { display: flex; min-height: 250px; padding: 22px; background: var(--paper); border: 1px solid var(--line); border-radius: 9px; flex-direction: column; }
+    .journey .kicker { color: var(--accent); font-family: var(--mono); font-size: 0.62rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
+    .journey h3 { margin-top: 10px; }
+    .journey .actions { margin-top: auto; }
+    .journey .actions a { font-size: 0.78rem; font-weight: 700; }
 
     .architecture-shell { display: grid; grid-template-columns: minmax(210px, .35fr) minmax(0, 1fr); gap: 22px; }
     .architecture-note { padding: 18px 20px; color: #dce1e7; background: var(--night-raised); border-left: 5px solid var(--accent); border-radius: 0 8px 8px 0; font-size: 0.78rem; line-height: 1.55; }
@@ -139,6 +163,14 @@
     .arch .arrow { padding: 0 8px; color: var(--accent); font-family: var(--mono); font-size: 1rem; font-weight: 800; white-space: nowrap; }
     .arch .arrow small { display: block; color: var(--muted); font-family: var(--sans); font-size: 0.6rem; font-weight: 500; }
 
+    .wire-grid { display: grid; gap: 11px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .wire-card { overflow: hidden; background: var(--paper); border: 1px solid var(--line); border-radius: 9px; }
+    .wire-card header { padding: 12px 16px; background: var(--night-raised); border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.04em; }
+    .wire-card pre { margin: 0; padding: 16px; overflow-x: auto; color: #c7ccd4; font-family: var(--mono); font-size: 0.7rem; line-height: 1.7; }
+    .wire-card pre .c { color: var(--accent-ink, #b7bcff); }
+    .wire-card pre .k { color: var(--ok); }
+    .wire-card p { margin: 0; padding: 12px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.72rem; line-height: 1.6; }
+
     .features { display: grid; gap: 11px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .feature { min-height: 190px; padding: 22px; background: var(--paper); border: 1px solid var(--line); border-top: 4px solid var(--accent); border-radius: 9px; box-shadow: 0 8px 22px rgba(33,36,42,.12); }
     .feature h3 { margin-top: 0; }
@@ -150,6 +182,22 @@
     .feature p code { padding: 2px 5px; color: var(--ink-soft); background: var(--night-raised); border-radius: 3px; font-family: var(--mono); font-size: 0.9em; }
     .feature p:last-child { margin-bottom: 0; }
 
+    .faq { display: grid; gap: 10px; max-width: 860px; }
+    .faq details { background: var(--paper); border: 1px solid var(--line); border-radius: 9px; }
+    .faq summary { padding: 15px 18px; color: #fff; font-size: 0.86rem; font-weight: 750; cursor: pointer; list-style: none; }
+    .faq summary::-webkit-details-marker { display: none; }
+    .faq summary::before { content: "+"; margin-right: 10px; color: var(--accent); font-family: var(--mono); font-weight: 800; }
+    .faq details[open] summary::before { content: "–"; }
+    .faq details p { margin: 0; padding: 0 18px 16px 37px; color: var(--muted); font-size: 0.8rem; line-height: 1.65; }
+    .faq details p code { padding: 2px 5px; color: var(--ink-soft); background: var(--night-raised); border-radius: 3px; font-family: var(--mono); font-size: 0.9em; }
+
+    .cta-band { padding: 26px; background: var(--night-raised); border: 1px solid var(--line-strong); border-top: 3px solid var(--accent); border-radius: 12px; }
+    .cta-band h2 { margin: 0 0 8px; font-size: clamp(1.4rem, 2.4vw, 1.9rem); letter-spacing: -0.04em; }
+    .cta-band p { max-width: 700px; margin: 0 0 18px; color: var(--muted); font-size: 0.82rem; line-height: 1.6; }
+    .cta-band pre { margin: 0 0 18px; padding: 12px 14px; overflow-x: auto; color: #eef1f5; background: var(--night); border: 1px solid var(--line); border-radius: 6px; font-family: var(--mono); font-size: 0.76rem; line-height: 1.7; }
+    .cta-band pre .c { color: var(--accent-ink, #b7bcff); }
+    .cta-band .actions { display: flex; gap: 9px; flex-wrap: wrap; }
+
     footer { padding: 28px 0 38px; color: var(--muted); font-size: 0.7rem; }
     footer .wrap { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); }
     .live-dot { display: inline-block; width: 7px; height: 7px; margin-right: 7px; background: var(--accent); border-radius: 50%; }
@@ -159,7 +207,8 @@
       .hero__content { grid-template-columns: 1fr; gap: 38px; }
       .hero__copy, .terminal { max-width: 780px; }
       .hero__footer { grid-template-columns: 1fr; gap: 18px; }
-      .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .steps, .products { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .wire-grid, .journeys { grid-template-columns: 1fr 1fr; }
       .architecture-shell { grid-template-columns: 1fr; }
     }
     @media (max-width: 700px) {
@@ -167,12 +216,13 @@
       .site-header__inner { min-height: 64px; }
       .logo__name { display: none; }
       .topnav a { padding: 7px; }
+      .topnav a:not(.cta):not([href="/login"]) { display: none; }
       .hero { padding: 44px 14px 28px; }
       .hero h1 { font-size: clamp(2.9rem, 16vw, 4.45rem); }
       .hero-stats { grid-template-columns: 1fr 1fr; gap: 17px 0; }
       .hero-stats div:nth-child(3) { padding-left: 0; border-left: 0; }
-      .steps, .features { grid-template-columns: 1fr; }
-      .step { min-height: 0; }
+      .steps, .features, .products, .journeys, .wire-grid { grid-template-columns: 1fr; }
+      .step, .product, .journey { min-height: 0; }
       .section-heading { align-items: start; flex-direction: column; gap: 9px; }
       .architecture-lane { grid-template-columns: 1fr; }
       .arch { align-items: stretch; flex-direction: column; }
@@ -193,9 +243,10 @@
         <span class="logo__name"><strong>Invincible</strong><em>Gateway</em></span>
       </a>
       <nav class="topnav" aria-label="Primary navigation">
-        <a href="#setup">Setup</a>
-        <a href="#architecture">Architecture</a>
-        <a href="#capabilities">Capabilities</a>
+        <a href="#products">Products</a>
+        <a href="#setup">Get started</a>
+        <a href="#wire">Models</a>
+        <a href="#faq">FAQ</a>
         <a href="/login">Sign in</a>
         <a class="cta" href="/register">Create account</a>
       </nav>
@@ -208,7 +259,7 @@
         <div class="hero__copy">
           <p class="eyebrow">Remote-first · Per-user BYOK · Owner-scoped state</p>
           <h1><span>One gateway.</span><span>Your providers.</span><em>Your continuity.</em></h1>
-          <p>Connect your own provider credentials, route AI clients through one stable endpoint, and keep sessions, memories, task state, and checkpoints scoped to your account. Add OAuth-protected MCP tools and route confirmed commands to your paired machine when you need them.</p>
+          <p class="sub">Connect your own provider credentials, route AI clients through one stable endpoint, and keep sessions, memories, task state, and checkpoints scoped to your account. Add OAuth-protected MCP tools and route confirmed commands to your paired machine when you need them.</p>
           <div class="actions">
             <a class="btn" href="/register">Create your account</a>
             <a class="btn ghost" href="#setup">See the hosted setup</a>
@@ -218,13 +269,25 @@
 <span class="c">invincible agent</span>  <span class="dim" style="color:#747c88;"># pairs your machine — no database, no .env</span></pre>
             <small>One command pairs your PC with invincible-ai.me. Your account, provider keys, and memory live on the hosted service.</small>
           </div>
+          <p class="hint">A free account unlocks chat instantly. Pair the agent to give a remote AI hands on your machine. Connect provider keys to power every model route.</p>
         </div>
         <div class="terminal" aria-label="Invincible hosted client configuration">
           <div class="bar"><i></i><i></i><i></i><strong>invincible / client-config</strong></div>
-          <pre><span class="dim">base</span>  <span class="cmd">https://invincible-ai.me/v1</span>
+          <pre><span class="dim">$</span> <span class="cmd">pip install invincible-ai</span>
+<span class="dim">$</span> <span class="cmd">invincible agent</span>
+<span class="ok">✓ Paired with invincible-ai.me</span>
+<span class="dim">base</span>  <span class="cmd">https://invincible-ai.me/v1</span>
 <span class="dim">key</span>   <span class="cmd">inv_…</span> <span class="ok">✓ shown once · revocable</span>
 <span class="dim">chat</span>  OpenAI Chat · Anthropic Messages · Responses (Codex)
 <span class="dim">tools</span> <span class="cmd">https://invincible-ai.me/mcp</span> <span class="ok">✓ OAuth</span></pre>
+        </div>
+      </div>
+      <div class="wrap">
+        <div class="trust-chips" aria-label="Deployment guarantees">
+          <span><i aria-hidden="true"></i>Zero inbound ports</span>
+          <span><i aria-hidden="true"></i>MCP-native</span>
+          <span><i aria-hidden="true"></i>Per-user BYOK — no shared pool</span>
+          <span><i aria-hidden="true"></i>macOS · Linux · Windows agent</span>
         </div>
       </div>
       <div class="hero__footer wrap">
@@ -246,14 +309,43 @@
     <section id="setup" class="content-section">
       <div class="wrap">
         <div class="section-heading">
-          <div><p class="eyebrow">Hosted setup</p><h2>Start with your account and your credentials</h2></div>
-          <p>Use the hosted service at invincible-ai.me. You do not need a local PostgreSQL database, environment file, or server process to route chat through Invincible.</p>
+          <div><p class="eyebrow">Get started</p><h2>Three steps. Start wherever you are.</h2></div>
+          <p>Each step unlocks a different part of Invincible. You do not need all three to begin — chat works before any machine is paired. Hosted at invincible-ai.me: no local database, environment file, or server process.</p>
         </div>
         <div class="steps">
-          <article class="step"><span class="num">01</span><h3>Create an account</h3><p>Register with email and password, or sign in with GitHub when your deployment enables it. Your account owns its keys, providers, sessions, and state.</p><code>/register</code></article>
-          <article class="step"><span class="num">02</span><h3>Connect providers</h3><p>Choose a provider from the catalog or add any OpenAI-compatible Chat Completions endpoint. Each key is encrypted at rest and used only for your account's requests.</p><code>dashboard → providers</code></article>
-          <article class="step"><span class="num">03</span><h3>Create an API key</h3><p>Generate a per-user <code>inv_</code> key from Account. The raw value is shown once, stored as a hash, and can be revoked immediately.</p><code>dashboard → account → API keys</code></article>
-          <article class="step"><span class="num">04</span><h3>Connect your client</h3><p>Point any OpenAI-compatible client or Codex at <code>https://invincible-ai.me/v1</code>, or Claude Code via <code>ANTHROPIC_BASE_URL=https://invincible-ai.me</code>. Use the separate MCP endpoint only when your client supports OAuth tools.</p><code>https://invincible-ai.me/v1</code></article>
+          <article class="step"><span class="num">01</span><h3>Create an account</h3><p>Register with email and password, or sign in with GitHub when your deployment enables it. Your account owns its keys, providers, sessions, and state.</p><p class="unlocks">Unlocks chat + dashboard + memory</p><code class="block">/register</code></article>
+          <article class="step"><span class="num">02</span><h3>Connect providers</h3><p>Choose a provider from the catalog or add any OpenAI-compatible Chat Completions endpoint. Each key is encrypted at rest and used only for your account's requests.</p><p class="unlocks">Unlocks every model route</p><code class="block">dashboard → providers</code></article>
+          <article class="step"><span class="num">03</span><h3>Create an API key</h3><p>Generate a per-user <code>inv_</code> key from Account. The raw value is shown once, stored as a hash, and can be revoked immediately.</p><p class="unlocks">Unlocks /v1 chat from any client</p><code class="block">dashboard → account → API keys</code></article>
+          <article class="step"><span class="num">04</span><h3>Pair your machine</h3><p>Point any OpenAI-compatible client or Codex at <code>https://invincible-ai.me/v1</code>, or Claude Code via <code>ANTHROPIC_BASE_URL=https://invincible-ai.me</code>. Then pair the agent so approved tool calls run on your PC.</p><p class="unlocks">Unlocks hands on your machine</p><code class="block">pip install invincible-ai · invincible agent</code></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="products" class="content-section" style="background: var(--wash);">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><p class="eyebrow">Four pieces, one system</p><h2>Use them together, or one at a time</h2></div>
+          <p>Every piece stands on its own for the clients you already use. Together, they keep one stable endpoint, one memory, and one task history across every model you route through.</p>
+        </div>
+        <div class="products">
+          <article class="product"><h3>Gateway</h3><p>One stable endpoint for every model. Per-user BYOK failover across <code>auto</code>, <code>pinned</code>, or <code>chain</code> routing — a 429 or 5xx cools down and moves to your next credential instead of killing the run.</p><p class="needs"><strong>Needs:</strong> your own provider keys — there is no shared pool.</p></article>
+          <article class="product"><h3>Memory</h3><p>Agents that remember across tools and sessions. Scoped lexical retrieval over PostgreSQL blends full-text relevance, recency, kind, and confidence under one bounded budget. Say "remember this" and it is saved.</p><p class="needs"><strong>Needs:</strong> nothing extra — memories accrue as you chat.</p></article>
+          <article class="product"><h3>Continuity</h3><p>Task state that survives provider switches. Versioned states with optimistic checks, immutable checkpoints, and one pre-failover snapshot per request when task state exists.</p><p class="needs"><strong>Needs:</strong> any chat client — state versions itself as you work.</p></article>
+          <article class="product"><h3>Tools + Agent</h3><p>OAuth-protected MCP tools with real hands on your machine. Ten tools across files, shell, task state, and memory — destructive verbs stage behind a single-use confirmation token, then run on your paired agent inside a home-relative sandbox.</p><p class="needs"><strong>Needs:</strong> <code>invincible agent</code> running on the machine you want to reach.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="journeys" class="content-section">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><p class="eyebrow">Ways to use Invincible</p><h2>Start with what you have today</h2></div>
+          <p>No machine needed for chat and memory. Pair a machine when you want a remote AI to act on your files. Open the dashboard when you want to see how every run moved.</p>
+        </div>
+        <div class="journeys">
+          <article class="journey"><span class="kicker">No machine needed</span><h3>Chat + memory only</h3><p>Mint an <code>inv_</code> key and point any OpenAI-compatible client at <code>https://invincible-ai.me/v1</code>. Sessions, memories, and continuity accrue immediately — no install, no pairing.</p><div class="actions"><a href="/register">Create a free account →</a></div></article>
+          <article class="journey"><span class="kicker">After pairing the agent</span><h3>Chat with hands</h3><p>Run <code>invincible agent</code> on the machine you want to reach, then connect any MCP client to <code>https://invincible-ai.me/mcp</code>. Confirmed commands and writes execute on your PC — zero inbound ports.</p><div class="actions"><a href="#wire">See the wiring →</a></div></article>
+          <article class="journey"><span class="kicker">After adding your keys</span><h3>The full system</h3><p>Connect provider credentials and every route, failover, checkpoint, and token count shows up in the dashboard — sessions, task board, memory graph, and per-day usage by provider.</p><div class="actions"><a href="/login">Open the dashboard →</a></div></article>
         </div>
       </div>
     </section>
@@ -265,7 +357,7 @@
           <p>Each surface uses its intended credential. Chat keys authorize <code>/v1/*</code>, OAuth tokens protect <code>/mcp</code>, and browser sessions protect account management.</p>
         </div>
         <div class="architecture-shell">
-          <aside class="architecture-note"><strong>Owner-scoped by default.</strong><span>Supported application stores enforce per-user ownership for projects, credentials, sessions, runs, memory, continuity state, and MCP grants. The hosted service has no shared provider pool.</span></aside>
+          <aside class="architecture-note"><strong>Owner-scoped by default.</strong><span>Supported application stores enforce per-user ownership for projects, credentials, sessions, runs, memory, continuity state, and MCP grants. The hosted service has no shared provider pool. The paired agent dials out over plain HTTPS — your machine never opens a port.</span></aside>
           <div class="architecture-lanes">
             <div class="architecture-lane"><span class="realm-label">Chat</span><div class="arch"><div class="node"><strong>AI client</strong><small>Chat · Messages · Responses</small></div><div class="arrow">→<small>inv_ key</small></div><div class="node"><strong>Invincible</strong><small>BYOK failover routing</small></div><div class="arrow">→<small>your order</small></div><div class="node"><strong>Your credentials</strong><small>OpenAI-compatible APIs</small></div></div></div>
             <div class="architecture-lane"><span class="realm-label">Tools</span><div class="arch"><div class="node"><strong>MCP client</strong><small>OAuth 2.1 + PKCE</small></div><div class="arrow">→<small>Bearer</small></div><div class="node"><strong>/mcp</strong><small>denylist + confirmation</small></div><div class="arrow">→<small>agent routing</small></div><div class="node"><strong>Paired machine</strong><small>home-relative sandbox</small></div></div></div>
@@ -275,19 +367,81 @@
       </div>
     </section>
 
-    <section id="capabilities" class="content-section">
+    <section id="wire" class="content-section">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><p class="eyebrow">Your keys. Your models. One endpoint.</p><h2>Wire it up in minutes</h2></div>
+          <p>Add a provider key on the dashboard and every model it can reach shows up in one place. Provider keys stay server-side — they never touch your client.</p>
+        </div>
+        <div class="wire-grid">
+          <article class="wire-card"><header>Chat — any OpenAI client</header><pre><span class="c">curl https://invincible-ai.me/v1/chat/completions</span> \
+  -H <span class="k">"Authorization: Bearer inv_…"</span> \
+  -H <span class="k">"X-Session-Id: my-conversation"</span> \
+  -d <span class="k">'{"messages": [{"role": "user",
+    "content": "Hello!"}]}'</span></pre><p>History under the session id is prepended upstream; the reply is persisted back. A 429 cools down and fails over — the client sees one stable endpoint.</p></article>
+          <article class="wire-card"><header>Claude Code + Codex</header><pre><span class="dim" style="color:#747c88;"># Claude Code — Anthropic Messages</span>
+<span class="c">ANTHROPIC_BASE_URL=https://invincible-ai.me</span>
+<span class="dim" style="color:#747c88;"># Codex — OpenAI Responses</span>
+<span class="c">https://invincible-ai.me/v1/responses</span>
+<span class="dim" style="color:#747c88;"># model is a soft hint; the response</span>
+<span class="dim" style="color:#747c88;"># names the credential that served it</span></pre><p>Both protocols translate into one internal message model, so an OpenAI client and Claude Code on the same session id see the same conversation.</p></article>
+          <article class="wire-card"><header>Tools — any MCP client</header><pre>{
+  <span class="c">"mcpServers"</span>: {
+    <span class="c">"invincible"</span>: {
+      <span class="c">"url"</span>: <span class="k">"https://invincible-ai.me/mcp"</span>
+    }
+  }
+}</pre><p>Approve the connector in the browser — OAuth 2.1 + PKCE mints the bearer token. Destructive calls return a confirmation token first; nothing runs until you approve it.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="capabilities" class="content-section" style="background: var(--wash);">
       <div class="wrap">
         <div class="section-heading">
           <div><p class="eyebrow">Continuity and control</p><h2>The pieces agent workflows need to keep working</h2></div>
           <p>Provider choice stays replaceable. Your account, projects, credentials, memory, and continuity state remain attached to Invincible.</p>
         </div>
         <div class="features">
-          <article class="feature"><h3>Per-user BYOK failover</h3><p>Choose <code>auto</code>, <code>pinned</code>, or <code>chain</code> routing. Invincible tries the next available credential after rate limits, server errors, network failures, or disabled authentication—without claiming to optimize for price.</p></article>
+          <article class="feature"><h3>Per-user BYOK failover</h3><p>Choose <code>auto</code>, <code>pinned</code>, or <code>chain</code> routing. Invincible tries the next available credential after rate limits, server errors, network failures, or disabled authentication — without claiming to optimize for price.</p></article>
           <article class="feature"><h3>Versioned continuity</h3><p>Task state is versioned with optimistic checks, immutable checkpoints pin important states, and one pre-failover snapshot captures the provider failure before routing continues — only when task state exists.</p></article>
           <article class="feature"><h3>Scoped lexical memory</h3><p>PostgreSQL stores memories with layer, confidence, provenance, and project scope. Lexical retrieval combines full-text relevance, recency, kind, confidence, and a bounded top-N result set. Say "remember this" to save explicitly.</p></article>
           <article class="feature"><h3>OAuth-protected MCP tools</h3><p>Ten tools cover file reads, approved shell execution, approved writes, task state, checkpoints, and memory. <code>execute_bash</code> and <code>write_file</code> require a single-use confirmation token.</p></article>
           <article class="feature"><h3>Paired machine execution</h3><p>When the hosted deployment routes tool jobs to your paired agent, confirmed commands and writes execute on your machine inside a home-relative sandbox. Reads and data-plane tools do not use that second approval.</p></article>
           <article class="feature"><h3>Usage and run history</h3><p>The dashboard aggregates attempts, failovers, and input/output token counts by day and provider/model. Provider-attempt history and continuity projections show how tracked work moved forward.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="faq" class="content-section">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><p class="eyebrow">FAQ</p><h2>Frequently asked questions</h2></div>
+          <p>Short answers with the same semantics the docs pin. Nothing here promises what the code does not do yet.</p>
+        </div>
+        <div class="faq">
+          <details><summary>Do I need to run a server or a database?</summary><p>No. Create an account on the hosted service and everything — providers, sessions, memory, task state — lives server-side. Pairing a machine is one user command (<code>pip install invincible-ai</code>, then <code>invincible agent</code>). The same code also self-hosts on a laptop backed by PostgreSQL if you prefer to operate it yourself.</p></details>
+          <details><summary>What happens when a provider rate-limits me?</summary><p>A 429 or 5xx records a failure, puts that credential in an exponential cooldown (30s up to a 300s cap), and tries your next credential. A 401 or 403 skips the credential. When every credential is exhausted the gateway answers 503 — your agent retries one stable endpoint instead of dying on the first 429.</p></details>
+          <details><summary>Where do approved tool calls actually execute?</summary><p>On the hosted service, on your paired machine: the server keeps every security decision (denylist, staging, single-use confirmation token, audit, per-user routing) and the agent only does the work inside a home-relative sandbox, with denylisted credential paths blocked. An offline agent answers immediately instead of hanging.</p></details>
+          <details><summary>What does memory remember?</summary><p>Scoped lexical memories in PostgreSQL — notes, facts, preferences, decisions — ranked by full-text relevance, recency, kind, and confidence under one bounded budget shared with the continuity brief. Say "remember this" to save explicitly, and manage or delete everything from the dashboard. Semantic or vector search is not built yet.</p></details>
+          <details><summary>Which clients work with Invincible?</summary><p>Any OpenAI-compatible chat client against <code>/v1/chat/completions</code>, Claude Code against <code>/v1/messages</code> via <code>ANTHROPIC_BASE_URL</code>, Codex against <code>/v1/responses</code>, and any MCP-compatible client against <code>/mcp</code> through the browser OAuth flow.</p></details>
+          <details><summary>Is there a shared provider pool I can fall back to?</summary><p>No. Every request routes only through your own connected provider credentials — encrypted at rest, never shared across accounts. With no credentials connected, chat answers 400 and tells you to connect one on the Providers page.</p></details>
+          <details><summary>Can one account see another account's data?</summary><p>No. Projects, credentials, sessions, runs, memories, continuity state, and MCP grants are all owner-scoped per account, verified by a closed multi-tenant audit — a foreign id reads exactly like an unknown one.</p></details>
+        </div>
+      </div>
+    </section>
+
+    <section class="content-section">
+      <div class="wrap">
+        <div class="cta-band">
+          <h2>Pair once. Route everything.</h2>
+          <p>Run this on the machine you want to reach. macOS, Linux, and Windows — one package, no server to operate, no database to provision.</p>
+          <pre><span class="c">pip install invincible-ai</span>
+<span class="c">invincible agent</span>  <span class="dim" style="color:#747c88;"># browser opens → sign in → Approve</span></pre>
+          <div class="actions">
+            <a class="btn" href="/register">Create your account</a>
+            <a class="btn ghost" href="/login">Sign in</a>
+          </div>
         </div>
       </div>
     </section>

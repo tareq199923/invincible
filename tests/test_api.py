@@ -49,6 +49,9 @@ async def test_root_serves_landing_page_to_browsers(client):
     assert "OAuth-protected MCP tools" in body
     assert "Per-user BYOK failover" in body
     assert "OpenAI Responses (Codex)" in body
+    assert "Zero inbound ports" in body
+    assert "Frequently asked questions" in body
+    assert "Pair once. Route everything." in body
     assert "Every provider" not in body
     assert "pip install invincible-ai" in body
     assert "invincible agent" in body
