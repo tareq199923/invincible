@@ -9,15 +9,19 @@ WORKDIR /app
 ENV PIP_DEFAULT_TIMEOUT=120 \
     PIP_RETRIES=10
 
+# Install the build backend as its own cacheable layer, ABOVE the app
+# COPYs. The pin is independent of app files, so this layer survives every
+# source and metadata change - pip never re-downloads setuptools into a
+# throwaway env on a rebuild (the step that failed on Railway 2026-09-22).
+RUN pip install --no-cache-dir "setuptools>=77"
+
 # README.md and LICENSE back pyproject.toml's PEP 639 metadata
 # (readme = "README.md", license-files = ["LICENSE"]).
 COPY pyproject.toml README.md LICENSE ./
 COPY invincible ./invincible
 
-# Install the build backend as its own cacheable layer and build without
-# isolation, so pip never re-downloads setuptools into a throwaway env
-# on every build (the step that failed on Railway).
-RUN pip install --no-cache-dir "setuptools>=77"
+# --no-build-isolation reuses the setuptools installed above instead of
+# spinning up a throwaway build env that would re-download it.
 RUN pip install --no-cache-dir --no-build-isolation .
 
 EXPOSE 8000
