@@ -1,4 +1,9 @@
+import contextlib
 import os
+import pathlib
+import subprocess
+import tempfile
+from functools import lru_cache
 
 import pytest
 
@@ -511,3 +516,200 @@ async def test_read_file_outside_roots_never_touches_disk(tmp_path, monkeypatch)
 
     with pytest.raises(tool_executor.ToolBlocked):
         await tool_executor.read_file(str(target))
+
+
+# --- link escapes (deep code review 2026-09-24, finding 3) ------------------
+#
+# The path checks ran on os.path.abspath(), which collapses ".." but does
+# NOT follow links. A link inside an allowed root was a doorway out of it;
+# a link named innocently was a doorway to an excluded file; and a link
+# pointing INTO the repo could carry a name matching no pattern. Every
+# case below passed before the fix.
+
+
+def _make_dir_link(link: str, target: str) -> bool:
+    """Create a DIRECTORY link at ``link`` pointing at ``target``.
+
+    Tries a symlink, then a Windows directory JUNCTION - which needs
+    neither admin rights nor Developer Mode, making it the likelier link
+    to exist on a real Windows machine, and so the likelier attack.
+    """
+    try:
+        os.symlink(target, link, target_is_directory=True)
+        return True
+    except (OSError, NotImplementedError):
+        pass
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", link, target],
+            capture_output=True,
+        )
+        return result.returncode == 0 and os.path.exists(link)
+    return False
+
+
+@lru_cache(maxsize=1)
+def _dir_links_supported() -> bool:
+    with tempfile.TemporaryDirectory() as d:
+        target = os.path.join(d, "t")
+        os.makedirs(target)
+        return _make_dir_link(os.path.join(d, "l"), target)
+
+
+@lru_cache(maxsize=1)
+def _file_symlinks_supported() -> bool:
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            target = os.path.join(d, "t")
+            with open(target, "w", encoding="utf-8") as f:
+                f.write("x")
+            os.symlink(target, os.path.join(d, "l"))
+        return True
+    except (OSError, NotImplementedError):
+        return False
+
+
+requires_dir_links = pytest.mark.skipif(
+    not _dir_links_supported(),
+    reason="this OS/user cannot create directory links",
+)
+requires_file_symlinks = pytest.mark.skipif(
+    not _file_symlinks_supported(),
+    reason="this OS/user cannot create file symlinks",
+)
+
+
+@pytest.fixture
+def dir_link(tmp_path):
+    """Build directory links under ``tmp_path``, removing each afterwards.
+
+    The removal is safety, not tidiness: ``os.path.islink()`` is False for
+    a Windows junction, so pytest's tmp_path cleanup treats one as an
+    ordinary directory and would delete the TARGET's contents through it.
+    ``os.rmdir`` removes the link and leaves the target alone.
+    """
+    created = []
+
+    def _make(target: str, name: str) -> pathlib.Path:
+        link = tmp_path / name
+        if not _make_dir_link(str(link), str(target)):
+            pytest.skip("this OS/user cannot create directory links")
+        created.append(link)
+        return link
+
+    yield _make
+    for link in created:
+        try:
+            os.unlink(link)  # a symlink
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.rmdir(link)  # a Windows junction
+
+
+@requires_dir_links
+def test_read_denylist_directory_link_out_of_roots_blocked(
+    tmp_path, monkeypatch, dir_link
+):
+    """A link inside an allowed root pointing outside every root - then
+    addressed through to a child that does not exist yet."""
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    outside = tempfile.mkdtemp()
+    with open(os.path.join(outside, "elsewhere.txt"), "w",
+              encoding="utf-8") as f:
+        f.write("outside every allowed root")
+
+    link = dir_link(outside, "innocent")
+
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.check_read_denylist(str(link / "elsewhere.txt"))
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.check_read_denylist(str(link / "brand-new.txt"))
+
+
+@requires_dir_links
+def test_read_denylist_directory_link_to_denylisted_name_blocked(
+    tmp_path, monkeypatch, dir_link
+):
+    """`innocent` -> a directory named `.env`: the components checked were
+    the LINK's path, so `innocent/x` matched nothing and the read followed
+    the link into the excluded tree."""
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    secret_dir = tmp_path / ".env-store"
+    secret_dir.mkdir()
+    (secret_dir / "x").write_text("SECRET=hunter2")
+
+    # The resolved path's components must include a denylisted name.
+    shadow = tmp_path / ".env"
+    shadow.mkdir()
+    (shadow / "x").write_text("SECRET=hunter2")
+
+    link = dir_link(shadow, "innocent")
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.check_read_denylist(str(link / "x"))
+
+
+@requires_dir_links
+def test_protected_path_resolves_links_into_the_repo(tmp_path, monkeypatch,
+                                                     dir_link):
+    """A link OUTSIDE the repo, named innocently, pointing at a protected
+    file INSIDE it.
+
+    ``_REPO_ROOT`` is monkeypatched to a stand-in inside tmp_path rather
+    than junctioning at the real checkout: pytest cleans tmp_path with
+    rmtree, which follows a junction, so a link into the live repo would
+    put the repository itself at risk if cleanup ever ran uncleaned.
+    """
+    fake_repo = tmp_path / "fakerepo"
+    (fake_repo / "invincible" / "core").mkdir(parents=True)
+    (fake_repo / "invincible" / "core" / "db.py").write_text("x")
+    monkeypatch.setattr(tool_executor, "_REPO_ROOT", str(fake_repo))
+
+    link = dir_link(fake_repo / "invincible", "harmless")
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor._check_protected_path(
+            str(link / "core" / "db.py"),
+            tool_executor.WRITE_DENYLIST_PATTERNS,
+            "write",
+        )
+
+
+@requires_dir_links
+def test_directory_link_inside_roots_still_allowed(tmp_path, monkeypatch,
+                                                   dir_link):
+    """Not 'refuse every link': one that stays inside an allowed root and
+    targets nothing excluded is ordinary use."""
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    target = tmp_path / "real-dir"
+    target.mkdir()
+    (target / "notes.txt").write_text("fine")
+
+    link = dir_link(target, "shortcut")
+    tool_executor.check_read_denylist(str(link / "notes.txt"))  # no raise
+
+
+@requires_file_symlinks
+def test_read_denylist_file_symlink_to_env_blocked(tmp_path, monkeypatch):
+    """`notes.txt` -> `.env`: both checks saw only the link's own name."""
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    env = tmp_path / ".env"
+    env.write_text("SECRET=hunter2")
+    link = tmp_path / "notes.txt"
+    os.symlink(str(env), str(link))
+
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.check_read_denylist(str(link))
+
+
+@requires_file_symlinks
+def test_read_denylist_file_symlink_out_of_roots_blocked(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    outside = tempfile.mkdtemp()
+    secret = os.path.join(outside, "elsewhere.txt")
+    with open(secret, "w", encoding="utf-8") as f:
+        f.write("outside every allowed root")
+
+    link = tmp_path / "innocent.txt"
+    os.symlink(secret, str(link))
+
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.check_read_denylist(str(link))

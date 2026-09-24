@@ -201,3 +201,32 @@ async def test_dispatch_timeout_leaves_no_orphan_future(registry):
     # internal bookkeeping cleaned up: the futures map is empty again
     assert not reg._futures.get(42, {})
     assert not reg._jobs
+
+
+async def test_cancelled_dispatch_drops_queued_job(registry):
+    """Cancellation is not timeout (deep code review 2026-09-24,
+    finding 4).
+
+    A cancelled dispatch - client disconnect, server shutdown - raises
+    CancelledError, which the timeout-only cleanup never saw. The job
+    stayed in the queue, so the next poll handed it to the agent: an
+    approved shell command executing on the user's machine with nobody
+    left awaiting the result. The registry's own docstring says that
+    must never happen.
+    """
+    reg, _ = registry
+
+    async def dispatcher():
+        return await reg.dispatch(
+            42, "execute_bash", {"command": "echo approved"}, timeout=30)
+
+    task = asyncio.ensure_future(dispatcher())
+    await asyncio.sleep(0.01)  # staged, parked on its future
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    # The queued copy is gone, so a late poll cannot pick up dead work.
+    assert await reg.poll(42, hold=0.01) is None
+    # ...and the bookkeeping is as clean as the timeout path's.
+    assert not reg._futures.get(42, {})
+    assert not reg._jobs

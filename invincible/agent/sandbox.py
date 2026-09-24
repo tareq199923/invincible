@@ -14,7 +14,11 @@ laptop. The agent needs walls defined for where it actually runs:
 
 - Reads and writes both stay under the agent root (the user's home,
   or INVINCIBLE_AGENT_ROOT), resolved case-insensitively so Windows
-  ``~/.ENV`` is the same file as ``~/.env``.
+  ``~/.ENV`` is the same file as ``~/.env``, and resolved through
+  SYMLINKS so a link cannot stand in for a path outside the root or for
+  an excluded name. Both checks run on the resolved path: the symlink
+  escape in the 2026-09-24 deep review (finding 3) was that they ran on
+  the unresolved one.
 - Basename denylist matched against EVERY path component, both verbs:
   dotfiles that carry credentials (.env*, .git, .ssh), key material
   (id_rsa*, *.pem, *credentials*). Case-insensitive for the same
@@ -53,29 +57,53 @@ _BASENAME_PATTERNS = [
 
 def agent_root() -> str:
     """Sandbox root: the user's home, or INVINCIBLE_AGENT_ROOT. The
-    agent can only touch things under this directory."""
+    agent can only touch things under this directory.
+
+    Resolved through symlinks so the root is expressed the same way the
+    paths checked against it are (see :func:`check_agent_path`): on a
+    machine where the home directory is itself reached through a link
+    (macOS ``/var`` -> ``/private/var``, some Windows profiles), an
+    unresolved root would reject every legitimate path."""
     root = os.getenv("INVINCIBLE_AGENT_ROOT", "").strip()
-    if root:
-        return os.path.abspath(os.path.expanduser(root))
-    return os.path.abspath(os.path.expanduser("~"))
+    base = os.path.expanduser(root) if root else os.path.expanduser("~")
+    return os.path.realpath(os.path.abspath(base))
 
 
 def check_agent_path(path: str, verb: str) -> None:
     """Raise ToolBlocked unless ``path`` is inside the agent root and
     no component matches the basename denylist. ``verb`` is "read" or
-    "write" - used only for the error message."""
-    abs_path = os.path.abspath(os.path.expanduser(path))
+    "write" - used only for the error message.
+
+    Both checks run on the RESOLVED path. ``abspath`` only collapses
+    ``..``; it does not follow symlinks. So a link inside the root could
+    point outside it, and a link named innocently could point at an
+    excluded file - `<home>/notes.txt` -> `<home>/.env` satisfied the
+    root check and the basename denylist alike, then ``open()`` followed
+    it. Resolving first closes both.
+
+    Consequence worth knowing: a legitimate link pointing outside the
+    sandbox is now refused. That is what the root check always claimed.
+
+    Known limit: a link swapped between this check and the ``open()``
+    that follows it is still a race. Nothing here defends against a
+    local attacker changing the filesystem underneath us.
+
+    A hard link is not caught at all - it is a second name for the same
+    file, with no path to resolve.
+    """
+    real_path = os.path.realpath(
+        os.path.abspath(os.path.expanduser(path)))
     root = os.path.normcase(agent_root())
-    norm = os.path.normcase(abs_path)
+    norm = os.path.normcase(real_path)
     if not (norm == root or norm.startswith(root + os.sep)):
         raise ToolBlocked(
             f"{verb} of path outside the agent sandbox root ({root}): "
             f"{path}"
         )
-    for part in abs_path.split(os.sep):
+    for part in real_path.split(os.sep):
         for pattern, reason in _BASENAME_PATTERNS:
             if pattern.match(part):
-                raise ToolBlocked(f"{verb} of {reason} ({abs_path})")
+                raise ToolBlocked(f"{verb} of {reason} ({real_path})")
 
 
 def check_agent_read(path: str) -> None:

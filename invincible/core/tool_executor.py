@@ -49,6 +49,13 @@ Security model - decided explicitly up front, not bolted on after the fact:
      any directories listed in INVINCIBLE_READ_ROOTS (os.pathsep-separated).
      Paths outside those roots are blocked outright, and .env / sessions.db
      / .git are blocked by name anywhere inside them.
+  7. Every path check resolves SYMLINKS before matching (``realpath``, not
+     ``abspath``), and resolves the roots it compares against the same way.
+     ``abspath`` only collapses ``..``: without this, a link inside the repo
+     named innocently could point at ``.env`` and match no pattern, and a
+     link out of the repo could carry a name that matches one it does not
+     target. This refuses legitimate links out of the sandbox, which is what
+     the root rules always claimed.
 
 KNOWN LIMIT: the denylist is a text-pattern match, not a real shell parser.
 `powershell -Command "..."`, `cmd /c "..."`, or any other wrapper/encoding
@@ -57,6 +64,12 @@ exists to catch the obvious, high-blast-radius cases without a prompt; it
 is not the real safety boundary. The approval step is - whoever holds a
 valid bearer token decides what runs, and anything staged for approval is
 visible in plain sight at the server's own stdout before it is approved.
+
+KNOWN LIMIT: path resolution closes symlinks, not every filesystem trick.
+A HARD link is a second name for the same file and has no path to resolve,
+so it is not caught. Nor is a link swapped between the check and the
+``open()`` that follows it - nothing here defends against a local attacker
+mutating the filesystem underneath the process.
 """
 import asyncio
 import json
@@ -130,9 +143,14 @@ DENYLIST_PATTERNS = [
 #
 # Case-insensitive on purpose: Windows filesystems treat .env and .ENV as
 # the same file, so a differently-cased target must not slip past.
-_REPO_ROOT = os.path.dirname(
+#
+# realpath'd because every path compared against it is realpath'd too
+# (see _check_protected_path): resolving one side only would make the
+# relpath() below report ".." for every legitimate path whenever the
+# checkout is itself reached through a symlink.
+_REPO_ROOT = os.path.realpath(os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
+))
 
 WRITE_DENYLIST_PATTERNS = [
     (re.compile(r"^\.env(\..+)?$", re.I), "Invincible's .env file"),
@@ -363,7 +381,13 @@ def check_denylist(command: str) -> None:
 
 
 def _check_protected_path(path: str, patterns: list, verb: str) -> None:
-    abs_path = os.path.abspath(path)
+    # Resolve symlinks FIRST (deep code review 2026-09-24, finding 3):
+    # abspath only collapses "..", so a link inside the repo named
+    # innocently could point at .env and match no pattern, while a link
+    # out of the repo could carry an "invincible/..." name that matches
+    # one it does not actually target. Matching the resolved path against
+    # the resolved repo root keeps this relative-path match honest.
+    abs_path = os.path.realpath(os.path.abspath(path))
     try:
         rel = os.path.relpath(abs_path, _REPO_ROOT)
     except ValueError:
@@ -394,12 +418,17 @@ def _allowed_read_roots() -> list:
     roots = [_REPO_ROOT, os.getcwd()]
     roots.extend(settings.read_roots())
     return [
-        os.path.normcase(os.path.abspath(root)) for root in roots
+        os.path.normcase(os.path.realpath(os.path.abspath(root)))
+        for root in roots
     ]
 
 
 def check_read_denylist(path: str) -> None:
-    abs_path = os.path.abspath(path)
+    # Resolved for the same reason as _check_protected_path: an
+    # unresolved link inside an allowed root could point outside it, and
+    # one named innocently could point at an excluded file. Both checks
+    # below therefore run on the real target.
+    abs_path = os.path.realpath(os.path.abspath(path))
     norm = os.path.normcase(abs_path)
     roots = _allowed_read_roots()
     if not any(norm == root or norm.startswith(root + os.sep) for root in roots):

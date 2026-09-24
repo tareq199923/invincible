@@ -159,8 +159,14 @@ class AgentRegistry:
         Returns the agent's result dict, or ``{"status":
         "agent_timeout", ...}`` if nothing came back within ``timeout``
         (the action's own timeout plus grace, supplied by the caller).
-        On timeout the queued job is removed if still pending - a late
-        poll must not execute stale work nobody is waiting on.
+
+        The queued job is removed on EVERY exit path - timeout,
+        cancellation, or success - so a late poll never executes stale
+        work nobody is waiting on. Cancellation matters as much as
+        timeout here: a vanished client or a shutting-down server
+        cancels the awaiting task, and leaving the job queued would run
+        a confirmed command on the user's machine with no one to receive
+        the result.
         """
         job_id = secrets.token_urlsafe(16)
         future: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -184,7 +190,6 @@ class AgentRegistry:
             return await asyncio.wait_for(asyncio.shield(future),
                                           timeout=timeout)
         except asyncio.TimeoutError:
-            self._drop_job(user_id, job_id)
             return {
                 "status": "agent_timeout",
                 "message": (
@@ -195,6 +200,14 @@ class AgentRegistry:
                 ),
             }
         finally:
+            # Unconditional, and that is the point: a CANCELLED dispatch
+            # (client disconnect, shutdown) raises CancelledError, not
+            # TimeoutError, so cleanup that lived only on the timeout
+            # branch left the job in the queue - a later poll then
+            # executed confirmed work nobody was waiting on, exactly what
+            # this class documents as never happening. Draining the queue
+            # here covers timeout, cancellation and success alike.
+            self._drop_job(user_id, job_id)
             self._futures.get(user_id, {}).pop(job_id, None)
             self._jobs.pop(job_id, None)
 
