@@ -8,7 +8,9 @@ triggers. Retrieval and injection live in ``core/retrieval.py`` and
 ``core/context_builder.py``.
 
 The ``facts`` table itself is inert history as of Phase 4: nothing reads
-or writes it in service code (only the legacy importer fills it).
+or writes it. The legacy SQLite importer that used to fill it was removed
+2026-09-24, so the table now has no writer at all; it is retained until its
+production data is audited and backed up (``core/db.py``).
 """
 import re
 import time

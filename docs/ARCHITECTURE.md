@@ -79,7 +79,7 @@ invincible/
     │                           and the dashboard memory-graph page
     ├── continuity.py           Task-state/checkpoint engine + continuation brief
     │                           + reactive failover checkpoints (Phase 4)
-    └── tool_executor.py        MCP tool execution + denylists + approval
+    ├── tool_executor.py        MCP tool execution + denylists + approval
     ├── agent_registry.py       Per-user agent queues/futures (in-memory, long-poll transport)
     ├── credential_store.py     BYOK credential persistence (ciphertext at rest)
     ├── credential_crypto.py    Fernet primitives + the INVINCIBLE_CREDENTIAL_KEY gate
@@ -88,7 +88,7 @@ invincible/
     ├── selection.py            Pure auto/pinned/chain attempt ordering
     ├── trimming.py             Token estimation, turn grouping, and per-provider trim
     ├── config.py               providers.yaml schema validation/loading
-    ├── url_safety.py           SSRF guards for user-supplied provider URLs
+    └── url_safety.py           SSRF guards for user-supplied provider URLs
 ```
 
 Packaging (`pyproject.toml`):

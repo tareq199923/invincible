@@ -36,7 +36,7 @@ in [ROADMAP.md](ROADMAP.md) §Phase 7 and the
 ### 2. Phase 8 — retire the superseded local-era pieces
 
 The hosted flow is stable (0.3.1 live on PyPI and in production, suite
-green at 1136), so the deprecations whose trigger was *"after hosted
+green at 1135), so the deprecations whose trigger was *"after hosted
 launch stabilizes"* are now actionable. The table in
 [ROADMAP.md](ROADMAP.md) §Deprecated is the source of truth; what it
 still owes:
@@ -66,6 +66,11 @@ Local/self-hosted mode itself is **not** deprecated and stays.
 The deprecated `invincible db import` command and its SQLite importer module
 were removed. The legacy PostgreSQL `facts` table remains temporarily while
 production data is audited and backed up; no request-serving code uses it.
+
+**Release note for whoever publishes next:** 0.3.1 shipped `db import` as a
+documented command, so its removal is a breaking CLI change — the next PyPI
+release must be a **minor** bump (`0.4.0`), not a patch, and must say the
+command is gone. `invincible/__init__.py` still reads `0.3.1`.
 
 ### 0.3.1 released — Anthropic messages report the serving model (2026-09-23)
 
@@ -121,6 +126,34 @@ had been deleted. Fixed:
 ---
 
 ## Decisions pending
+
+### Should assistant/tool text be able to mint auto-memories? (2026-09-24)
+
+`core/memory.py::extract_facts` has **no role filter** — it scans every
+message in the persisted turn, so the assistant reply and any tool-result
+content reach the regex patterns and can write durable `auto` memories at
+confidence 0.6, which `RetrievalService` then injects into later prompts for
+that user. `extract_explicit` deliberately does the opposite
+(`if m.get("role") != "user": continue`, with a comment saying an assistant
+echoing "remember that…" must never mint a memory on its own).
+
+**This is documented intent, not drift:** `record_memories`' docstring says
+auto-extraction runs "over every message". So it is a design call, not a bug
+to quietly patch — recorded here rather than changed.
+
+What makes it worth revisiting: several patterns are phrasings an assistant
+or a tool result emits routinely, not just user voice —
+`\bremember that\s+(.+)`, `\bthe next step is\s+(.+)`,
+`\bwe decided(?:\s+to)?\s+(.+)`, and `\b(?:I'?m )?(?:currently )?working
+on\s+(.+)` (whose prefix is optional, so a bare "working on …" anywhere
+matches). Attacker-influenced content — a fetched page, a file read through
+`read_file`, a provider reply — therefore becomes self-reinforcing context.
+
+Options: (a) leave as designed; (b) filter `extract_facts` to
+`role == "user"` like the explicit extractor — behaviour change, needs test
+updates; (c) keep assistant text eligible but exclude `role == "tool"`,
+closing the attacker-controlled path only. Source: finding 2 of
+[DEEP-CODE-REVIEW-2026-09-24.md](DEEP-CODE-REVIEW-2026-09-24.md).
 
 ### `invincible start` remote ergonomics (small, optional)
 

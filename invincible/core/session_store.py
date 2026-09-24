@@ -13,8 +13,10 @@ is now a FK to ``sessions.id``. Every method takes the caller's
 ``user_id``/``project_id`` as REQUIRED arguments: there is deliberately no
 local-owner fallback (multi-tenant audit Step 2, 2026-09-07), so a call site
 that forgets its principal fails loudly instead of silently mixing users'
-data. Operator paths that genuinely span owners resolve the owner explicitly
-up front (``owner_context``).
+data. There is deliberately no cross-owner resolver either: the operator-era
+``owner_context`` helper (bare client string -> any owner, oldest row wins)
+was deleted with the role it served, so nothing here resolves a session
+without a principal.
 
 Concurrency: every write takes ``SELECT ... FOR UPDATE`` on the resolved
 session row inside its transaction, so concurrent appends to one session
@@ -59,22 +61,6 @@ class SessionStore:
         the principal has no such session (read paths)."""
         async with self.engine.begin() as conn:
             return await self._lookup_pk(conn, session_id, user_id, project_id)
-
-    async def owner_context(self, session_id: str) -> tuple[int, int] | None:
-        """The ``(user_id, project_id)`` owning ANY session with this
-        client string (oldest row wins).
-
-        Operator-only resolution for the graph override: a bare string is
-        ambiguous under multi-user identity, so this is deliberately NOT
-        part of any user-scoped path."""
-        async with self.engine.connect() as conn:
-            row = (await conn.execute(
-                select(sessions.c.user_id, sessions.c.project_id)
-                .where(sessions.c.client_session_id == session_id)
-                .order_by(sessions.c.id.asc())
-                .limit(1)
-            )).first()
-        return (int(row[0]), int(row[1])) if row else None
 
     async def resolve_or_create(
         self, session_id: str, *, user_id: int, project_id: int

@@ -248,10 +248,10 @@ turns as nodes/edges/timeline - is available to the session's owner at
   writes `alembic_version`). Tables: `sessions`, `turns`, `messages`,
   legacy `facts` history, `runs`, `task_states`, `checkpoints`, `oauth_clients`,
   `oauth_codes`, `oauth_tokens`, `pending_actions`. No request-serving code
-  reads or writes `facts`; it is retained pending a production data audit
-  and future drop decision. Message payloads are JSONB; turn boundaries
-  mirror the router's
-  `group_into_turns` rule.
+  reads or writes `facts`, and it has had no writer at all since the legacy
+  importer was removed; it is retained pending a production data audit and a
+  future drop decision. Message payloads are JSONB; turn boundaries mirror
+  the router's `group_into_turns` rule.
 - `doctor` verifies connectivity and that the recorded schema revision
   matches the packaged migration head (loud FAIL on mismatch or an
   unmanaged-but-populated database). Startup never auto-migrates.

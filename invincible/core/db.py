@@ -95,7 +95,8 @@ async def ensure_local_owner(engine) -> tuple[int, int]:
 
 async def seed_local_owner_conn(conn) -> tuple[int, int]:
     """Connection-scoped variant of :func:`ensure_local_owner` - runs
-    inside the caller's transaction (importer, batch bootstrap)."""
+    inside the caller's transaction, for callers that already hold a
+    connection (``ensure_local_owner`` itself, batch bootstrap)."""
     from sqlalchemy import select, update
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -243,11 +244,11 @@ users = Table(
     # resolution rejects mismatches - a stolen cookie dies with the
     # password instead of surviving the full TTL.
     Column("session_version", Integer, nullable=False, server_default="0"),
-    # OAuth-consent gate: only ``operator`` may approve clients (approval
-    # mints MCP bearer tokens - execute_bash/write_file on the host), so
-    # open self-registration alone can never reach host tools. The local
-    # owner is seeded/elevated to operator (revision 0008 does the same
-    # for migrated databases).
+    # Registration role. DORMANT for authorization (see the note above the
+    # table): since Phase 2 every account approves only its OWN OAuth
+    # clients, so this column is no longer the consent gate it was designed
+    # as. It survives as the value on the system local-owner row and in
+    # revisions 0002/0008.
     Column("role", Text, nullable=False, server_default=ROLE_USER),
     Column("is_system", Boolean, nullable=False, server_default="false"),
     Column("created_at", Float, nullable=False),
@@ -412,6 +413,11 @@ Index("idx_messages_turn", messages.c.turn_id, messages.c.seq)
 # ---------------------------------------------------------------------------
 # Continuity  (Phase 15b shapes)
 
+# RETAINED, NOT LIVE: the legacy per-session triple store, superseded by
+# ``memories`` in Phase 4 and writerless since the legacy SQLite importer
+# was removed 2026-09-24. Kept only until its production rows are audited
+# and backed up; dropping it must be a separate, explicit Alembic revision,
+# never a quiet metadata edit (see docs/WORKQUEUE.md).
 facts = Table(
     "facts",
     metadata,

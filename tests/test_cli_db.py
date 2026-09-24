@@ -296,8 +296,14 @@ async def test_db_upgrade_creates_full_schema(scratch_db, monkeypatch):
 # --- db command surface ---------------------------------------------------------
 
 
-def test_db_help_exposes_upgrade_only():
+def test_db_exposes_upgrade_only():
+    """`upgrade` is the whole group; the retired legacy-SQLite `import`
+    command is unreachable, not merely hidden from the help text."""
     result = CliRunner().invoke(cli, ["db", "--help"])
     assert result.exit_code == 0, result.output
+    assert set(cli.commands["db"].commands) == {"upgrade"}
     assert "upgrade" in result.output
-    assert "import" not in result.output
+
+    retired = CliRunner().invoke(cli, ["db", "import", "legacy-sessions.db"])
+    assert retired.exit_code == 2
+    assert "No such command 'import'" in retired.output

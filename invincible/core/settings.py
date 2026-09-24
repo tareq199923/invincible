@@ -38,10 +38,6 @@ AGENT_ONLINE_TTL_SECONDS = 60
 AGENT_POLL_HOLD_SECONDS = 25
 AGENT_JOB_GRACE_SECONDS = 10
 
-# Fact-injection cap (core/memory.py) when INVINCIBLE_MEMORY_MAX_FACTS is
-# unset or unparseable.
-DEFAULT_MEMORY_MAX_FACTS = 40
-
 # Lexical retrieval caps (core/retrieval.py, Phase 4).
 DEFAULT_MEMORY_TOP_N = 8
 DEFAULT_MEMORY_MIN_SCORE = 0.01
@@ -230,13 +226,6 @@ class Settings:
         default on). State WRITES are unaffected by this toggle - it only
         gates rendering into outgoing prompts."""
         return _env_flag("INVINCIBLE_CONTINUITY")
-
-    def memory_max_facts(self) -> int:
-        """Injection cap for the fact summary system message."""
-        try:
-            return max(1, int(os.getenv("INVINCIBLE_MEMORY_MAX_FACTS", "")))
-        except ValueError:
-            return DEFAULT_MEMORY_MAX_FACTS
 
     def memory_top_n(self) -> int:
         """Max memories injected per request by RetrievalService."""
