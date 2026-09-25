@@ -95,9 +95,12 @@ async def test_mcp_tools_list(client, bearer_headers):
     names = {t["name"] for t in response.json()["result"]["tools"]}
     # Phase 15b added the continuity tools alongside the file/exec surface;
     # the memory tools (save/search/list) are the data-plane layer on top;
-    # project_create/project_list feed the memory tools valid names.
+    # project_create/project_list feed the memory tools valid names; the
+    # harness H6a read-only machine tools (search/process/screenshot) need
+    # no confirmation gate, like read_file.
     assert names == {
         "read_file", "execute_bash", "write_file", "confirm_action",
+        "code_search", "process_list", "screenshot",
         "task_state_set", "task_state_get", "checkpoint_create",
         "memory_save", "memory_search", "memory_list",
         "project_create", "project_list",

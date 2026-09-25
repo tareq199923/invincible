@@ -43,6 +43,7 @@ dependencies = [
     "argon2-cffi",
     "cryptography",
     "jinja2",
+    "websockets",
 ]
 
 [project.optional-dependencies]

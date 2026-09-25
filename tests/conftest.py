@@ -22,6 +22,7 @@ from invincible.core.db import (
 from invincible.core.db import (
     metadata as db_metadata,
 )
+from invincible.core.harness_bus import HarnessBus
 from invincible.core.identity import ApiKeyStore, AuditLog
 from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore, _s256_challenge
@@ -277,6 +278,11 @@ async def client(pg_engine, router_setter, monkeypatch):
     # job dispatch); a leaked one would cross-pollute poll/dispatch
     # assertions exactly like a leaked router would.
     app.state.agent_registry = AgentRegistry()
+    # H0: fresh in-memory harness bus per test (same leak discipline as
+    # the agent registry above). H5: attached to the test engine so
+    # workflow-scoped emits persist to workflow_events like production.
+    app.state.harness_bus = HarnessBus()
+    app.state.harness_bus.attach_engine(pg_engine)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as async_client:
@@ -288,6 +294,8 @@ async def client(pg_engine, router_setter, monkeypatch):
     await retrieval.close()
     await memory.close()
     await oauth_store.close()
+    if app.state.harness_bus is not None:
+        await app.state.harness_bus.flush_persisted()
     # app.state is module-global: anything a test attaches otherwise
     # leaks into every later file - the demonstrated order-dependent
     # settings-page failure. Mirror the oauth_store reset for every
@@ -295,6 +303,7 @@ async def client(pg_engine, router_setter, monkeypatch):
     app.state.oauth_store = None
     app.state.byok_http_client = None
     app.state.agent_registry = None
+    app.state.harness_bus = None
 
 
 # --- Phase 3 account helpers ----------------------------------------------------

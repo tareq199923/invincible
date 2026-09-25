@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Machines - Invincible{% endblock %}
+{% block content %}
+<h2>Paired machines</h2>
+<p class="muted">PCs running <code>invincible harness connect</code> (or
+<code>invincible agent</code>) on this account. Confirmed tool actions run
+on the machine they were staged for — a machine only ever sees this
+account's work.</p>
+
+{% if machines %}
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Machine</th><th>ID</th><th>Platform</th>
+      <th>Capabilities</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for m in machines %}
+  <tr class="machine-row" data-machine-id="{{ m.machine_id }}">
+    <td>{{ m.machine_name or '(unnamed)' }}</td>
+    <td class="muted"><code>{{ m.machine_id }}</code></td>
+    <td class="muted">{{ m.platform or '—' }}</td>
+    <td class="muted">{{ m.capability_names | join(', ') if m.capability_names else 'none detected' }}</td>
+    <td>{% if m.online %}<span class="status-badge status-ok">online</span>{% else %}<span class="status-badge">offline</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted empty">No machines seen yet. On the PC you want to reach:
+<code>pip install invincible-ai</code>, then
+<code>invincible harness setup</code> and
+<code>invincible harness connect</code>.</p>
+{% endif %}
+{% endblock content %}

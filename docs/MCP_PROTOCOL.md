@@ -233,9 +233,9 @@ Response:
 {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
 ```
 
-Response: `result.tools` is an array of twelve tool descriptors (the
-file/exec/approval surface, the Phase 15b continuity tools, the memory
-tools, and the project tools):
+Response: `result.tools` is an array of fifteen tool descriptors (the
+file/exec/approval surface, the three H6a read-only machine tools, the
+Phase 15b continuity tools, the memory tools, and the project tools):
 
 ```json
 {
@@ -277,6 +277,36 @@ tools, and the project tools):
           "type": "object",
           "properties": {"token": {"type": "string"}, "approve": {"type": "boolean"}},
           "required": ["token", "approve"]
+        }
+      },
+      {
+        "name": "code_search",
+        "description": "Search files for a text pattern under a directory. ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "pattern": {"type": "string"},
+            "path": {"type": "string"},
+            "max_results": {"type": "integer"}
+          },
+          "required": ["pattern", "path"]
+        }
+      },
+      {
+        "name": "process_list",
+        "description": "List running processes on the executing machine. ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {"limit": {"type": "integer"}}
+        }
+      },
+      {
+        "name": "screenshot",
+        "description": "Headless-Chrome screenshot of an http(s) URL; agent-only. ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {"url": {"type": "string"}},
+          "required": ["url"]
         }
       },
       {
@@ -543,6 +573,59 @@ the exact token from that request; `approve` must be a real JSON boolean
 Tokens are valid for **10 minutes** and are **single-use**: the first
 `confirm_action` that resolves a token consumes it, so replaying the same
 token can never execute the action twice.
+
+#### `code_search`
+
+```json
+"arguments": {"pattern": "target_fn", "path": "C:\\Users\\me\\project", "max_results": 20}
+```
+
+Case-insensitive substring search under `path` (ripgrep when installed,
+a bounded Python walk otherwise). Same sandbox as `read_file` — server
+read roots locally, the agent's home when routed — with `.git`,
+`node_modules`, venvs, binaries, and files over 256KB skipped;
+`max_results` defaults to 20, capped at 50. No confirmation (read-only).
+Denylisted paths answer `Blocked: ...`, `isError: true`, like `read_file`.
+
+Success:
+
+```json
+{"status": "search", "pattern": "target_fn", "path": "...",
+ "hits": [{"path": "...", "line": 12, "text": "def target_fn():"}],
+ "truncated": false, "files_searched": 34}
+```
+
+#### `process_list`
+
+```json
+"arguments": {"limit": 50}
+```
+
+Lists running processes on the machine that executes tools (server host
+by default, your paired machine when routing is on) — pid, name, and
+cpu/mem where the platform reports them. `limit` defaults to 50, capped
+at 200. No confirmation (read-only).
+
+```json
+{"status": "processes", "processes": [{"pid": 1234, "name": "python", "...": "..."}], "truncated": false}
+```
+
+#### `screenshot`
+
+```json
+"arguments": {"url": "http://127.0.0.1:3000/"}
+```
+
+Headless-Chrome capture (1280×800 PNG, base64) of an `http(s)` URL for
+visual validation. **Agent-only by design**: without routing it answers
+`{"status": "unavailable", ...}` — the server never fetches
+caller-supplied URLs, so this path cannot become an SSRF primitive. Needs
+Chrome/Chromium/Edge on the paired machine, else `unavailable`. Captures
+over 2MB are refused. No confirmation (read-only).
+
+```json
+{"status": "screenshot", "mime": "image/png", "data_b64": "...", "bytes": 48210, "url": "..."}
+```
 
 #### `memory_save`
 

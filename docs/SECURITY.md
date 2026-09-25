@@ -232,7 +232,17 @@ authenticated caller (valid bearer access token)
 ```
 
 `read_file` has no approval step (reading is non-destructive); its
-denylist is the only gate after auth.
+denylist is the only gate after auth. The H6a read-only tools inherit
+that posture: `code_search` shares `read_file`'s sandbox (server read
+roots, agent home when routed; binaries, secret/state names, and files
+over 256KB skipped), `process_list` carries no path and runs wherever
+tools execute — server-local output on a shared host is operator-visible
+by design, which is why public deploys must route execution to paired
+machines (`INVINCIBLE_AGENT_ROUTING=1`, §10). `screenshot` is agent-only:
+the server never fetches caller-supplied URLs, so a token that can call
+tools cannot turn the server into an SSRF fetcher (no cloud-metadata or
+intranet reads); only `http(s)` URLs render, and only on the approver's
+own machine.
 
 ### 2.0 Approval remains remote and token-based — the trust boundary
 
@@ -305,6 +315,43 @@ them safe:
   token discipline as prompt injection.
 - **No deletion**: there is deliberately no `memory_delete` over MCP —
   erasing history stays a human, dashboard-only action.
+
+### 2.0c Policy gate + runtime spine (harness H2)
+
+`core/harness_policy.py::before_tool_call` is the single pre-execution
+entry point for every machine-plane tool: `execute_bash` runs the command
+denylist (§2.1), `write_file` the path denylist (§2.2), `read_file` the
+read-roots check (§2.3) — the same functions `tool_executor` has always
+run, now orchestrated in one place so the MCP dispatcher and the future
+supervisor fan-out (H4) cannot drift apart. It adds **no new patterns and
+changes no wire shape**: a denial raises the same `ToolBlocked`, mapped to
+the same `Blocked: <reason>` result with no token issued. The one routing
+rule lives here explicitly: when agent routing is on, the server skips its
+own read-roots check for `read_file` (server roots describe the wrong
+machine's filesystem) and the agent's home sandbox (`agent/sandbox.py`,
+Wall 3) is the gate instead — enforced locally by the runner before
+execution. `core/harness_runtime.py::run_workflow` is the event-wrapped
+loop spine (policy → emit → execute → checkpoint); policy denials inside
+it become structured `tool.failed` results the agent can self-correct
+from, never workflow crashes.
+
+### 2.0d Durable approvals — the slow path (harness H5)
+
+Alongside the 10-minute fast path above, `core/harness_approvals.py`
+provides a **slow path** for human decisions that take hours or days
+(their human-in-the-loop lesson): `suspend` parks a confirmed action as
+a `pending_actions` row carrying `suspended_workflow_id` + `deadline`
+(default 24h), and `resolve` resumes it later — across process restarts.
+Separation is structural, not a flag check: `suspend` is the only writer
+of slow-path rows, `resolve` refuses rows with NULL `suspended_workflow_id`
+(fast-path tokens), and the fast path's `load_persisted` skips slow-path
+rows — neither path can resolve the other's tokens. Unknown, expired,
+already-used, wrong-subject, and cross-path tokens all answer
+identically (nothing runs), and every definitive outcome deletes its row
+(single-use). Resolution returns the staged record to the executor, so
+callers must log metadata only — never raw commands/paths. The durable
+workflow timeline itself (`workflow_events`, metadata only) is the audit
+trail a suspended workflow resumes against.
 
 ### 2.1 `execute_bash` denylist — full inventory
 

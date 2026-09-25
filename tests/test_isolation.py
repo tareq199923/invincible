@@ -14,8 +14,11 @@ internals):
 - checkpoints     : created by A invisible to B's projections;
 - runs            : attempts recorded for A's request carry A's ownership;
                     B's graph shows none of them;
-- facts           : extracted from A's chat never injected into B's
-                    outgoing context (and vice versa);
+- facts           : memories extracted from A's chat (via the
+                    ``extract_facts`` extractor into ``memories`` — the
+                    legacy ``facts`` table itself was dropped by revision
+                    ``0013``) never injected into B's outgoing context
+                    (and vice versa);
 - approvals       : execute_bash staged by A cannot be confirmed by B
                     (unknown-token semantics), then A confirms fine;
 - agent dispatch  : A's confirmed job never reaches B's /agent/poll and

@@ -102,10 +102,11 @@ Verified snapshot of shipped capability (file pointers in
 | Sessions | Normalized `sessions`/`turns`/`messages`; whole-turn retention cap; per-session `SELECT … FOR UPDATE` serialization; streamed replies reconstructed and persisted; store API keeps client session strings with optional ownership context falling back to the local owner. |
 | Continuity | ContinuityEngine: versioned `task_states` per `(session, task_key)` with optimistic CAS (UNIQUE constraint + advisory locks), immutable checkpoints pinning versions, size-bounded continuation-brief injection, interruption detection from runs; MCP tools `task_state_set/get/checkpoint_create`. |
 | Memory | Phase 4: scoped `memories` (user/project scope, explicit/auto layers, kind, confidence, provenance) written at persist time by the deterministic extractor (user messages
-only since 2026-09-25) **and** explicit "remember this"/"save this" triggers; lexical retrieval (`RetrievalService`: generated-tsvector FTS × recency half-life × kind weight × confidence, AND→OR query fallback, relevance floor, top-N); unified-budget injection via `ContextBuilder` (memory + continuity brief under one token cap); the legacy per-session `facts` table is retained as historical schema, not request-serving state. |
-| MCP | `POST /mcp` JSON-RPC 2.0, twelve tools: machine-plane `read_file`, `execute_bash`, `write_file`, `confirm_action` (text-pattern denylists; single-use token approvals bound to the staging subject, audit-written; opt-in PG persistence of staged actions; Phase 10 agent routing moves confirmed execution to the caller's paired local agent); continuity tools `task_state_set`/`task_state_get`/`checkpoint_create`; memory tools `memory_save`/`memory_search`/`memory_list` (data-plane, no confirm gate — confidence 0.9, `mcp:<client>` provenance, ownership-predicated, kill-switch-gated saves, no MCP delete; documented in SECURITY.md §2.0b); project tools `project_create`/`project_list`. |
+only since 2026-09-25) **and** explicit "remember this"/"save this" triggers; lexical retrieval (`RetrievalService`: generated-tsvector FTS × recency half-life × kind weight × confidence, AND→OR query fallback, relevance floor, top-N); unified-budget injection via `ContextBuilder` (memory + continuity brief under one token cap). |
+| MCP | `POST /mcp` JSON-RPC 2.0, fifteen tools: machine-plane `read_file`, `execute_bash`, `write_file`, `confirm_action` (text-pattern denylists; single-use token approvals bound to the staging subject, audit-written; opt-in PG persistence of staged actions; agent routing moves confirmed execution to the caller's paired local agent) plus read-only `code_search` (ripgrep-or-walk, same sandbox), `process_list`, and agent-only `screenshot` (headless Chrome on the paired machine; the server never fetches caller URLs); continuity tools `task_state_set`/`task_state_get`/`checkpoint_create`; memory tools `memory_save`/`memory_search`/`memory_list` (data-plane, no confirm gate — confidence 0.9, `mcp:<client>` provenance, ownership-predicated, kill-switch-gated saves, no MCP delete; documented in SECURITY.md §2.0b); project tools `project_create`/`project_list`. |
 | Auth | Four separate realms: `/v1/*` accepts only per-user `inv_` API keys via bearer/x-api-key (SHA-256 hashed at rest, shown once, revocable via CLI), resolving a **Principal** bound to the key's user and default project; fail-closed (401 for missing, invalid, or revoked keys), with no legacy gateway-key fallback or anonymous local-owner access; browser sessions on `/auth/*` + `/projects` + `/api-keys` (Phase 3: HMAC-signed HttpOnly cookies, fail-closed without the owner secret); the operator/admin surface is **gone** (removed with the operator role in commit `c3e768f`; the only `/api/v1/*` route left is the owner-scoped continuity graph, and host administration is the environment variables plus the CLI); OAuth 2.1 + PKCE authorization server on `/oauth/*` (dynamic registration, owner-secret browser consent, hashed tokens, refresh rotation, revocation) with consent-stamped user subjects and persistent lockouts (`login_attempts`, scoped per realm since 0004); GitHub login (OAuth App, verified-email auto-link); GitHub-only accounts adopt a first password via `POST /auth/password` (Phase 5), and every password write bumps the per-user `session_version` (migration `0006`) so browser cookies minted before the change stop resolving immediately. Anonymous browser GETs that hit a 401 anywhere are redirected to `/login?next=<path>` (`Accept: text/html` → 302, HTMX → `HX-Redirect`; API clients keep the JSON body; POSTs never redirect) — see `main.py`'s exception handler. |
-| Dashboard | Phase 5 (Jinja2 + HTMX; script vendored at `/static/htmx.min.js`): `/dashboard` overview (owned count cards + 10 recent sessions), sessions index + per-session detail rendering the shared projection (`core/projection.py`, also backing the graph endpoint), cross-session task board, memory management (browse/filter/search, explicit create, audited owner-scoped delete — `INVINCIBLE_MEMORY=0` blocks creation only), memory-graph view (2026-09-06: `/dashboard/memory/graph` server-rendered SVG — center-radial project clusters, source-colored dots, timeline strip; Level 1 derived relationships via `core/memory_projection.py`, JSON sibling `GET /memories/graph` as the permanent contract for a future UI redesign), usage view with UTC day buckets (JSON sibling `GET /usage`, window clamped 1–90 days), settings page (system flags, read-only provider/routing panel, password forms). The whole surface resolves **session cookies only** (`require_user_session`) — foreign resources are byte-identical to unknown ones. |
+| Dashboard | Phase 5 (Jinja2 + HTMX; script vendored at `/static/htmx.min.js`): `/dashboard` overview (owned count cards + 10 recent sessions), sessions index + per-session detail rendering the shared projection (`core/projection.py`, also backing the graph endpoint), cross-session task board, memory management (browse/filter/search, explicit create, audited owner-scoped delete — `INVINCIBLE_MEMORY=0` blocks creation only), memory-graph view (2026-09-06: `/dashboard/memory/graph` server-rendered SVG — center-radial project clusters, source-colored dots, timeline strip; Level 1 derived relationships via `core/memory_projection.py`, JSON sibling `GET /memories/graph` as the permanent contract for a future UI redesign), usage view with UTC day buckets (JSON sibling `GET /usage`, window clamped 1–90 days), settings page (system flags, read-only provider/routing panel, password forms), machines page (`/dashboard/machines`: per-machine online state, platform, auto-discovered capabilities, read-only). The whole surface resolves **session cookies only** (`require_user_session`) — foreign resources are byte-identical to unknown ones. |
+| Harness | Machine-harness layer over the Phase 10 agent (`core/harness_*`, `docs/HARNESS_PLAN.md`): typed event bus (`harness_events`/`harness_bus`, workflow-scoped rows persisted to `workflow_events`), unified policy gate (`harness_policy`), dependency-injected loop spine + context hydration/compaction (`harness_runtime`), agent handoff router + parallel supervisor (`harness_router`/`harness_supervisor`), durable suspend/resume approvals (`harness_approvals`, migrations `0011`/`0012`); outbound-only WS relay (`WS /agent/ws`, WS-first with long-poll fallback, per-machine inventory with capabilities) plus read-only inspector stream (`WS /harness/events`). |
 | Control plane | Static provider config (packaged `providers.yaml` fixture + `core/provider_catalog.py` operator constants). Routing is **per user** since Phase 9: each account's own BYOK credentials with `auto`/`pinned`/`chain` settings in `user_settings`, managed on the dashboard's Providers page. `GET /api/v1/sessions/{id}/graph` projection. There is no admin API and no shared provider pool. |
 | CLI | `setup` (non-interactive since 2026-09-01: zero prompts, secrets auto-generated, provider keys configured later via the dashboard/env, DB URL via `--db-url` — remote-first; scriptable on Windows), `start` (uvicorn + Cloudflare tunnel with an orphan-free lifecycle; opens `/dashboard` in the browser — anonymous sessions land on `/login`), `login` (device-flow pairing, Phase 3; defaults to the hosted service `https://invincible-ai.me`, `--server` for a self-hosted server), `agent` (runs confirmed tool jobs on the user's own machine, Phase 10), `doctor`, `dev-db`, `db upgrade`, `secret rotate` / `secret credential-key`, `oauth list/revoke/test-client`, `api-key create/list/revoke`, `users list/reset-password`. Both `invincible` and `inv`. |
 | Packaging/deploy | pyproject (name `invincible-ai`), packaged `providers.yaml` + migrations + Jinja2 templates, Dockerfile, docker-compose app+postgres pair, `Procfile` + `railway.json` (platform start command with `$PORT` and proxy headers). Remote runbook: [DEPLOYMENT.md](DEPLOYMENT.md). |
@@ -118,10 +119,9 @@ Honest limitations remaining:
   flow — the gateway has no mail infrastructure by design.
 - Device pairing stores one pending request per CLI start; there is no
   admin view of device history beyond audit rows.
-- `facts` is retained legacy schema/history: no request-serving code reads or
-  writes it, the legacy importer has been removed, and no backfill into
-  `memories` was performed. A future drop requires a production data audit
-  and backup.
+- The legacy per-session `facts` table was dropped by revision `0013`
+  (2026-09-25) after a production audit found it empty; no backfill into
+  `memories` was ever performed.
 - Retrieval is lexical only; semantic/vector retrieval remains a designed
   seam behind `RetrievalService`.
 - Streaming usage on `runs` rows is estimated and flagged
@@ -204,8 +204,8 @@ rewritten onto scoped `memories` (auto-extracted rows at confidence 0.6,
 mined from user messages only since 2026-09-25;
 explicit "remember this"/"save this" chat triggers at confidence 1.0,
 user-scope, user-messages-only, no explicit/auto double-capture; the
-per-session `facts` pipeline retired — injection path removed, table left
-inert with **no backfill**); `RetrievalService` (lexical match × recency
+per-session `facts` pipeline retired in Phase 4 and its table dropped by
+revision `0013` with **no backfill**); `RetrievalService` (lexical match × recency
 half-life × kind weight × confidence; AND-first query shape with OR
 fallback for conversational questions; relevance floor + top-N knobs);
 `ContextBuilder` giving memory + continuity injections one shared token
@@ -303,9 +303,9 @@ Deployment acceptance criteria (explicit; permission model detailed in
 ### Phase 8 — Cleanup
 The shared gateway-key and anonymous fail-open paths have been removed;
 `/v1/*` requires per-user `inv_` keys in hosted and local modes. The legacy
-SQLite importer was removed 2026-09-24. The legacy `facts` table remains
-temporarily while production data is audited and backed up; any future drop
-must be a separate explicit migration. Local mode itself stays.
+SQLite importer was removed 2026-09-24. The legacy `facts` table was
+audited empty on production, backed up, and dropped by revision `0013`
+on 2026-09-25. Local mode itself stays.
 
 
 ### Phase 9 — BYOK Provider Connections
@@ -326,10 +326,13 @@ realm/fail-closed gates pinned by ``tests/test_dashboard_providers.py``.
 
 ### Phase 10 — Local Agent (tool execution on the user's PC)
 Move confirmed MCP tool execution off the server host and onto each
-user's own machine: a paired local agent (``invincible agent``) that
-long-polls ``POST /agent/poll`` with its ``inv_`` key, executes
-confirmed ``execute_bash``/``write_file``/``read_file`` jobs locally,
-and posts results back through ``POST /agent/result``. The server keeps
+user's own machine: a paired local agent (``invincible agent``,
+WS-first ``invincible harness connect`` since H1) that holds an
+outbound-only relay (``WS /agent/ws`` with long-poll fallback) with its
+``inv_`` key, executes confirmed ``execute_bash``/``write_file``/
+``read_file`` jobs locally (plus read-only ``code_search``/
+``process_list`` and agent-only ``screenshot`` since H6a), and posts
+results back through ``POST /agent/result`` (or the WS itself). The server keeps
 every decision (denylist, staging, tokens, audit, routing by
 ``user_id``); the agent only does the work — with a local denylist
 re-check (wall 2) and a home-relative read/write sandbox (wall 3,
@@ -338,13 +341,21 @@ re-check (wall 2) and a home-relative read/write sandbox (wall 3,
 gate relaxes for non-operators **iff** routing is on (approving exposes
 only one's own machine — the coupling is pinned by
 ``tests/test_oauth_consent_relaxation.py`` and documented in
-[SECURITY.md §10](SECURITY.md)). No new dependencies, no migrations:
+[SECURITY.md §10](SECURITY.md)). One new dependency (`websockets`, agent
+relay + server WS routes); migrations `0011`/`0012` (workflow log,
+approval columns) landed with the H5 durable-approval slice:
 long-poll over plain HTTPS, in-memory registry (restart orphans
 in-flight jobs; agents re-register on next poll). Dashboard MCP page
-gained a live agent online/offline badge (``GET /agent/status``).
+gained a live agent online/offline badge (``GET /agent/status``),
+and the dashboard Machines page lists per-machine inventory
+(``GET /agent/status`` machines + ``GET /agent/machines`` for the CLI).
 Pinned by ``tests/test_agent_registry.py``,
 ``tests/test_agent_endpoints.py``, ``tests/test_agent_routing.py``,
-``tests/test_agent_sandbox.py``, ``tests/test_cli_agent.py``.
+``tests/test_agent_sandbox.py``, ``tests/test_cli_agent.py``,
+``tests/test_agent_ws.py`` (relay + inventory),
+``tests/test_dashboard_machines.py``, ``tests/test_cli_harness.py``,
+``tests/test_harness_*.py`` (bus/policy/runtime/memory/router/
+supervisor/approvals/tools).
 
 ---
 
@@ -369,7 +380,7 @@ as removed.
 | Item | Replacement | When |
 |---|---|---|
 | Owner-secret-only MCP consent (`INVINCIBLE_OWNER_SECRET` as sole identity) | User-bound OAuth subjects | Retired 2026-09-25 (subject mandatory at issuance; legacy rows fail closed) |
-| `facts` triple store | `memories` table (scopes/layers/provenance) | Phase 4 request path retired. **Decision 2026-09-24: retained temporarily**; the importer is removed, but the table remains until production data is audited and backed up. |
+| `facts` triple store | `memories` table (scopes/layers/provenance) | Phase 4 request path retired; table dropped by revision `0013` on 2026-09-25 after an empty production audit (no backfill ever performed). |
 | Legacy SQLite importer (`db import`) | Direct hosted signup/onboarding | Removed 2026-09-24 |
 | Client-supplied `session_id` as storage identity | Relational session identity | Phase 1 (transitional helper retained briefly) |
 

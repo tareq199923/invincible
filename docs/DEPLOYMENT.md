@@ -129,6 +129,14 @@ the longest held request is a dispatched agent job (the action's own
 timeout plus a 10s grace, ~40s for the default 30s command), so a proxy
 that cuts requests sooner surfaces as a failed tool call, not a crash.
 
+**WebSocket relay.** The harness agent holds `WS /agent/ws` open for
+hours (outbound-only from the agent; the 20s `INVINCIBLE_HARNESS_WS`
+heartbeat keeps proxies from idling it out). If the platform or a
+middlebox kills quiet WS connections sooner than the heartbeat, lower the
+interval — and know the failure mode is graceful anyway: the agent falls
+back to long-polling, and dispatched jobs route over whichever transport
+is live (WS-first, never both — a confirmed job executes exactly once).
+
 ---
 
 ## 6. Users, access, and operations
@@ -183,8 +191,14 @@ this is the operational version.
       armed; there is no anonymous path).
 - [ ] `/mcp` without a token → `401` with the RFC 9728 challenge pointed at
       your domain.
-- [ ] Pair `invincible agent` from a laptop against the deployment, approve
-      a staged command, and confirm the dashboard shows **Agent: online**.
+- [ ] Pair `invincible harness connect` from a laptop against the
+      deployment, approve a staged command, and confirm the dashboard
+      shows **Agent: online** and the Machines page lists the laptop
+      (name, platform, capabilities). If it stays offline, check the
+      proxy's WebSocket/idle-timeout behavior (§5) before anything else.
+- [ ] `code_search` + `process_list` round-trip through `/mcp` against
+      the paired machine; `screenshot` answers `unavailable` until an
+      agent with Chrome is connected (agent-only by design).
 - [ ] `invincible doctor` against the production DSN: secrets present,
       schema at head, DSN masked.
 - [ ] Delete the throwaway account's data if you do not want to keep it.

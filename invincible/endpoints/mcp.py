@@ -36,6 +36,8 @@ from invincible import __version__
 from invincible.core import tool_executor
 from invincible.core.accounts import AccountError, ProjectService
 from invincible.core.continuity import ContinuityConflictError
+from invincible.core.harness_events import HarnessEventType
+from invincible.core.harness_policy import before_tool_call
 from invincible.core.identity import resolve_project_by_name
 from invincible.core.memory import (
     MAX_CONTENT_CHARS,
@@ -47,6 +49,16 @@ from invincible.core.principal import Principal
 from invincible.core.settings import AGENT_JOB_GRACE_SECONDS, settings
 
 router = APIRouter()
+
+
+def _emit_harness(request: Request, type: HarnessEventType, **fields) -> None:
+    """Best-effort harness event. Never breaks the MCP flow; metadata only
+    (tool names + statuses, never commands/paths/contents)."""
+    bus = getattr(request.app.state, "harness_bus", None)
+    if bus is None:
+        return
+    with contextlib.suppress(Exception):
+        bus.emit(type, **fields)
 
 # Response caps for the memory tools: MCP results land in an AI's context
 # window, so they obey the same token discipline as prompt injection.
@@ -110,6 +122,58 @@ TOOLS = [
                 "content": {"type": "string"},
             },
             "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "code_search",
+        "description": (
+            "Search files for a text pattern (case-insensitive) under a "
+            "directory: ripgrep when installed, a bounded Python walk "
+            "otherwise. Same sandbox as read_file (server read roots, or "
+            "the agent's home when routed); secret/state files and large "
+            "binaries are skipped, results are capped. No confirmation is "
+            "required since searching is non-destructive."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string"},
+                "path": {"type": "string"},
+                "max_results": {"type": "integer"},
+            },
+            "required": ["pattern", "path"],
+        },
+    },
+    {
+        "name": "process_list",
+        "description": (
+            "List running processes (pid, name, cpu/mem where available) "
+            "on the machine that executes tools — the server host by "
+            "default, your own paired machine when agent routing is on. "
+            "Read-only: no confirmation required."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer"},
+            },
+        },
+    },
+    {
+        "name": "screenshot",
+        "description": (
+            "Capture a headless-Chrome screenshot (1280x800 PNG) of an "
+            "http(s) URL for visual validation. Runs ONLY on your paired "
+            "machine (agent routing must be on and Chrome installed) — "
+            "the server never fetches caller-supplied URLs, so this path "
+            "cannot become an SSRF primitive. No confirmation required."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+            },
+            "required": ["url"],
         },
     },
     {
@@ -516,6 +580,12 @@ async def _dispatch(method, rpc_id, params, request,
         # Phase 2: every staged action is bound to the caller's subject;
         # only the same subject may later confirm it.
         owner_subject = principal.user_id if principal else None
+        # H0: harness event (metadata only — tool name + subject, never
+        # commands/paths/contents). Best-effort; never breaks dispatch.
+        _emit_harness(
+            request, HarnessEventType.TOOL_REQUESTED,
+            name=str(name), user_id=owner_subject,
+        )
 
         try:
             if name == "read_file":
@@ -526,10 +596,21 @@ async def _dispatch(method, rpc_id, params, request,
                 # the agent's sandbox is the gate when routed.
                 agent_executor = await _agent_executor(request, owner_subject)
                 if agent_executor is not None:
+                    # H2: policy gate (agent-routed: server roots skipped,
+                    # the agent's home sandbox gates locally as Wall 3).
+                    before_tool_call(
+                        "read_file", {"path": args.get("path", "")},
+                        agent_routed=True,
+                    )
                     result = await agent_executor(
                         "read_file", {"path": args.get("path", "")}
                     )
                 else:
+                    # H2: policy gate before local execution (same check
+                    # read_file runs internally; the gate is the single
+                    # entry point H4's supervisor reuses).
+                    before_tool_call(
+                        "read_file", {"path": args.get("path", "")})
                     result = await tool_executor.read_file(
                         args.get("path", ""))
                 status = result.get("status")
@@ -542,6 +623,12 @@ async def _dispatch(method, rpc_id, params, request,
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "execute_bash":
+                # H2: policy gate before staging (same denylist
+                # execute_bash runs internally; raises ToolBlocked with no
+                # token issued — byte-identical wire shape via the outer
+                # handler).
+                before_tool_call(
+                    "execute_bash", {"command": args.get("command", "")})
                 result = tool_executor.execute_bash(
                     args.get("command", ""), pending_actions,
                     owner_subject=owner_subject,
@@ -549,10 +636,104 @@ async def _dispatch(method, rpc_id, params, request,
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "write_file":
+                # H2: policy gate before staging (same as above).
+                before_tool_call(
+                    "write_file", {"path": args.get("path", "")})
                 result = tool_executor.write_file(
                     args.get("path", ""), args.get("content", ""),
                     pending_actions, owner_subject=owner_subject,
                 )
+                return _result(rpc_id, _tool_content(json.dumps(result)))
+
+            if name == "code_search":
+                # H6a: read-only like read_file — sandbox gate, no
+                # confirm step. Routed reads run on the caller's machine
+                # (home sandbox there); local reads under server roots.
+                try:
+                    max_results = int(
+                        args.get("max_results")
+                        or tool_executor.SEARCH_DEFAULT_MAX_RESULTS
+                    )
+                except (TypeError, ValueError):
+                    max_results = tool_executor.SEARCH_DEFAULT_MAX_RESULTS
+                agent_executor = await _agent_executor(request, owner_subject)
+                if agent_executor is not None:
+                    before_tool_call(
+                        "code_search", {"path": args.get("path", "")},
+                        agent_routed=True,
+                    )
+                    result = await agent_executor(
+                        "code_search", {
+                            "pattern": args.get("pattern", ""),
+                            "path": args.get("path", ""),
+                            "max_results": max_results,
+                        },
+                    )
+                else:
+                    before_tool_call(
+                        "code_search", {"path": args.get("path", "")})
+                    result = await tool_executor.search_code(
+                        args.get("pattern", ""), args.get("path", ""),
+                        max_results,
+                    )
+                status = result.get("status")
+                if status in ("agent_offline", "agent_timeout"):
+                    await _audit_action(request, name, status,
+                                        subject=owner_subject)
+                    return _result(rpc_id, _tool_content(
+                        result.get("message", status), is_error=True
+                    ))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
+
+            if name == "process_list":
+                # H6a: read-only, no path, no confirm step. Runs wherever
+                # tools execute (server host by default, paired machine
+                # when routed) — same posture as execute_bash.
+                try:
+                    limit = int(
+                        args.get("limit")
+                        or tool_executor.PROCESSES_DEFAULT_LIMIT
+                    )
+                except (TypeError, ValueError):
+                    limit = tool_executor.PROCESSES_DEFAULT_LIMIT
+                agent_executor = await _agent_executor(request, owner_subject)
+                if agent_executor is not None:
+                    result = await agent_executor(
+                        "process_list", {"limit": limit})
+                else:
+                    result = await tool_executor._list_processes(limit)
+                status = result.get("status")
+                if status in ("agent_offline", "agent_timeout"):
+                    await _audit_action(request, name, status,
+                                        subject=owner_subject)
+                    return _result(rpc_id, _tool_content(
+                        result.get("message", status), is_error=True
+                    ))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
+
+            if name == "screenshot":
+                # H6a: agent-only by design — the server never fetches
+                # caller-supplied URLs (SSRF). Without routing, report
+                # unavailability instead of failing the call shape.
+                agent_executor = await _agent_executor(request, owner_subject)
+                if agent_executor is None:
+                    return _result(rpc_id, _tool_content(json.dumps({
+                        "status": "unavailable",
+                        "reason": (
+                            "Screenshots run on your paired machine: "
+                            "set INVINCIBLE_AGENT_ROUTING=1 and start "
+                            "one with: invincible agent"
+                        ),
+                    })))
+                result = await agent_executor(
+                    "screenshot", {"url": args.get("url", "")})
+                status = result.get("status")
+                if status in ("agent_offline", "agent_timeout"):
+                    await _audit_action(request, name, status,
+                                        subject=owner_subject)
+                    return _result(rpc_id, _tool_content(
+                        result.get("message", status), is_error=True
+                    ))
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "confirm_action":
@@ -569,6 +750,19 @@ async def _dispatch(method, rpc_id, params, request,
                 status = result.get("status")
                 await _audit_action(request, name, status,
                                     subject=owner_subject)
+                # H0: harness approval outcome (status only, never token).
+                _emit_harness(
+                    request, HarnessEventType.APPROVAL_RESOLVED,
+                    name=str(name), status=str(status),
+                    user_id=owner_subject,
+                    approved=bool(approve) and status not in (
+                        "not_found", "declined"),
+                )
+                _emit_harness(
+                    request, HarnessEventType.TOOL_COMPLETED,
+                    name=str(name), status=str(status),
+                    user_id=owner_subject,
+                )
                 if status == "not_found":
                     return _result(rpc_id, _tool_content(
                         "Unknown or expired confirmation token.", is_error=True
@@ -900,6 +1094,11 @@ async def _dispatch(method, rpc_id, params, request,
             return _error(rpc_id, -32601, f"Unknown tool: {name}")
 
         except tool_executor.ToolBlocked as e:
+            _emit_harness(
+                request, HarnessEventType.TOOL_FAILED,
+                name=str(params.get("name")), user_id=owner_subject,
+                status="blocked",
+            )
             return _result(rpc_id, _tool_content(f"Blocked: {e.reason}", is_error=True))
 
     return _error(rpc_id, -32601, f"Unknown method: {method}")

@@ -55,12 +55,13 @@ still owes:
   too (`settings.legacy_owner_secret` gone; setup/rotate no longer
   migrate it; doctor fails the owner check on the alias alone) — stale
   values are inert, rename to `INVINCIBLE_OWNER_SECRET`.
-- **`facts` triple store** — **DECIDED 2026-09-24: keep temporarily while
-  production data is audited.** No request-serving code reads or writes the
-  table, and no backfill was performed. The legacy importer is now removed,
-  so the table has no supported writer; it still occupies schema/storage.
-  After checking and backing up production data, decide whether to drop it
-  in a future migration.
+- **`facts` triple store** — **DROPPED 2026-09-25** (revision `0013`):
+  audited empty on production (0 rows; backed up to
+  `invincible-facts-backup-20260925.csv`), metadata no longer declares
+  it, scratch-DB upgrade/downgrade/rerun pinned by
+  `tests/test_migration_drop_facts.py`. No backfill was ever performed;
+  the `extract_facts` memory extractor (feeds `memories`) is unrelated
+  and stays.
 - **Client-supplied `session_id` as storage identity** — relational
   session identity landed in Phase 1 and the transitional helper was
   only meant to be retained briefly. Check whether it is still there.
@@ -87,8 +88,9 @@ venv outside the repo reports 0.4.0 with `invincible --version` /
 ### Legacy SQLite importer retired — 2026-09-24
 
 The deprecated `invincible db import` command and its SQLite importer module
-were removed. The legacy PostgreSQL `facts` table remains temporarily while
-production data is audited and backed up; no request-serving code uses it.
+were removed. The legacy PostgreSQL `facts` table was audited empty,
+backed up, and dropped by revision `0013` on 2026-09-25; no
+request-serving code used it.
 
 Shipped in **0.4.0** (2026-09-25) — see above.
 

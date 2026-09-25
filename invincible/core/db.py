@@ -413,26 +413,12 @@ Index("idx_messages_turn", messages.c.turn_id, messages.c.seq)
 # ---------------------------------------------------------------------------
 # Continuity  (Phase 15b shapes)
 
-# RETAINED, NOT LIVE: the legacy per-session triple store, superseded by
-# ``memories`` in Phase 4 and writerless since the legacy SQLite importer
-# was removed 2026-09-24. Kept only until its production rows are audited
-# and backed up; dropping it must be a separate, explicit Alembic revision,
-# never a quiet metadata edit (see docs/WORKQUEUE.md).
-facts = Table(
-    "facts",
-    metadata,
-    Column("id", BigInteger, Identity(), primary_key=True),
-    Column("user_id", Text, nullable=False, server_default="default"),
-    Column("session_id", Text, nullable=False),
-    Column("entity", Text, nullable=False),
-    Column("relation", Text, nullable=False),
-    Column("target", Text, nullable=False),
-    Column("created_at", Float, nullable=False),
-    UniqueConstraint(
-        "user_id", "session_id", "entity", "relation", "target",
-        name="uq_facts_triple",
-    ),
-)
+# REMOVED: the legacy per-session triple store (``facts``), superseded by
+# ``memories`` in Phase 4, writerless since the legacy SQLite importer was
+# removed 2026-09-24, audited empty on production 2026-09-25 (backed up to
+# invincible-facts-backup-20260925.csv), and dropped by Alembic revision
+# ``0013``. The name ``extract_facts`` survives for the memory extractor,
+# which feeds ``memories``, not this table.
 
 runs = Table(
     "runs",
@@ -614,6 +600,13 @@ pending_actions = Table(
     Column("type", String, nullable=False),
     Column("args", JSONB, nullable=False),
     Column("created_at", Float, nullable=False),
+    # Harness H5 (durable approvals): slow-path rows suspended awaiting a
+    # human carry the waiting workflow + an absolute deadline. Fast-path
+    # rows (PendingActionStore.put) leave both NULL — and the slow-path
+    # ApprovalStore refuses NULL-workflow rows, so the two paths can never
+    # resolve each other's tokens.
+    Column("suspended_workflow_id", Text),
+    Column("deadline", Float),
 )
 
 
@@ -724,3 +717,26 @@ device_codes = Table(
     Column("last_poll_at", Float),
     Column("resolved_at", Float),
 )
+
+
+# ---------------------------------------------------------------------------
+# Harness H5: durable workflow event log (Hendrixer bus.ts parity).
+#
+# Append-only timeline per workflow: every harness step (started,
+# tool requested/completed/failed, handoffs, plans, approvals) lands here
+# when it carries a workflow_id, so a crash or a days-long approval
+# suspend resumes against the full history. Payloads are metadata only
+# (names, ids, statuses — never commands, paths, or secrets); the JSONB
+# column binds native dicts. Events WITHOUT a workflow_id (ambient MCP
+# chatter like tool.requested) stay in-memory only — the bus decides.
+workflow_events = Table(
+    "workflow_events",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("workflow_id", Text, nullable=False),
+    Column("type", Text, nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Column("created_at", Float, nullable=False),
+)
+
+Index("idx_workflow_events_workflow", workflow_events.c.workflow_id)

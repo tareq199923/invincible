@@ -80,7 +80,16 @@ invincible/
     ├── continuity.py           Task-state/checkpoint engine + continuation brief
     │                           + reactive failover checkpoints (Phase 4)
     ├── tool_executor.py        MCP tool execution + denylists + approval
-    ├── agent_registry.py       Per-user agent queues/futures (in-memory, long-poll transport)
+    ├── agent_registry.py       Per-user agent queues/futures (in-memory; long-poll
+    │                           + WS relay transports since harness H1)
+    ├── harness_events.py       Harness event contract (H0; Hendrixer events.ts parity)
+    ├── harness_bus.py          In-memory harness event bus: emit/subscribe/history (H0)
+    ├── harness_policy.py       Unified pre-execution policy gate (H2; no new patterns)
+    ├── harness_runtime.py      Durable agent-loop spine: policy → emit → execute (H2)
+    │                           + context hydration/compaction (H3)
+    ├── harness_router.py       Agent defs + lateral handoff interception (H4; not on /mcp)
+    ├── harness_supervisor.py   Plan → parallel sub-agents → fan-in → synthesize (H4)
+    ├── harness_approvals.py    Durable suspend/resume approvals over pending_actions (H5)
     ├── credential_store.py     BYOK credential persistence (ciphertext at rest)
     ├── credential_crypto.py    Fernet primitives + the INVINCIBLE_CREDENTIAL_KEY gate
     ├── user_settings_store.py  Per-user settings (routing mode/order, overrides)

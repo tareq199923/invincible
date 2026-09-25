@@ -19,6 +19,7 @@ from invincible.core.db import (
     make_engine,
     warn_if_schema_stale,
 )
+from invincible.core.harness_bus import HarnessBus
 from invincible.core.identity import ApiKeyStore, AuditLog
 from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore
@@ -132,6 +133,12 @@ async def lifespan(app: FastAPI):
     # migration; INVINCIBLE_AGENT_ROUTING decides whether the mcp
     # endpoint ever dispatches to it.
     app.state.agent_registry = AgentRegistry()
+    # H0: harness event bus. In-memory on purpose (same trade-off as the
+    # default PendingActionStore and AgentRegistry) - restart drops history,
+    # subscribers re-attach. H5: workflow-scoped events additionally persist
+    # to workflow_events (best-effort; memory stays the source of truth).
+    app.state.harness_bus = HarnessBus()
+    app.state.harness_bus.attach_engine(engine)
     app.state.router.run_recorder = runs.record
     yield
     await app.state.router.close()
@@ -140,8 +147,10 @@ async def lifespan(app: FastAPI):
     await retrieval.close()
     await memory.close()
     await oauth_store.close()
-    # Drain fire-and-forget staged-action writes before the engine goes.
+    # Drain fire-and-forget staged-action AND workflow-event writes before
+    # the engine goes.
     await pending.flush_persisted()
+    await app.state.harness_bus.flush_persisted()
     await engine.dispose()
 
 app = FastAPI(title="Invincible", lifespan=lifespan)

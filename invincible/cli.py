@@ -1870,6 +1870,246 @@ def agent(config_path: str | None, server: str):
         click.echo("\nAgent stopped.")
 
 
+@click.group("harness")
+def harness():
+    """Machine harness (flexx-style remote hands): pair this PC, keep it
+    connected, inspect it, and install it as an always-on service.
+
+    `agent` stays exactly as it was; `harness connect` is its WS-first
+    sibling (same pairing file, same sandbox, falls back to polling).
+    """
+
+
+def _ensure_paired(server: str, config_path: str | None) -> dict:
+    """Load pairing credentials, pairing once when no config file exists.
+
+    Only a MISSING file pairs — a corrupt or incomplete one falls through
+    to _load_client_config's explicit repair hint (never overwritten
+    silently), the same discipline as `agent`'s first run.
+    """
+    if not os.path.isfile(_client_config_path(config_path)):
+        click.echo(
+            "This machine isn't paired yet - starting one-time pairing "
+            f"with {server.rstrip('/')}.")
+        _pair_and_save(server.rstrip("/"), config_path)
+    return _load_client_config(config_path)
+
+
+@harness.command("setup")
+@click.option("--config", "config_path",
+              type=click.Path(dir_okay=False, path_type=str), default=None,
+              help="Pairing credentials to use "
+                   "(default ~/.invincible/config.json).")
+@click.option("--server", default=DEFAULT_SERVER,
+              show_default=True, envvar="INVINCIBLE_SERVER",
+              help="Server to pair with on first run (later runs always "
+                   "use the saved server).")
+def harness_setup(config_path: str | None, server: str):
+    """Pair this machine and print its MCP connector config.
+
+    Idempotent: an already-paired machine just re-prints its config, it
+    is never re-paired silently. Then `harness connect` brings it online.
+    """
+    import json
+
+    from invincible.agent.runner import machine_id
+
+    config = _ensure_paired(server, config_path)
+    server = config["server"].rstrip("/")
+    click.echo(f"Paired with {server} (machine id: {machine_id()}).")
+    click.echo("Add this MCP server to your AI client "
+               "(Cursor: Settings → MCP → Add Server):")
+    click.echo(
+        json.dumps({"mcpServers": {"invincible": {"url": f"{server}/mcp"}}},
+                   indent=2))
+    click.echo("Next: invincible harness connect  (this machine goes "
+               "online; memory tools work immediately, machine tools once "
+               "connected).")
+
+
+@harness.command("connect")
+@click.option("--config", "config_path",
+              type=click.Path(dir_okay=False, path_type=str), default=None,
+              help="Pairing credentials to use "
+                   "(default ~/.invincible/config.json).")
+@click.option("--server", default=DEFAULT_SERVER,
+              show_default=True, envvar="INVINCIBLE_SERVER",
+              help="Server to pair with on first run, before saved "
+                   "credentials exist.")
+def harness_connect(config_path: str | None, server: str):
+    """Keep this machine online (Ctrl+C to stop).
+
+    WS-first relay with long-poll fallback: the server pushes confirmed
+    jobs over an outbound-only connection (zero inbound ports). Same
+    sandbox and privileges as `agent`.
+    """
+    from invincible.agent.runner import run_harness
+
+    config = _ensure_paired(server, config_path)
+    server = config["server"].rstrip("/")
+    click.echo(f"Harness for {server} - connecting (WS-first). Ctrl+C "
+               "to stop.")
+    try:
+        run_coro_sync(run_harness(server, config["api_key"]))
+    except KeyboardInterrupt:
+        click.echo("\nHarness stopped.")
+
+
+def _format_harness_status(payload: dict) -> str:
+    """Render GET /agent/status for the terminal (pure, tested)."""
+    lines = ["Agent online: "
+             f"{'yes' if payload.get('agent_online') else 'no'}"]
+    machines = payload.get("machines") or []
+    if not machines:
+        lines.append("Machines: none seen yet "
+                     "(start one with: invincible harness connect)")
+        return "\n".join(lines)
+    lines.append(f"Machines ({len(machines)}):")
+    for m in machines:
+        state = "online" if m.get("online") else "offline"
+        caps = ",".join(
+            name for name, have in (m.get("capabilities") or {}).items()
+            if have) or "none"
+        lines.append(
+            f"  - {m.get('machine_name') or m.get('machine_id')} "
+            f"[{m.get('machine_id')}] {state} "
+            f"({m.get('platform', '')}; caps: {caps})")
+    return "\n".join(lines)
+
+
+@harness.command("status")
+@click.option("--config", "config_path",
+              type=click.Path(dir_okay=False, path_type=str), default=None,
+              help="Pairing credentials to use "
+                   "(default ~/.invincible/config.json).")
+def harness_status(config_path: str | None):
+    """Show this account's agent liveness + machine inventory."""
+    import httpx
+
+    config = _load_client_config(config_path)
+    server = config["server"].rstrip("/")
+    try:
+        response = httpx.get(
+            f"{server}/agent/machines",
+            headers={"Authorization": f"Bearer {config['api_key']}"},
+            timeout=15,
+        )
+    except Exception as exc:
+        raise click.ClickException(
+            f"Could not reach {server}: {exc}") from exc
+    if response.status_code == 401:
+        raise click.ClickException(
+            "Pairing key rejected (401) - re-pair with "
+            "`invincible harness setup`.")
+    try:
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        raise click.ClickException(
+            f"Bad status response from {server}: {exc}") from exc
+    click.echo(_format_harness_status({
+        "agent_online": any(
+            m.get("online") for m in (payload.get("machines") or [])),
+        "machines": payload.get("machines"),
+    }))
+
+
+def _render_agent_service(*, config_path: str | None) -> tuple[str, str]:
+    """Render an always-on service definition for this platform.
+
+    Pure (tested): returns (filename, content). The `install` command
+    writes the file and prints the exact enable command — it never
+    executes the enable itself (no elevation surprises, deterministic).
+    """
+    import sys
+
+    target = _client_config_path(config_path)
+    argv = [sys.executable, "-m", "invincible.cli", "harness", "connect",
+            "--config", target]
+    if os.name == "nt":
+        # schtasks one-shot command the user runs elevated.
+        quoted = " ".join(f'"{a}"' for a in argv)
+        return ("invincible-agent.xml",
+                f"Run elevated:\n"
+                f"schtasks /create /tn invincible-agent /tr {quoted} "
+                f"/sc onlogon /rl highest\n")
+    if sys.platform == "darwin":
+        args_xml = "\n".join(
+            f"    <string>{a}</string>" for a in argv)
+        return ("me.invincible.agent.plist",
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+                "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+                "<plist version=\"1.0\">\n<dict>\n"
+                "  <key>Label</key><string>me.invincible.agent</string>\n"
+                "  <key>ProgramArguments</key>\n  <array>\n"
+                f"{args_xml}\n"
+                "  </array>\n"
+                "  <key>RunAtLoad</key><true/>\n"
+                "  <key>KeepAlive</key><true/>\n"
+                "</dict>\n</plist>\n")
+    quoted = " ".join(argv)
+    return ("invincible-agent.service",
+            "[Unit]\n"
+            "Description=Invincible machine harness agent\n"
+            "After=network-online.target\n"
+            "Wants=network-online.target\n\n"
+            "[Service]\n"
+            f"ExecStart={quoted}\n"
+            "Restart=on-failure\n"
+            "RestartSec=5\n\n"
+            "[Install]\n"
+            "WantedBy=default.target\n")
+
+
+@harness.group("service")
+def harness_service():
+    """Always-on service management for the harness agent."""
+
+
+@harness_service.command("install")
+@click.option("--config", "config_path",
+              type=click.Path(dir_okay=False, path_type=str), default=None,
+              help="Pairing credentials the service will use "
+                   "(default ~/.invincible/config.json).")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print the service definition without writing it.")
+def harness_service_install(config_path: str | None, dry_run: bool):
+    """Write an always-on service definition for this machine.
+
+    Writes the file and prints the exact enable command; enabling itself
+    is left to you (services need platform-specific privileges).
+    """
+    import sys
+
+    filename, content = _render_agent_service(config_path=config_path)
+    if os.name == "nt" or dry_run:
+        click.echo(content)
+        if dry_run:
+            return
+    if os.name == "nt":
+        # Windows: definition IS the elevated schtasks command (printed
+        # above); nothing to write.
+        return
+    if sys.platform == "darwin":
+        directory = os.path.join(
+            os.path.expanduser("~"), "Library", "LaunchAgents")
+    else:
+        directory = os.path.join(
+            os.path.expanduser("~"), ".config", "systemd", "user")
+    os.makedirs(directory, exist_ok=True)
+    target = os.path.join(directory, filename)
+    with open(target, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    click.echo(f"Wrote {target}")
+    if sys.platform == "darwin":
+        click.echo("Enable with: launchctl load "
+                   f"{target}")
+    else:
+        click.echo("Enable with: systemctl --user daemon-reload && "
+                   "systemctl --user enable --now invincible-agent.service")
+
+
 @click.command("dev-db")
 @click.option("--port", default=DEV_DB_PORT, show_default=True, type=int,
               help="Local Postgres port to probe (and to publish when "
@@ -2007,6 +2247,7 @@ cli.add_command(setup)
 cli.add_command(start)
 cli.add_command(login)
 cli.add_command(agent)
+cli.add_command(harness)
 cli.add_command(doctor)
 cli.add_command(secret)
 cli.add_command(oauth)

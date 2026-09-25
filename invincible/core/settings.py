@@ -123,6 +123,31 @@ class Settings:
         docs/SECURITY.md §10 deployment posture)."""
         return bool(os.getenv("INVINCIBLE_AGENT_ROUTING"))
 
+    def harness_ws_enabled(self) -> bool:
+        """Agent WebSocket relay (H1). Default on: WS-first with long-poll
+        fallback. Set INVINCIBLE_HARNESS_WS=0/off/false to force poll-only
+        (useful behind proxies that break WS)."""
+        return _env_flag("INVINCIBLE_HARNESS_WS")
+
+    def harness_ws_heartbeat_seconds(self) -> float:
+        """WS keepalive pings from the agent (H1)."""
+        try:
+            return max(
+                1.0, float(os.getenv("INVINCIBLE_HARNESS_WS_HEARTBEAT", ""))
+            )
+        except ValueError:
+            return 20.0
+
+    def harness_summarizer_enabled(self) -> bool:
+        """Opt-in LLM summarizer for harness context compaction (H3).
+        DEFAULT OFF (explicit allowlist, like the debug toggles): each
+        compaction burns an upstream call on the caller's BYOK credentials,
+        so the relay digest in core/relay.py stays the default path."""
+        return os.getenv(
+            "INVINCIBLE_HARNESS_SUMMARIZER", "").strip().lower() in (
+            "1", "true", "on", "yes",
+        )
+
     def debug_dump_400(self) -> bool:
         """Opt-in: dump the exact outgoing payload on non-failover 400s to
         debug_400_<provider>_<epoch>.json. DEFAULT OFF (explicit allowlist,

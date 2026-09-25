@@ -7,10 +7,9 @@ session ``facts`` triples) and explicit \"remember this\" / \"save this\"
 triggers. Retrieval and injection live in ``core/retrieval.py`` and
 ``core/context_builder.py``.
 
-The ``facts`` table itself is inert history as of Phase 4: nothing reads
-or writes it. The legacy SQLite importer that used to fill it was removed
-2026-09-24, so the table now has no writer at all; it is retained until its
-production data is audited and backed up (``core/db.py``).
+The legacy per-session ``facts`` table this vocabulary was retargeted
+from was dropped by Alembic revision ``0013`` (audited empty on
+production 2026-09-25, no backfill ever performed).
 """
 import re
 import time

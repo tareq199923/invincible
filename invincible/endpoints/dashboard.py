@@ -823,6 +823,34 @@ async def mcp_page(
     )
 
 
+@router.get("/dashboard/machines")
+async def machines_page(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    """This account's paired machines (H6c, read-only). Structural
+    isolation holds by construction: the registry tables are keyed by
+    the resolved user, so a user only ever reads their own machines —
+    foreign machines render exactly like absent ones (there is nothing
+    to enumerate: no ids in the URL)."""
+    registry = _state(request, "agent_registry")
+    rows = [
+        {
+            **m,
+            "capability_names": sorted(
+                name for name, have in (m.get("capabilities") or {}).items()
+                if have
+            ),
+        }
+        for m in registry.machines_for(principal.user_id)
+    ]
+    return _page(
+        "machines.html", request,
+        user_email=await _email(_engine(request), principal),
+        machines=rows,
+    )
+
+
 @router.delete("/dashboard/mcp/clients/{client_id}/tokens")
 async def revoke_mcp_client_tokens(
     client_id: str,

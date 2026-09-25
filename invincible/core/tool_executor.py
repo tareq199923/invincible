@@ -72,12 +72,16 @@ so it is not caught. Nor is a link swapped between the check and the
 mutating the filesystem underneath the process.
 """
 import asyncio
+import base64
+import contextlib
 import json
 import logging
 import os
 import re
 import secrets
+import shutil
 import subprocess
+import tempfile
 import time
 
 from sqlalchemy import delete
@@ -236,10 +240,19 @@ class PendingActionStore:
             from invincible.core.db import pending_actions
 
             async with self.engine_connect() as conn:
+                # Explicit columns, not SELECT *: H5 added
+                # suspended_workflow_id/deadline to this table for the
+                # slow-path ApprovalStore, and a star-select would both
+                # break this unpack and resurrect slow-path rows into the
+                # fast-path memory store. Slow-path rows are skipped here
+                # (the ApprovalStore owns them) — the two paths never
+                # resolve each other's tokens.
                 rows = (await conn.execute(
-                    pending_actions.select()
+                    pending_actions.select().where(
+                        pending_actions.c.suspended_workflow_id.is_(None)
+                    )
                 )).all()
-                for token, action_type, args, created_at in rows:
+                for token, action_type, args, created_at, _, _ in rows:
                     args = (
                         args if isinstance(args, dict)
                         else json.loads(args)
@@ -630,3 +643,330 @@ async def read_file(path: str) -> dict:
     except Exception as e:
         logger.error(f"read_file failed: {e}")
         return {"status": "error", "error": str(e)}
+
+
+# --- Harness H6a: read-only machine tools ------------------------------------
+# code_search / process_list / screenshot are NON-destructive like
+# read_file, so they carry no confirm_action gate — the sandbox (server
+# read roots, or the agent's home sandbox when routed) is the gate for
+# anything path-shaped. The private ``_`` helpers below are the EXACT
+# functions both sides run (same pattern as ``_run_command`` /
+# ``_write_file``): the server calls them after its own checks, the agent
+# runner after its sandbox re-check, so result shapes are byte-identical
+# wherever the work happens.
+
+SEARCH_DEFAULT_MAX_RESULTS = 20
+SEARCH_MAX_RESULTS_CAP = 50
+# Files bigger than this are skipped, not read (same spirit as the read
+# sandbox: bounded work per call, no giant-file context blowups).
+SEARCH_FILE_BYTES_CAP = 256 * 1024
+SEARCH_TIMEOUT_SECONDS = 15.0
+# Directory names never descended into by the Python fallback (rg honors
+# .gitignore + skips hidden on its own; both skip these explicitly).
+_SEARCH_SKIP_DIRS = frozenset({
+    ".git", "node_modules", "__pycache__", ".venv", "venv", "dist",
+    "build", ".pytest_cache", ".ruff_cache",
+})
+
+PROCESSES_DEFAULT_LIMIT = 50
+PROCESSES_LIMIT_CAP = 200
+
+# Screenshot framing for UI-validation captures.
+SCREENSHOT_WIDTH = 1280
+SCREENSHOT_HEIGHT = 800
+SCREENSHOT_TIMEOUT_SECONDS = 30.0
+SCREENSHOT_MAX_BYTES = 2 * 1024 * 1024
+_CHROME_BINARIES = (
+    "google-chrome", "chrome", "chromium", "chromium-browser",
+    "chrome.exe", "msedge",
+)
+
+
+def _find_chrome() -> str | None:
+    """First usable Chrome/Chromium/Edge binary, or None."""
+    for name in _CHROME_BINARIES:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def _is_text_sample(path: str) -> bool:
+    """Null-byte probe: binary files are skipped, never decoded."""
+    try:
+        with open(path, "rb") as f:
+            return b"\x00" not in f.read(8192)
+    except OSError:
+        return False
+
+
+def _walk_search(
+    pattern: str, root: str, max_results: int
+) -> tuple[list, int, bool]:
+    """Synchronous fallback search (run in a thread). Case-insensitive
+    substring match per line. Returns (hits, files_searched, truncated)."""
+    lowered = pattern.lower()
+    hits: list = []
+    files_searched = 0
+    truncated = False
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in _SEARCH_SKIP_DIRS
+        )
+        for filename in sorted(filenames):
+            if len(hits) >= max_results:
+                truncated = True
+                return hits, files_searched, truncated
+            full = os.path.join(dirpath, filename)
+            try:
+                if os.path.getsize(full) > SEARCH_FILE_BYTES_CAP:
+                    continue
+            except OSError:
+                continue
+            if not _is_text_sample(full):
+                continue
+            files_searched += 1
+            try:
+                with open(full, encoding="utf-8", errors="replace") as f:
+                    for lineno, line in enumerate(f, start=1):
+                        if lowered in line.lower():
+                            hits.append({
+                                "path": full,
+                                "line": lineno,
+                                "text": line.strip()[:300],
+                            })
+                            if len(hits) >= max_results:
+                                truncated = True
+                                return hits, files_searched, truncated
+            except OSError:
+                continue
+    return hits, files_searched, truncated
+
+
+async def _search_with_rg(
+    pattern: str, root: str, max_results: int
+) -> tuple[list, int, bool] | None:
+    """ripgrep fast path (``rg --json``). None when rg is absent or fails
+    (the caller falls back to the walker) — never raises into the tool."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "rg", "--json", "-m", str(max_results), "-S", pattern, root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except (FileNotFoundError, NotImplementedError):
+        return None
+    try:
+        try:
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=SEARCH_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return None
+        if proc.returncode not in (0, 1):  # 1 = no matches, fine
+            return None
+        hits: list = []
+        files: set = set()
+        for raw in stdout.decode(errors="replace").splitlines():
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") != "match":
+                continue
+            data = event.get("data", {})
+            path = (
+                data.get("path", {}).get("text", "")
+                if isinstance(data.get("path"), dict)
+                else str(data.get("path", ""))
+            )
+            lines = data.get("lines", {})
+            text = ""
+            if isinstance(lines, dict):
+                text = str(lines.get("text", "")).strip()[:300]
+            hits.append({
+                "path": path,
+                "line": int(data.get("line_number", 0)),
+                "text": text,
+            })
+            files.add(path)
+            if len(hits) >= max_results:
+                break
+        return hits, len(files), len(hits) >= max_results
+    except Exception:
+        return None
+
+
+async def _search_code(
+    pattern: str, path: str, max_results: int
+) -> dict:
+    """Search path for pattern. Path is ASSUMED vetted by the caller
+    (server read denylist or agent home sandbox) — this function only
+    executes."""
+    if not pattern.strip():
+        return {"status": "error", "error": "pattern must be non-empty"}
+    limit = max(1, min(int(max_results or SEARCH_DEFAULT_MAX_RESULTS),
+                       SEARCH_MAX_RESULTS_CAP))
+    target = os.path.abspath(os.path.expanduser(path or "."))
+    if os.path.isfile(target):
+        if not _is_text_sample(target):
+            return {"status": "search", "pattern": pattern, "path": path,
+                    "hits": [], "truncated": False, "files_searched": 0}
+        result = await _search_with_rg(pattern, target, limit)
+        if result is not None:
+            hits, files, truncated = result
+            return {"status": "search", "pattern": pattern, "path": path,
+                    "hits": hits, "truncated": truncated,
+                    "files_searched": files}
+        hits, _, truncated = await asyncio.to_thread(
+            _walk_search, pattern, os.path.dirname(target), limit)
+        hits = [h for h in hits if h["path"] == target][:limit]
+        return {"status": "search", "pattern": pattern, "path": path,
+                "hits": hits, "truncated": truncated,
+                "files_searched": 1}
+    if not os.path.isdir(target):
+        return {"status": "error", "error": f"Path not found: {path}"}
+    result = await _search_with_rg(pattern, target, limit)
+    if result is None:
+        hits, files, truncated = await asyncio.to_thread(
+            _walk_search, pattern, target, limit)
+        return {"status": "search", "pattern": pattern, "path": path,
+                "hits": hits, "truncated": truncated,
+                "files_searched": files}
+    hits, files, truncated = result
+    return {"status": "search", "pattern": pattern, "path": path,
+            "hits": hits, "truncated": truncated,
+            "files_searched": files}
+
+
+async def search_code(
+    pattern: str, path: str, max_results: int = SEARCH_DEFAULT_MAX_RESULTS
+) -> dict:
+    """Server-side entry: read-denylist gate, then shared search."""
+    check_read_denylist(path or ".")  # raises ToolBlocked
+    return await _search_code(pattern, path, max_results)
+
+
+async def _list_processes(limit: int) -> dict:
+    """Process table via stdlib subprocess only. No paths, no network —
+    safe to run on either side; the routing posture (server-local vs
+    agent) is the same as every other machine-plane tool."""
+    capped = max(1, min(int(limit or PROCESSES_DEFAULT_LIMIT),
+                        PROCESSES_LIMIT_CAP))
+    try:
+        if os.name == "nt":
+            proc = await asyncio.create_subprocess_exec(
+                "tasklist", "/FO", "CSV", "/NH",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=SEARCH_TIMEOUT_SECONDS)
+            rows = []
+            for line in stdout.decode(errors="replace").splitlines():
+                parts = [p.strip('"') for p in line.split('","')]
+                if len(parts) >= 2:
+                    try:
+                        pid = int(parts[1])
+                    except ValueError:
+                        continue
+                    rows.append({
+                        "pid": pid, "name": parts[0],
+                        "mem": parts[4] if len(parts) > 4 else "",
+                    })
+                    if len(rows) >= capped:
+                        break
+            return {"status": "processes", "processes": rows,
+                    "truncated": len(rows) >= capped}
+        proc = await asyncio.create_subprocess_shell(
+            "ps -eo pid=,comm=,etime=,pcpu=,pmem=,args=",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(
+            proc.communicate(), timeout=SEARCH_TIMEOUT_SECONDS)
+        rows = []
+        for line in stdout.decode(errors="replace").splitlines():
+            parts = line.split(None, 5)
+            if len(parts) < 2:
+                continue
+            try:
+                pid = int(parts[0])
+            except ValueError:
+                continue
+            rows.append({
+                "pid": pid,
+                "name": parts[1],
+                "elapsed": parts[2] if len(parts) > 2 else "",
+                "cpu": parts[3] if len(parts) > 3 else "",
+                "mem": parts[4] if len(parts) > 4 else "",
+                "cmd": (parts[5] if len(parts) > 5 else "")[:200],
+            })
+            if len(rows) >= capped:
+                break
+        return {"status": "processes", "processes": rows,
+                "truncated": len(rows) >= capped}
+    except asyncio.TimeoutError:
+        return {"status": "error",
+                "error": "process listing timed out"}
+    except Exception as e:
+        logger.error(f"process listing failed: {e}")
+        return {"status": "error", "error": str(e)}
+
+
+async def _take_screenshot(url: str, timeout: float) -> dict:
+    """Headless-Chrome capture of an http(s) URL. Runs ONLY on the user's
+    own machine (agent-routed): the server never fetches caller-supplied
+    URLs, so this path cannot become an SSRF primitive. Non-http(s) URLs
+    are refused outright."""
+    if not re.match(r"^https?://", url.strip(), re.I):
+        return {"status": "error",
+                "error": "screenshot URL must start with http:// or https://"}
+    chrome = _find_chrome()
+    if chrome is None:
+        return {"status": "unavailable",
+                "reason": "No Chrome/Chromium/Edge binary found on this "
+                          "machine (auto-discovery reported no browser)."}
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            suffix=".png", delete=False
+        ) as handle:
+            tmp = handle.name
+        proc = await asyncio.create_subprocess_exec(
+            chrome, "--headless", "--disable-gpu", "--hide-scrollbars",
+            f"--window-size={SCREENSHOT_WIDTH},{SCREENSHOT_HEIGHT}",
+            f"--screenshot={tmp}", "--virtual-time-budget=5000", url,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return {"status": "error",
+                    "error": f"screenshot timed out after {timeout}s"}
+        try:
+            with open(tmp, "rb") as f:
+                data = f.read()
+        except OSError:
+            return {"status": "error",
+                    "error": "Chrome produced no screenshot "
+                             f"({stderr.decode(errors='replace')[:200]})"}
+        if len(data) > SCREENSHOT_MAX_BYTES:
+            return {"status": "error",
+                    "error": f"screenshot too large ({len(data)} bytes, "
+                             f"cap {SCREENSHOT_MAX_BYTES})"}
+        return {"status": "screenshot", "mime": "image/png",
+                "data_b64": base64.b64encode(data).decode("ascii"),
+                "bytes": len(data), "url": url}
+    except Exception as e:
+        logger.error(f"screenshot failed: {e}")
+        return {"status": "error", "error": str(e)}
+    finally:
+        if tmp:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)

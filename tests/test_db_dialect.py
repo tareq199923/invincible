@@ -30,6 +30,12 @@ from tests.conftest import TEST_DB_URL
 async def engine():
     eng = create_async_engine(TEST_DB_URL)
     async with eng.begin() as conn:
+        # Alembic's own bookkeeping is not a metadata table: an explicitly
+        # upgraded database (e.g. `invincible db upgrade` against the test
+        # DSN) carries it, and the symmetry assertion below is about the
+        # metadata tables only.
+        await conn.execute(
+            text("DROP TABLE IF EXISTS alembic_version"))
         await conn.run_sync(metadata.drop_all)
         await conn.run_sync(metadata.create_all)
     try:
@@ -208,7 +214,7 @@ def test_metadata_covers_all_expected_tables():
         # Phase 1 identity & ownership
         "users", "projects", "api_keys", "audit_log", "memories",
         # sessions / continuity / oauth / mcp / rate limiting
-        "sessions", "turns", "messages", "facts", "runs", "task_states",
+        "sessions", "turns", "messages", "runs", "task_states",
         "checkpoints", "oauth_clients", "oauth_codes", "oauth_tokens",
         "pending_actions", "login_attempts",
         # Phase 3 accounts
@@ -217,6 +223,8 @@ def test_metadata_covers_all_expected_tables():
         "user_provider_credentials",
         # Phase 1 self-service: per-user routing + request settings
         "user_settings",
+        # Harness H5: durable workflow event log
+        "workflow_events",
     }
     assert set(metadata.tables) == expected
 
@@ -228,3 +236,6 @@ def test_payload_columns_are_jsonb():
     assert isinstance(messages.c.payload.type, JSONB)
     assert isinstance(runs.c.meta.type, JSONB)
     assert isinstance(task_states.c.payload.type, JSONB)
+    from invincible.core.db import workflow_events
+
+    assert isinstance(workflow_events.c.payload.type, JSONB)

@@ -206,3 +206,26 @@ async def test_status_reports_liveness(client):
     await client.post("/agent/poll", headers=agent_headers(key))
     online = await client.get("/agent/status")
     assert online.json()["agent_online"] is True
+
+async def test_machines_requires_inv_key(client):
+    assert (await client.get("/agent/machines")).status_code == 401
+    assert (await client.get(
+        "/agent/machines", headers=agent_headers("inv_garbage")
+    )).status_code == 401
+
+
+async def test_machines_lists_own_machines_only(client):
+    uid, key = await _mint_key(client)
+    assert (await client.get(
+        "/agent/machines", headers=agent_headers(key))).json() == {
+        "machines": []}
+    app.state.agent_registry.update_machine(uid, "m-9", {
+        "machine_name": "lab", "platform": "linux", "capabilities": {}})
+    mine = await client.get(
+        "/agent/machines", headers=agent_headers(key))
+    assert [m["machine_id"] for m in mine.json()["machines"]] == ["m-9"]
+    # A second account sees none of it (structural isolation).
+    _, key2 = await _mint_key(client, email="agent-user-2@example.com")
+    theirs = await client.get(
+        "/agent/machines", headers=agent_headers(key2))
+    assert theirs.json() == {"machines": []}

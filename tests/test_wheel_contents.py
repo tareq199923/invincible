@@ -36,6 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXPECTED_TEMPLATES = {
     "account.html", "base.html", "dashboard.html", "device.html",
     "device_result.html", "landing.html", "login.html", "mcp.html",
+    "machines.html",
     "memory.html", "providers.html", "register.html", "sessions.html",
     "session_detail.html", "settings.html", "setup.html", "tasks.html",
     "usage.html", "_memory_table.html", "_provider_row.html",
