@@ -35,8 +35,8 @@ in [ROADMAP.md](ROADMAP.md) §Phase 7 and the
 
 ### 2. Phase 8 — retire the superseded local-era pieces
 
-The hosted flow is stable (0.3.1 live on PyPI and in production, suite
-green at 1135), so the deprecations whose trigger was *"after hosted
+The hosted flow is stable (0.4.0 live on PyPI and in production, suite
+green at 1175), so the deprecations whose trigger was *"after hosted
 launch stabilizes"* are now actionable. The table in
 [ROADMAP.md](ROADMAP.md) §Deprecated is the source of truth; what it
 still owes:
@@ -61,17 +61,26 @@ Local/self-hosted mode itself is **not** deprecated and stays.
 
 ## Recently completed
 
+### 0.4.0 released — `db import` removal ships as a minor bump (2026-09-25)
+
+`invincible-ai` **0.4.0** is on PyPI, published from tag `v0.4.0` via the
+trusted-publisher dispatch, and production is serving it (`/health` →
+0.4.0). It carries the 2026-09-24 removal of `invincible db import` and
+its SQLite importer module — a breaking CLI change, hence the minor bump
+rather than a patch. Replacement path: direct hosted signup/onboarding.
+
+Verified: `ruff check` clean; full suite 1175 passed; `twine check`
+passed; packaging smoke test passed; install from PyPI into a scratch
+venv outside the repo reports 0.4.0 with `invincible --version` /
+`invincible agent --help` working with no database and no `.env`.
+
 ### Legacy SQLite importer retired — 2026-09-24
 
 The deprecated `invincible db import` command and its SQLite importer module
 were removed. The legacy PostgreSQL `facts` table remains temporarily while
 production data is audited and backed up; no request-serving code uses it.
 
-**Release note for whoever publishes next:** 0.3.1 shipped `db import` as a
-documented command, so its removal is a breaking CLI change — the next PyPI
-release must be a **minor** bump (`0.4.0`), not a patch, and must say the
-command is gone. `invincible/__init__.py` now reads `0.4.0` (bumped,
-unreleased — tag `v0.4.0` + publish still pending).
+Shipped in **0.4.0** (2026-09-25) — see above.
 
 ### 0.3.1 released — Anthropic messages report the serving model (2026-09-23)
 

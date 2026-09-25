@@ -142,10 +142,11 @@ verified by installing from PyPI into a scratch venv outside the repo:
 `invincible --version`, the packaged `providers.yaml` and `templates/`,
 and a migration head matching the source tree.
 
-**0.4.0 is next (pending):** minor bump, not a patch — it removes the
+**0.4.0 shipped 2026-09-25:** minor bump, not a patch — it removes the
 `invincible db import` legacy SQLite importer that 0.3.1 shipped as a
-documented command. Its release note must say the command is gone
-(replacement: direct hosted signup/onboarding).
+documented command (replacement: direct hosted signup/onboarding).
+Published from tag `v0.4.0` via the trusted-publisher dispatch and
+verified serving in production (`/health` → 0.4.0).
 
 Everything from here is immutable: `0.3.0` can never be replaced or
 re-uploaded, only yanked and superseded. Bump `invincible/__init__.py` to
