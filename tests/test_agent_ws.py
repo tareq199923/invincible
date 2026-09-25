@@ -198,10 +198,14 @@ def test_machine_id_stable_and_overridable(tmp_path, monkeypatch):
     monkeypatch.setenv("INVINCIBLE_MACHINE_ID", "pinned-1")
     assert machine_id() == "pinned-1"
     monkeypatch.delenv("INVINCIBLE_MACHINE_ID")
-    # Windows expanduser honors USERPROFILE (not HOME).
+    # Redirect home on BOTH platforms: nt expanduser honors USERPROFILE
+    # (then HOMEDRIVE+HOMEPATH) while posix honors HOME. Without the HOME
+    # override the file lands in the real home dir on Linux/macOS (and CI
+    # fails because it is not under tmp_path).
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("HOMEDRIVE", "")
     monkeypatch.setenv("HOMEPATH", "")
+    monkeypatch.setenv("HOME", str(tmp_path))
     first = machine_id()
     assert first
     # Second call loads the persisted file, not a fresh uuid.
