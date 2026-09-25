@@ -39,6 +39,23 @@ def test_cli_help():
     assert "oauth" in result.output
 
 
+def test_cli_help_leads_with_hosted_commands():
+    """Phase 6 client-mode pass: --help leads with login/agent under a
+    hosted-service heading; server administration is a separate section
+    below. Command names and paths are unchanged."""
+    result = CliRunner().invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    assert "Use the hosted service" in result.output
+    assert "Self-host & server administration" in result.output
+    hosted_at = result.output.index("Use the hosted service")
+    admin_at = result.output.index("Self-host & server administration")
+    assert hosted_at < admin_at
+    login_at = result.output.index("  login", hosted_at)
+    agent_at = result.output.index("  agent", hosted_at)
+    setup_at = result.output.index("  setup", admin_at)
+    assert login_at < agent_at < admin_at < setup_at
+
+
 def test_cli_version():
     result = CliRunner().invoke(cli, ["--version"])
     assert result.exit_code == 0

@@ -1951,10 +1951,56 @@ def db_upgrade():
                f"({_mask_url(url)})")
 
 
-@click.group()
+# --- top-level group: remote-first help -------------------------------------
+# Every user is their own operator against the hosted service; nobody runs
+# a server to use Invincible. The --help listing leads with the two hosted
+# commands (login, agent) and groups everything else as self-host and
+# server administration. Command NAMES and paths are unchanged - only the
+# presentation order differs from click's default alphabetical listing.
+
+
+class _RemoteFirstGroup(click.Group):
+    """click.Group with a curated two-section command listing."""
+
+    HOSTED_COMMANDS = ("login", "agent")
+
+    def format_commands(
+        self, ctx: click.Context, formatter: click.HelpFormatter
+    ) -> None:
+        commands = []
+        for name in self.list_commands(ctx):
+            cmd = self.get_command(ctx, name)
+            if cmd is None or cmd.hidden:
+                continue
+            commands.append((name, cmd))
+
+        hosted = [row for row in commands if row[0] in self.HOSTED_COMMANDS]
+        hosted.sort(key=lambda row: self.HOSTED_COMMANDS.index(row[0]))
+        rest = sorted(
+            [row for row in commands if row[0] not in self.HOSTED_COMMANDS],
+            key=lambda row: row[0],
+        )
+        for title, rows in (
+            ("Use the hosted service", hosted),
+            ("Self-host & server administration", rest),
+        ):
+            if not rows:
+                continue
+            with formatter.section(title):
+                formatter.write_dl(
+                    [(name, cmd.get_short_help_str()) for name, cmd in rows]
+                )
+
+
+@click.group(cls=_RemoteFirstGroup)
 @click.version_option(__version__, "--version", "-V", prog_name="invincible")
 def cli():
-    """Invincible - multi-provider AI gateway with MCP tool execution."""
+    """Invincible - your AI continuity service.
+
+    Most users only need two commands: login (pair this machine with the
+    hosted service) and agent (run confirmed tool jobs on this machine).
+    Everything else is self-host and server administration.
+    """
 
 
 cli.add_command(setup)

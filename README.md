@@ -225,10 +225,14 @@ How to add a provider, aliases, and supported shapes:
 
 ## CLI Commands
 
-Two commands, both exposed as `invincible` and `inv`:
+Two commands, both exposed as `invincible` and `inv`. Most users only
+need the first two rows (the hosted service); the rest is self-host and
+server administration:
 
 | Command | Purpose |
 |---|---|
+| `invincible login [--server URL]` | Pair this machine with an Invincible server (device flow): opens the approval page in your browser — click Approve and the command finishes, saving the `inv_` key to `~/.invincible/config.json`. Defaults to the hosted service (`https://invincible-ai.me`); pass `--server` for a self-hosted or local server. URL + code are printed for headless terminals; the Account page also has a "Pair a device" box for typing a code by hand. |
+| `invincible agent` | Run the local agent (Phase 10): polls the paired server for confirmed tool jobs and executes them on **this machine** with your own user privileges — denylist re-checked locally, reads/writes sandboxed to your home. Ctrl+C to stop. First run pairs automatically (device flow); `invincible login` is the explicit pairing/repair tool. |
 | `invincible setup` | Create/update `.env`: generates missing secrets (`token_urlsafe(32)`, never echoed), prompts for provider keys, preserves existing comments/values; a stale `MCP_SHARED_SECRET` line is left alone (rename it to `INVINCIBLE_OWNER_SECRET` yourself). `--force` re-prompts existing values. |
 | `invincible secret rotate` | Generate a brand-new `INVINCIBLE_OWNER_SECRET` and rewrite it in place — no manual `.env` editing, never echoes the value (unless `--show`). Preserves every other line. Does **not** revoke already-issued OAuth grants (that's `invincible oauth revoke`). |
 | `invincible start` | Start the server. `--host` (default `127.0.0.1`; pass `0.0.0.0` to be reachable from other machines), `--port` (default `8000`), `--reload`, `--log-level`, `--env-file`, `--config` (custom providers.yaml), `--tunnel/--no-tunnel` (local convenience: starts a Cloudflare tunnel named `invincible` by default so a laptop can be reached from the internet), `--tunnel-name` (or `INVINCIBLE_TUNNEL_NAME`). The tunnel is shut down with the server (Ctrl+C or a crash); a dead tunnel is reported as soon as it exits. There is no database flag — `INVINCIBLE_DB_URL` comes from the env/.env. **Hosted platforms do not use this command**: the container command in `Dockerfile`/`railway.json`/`Procfile` binds `0.0.0.0:$PORT` with proxy headers — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). |
@@ -243,8 +247,6 @@ Two commands, both exposed as `invincible` and `inv`:
 | `invincible api-key revoke <id-or-prefix>` | Revoke a key immediately. |
 | `invincible users list` | List accounts (host tool; roles are informational only). |
 | `invincible users reset-password <email>` | Reset an account's password (host recovery path — database access is the proof of authority; `--generate` prints a strong password once). Every browser session for the account is signed out; `inv_` keys and MCP tokens are untouched. |
-| `invincible login [--server URL]` | Pair this machine with an Invincible server (device flow): opens the approval page in your browser — click Approve and the command finishes, saving the `inv_` key to `~/.invincible/config.json`. Defaults to the hosted service (`https://invincible-ai.me`); pass `--server` for a self-hosted or local server. URL + code are printed for headless terminals; the Account page also has a "Pair a device" box for typing a code by hand. |
-| `invincible agent` | Run the local agent (Phase 10): polls the paired server for confirmed tool jobs and executes them on **this machine** with your own user privileges — denylist re-checked locally, reads/writes sandboxed to your home. Ctrl+C to stop. First run pairs automatically (device flow); `invincible login` is the explicit pairing/repair tool. |
 
 ```bash
 invincible setup --force

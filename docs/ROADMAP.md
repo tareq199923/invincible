@@ -255,9 +255,12 @@ different session timezones (UTC regression test).
 **Status: In progress (partly shipped).** Shipped: hosted-by-default device
 pairing (`invincible login`, with `--server` for a self-hosted server) and
 the agent's one-command self-pairing (`invincible agent`), so an ordinary
-user never touches PostgreSQL/Alembic/tunnel/OAuth details. Remaining: an
-`inv` client-mode pass so the CLI reads as a client of the hosted service
-rather than a server launcher.
+user never touches PostgreSQL/Alembic/tunnel/OAuth details. Client-mode
+pass landed 2026-09-25: `--help` leads with login/agent under a hosted
+heading and groups the rest as self-host administration (command names
+and paths unchanged; every user is their own operator against the
+hosted service). Possible follow-up: a remote `status`/`whoami` so a
+hosted user can check login + agent state without touching the server.
 
 ### Phase 7 — Deployment
 **Status: Deployed 2026-09-02 — production operational; Railway ownership

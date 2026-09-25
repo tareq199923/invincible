@@ -267,7 +267,12 @@ turns as nodes/edges/timeline - is available to the session's owner at
 
 ## 4. CLI reference
 
+`--help` leads with the hosted-service commands; the rest is self-host
+and server administration (same order as the tool prints it):
+
 ```
+invincible login [--server URL] [--config PATH]
+invincible agent [--config PATH] [--server URL]
 invincible setup [--db-url DSN] [--env-file PATH] [--force] [--skip-db-check]
 invincible secret rotate | credential-key [--env-file PATH] [--show]
 invincible start [--host 127.0.0.1|0.0.0.0] [--port 8000] [--reload]
@@ -277,8 +282,6 @@ invincible start [--host 127.0.0.1|0.0.0.0] [--port 8000] [--reload]
 invincible doctor [--env-file .env]
 invincible dev-db [--port 5433] [--env-file .env] [--write-env]
 invincible db upgrade [--env-file .env]
-invincible login [--server URL] [--config PATH]
-invincible agent [--config PATH] [--server URL]
 invincible oauth list | revoke <client_id> | test-client
 invincible api-key create --user <id-or-email> [--label TEXT] | list | revoke <id-or-prefix>
 invincible users list | reset-password <email> [--generate]
