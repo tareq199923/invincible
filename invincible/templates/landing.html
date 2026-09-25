@@ -80,16 +80,11 @@
     .hero h1 span, .hero h1 em { display: block; max-width: 100%; }
     .hero h1 em { color: var(--accent); font-style: normal; }
     .hero__copy > p.sub { max-width: 640px; margin: 0; color: #adb4bf; font-size: clamp(1rem, 1.6vw, 1.16rem); line-height: 1.62; }
-    .hero__copy > p.hint { max-width: 640px; margin: 12px 0 0; color: #7f8792; font-size: 0.8rem; line-height: 1.6; }
     .hero .actions { display: flex; gap: 9px; margin-top: 28px; flex-wrap: wrap; }
     .btn { display: inline-flex; min-height: 44px; padding: 8px 15px; align-items: center; justify-content: center; color: var(--night); background: var(--accent); border: 1px solid var(--accent); border-radius: 6px; font-size: 0.74rem; font-weight: 850; text-decoration: none; transition: background .15s ease, transform .15s ease, box-shadow .15s ease; }
     .btn:hover { color: var(--night); background: #aeb4ff; box-shadow: 0 6px 0 rgba(139, 147, 255, 0.18); transform: translateY(-2px); }
     .btn.ghost { color: #c9ced6; background: transparent; border-color: #414752; }
     .btn.ghost:hover { color: #fff; background: #272c35; box-shadow: none; }
-    .install-strip { margin-top: 18px; max-width: 640px; }
-    .install-strip pre { margin: 0; padding: 12px 14px; overflow-x: auto; color: #eef1f5; background: var(--night-raised); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; font-family: var(--mono); font-size: 0.76rem; line-height: 1.7; }
-    .install-strip pre .c { color: var(--accent-ink, #b7bcff); }
-    .install-strip small { display: block; margin-top: 7px; color: #7f8792; font-size: 0.7rem; line-height: 1.5; }
 
     .terminal { overflow: hidden; background: var(--paper); border: 1px solid var(--line-strong); border-top: 3px solid var(--accent); border-radius: 12px; box-shadow: 0 30px 80px rgba(0,0,0,.42), 10px 10px 0 rgba(139,147,255,.1); font-family: var(--mono); font-size: 0.8rem; text-align: left; }
     .terminal .bar { display: flex; min-height: 40px; padding: 0 15px; gap: 7px; align-items: center; background: var(--night-raised); border-bottom: 1px solid var(--line); }
@@ -264,12 +259,6 @@
             <a class="btn" href="/register">Create your account</a>
             <a class="btn ghost" href="#setup">See the hosted setup</a>
           </div>
-          <div class="install-strip" aria-label="User install command">
-            <pre><span class="c">pip install invincible-ai</span>
-<span class="c">invincible agent</span>  <span class="dim" style="color:#747c88;"># pairs your machine — no database, no .env</span></pre>
-            <small>One command pairs your PC with invincible-ai.me. Your account, provider keys, and memory live on the hosted service.</small>
-          </div>
-          <p class="hint">A free account unlocks chat instantly. Pair the agent to give a remote AI hands on your machine. Connect provider keys to power every model route.</p>
         </div>
         <div class="terminal" aria-label="Invincible hosted client configuration">
           <div class="bar"><i></i><i></i><i></i><strong>invincible / client-config</strong></div>
