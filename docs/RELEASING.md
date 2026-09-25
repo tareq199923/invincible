@@ -136,10 +136,16 @@ runs the smoke test above for exactly that reason, and `publish` needs
 
 `invincible-ai` **0.3.0 was published on 2026-09-23** — the first upload,
 which claimed the name (it was unclaimed until then, so anyone could have
-taken it). The README's `pip install invincible-ai` journey is real now,
+taken it) — followed by **0.3.1** (serving-model fix for `/v1/messages`).
+The README's `pip install invincible-ai` journey is real now,
 verified by installing from PyPI into a scratch venv outside the repo:
 `invincible --version`, the packaged `providers.yaml` and `templates/`,
 and a migration head matching the source tree.
+
+**0.4.0 is next (pending):** minor bump, not a patch — it removes the
+`invincible db import` legacy SQLite importer that 0.3.1 shipped as a
+documented command. Its release note must say the command is gone
+(replacement: direct hosted signup/onboarding).
 
 Everything from here is immutable: `0.3.0` can never be replaced or
 re-uploaded, only yanked and superseded. Bump `invincible/__init__.py` to

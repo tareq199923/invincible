@@ -4,7 +4,7 @@ The single ordered list of actionable work. Everything to do, in
 priority order, with detail. Strategic context (phases, direction,
 what's implemented) lives in [ROADMAP.md](ROADMAP.md).
 
-Last updated: 2026-09-24.
+Last updated: 2026-09-25.
 
 ---
 
@@ -70,7 +70,8 @@ production data is audited and backed up; no request-serving code uses it.
 **Release note for whoever publishes next:** 0.3.1 shipped `db import` as a
 documented command, so its removal is a breaking CLI change — the next PyPI
 release must be a **minor** bump (`0.4.0`), not a patch, and must say the
-command is gone. `invincible/__init__.py` still reads `0.3.1`.
+command is gone. `invincible/__init__.py` now reads `0.4.0` (bumped,
+unreleased — tag `v0.4.0` + publish still pending).
 
 ### 0.3.1 released — Anthropic messages report the serving model (2026-09-23)
 
