@@ -233,9 +233,9 @@ Response:
 {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
 ```
 
-Response: `result.tools` is an array of ten tool descriptors (the
-file/exec/approval surface, the Phase 15b continuity tools, and the
-memory tools):
+Response: `result.tools` is an array of twelve tool descriptors (the
+file/exec/approval surface, the Phase 15b continuity tools, the memory
+tools, and the project tools):
 
 ```json
 {
@@ -346,6 +346,23 @@ memory tools):
             "kind": {"type": "string", "enum": ["note", "fact", "preference", "decision", "task"]},
             "project": {"type": "string"}
           }
+        }
+      },
+      {
+        "name": "project_create",
+        "description": "Create a new project for the user. Projects scope memories: a memory saved with project=<name> is only retrieved when working in that project. ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {"name": {"type": "string", "description": "the project name, 1-100 characters"}},
+          "required": ["name"]
+        }
+      },
+      {
+        "name": "project_list",
+        "description": "List the user's projects (id, name, is_default, archived_at). Call this before project-scoped memory_save to discover valid project names instead of guessing. ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {"include_archived": {"type": "boolean", "description": "include soft-archived projects (default false)"}}
         }
       }
     ]
