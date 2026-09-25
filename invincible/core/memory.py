@@ -62,9 +62,16 @@ def _clean_target(raw: str) -> str:
 
 
 def extract_facts(messages: list) -> list[tuple[str, str, str]]:
+    # User voice only (2026-09-25): assistant replies and tool results are
+    # never mined, so attacker-influenced content (a fetched page, a file
+    # read, a provider reply) cannot mint durable auto memories that later
+    # prompts re-inject. Matches extract_explicit's long-standing rule that
+    # an assistant echoing "remember that..." must never save on its own.
     facts_out = []
     seen = set()
     for m in messages:
+        if m.get("role") != "user":
+            continue
         content = m.get("content")
         if not isinstance(content, str) or not content:
             continue
@@ -206,8 +213,8 @@ class MemoryStore:
         """Extract memories from a request's new turns and persist them.
 
         Two sources per the Phase 4 design: deterministic auto-extraction
-        (regex patterns, confidence 0.6) over every message, and explicit
-        \"remember this\" / \"save this\" triggers (confidence 1.0) from
+        (regex patterns, confidence 0.6) over user messages only, and explicit
+        "remember this" / "save this" triggers (confidence 1.0) from
         user messages only. Rows are user-scope; provenance records the
         originating client session. Returns how many NEW rows landed.
 

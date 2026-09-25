@@ -412,6 +412,7 @@ as `system` messages and **never persisted**:
 ```
 memories row written at persist time:
     auto:     regex triples -> "relation: target", confidence 0.6
+              (user messages ONLY — assistant/tool text never mints rows)
     explicit: "remember this|that …" / "save this|that …"
               (user messages ONLY), verbatim-ish, confidence 1.0
 

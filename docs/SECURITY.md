@@ -579,7 +579,10 @@ sandbox:
    message for later requests. It carries exactly the trust level of the
    scoped-memory injection: whoever holds an MCP token can shape future
    prompts in their own session. Payloads are size-capped and never
-   treated as instructions by Invincible itself.
+   treated as instructions by Invincible itself. Chat auto-extraction is
+   narrower still: only user-role messages are mined, so assistant replies
+   and tool results (a fetched page, a file read) can never mint durable
+   memories that later prompts re-inject.
 11. **Graph API shows raw snippets.** `/api/v1/sessions/{id}/graph`
     includes first-message JSON snippets per turn — owner-scoped to the
     `inv_` key's user, same exposure class as reading the session via
