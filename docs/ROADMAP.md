@@ -365,7 +365,7 @@ as removed.
 
 | Item | Replacement | When |
 |---|---|---|
-| Owner-secret-only MCP consent (`INVINCIBLE_OWNER_SECRET` as sole identity) | User-bound OAuth subjects | Phase 2+ |
+| Owner-secret-only MCP consent (`INVINCIBLE_OWNER_SECRET` as sole identity) | User-bound OAuth subjects | Retired 2026-09-25 (subject mandatory at issuance; legacy rows fail closed) |
 | `facts` triple store | `memories` table (scopes/layers/provenance) | Phase 4 request path retired. **Decision 2026-09-24: retained temporarily**; the importer is removed, but the table remains until production data is audited and backed up. |
 | Legacy SQLite importer (`db import`) | Direct hosted signup/onboarding | Removed 2026-09-24 |
 | Client-supplied `session_id` as storage identity | Relational session identity | Phase 1 (transitional helper retained briefly) |

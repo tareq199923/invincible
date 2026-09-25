@@ -130,9 +130,10 @@ class OAuthStore:
         self, code: str, client_id: str, redirect_uri: str,
         code_verifier: str,
     ) -> int | None:
-        """Phase 2 variant of :meth:`consume_code` that also returns the
-        authorizing subject recorded at approval time (None on legacy
-        codes). The code is marked used exactly like the base path."""
+        """Consume an authorization code, returning the consenting subject
+        recorded at approval time. The code is marked used exactly once;
+        reuse, mismatch, expiry, and PKCE failure all raise
+        ``invalid_grant``."""
         await self._expire_lazy()
         async with self.engine.connect() as conn:
             row = (await conn.execute(
@@ -174,8 +175,16 @@ class OAuthStore:
 
     async def create_code(
         self, client_id: str, redirect_uri: str, code_challenge: str,
-        ttl: float = CODE_TTL, subject_user_id: int | None = None,
+        ttl: float = CODE_TTL, *, subject_user_id: int,
     ) -> str:
+        """Mint an authorization code bound to the consenting user.
+
+        The subject has been mandatory since the Phase 8 consent
+        retirement: owner-secret-only (subject-less) grants can no longer
+        be created. Pre-existing subject-less rows fail closed downstream
+        (``require_mcp_auth`` rejects them; ``rotate_refresh`` refuses
+        them), so the nullable column stays for history only.
+        """
         code = secrets.token_urlsafe(24)
         async with self.engine.begin() as conn:
             await conn.execute(
@@ -191,50 +200,11 @@ class OAuthStore:
             )
         return code
 
-    async def consume_code(
-        self, code: str, client_id: str, redirect_uri: str,
-        code_verifier: str,
-    ) -> None:
-        await self._expire_lazy()
-        async with self.engine.connect() as conn:
-            row = (await conn.execute(
-                select(
-                    oauth_codes.c.code,
-                    oauth_codes.c.client_id,
-                    oauth_codes.c.redirect_uri,
-                    oauth_codes.c.code_challenge,
-                    oauth_codes.c.used,
-                ).where(oauth_codes.c.code == code)
-            )).first()
-        if row is None:
-            raise OAuthError(
-                "invalid_grant", "authorization code is invalid or expired"
-            )
-        _, stored_client, stored_redirect, challenge, used = row
-        if used:
-            raise OAuthError(
-                "invalid_grant", "authorization code has already been used"
-            )
-        if stored_client != client_id or stored_redirect != redirect_uri:
-            raise OAuthError(
-                "invalid_grant",
-                "authorization code was not issued for this request",
-            )
-        verifier_challenge = _s256_challenge(code_verifier)
-        if not secrets.compare_digest(verifier_challenge, challenge):
-            raise OAuthError("invalid_grant", "PKCE verification failed")
-        async with self.engine.begin() as conn:
-            await conn.execute(
-                update(oauth_codes)
-                .where(oauth_codes.c.code == code)
-                .values(used=True)
-            )
-
     # --- tokens ---
 
     async def _insert_token(
         self, token_type: str, client_id: str, ttl: float,
-        subject_user_id: int | None = None,
+        subject_user_id: int,
     ) -> str:
         raw = secrets.token_urlsafe(32)
         async with self.engine.begin() as conn:
@@ -252,8 +222,13 @@ class OAuthStore:
         return raw
 
     async def issue_token_pair(
-        self, client_id: str, subject_user_id: int | None = None,
+        self, client_id: str, subject_user_id: int,
     ) -> dict:
+        """Mint an access + refresh pair acting as ``subject_user_id``.
+
+        Subject-less issuance was removed with the Phase 8 consent
+        retirement: every grant acts as the user who consented to it.
+        """
         access = await self._insert_token(
             "access", client_id, ACCESS_TOKEN_TTL, subject_user_id)
         refresh = await self._insert_token(
@@ -292,6 +267,11 @@ class OAuthStore:
         if token_type != "refresh" or revoked:
             raise OAuthError("invalid_grant",
                              "refresh token is invalid or expired")
+        if subject is None:
+            # Pre-subject legacy grant: unusable at /mcp and unrefreshable
+            # here (Phase 8 consent retirement). Fail closed, don't mint.
+            raise OAuthError("invalid_grant",
+                             "refresh token has no subject")
         await self._revoke_by_hash(token_hash_value)
         return await self.issue_token_pair(client_id, subject)
 

@@ -19,8 +19,11 @@ its own realm.
 > the owner-secret *login* entirely. The variable survives with one job
 > only: the HMAC key source signing account browser sessions
 > (`core.accounts SessionManager`). It is never sent on `/mcp` and never
-> typed into any form. A stale `MCP_SHARED_SECRET` value still works as a
-> session-signing fallback.
+> typed into any form. The pre-rename `MCP_SHARED_SECRET` alias was
+> retired after the Phase 8 consent retirement: only
+> `INVINCIBLE_OWNER_SECRET` signs sessions now, and a stale
+> `MCP_SHARED_SECRET` value is inert (rename it to keep browser
+> sessions working).
 
 ### `/v1/*` — per-user API keys only (fail closed)
 
@@ -59,14 +62,18 @@ deliberately **not** accepted here: MCP grants must always pass the
 browser gate, so a leaked API key can never run
 `execute_bash`/`write_file`.
 
-**Consent identity (Phase 2, self-service).** A valid dashboard session
-cookie (`invincible_session`) grants consent **as that logged-in user** —
-the consent page names the identity, and tokens minted from the approval
-act as that user's subject. Every user approves their OWN clients; there
-is no operator gate and no owner-secret login anymore (the old
-owner-secret cookie path was removed in Phase 2). `require_mcp_auth`
-itself is unchanged: tokens have always resolved through
-`subject_user_id`.
+**Consent identity (Phase 2, self-service; sole-identity path retired in
+Phase 8).** A valid dashboard session cookie (`invincible_session`) grants
+consent **as that logged-in user** — the consent page names the identity,
+and tokens minted from the approval act as that user's subject. Every user
+approves their OWN clients; there is no operator gate and no owner-secret
+login anymore (the old owner-secret cookie path was removed in Phase 2).
+Since Phase 8 the subject is mandatory at issuance
+(`OAuthStore.create_code` / `issue_token_pair` require it; legacy
+subject-less refresh rows are refused) — pre-existing subject-less rows
+fail closed at `require_mcp_auth`, which has always resolved through
+`subject_user_id`. The owner secret itself stays, with one job only:
+the HMAC key source signing account browser sessions.
 
 **Why self-approval is safe here.** Approval mints MCP bearer tokens, and
 on a server with `INVINCIBLE_AGENT_ROUTING=1` confirmed tool execution

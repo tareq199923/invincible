@@ -117,7 +117,6 @@ def test_session_cookie_expiry(monkeypatch):
 
 def test_session_fail_closed_without_secret(monkeypatch):
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
-    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     assert SessionManager.available() is False
     assert SessionManager.verify("v2.1.0.9999999999.deadbeef") is None
     with pytest.raises(AccountError) as excinfo:

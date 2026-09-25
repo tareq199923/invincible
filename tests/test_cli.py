@@ -173,7 +173,9 @@ def test_setup_preserves_existing_values(tmp_path):
     assert target.read_text(encoding="utf-8") == before
 
 
-def test_setup_carries_legacy_mcp_shared_secret_into_new_key(tmp_path):
+def test_setup_ignores_legacy_mcp_shared_secret(tmp_path):
+    """The MCP_SHARED_SECRET fallback is retired: a stale legacy line is
+    left alone and a fresh INVINCIBLE_OWNER_SECRET is generated."""
     target = tmp_path / ".env"
     target.write_text(
         "UNRELATED_SETTING=keep-1\nMCP_SHARED_SECRET=old-mcp\n"
@@ -185,8 +187,9 @@ def test_setup_carries_legacy_mcp_shared_secret_into_new_key(tmp_path):
     )
     assert result.exit_code == 0
     values = _env_dict(target.read_text(encoding="utf-8"))
-    assert values["INVINCIBLE_OWNER_SECRET"] == "old-mcp"
-    assert "Carried MCP_SHARED_SECRET over" in result.output
+    assert values["INVINCIBLE_OWNER_SECRET"] != "old-mcp"
+    assert values["MCP_SHARED_SECRET"] == "old-mcp"
+    assert "Carried MCP_SHARED_SECRET over" not in result.output
 
 
 def test_setup_preserves_unrelated_vars_comments_and_blank_lines(tmp_path):
@@ -419,20 +422,17 @@ def test_secret_rotate_preserves_other_lines_comments_and_order(tmp_path):
     assert target.read_text(encoding="utf-8") != before
 
 
-def test_secret_rotate_migrates_legacy_mcp_shared_secret(tmp_path):
+def test_secret_rotate_ignores_legacy_mcp_shared_secret(tmp_path):
+    """The MCP_SHARED_SECRET fallback is retired: a file with only the
+    legacy key has no owner secret, so rotate guides to setup and leaves
+    the file untouched."""
     target = tmp_path / ".env"
-    target.write_text(
-        "UNRELATED_SETTING=keep-1\nMCP_SHARED_SECRET=old-mcp\n",
-        encoding="utf-8",
-    )
+    before = "UNRELATED_SETTING=keep-1\nMCP_SHARED_SECRET=old-mcp\n"
+    target.write_text(before, encoding="utf-8")
     result = CliRunner().invoke(cli, ["secret", "rotate", "--env-file", str(target)])
-    assert result.exit_code == 0
-    text = target.read_text(encoding="utf-8")
-    assert "INVINCIBLE_OWNER_SECRET=" in text
-    assert "MCP_SHARED_SECRET" not in text
-    values = _env_dict(text)
-    assert values["INVINCIBLE_OWNER_SECRET"] != "old-mcp"
-    assert values["UNRELATED_SETTING"] == "keep-1"
+    assert result.exit_code == 1
+    assert "invincible setup" in result.output
+    assert target.read_text(encoding="utf-8") == before
 
 
 def test_secret_rotate_missing_env_file_guides_to_setup(tmp_path):
@@ -930,11 +930,14 @@ def test_default_db_url_resolution_comes_from_env(monkeypatch):
 @pytest.fixture
 async def seeded_client_id(pg_engine):
     """Register a client + token pair on the shared test database."""
+    from invincible.core.db import ensure_local_owner
+
+    uid, _pid = await ensure_local_owner(pg_engine)
     store = OAuthStore(engine=pg_engine)
     registration = await store.register_client(
         ["http://localhost:9999/callback"], "seed-client"
     )
-    await store.issue_token_pair(registration["client_id"])
+    await store.issue_token_pair(registration["client_id"], uid)
     return registration["client_id"]
 
 
@@ -1047,7 +1050,6 @@ def test_oauth_test_client_prints_bearer_curl(pg_engine, monkeypatch):
 def test_oauth_test_client_requires_owner_secret(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)  # isolate from any repo-root .env
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
-    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
     result = CliRunner().invoke(cli, ["oauth", "test-client"])
     assert result.exit_code == 1

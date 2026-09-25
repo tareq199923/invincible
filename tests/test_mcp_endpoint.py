@@ -51,13 +51,35 @@ async def test_mcp_with_revoked_token_returns_401(client):
 
 
 async def test_mcp_subject_less_token_returns_401(client):
-    """Multi-tenant audit Step 2: a token with no subject (pre-0003
-    database era) must not fall back to the local owner - fail closed."""
+    """Multi-tenant audit Step 2: a token with no subject (pre-subject
+    legacy row) must not fall back to the local owner - fail closed.
+
+    The store can no longer mint subject-less pairs (Phase 8 consent
+    retirement), so the legacy row is inserted directly; it must still
+    be rejected at the gate."""
+    import secrets
+    import time
+
+    from invincible.core.db import oauth_tokens
+    from invincible.core.oauth_store import token_hash
+
     client_id, _ = await oauth_register(client)
-    tokens = await OAuthStore(app.state.engine).issue_token_pair(client_id)
+    raw = secrets.token_urlsafe(32)
+    async with app.state.engine.begin() as conn:
+        await conn.execute(
+            oauth_tokens.insert().values(
+                token_hash=token_hash(raw),
+                token_type="access",
+                client_id=client_id,
+                subject_user_id=None,
+                expires_at=time.time() + 3600,
+                revoked=False,
+                created_at=time.time(),
+            )
+        )
     response = await client.post(
         "/mcp",
-        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        headers={"Authorization": f"Bearer {raw}"},
         json=TOOLS_LIST_REQUEST,
     )
     assert response.status_code == 401

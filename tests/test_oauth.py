@@ -245,8 +245,11 @@ async def test_code_is_single_use(client):
 async def test_expired_code_rejected(client):
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
+    uid = await consent_account(client)
     store: OAuthStore = app.state.oauth_store
-    code = await store.create_code(client_id, redirect_uri, challenge, ttl=0)
+    code = await store.create_code(
+        client_id, redirect_uri, challenge, ttl=0, subject_user_id=uid
+    )
     response = await oauth_exchange(client, code, client_id, redirect_uri, verifier)
     assert response.status_code == 400
     assert response.json()["error"] == "invalid_grant"
@@ -381,6 +384,36 @@ async def test_refresh_rotates_and_invalidates_old(client):
     assert replay.json()["error"] == "invalid_grant"
 
 
+async def test_refresh_without_subject_is_refused(client):
+    """Phase 8 consent retirement: a pre-subject legacy refresh row must
+    not mint new tokens — fail closed with invalid_grant."""
+    import secrets
+    import time
+
+    import pytest
+
+    from invincible.core.db import oauth_tokens
+    from invincible.core.oauth_store import OAuthError, token_hash
+
+    client_id, _ = await oauth_register(client)
+    raw = secrets.token_urlsafe(32)
+    store: OAuthStore = app.state.oauth_store
+    async with app.state.engine.begin() as conn:
+        await conn.execute(
+            oauth_tokens.insert().values(
+                token_hash=token_hash(raw),
+                token_type="refresh",
+                client_id=client_id,
+                subject_user_id=None,
+                expires_at=time.time() + 3600,
+                revoked=False,
+                created_at=time.time(),
+            )
+        )
+    with pytest.raises(OAuthError, match="invalid_grant"):
+        await store.rotate_refresh(raw)
+
+
 # --- revocation ---
 
 
@@ -445,7 +478,6 @@ async def test_authorize_redirects_when_session_secret_unset(client, monkeypatch
     key would be publicly computable), so consent is unreachable: the
     GET bounces to /login and no code can ever be issued."""
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
-    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     verifier, challenge = pkce_pair()
     client_id, redirect_uri = await oauth_register(client)
     params = authorize_params(client_id, challenge, redirect_uri)

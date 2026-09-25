@@ -262,7 +262,7 @@ class SessionManager:
 
     @staticmethod
     def _key() -> bytes | None:
-        secret = settings.owner_secret() or settings.legacy_owner_secret()
+        secret = settings.owner_secret()
         if not secret:
             return None
         return hashlib.sha256(secret.encode("utf-8")).digest()

@@ -48,7 +48,6 @@ from invincible.core.identity import AuditLog as _AuditLog
 from invincible.core.oauth_store import OAuthStore
 
 SECRET_ENV_KEYS = ("INVINCIBLE_OWNER_SECRET",)
-LEGACY_OWNER_SECRET_KEY = "MCP_SHARED_SECRET"
 
 # --- local dev database (dev-db) ---------------------------------------------
 DEV_DB_PORT = 5433      # project convention: tests + local dev live here
@@ -447,21 +446,6 @@ def setup(env_file, db_url, force, skip_db_check):
                 existing.setdefault(parsed[0], parsed[1])
 
     new_values = {}
-
-    # Migration: the owner secret replaced MCP_SHARED_SECRET. When the new
-    # key is absent but the old one exists, carry the value over so existing
-    # deployments work unchanged (the legacy line is kept as a fallback).
-    if (
-        "INVINCIBLE_OWNER_SECRET" not in existing
-        and LEGACY_OWNER_SECRET_KEY in existing
-    ):
-        carried = existing[LEGACY_OWNER_SECRET_KEY]
-        new_values["INVINCIBLE_OWNER_SECRET"] = carried
-        existing["INVINCIBLE_OWNER_SECRET"] = carried
-        click.echo(
-            "Carried MCP_SHARED_SECRET over to INVINCIBLE_OWNER_SECRET "
-            "(it is now the account-session signing key)."
-        )
 
     # Secrets: generated on first run, regenerated only with --force,
     # never echoed and never prompted for.
@@ -964,12 +948,10 @@ def _run_doctor_checks():
     )
 
     owner = os.getenv("INVINCIBLE_OWNER_SECRET")
-    legacy = os.getenv(LEGACY_OWNER_SECRET_KEY)
-    note = "falling back to MCP_SHARED_SECRET" if (legacy and not owner) else ""
     checks.append((
         "INVINCIBLE_OWNER_SECRET exists (signs account sessions)",
-        bool(owner or legacy),
-        note,
+        bool(owner),
+        "",
     ))
 
     credential = os.getenv("INVINCIBLE_CREDENTIAL_KEY")
@@ -1048,9 +1030,8 @@ def secret():
 def secret_rotate(env_file, show):
     """Generate a new INVINCIBLE_OWNER_SECRET and write it to .env.
 
-    Preserves every other line, comment, and ordering; a legacy
-    MCP_SHARED_SECRET line (if present) is migrated to the new key at the
-    same time. The new value is never echoed unless --show is passed.
+    Preserves every other line, comment, and ordering. The new value is
+    never echoed unless --show is passed.
     Existing OAuth grants are NOT invalidated by rotation - use
     `invincible oauth revoke <client_id>` for that.
     """
@@ -1072,24 +1053,15 @@ def secret_rotate(env_file, show):
     parsed_keys = {
         p[0] for p in (_parse_env_line(line) for line in lines) if p
     }
-    if not (
-        "INVINCIBLE_OWNER_SECRET" in parsed_keys
-        or LEGACY_OWNER_SECRET_KEY in parsed_keys
-    ):
+    if "INVINCIBLE_OWNER_SECRET" not in parsed_keys:
         raise click.ClickException(
             f"No owner secret found in {env_path}. Run `invincible setup` "
             "first so it can create one for you."
         )
 
     new_secret = _generate_secret()
-    remove_keys = (
-        (LEGACY_OWNER_SECRET_KEY,)
-        if LEGACY_OWNER_SECRET_KEY in parsed_keys
-        else ()
-    )
     _apply_env_updates(
         env_path, lines, {"INVINCIBLE_OWNER_SECRET": new_secret},
-        remove_keys=remove_keys,
     )
 
     click.echo("New owner secret generated and saved to .env")

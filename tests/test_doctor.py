@@ -53,7 +53,6 @@ def _clean_invincible_env(monkeypatch):
     into it, so make every test start from a clean slate."""
     for key in (
         "INVINCIBLE_OWNER_SECRET",
-        "MCP_SHARED_SECRET",
         "INVINCIBLE_CREDENTIAL_KEY",
         "INVINCIBLE_CONFIG_PATH",
         "INVINCIBLE_DB_URL",
@@ -124,7 +123,6 @@ def test_doctor_prints_version(monkeypatch, tmp_path):
 
 def test_doctor_missing_secrets_fail(monkeypatch, tmp_path):
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
-    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
     _hermetic_db(monkeypatch)
     _config_and_chdir(monkeypatch, tmp_path)
@@ -134,7 +132,11 @@ def test_doctor_missing_secrets_fail(monkeypatch, tmp_path):
     assert f"FAIL  {OWNER_LABEL}" in result.output
 
 
-def test_doctor_legacy_alias_counts_as_owner_secret(monkeypatch, tmp_path):
+def test_doctor_legacy_alias_no_longer_counts_as_owner_secret(
+    monkeypatch, tmp_path
+):
+    """The MCP_SHARED_SECRET fallback is retired: the legacy alias alone
+    fails the owner-secret check (rename it to INVINCIBLE_OWNER_SECRET)."""
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
     monkeypatch.setenv("MCP_SHARED_SECRET", "legacy-owner")
     monkeypatch.setenv("INVINCIBLE_CREDENTIAL_KEY", "cred-key")
@@ -143,10 +145,8 @@ def test_doctor_legacy_alias_counts_as_owner_secret(monkeypatch, tmp_path):
     _config_and_chdir(monkeypatch, tmp_path)
 
     result = _invoke()
-    assert result.exit_code == 0
-    assert _flat(
-        f"OK  {OWNER_LABEL}  (falling back to MCP_SHARED_SECRET)"
-    ) in _flat(result.output)
+    assert result.exit_code == 1
+    assert f"FAIL  {OWNER_LABEL}" in result.output
 
 
 def test_doctor_missing_providers_yaml_fails(monkeypatch, tmp_path):
@@ -342,7 +342,6 @@ def test_doctor_uses_rich_console_when_available(monkeypatch, tmp_path):
 
 def test_doctor_rich_console_propagates_failure(monkeypatch, tmp_path):
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
-    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     monkeypatch.setenv("INVINCIBLE_DB_URL", TEST_DB_URL)
     _hermetic_db(monkeypatch)
     _config_and_chdir(monkeypatch, tmp_path)
@@ -398,7 +397,6 @@ def test_doctor_existing_exports_win_over_env_file(monkeypatch, tmp_path):
 
 def test_doctor_missing_env_file_reports_missing_keys(monkeypatch, tmp_path):
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
-    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     _hermetic_db(monkeypatch)
     _config_and_chdir(monkeypatch, tmp_path)
 
@@ -441,7 +439,6 @@ def test_doctor_credential_key_present_warns_to_back_up(
 
 def test_doctor_env_file_without_keys_still_fails(monkeypatch, tmp_path):
     monkeypatch.delenv("INVINCIBLE_OWNER_SECRET", raising=False)
-    monkeypatch.delenv("MCP_SHARED_SECRET", raising=False)
     (tmp_path / ".env").write_text(
         "SOME_OTHER_KEY=value\n", encoding="utf-8"
     )

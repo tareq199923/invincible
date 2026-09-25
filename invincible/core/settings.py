@@ -101,11 +101,6 @@ class Settings:
         """
         return os.getenv("INVINCIBLE_OWNER_SECRET")
 
-    def legacy_owner_secret(self) -> str | None:
-        """Pre-rename alias (MCP_SHARED_SECRET), honored as a fallback
-        session-signing key by core.accounts SessionManager."""
-        return os.getenv("MCP_SHARED_SECRET")
-
     def github_client_id(self) -> str | None:
         """GitHub OAuth App client ID - unset hides GitHub login entirely."""
         return os.getenv("INVINCIBLE_GITHUB_CLIENT_ID")

@@ -44,7 +44,17 @@ still owes:
 - **Owner-secret-only MCP consent** — `INVINCIBLE_OWNER_SECRET` as a
   *sole identity* is superseded by user-bound OAuth subjects; listed as
   Phase 2+, so it is overdue. The env var itself **stays** — it still
-  signs sessions. Only the identity path retires.
+  signs sessions. Only the identity path retires. **RETIRED 2026-09-25:**
+  `OAuthStore.create_code` / `issue_token_pair` now require a subject,
+  the legacy subject-less `consume_code` variant is deleted, and
+  `rotate_refresh` refuses pre-subject rows; leftover NULL-subject rows
+  fail closed at `require_mcp_auth` (pinned by
+  `test_mcp_subject_less_token_returns_401` and
+  `test_refresh_without_subject_is_refused`). **Companion 2026-09-25:**
+  the pre-rename `MCP_SHARED_SECRET` session-signing fallback is deleted
+  too (`settings.legacy_owner_secret` gone; setup/rotate no longer
+  migrate it; doctor fails the owner check on the alias alone) — stale
+  values are inert, rename to `INVINCIBLE_OWNER_SECRET`.
 - **`facts` triple store** — **DECIDED 2026-09-24: keep temporarily while
   production data is audited.** No request-serving code reads or writes the
   table, and no backfill was performed. The legacy importer is now removed,
