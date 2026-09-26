@@ -289,5 +289,14 @@ class Settings:
         """Resolve one provider's API key via its configured env-var name."""
         return os.getenv(api_key_env)
 
+    def chrome_bin(self) -> str | None:
+        """Explicit browser binary for agent-side screenshots
+        (INVINCIBLE_CHROME_BIN). Unset means auto-discovery (PATH, then
+        OS well-known install paths, then the Windows App-Paths
+        registry). Set it on a paired machine whose browser lives
+        somewhere unusual, then restart ``harness connect``."""
+        raw = os.getenv("INVINCIBLE_CHROME_BIN", "").strip()
+        return raw or None
+
 
 settings = Settings()

@@ -164,9 +164,12 @@ TOOLS = [
         "description": (
             "Capture a headless-Chrome screenshot (1280x800 PNG) of an "
             "http(s) URL for visual validation. Runs ONLY on your paired "
-            "machine (agent routing must be on and Chrome installed) — "
-            "the server never fetches caller-supplied URLs, so this path "
-            "cannot become an SSRF primitive. No confirmation required."
+            "machine (agent routing must be on and Chrome/Chromium/Edge "
+            "installed) — the server never fetches caller-supplied URLs, "
+            "so this path cannot become an SSRF primitive. The agent "
+            "finds the browser via INVINCIBLE_CHROME_BIN, PATH, "
+            "well-known install paths, and (on Windows) the App-Paths "
+            "registry. No confirmation required."
         ),
         "inputSchema": {
             "type": "object",

@@ -620,8 +620,11 @@ Headless-Chrome capture (1280×800 PNG, base64) of an `http(s)` URL for
 visual validation. **Agent-only by design**: without routing it answers
 `{"status": "unavailable", ...}` — the server never fetches
 caller-supplied URLs, so this path cannot become an SSRF primitive. Needs
-Chrome/Chromium/Edge on the paired machine, else `unavailable`. Captures
-over 2MB are refused. No confirmation (read-only).
+Chrome/Chromium/Edge on the paired machine, else `unavailable`. The agent
+finds the browser via `INVINCIBLE_CHROME_BIN` (explicit per-machine
+override, no source edit), then `PATH`, then OS well-known install paths,
+then the Windows App-Paths registry (custom install directories).
+Captures over 2MB are refused. No confirmation (read-only).
 
 ```json
 {"status": "screenshot", "mime": "image/png", "data_b64": "...", "bytes": 48210, "url": "..."}

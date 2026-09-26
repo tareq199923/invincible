@@ -41,6 +41,7 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 | `INVINCIBLE_HARNESS_WS_HEARTBEAT` | agent transport | WS keepalive ping interval in seconds (default `20`). Keeps platform proxies (Railway et al.) from idling the relay connection out; lower it if your proxy cuts quiet connections sooner. |
 | `INVINCIBLE_HARNESS_SUMMARIZER` | per-request | **Off by default** (explicit opt-in: `1`/`true`/`on`/`yes`): LLM summarizer for harness context compaction. Each compaction burns one upstream call on the caller's own BYOK credentials — the relay digest stays the default path. |
 | `INVINCIBLE_MACHINE_ID` | agent | Stable machine identity shown on the dashboard Machines page. Unset = load-or-create `~/.invincible/machine_id`. Set it explicitly for machines where the home directory does not persist (ephemeral VMs, containers acting as agents). |
+| `INVINCIBLE_CHROME_BIN` | agent (`screenshot` tool) | Explicit browser binary path for screenshots (e.g. `C:\Program Files\Google\Chrome\Application\chrome.exe`). Unset = auto-discovery (`PATH`, then OS well-known install paths, then the Windows App-Paths registry). Set it on a paired machine whose browser lives somewhere unusual, then restart `invincible harness connect` — no source edit needed. |
 
 The secrets are **independent**: a leaked `/mcp` URL alone is not enough to
 reach tool execution (a live OAuth bearer token is required as well), and

@@ -85,8 +85,7 @@ def ws_url_for(base_url: str) -> str:
 
 def hello_frame() -> dict:
     """H1 hello (+H6c machine_id): machine identity + capability
-    advertisement (flexx-style auto-discovery, cheap `shutil.which`
-    probes only)."""
+    advertisement (flexx-style auto-discovery, cheap probes only)."""
     return {
         "type": "hello",
         "machine_id": machine_id(),
@@ -95,13 +94,7 @@ def hello_frame() -> dict:
         "capabilities": {
             "ripgrep": shutil.which("rg") is not None,
             "docker": shutil.which("docker") is not None,
-            "chrome": any(
-                shutil.which(name) is not None
-                for name in (
-                    "google-chrome", "chrome", "chromium",
-                    "chrome.exe", "msedge",
-                )
-            ),
+            "chrome": tool_executor._find_chrome() is not None,
         },
     }
 

@@ -77,6 +77,7 @@ import contextlib
 import json
 import logging
 import os
+import platform
 import re
 import secrets
 import shutil
@@ -677,17 +678,132 @@ SCREENSHOT_HEIGHT = 800
 SCREENSHOT_TIMEOUT_SECONDS = 30.0
 SCREENSHOT_MAX_BYTES = 2 * 1024 * 1024
 _CHROME_BINARIES = (
-    "google-chrome", "chrome", "chromium", "chromium-browser",
-    "chrome.exe", "msedge",
+    "google-chrome", "google-chrome-stable", "chrome", "chromium",
+    "chromium-browser", "chrome.exe", "chromium.exe",
+    "msedge", "msedge.exe", "microsoft-edge",
+    "brave", "brave.exe", "brave-browser",
+)
+
+_CHROME_HINT = (
+    "Install Chrome/Chromium/Edge, or point "
+    "INVINCIBLE_CHROME_BIN at the browser binary "
+    "and restart `invincible harness connect`."
 )
 
 
+def _chrome_common_paths() -> list:
+    """Well-known install locations (browser installers rarely touch PATH).
+
+    Covers the default per-machine spots on each OS so users with a
+    normal install — and users who installed somewhere the installer
+    chose — do not need any configuration. Custom locations beyond
+    these are handled by INVINCIBLE_CHROME_BIN and the Windows
+    App-Paths registry below.
+    """
+    system = platform.system().lower()
+    candidates: list = []
+    if system == "windows":
+        for base in (
+            os.getenv("PROGRAMFILES", r"C:\Program Files"),
+            os.getenv("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
+            os.getenv("LOCALAPPDATA", ""),
+        ):
+            if not base:
+                continue
+            candidates.extend([
+                os.path.join(base, "Google", "Chrome",
+                             "Application", "chrome.exe"),
+                os.path.join(base, "Microsoft", "Edge",
+                             "Application", "msedge.exe"),
+                os.path.join(base, "Chromium",
+                             "Application", "chrome.exe"),
+                os.path.join(base, "BraveSoftware", "Brave-Browser",
+                             "Application", "brave.exe"),
+            ])
+    elif system == "darwin":
+        for root in ("/Applications",
+                     os.path.expanduser("~/Applications")):
+            candidates.extend([
+                os.path.join(root, "Google Chrome.app", "Contents",
+                             "MacOS", "Google Chrome"),
+                os.path.join(root, "Chromium.app", "Contents",
+                             "MacOS", "Chromium"),
+                os.path.join(root, "Microsoft Edge.app", "Contents",
+                             "MacOS", "Microsoft Edge"),
+                os.path.join(root, "Brave Browser.app", "Contents",
+                             "MacOS", "Brave Browser"),
+            ])
+    else:
+        candidates.extend([
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/snap/bin/chromium",
+            "/usr/bin/microsoft-edge",
+            "/usr/bin/brave-browser",
+            os.path.expanduser("~/.local/bin/google-chrome"),
+            os.path.expanduser("~/.local/bin/chromium"),
+        ])
+    return candidates
+
+
+def _chrome_registry_candidates() -> list:
+    """Windows App-Paths lookups (HKLM + HKCU).
+
+    The registry records the real binary path even when the user
+    picked a custom install directory during setup, which neither
+    PATH nor the well-known list can see. Non-Windows platforms and
+    machines without winreg return [].
+    """
+    try:
+        import winreg
+    except ImportError:
+        return []
+    found: list = []
+    for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for value in ("chrome.exe", "msedge.exe", "chromium.exe",
+                      "brave.exe"):
+            try:
+                with winreg.OpenKey(
+                    root,
+                    r"SOFTWARE\Microsoft\Windows\CurrentVersion"
+                    r"\App Paths\\" + value,
+                ) as key:
+                    path, _ = winreg.QueryValueEx(key, "")
+                if path:
+                    # Registry values may be quoted and carry args.
+                    cleaned = path.strip().strip('"')
+                    found.append(cleaned.split('"')[0].strip())
+            except OSError:
+                continue
+    return found
+
+
 def _find_chrome() -> str | None:
-    """First usable Chrome/Chromium/Edge binary, or None."""
+    """Browser binary for screenshots, or None.
+
+    Order (first hit wins, so explicit config beats guessing):
+    1. INVINCIBLE_CHROME_BIN (per-machine override, no source edit),
+    2. PATH (shutil.which over _CHROME_BINARIES),
+    3. OS well-known install paths,
+    4. Windows App-Paths registry (custom install directories).
+    """
+    override = settings.chrome_bin()
+    if override:
+        expanded = os.path.expanduser(os.path.expandvars(override))
+        if os.path.isfile(expanded):
+            return expanded
     for name in _CHROME_BINARIES:
         found = shutil.which(name)
         if found:
             return found
+    for candidate in _chrome_common_paths():
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    for candidate in _chrome_registry_candidates():
+        if candidate and os.path.isfile(candidate):
+            return candidate
     return None
 
 
@@ -927,7 +1043,9 @@ async def _take_screenshot(url: str, timeout: float) -> dict:
     if chrome is None:
         return {"status": "unavailable",
                 "reason": "No Chrome/Chromium/Edge binary found on this "
-                          "machine (auto-discovery reported no browser)."}
+                          "machine (checked INVINCIBLE_CHROME_BIN, PATH, "
+                          "well-known install paths, and the Windows "
+                          "App-Paths registry). " + _CHROME_HINT}
     tmp = None
     try:
         with tempfile.NamedTemporaryFile(

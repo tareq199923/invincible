@@ -117,6 +117,86 @@ async def test_screenshot_unavailable_without_chrome(monkeypatch):
     out = await tool_executor._take_screenshot(
         "http://127.0.0.1:8000/", 5.0)
     assert out["status"] == "unavailable"
+    assert "INVINCIBLE_CHROME_BIN" in out["reason"]
+
+
+def _no_chrome(monkeypatch):
+    """Force every discovery tier to miss (hermetic, no real browser)."""
+    monkeypatch.delenv("INVINCIBLE_CHROME_BIN", raising=False)
+    monkeypatch.setattr(tool_executor.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tool_executor, "_chrome_common_paths", lambda: [])
+    monkeypatch.setattr(
+        tool_executor, "_chrome_registry_candidates", lambda: [])
+
+
+def test_find_chrome_override_wins(monkeypatch, tmp_path):
+    target = tmp_path / "chrome.exe"
+    target.write_text("x")
+    monkeypatch.setenv("INVINCIBLE_CHROME_BIN", str(target))
+    assert tool_executor._find_chrome() == str(target)
+
+
+def test_find_chrome_missing_override_falls_through(monkeypatch):
+    monkeypatch.setenv(
+        "INVINCIBLE_CHROME_BIN", r"C:\nope\chrome.exe")
+    monkeypatch.setattr(
+        tool_executor.shutil, "which",
+        lambda name: r"C:\PATH\chrome.exe" if name == "chrome" else None)
+    monkeypatch.setattr(tool_executor, "_chrome_common_paths", lambda: [])
+    monkeypatch.setattr(
+        tool_executor, "_chrome_registry_candidates", lambda: [])
+    assert tool_executor._find_chrome() == r"C:\PATH\chrome.exe"
+
+
+def test_find_chrome_path_before_common_paths(monkeypatch):
+    _no_chrome(monkeypatch)
+    monkeypatch.setattr(
+        tool_executor.shutil, "which",
+        lambda name: "/usr/bin/chromium" if name == "chromium" else None)
+    monkeypatch.setattr(
+        tool_executor, "_chrome_common_paths",
+        lambda: ["/Applications/Never/Chrome"])
+    assert tool_executor._find_chrome() == "/usr/bin/chromium"
+
+
+def test_find_chrome_common_path_when_path_misses(
+        monkeypatch, tmp_path):
+    target = tmp_path / "chrome"
+    target.write_text("x")
+    monkeypatch.delenv("INVINCIBLE_CHROME_BIN", raising=False)
+    monkeypatch.setattr(tool_executor.shutil, "which", lambda name: None)
+    monkeypatch.setattr(
+        tool_executor, "_chrome_common_paths", lambda: [str(target)])
+    monkeypatch.setattr(
+        tool_executor, "_chrome_registry_candidates", lambda: [])
+    assert tool_executor._find_chrome() == str(target)
+
+
+def test_find_chrome_registry_last_resort(monkeypatch, tmp_path):
+    target = tmp_path / "msedge.exe"
+    target.write_text("x")
+    monkeypatch.delenv("INVINCIBLE_CHROME_BIN", raising=False)
+    monkeypatch.setattr(tool_executor.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tool_executor, "_chrome_common_paths", lambda: [])
+    monkeypatch.setattr(
+        tool_executor, "_chrome_registry_candidates",
+        lambda: [str(target)])
+    assert tool_executor._find_chrome() == str(target)
+
+
+def test_find_chrome_none_when_everything_misses(monkeypatch):
+    _no_chrome(monkeypatch)
+    assert tool_executor._find_chrome() is None
+
+
+def test_hello_frame_advertises_chrome_via_finder(monkeypatch):
+    from invincible.agent import runner
+
+    monkeypatch.setattr(
+        tool_executor, "_find_chrome", lambda: "/usr/bin/chrome")
+    assert runner.hello_frame()["capabilities"]["chrome"] is True
+    monkeypatch.setattr(tool_executor, "_find_chrome", lambda: None)
+    assert runner.hello_frame()["capabilities"]["chrome"] is False
 
 
 async def test_runner_search_blocked_outside_sandbox(tmp_path, monkeypatch):
