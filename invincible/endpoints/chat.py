@@ -169,15 +169,19 @@ async def chat_page(
         # Default to the most recent conversation; a fresh ?session=new-id
         # from /dashboard/chat/new simply renders empty (lazy creation).
         active_id = sidebar[0]["client_session_id"]
-    history: list = []
-    if active_id:
-        # Unknown AND foreign ids load identically empty (anti-enumeration:
-        # load is ownership-predicated, so there is nothing to distinguish).
-        history = await store.load(
-            active_id,
-            user_id=principal.user_id,
-            project_id=principal.project_id,
-        )
+    if not active_id:
+        # Fresh account (or all history pruned): mint a lazy id so the
+        # composer - with its model/mode pickers - always renders. No DB
+        # row is created until the first message persists, exactly like
+        # POST /dashboard/chat/new.
+        active_id = _new_web_session_id()
+    # Unknown AND foreign ids load identically empty (anti-enumeration:
+    # load is ownership-predicated, so there is nothing to distinguish).
+    history = await store.load(
+        active_id,
+        user_id=principal.user_id,
+        project_id=principal.project_id,
+    )
     models = await _model_ids(request, principal)
     return _page(
         "chat.html", request,

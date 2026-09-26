@@ -37,8 +37,6 @@
       <button type="submit" class="new-chat-btn">+ New chat</button>
     </form>
     <nav class="nav-list" aria-label="Primary">
-      <a class="nav-link{% if is_chat %} active{% endif %}"
-         href="/dashboard/chat">Chat</a>
       <a class="nav-link{% if path.startswith('/dashboard/setup') %} active{% endif %}"
          href="/dashboard/setup">Get started</a>
       <a class="nav-link{% if path.startswith('/dashboard/providers') %} active{% endif %}"

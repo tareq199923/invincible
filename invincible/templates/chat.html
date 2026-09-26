@@ -1,33 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Chat - Invincible{% endblock %}
 {% block content %}
-<div class="chat-head">
-  <div>
-    <h2>Chat</h2>
-    <p class="muted">Chat with your own connected providers. History is shared with your API sessions.</p>
-  </div>
-  <div class="chat-controls">
-    {% if has_provider %}
-    <label for="chat-model">model</label>
-    <select id="chat-model">
-    {% for m in models %}
-      <option value="{{ m }}">{{ m }}</option>
-    {% endfor %}
-    </select>
-    <label for="chat-mode">mode</label>
-    <select id="chat-mode">
-      <option value="plan" title="Plan only - reads your machine, changes nothing">plan</option>
-      <option value="manual" selected title="Asks your approval before each action">manual</option>
-      <option value="auto" title="Acts without asking - stays least-privilege">auto</option>
-    </select>
-    {% endif %}
-    <button type="button" class="theme-btn" id="theme-toggle" title="Switch between light and dark">dark</button>
-  </div>
+<div class="chat-topbar">
+  <button type="button" class="theme-btn" id="theme-toggle" title="Toggle light / dark" aria-label="Toggle light and dark theme">💡</button>
 </div>
-{% if has_provider %}
-<p class="muted">plan only looks, manual asks first, auto acts.
-Actions run on your paired PC when its agent is connected, else here.</p>
-{% endif %}
 
 {% if not has_provider %}
 <div class="banner">
@@ -41,7 +17,7 @@ Actions run on your paired PC when its agent is connected, else here.</p>
 {% if not history %}
 <div class="chat-hero">
   <h2>What can I help with?</h2>
-  <p class="muted">Pick a model above, then ask anything. Your chats live in the left sidebar.</p>
+  <p class="muted">Ask anything below. Your chats live in the left sidebar.</p>
 </div>
 {% endif %}
 
@@ -54,22 +30,34 @@ Actions run on your paired PC when its agent is connected, else here.</p>
 {% endfor %}
 </div>
 
-{% if active_session %}
 <div id="chat-composer">
 <form id="chat-form">
   <textarea id="chat-input" placeholder="Message your models&hellip;"
             aria-label="Message"></textarea>
   <div class="composer-row">
-    <span id="chat-status"></span>
+    <div class="composer-picks">
+      {% if has_provider %}
+      <label class="pick" for="chat-model">model
+        <select id="chat-model">
+        {% for m in models %}
+          <option value="{{ m }}">{{ m }}</option>
+        {% endfor %}
+        </select>
+      </label>
+      <label class="pick" for="chat-mode">mode
+        <select id="chat-mode">
+          <option value="plan" title="Plan only - reads your machine, changes nothing">plan</option>
+          <option value="manual" selected title="Asks your approval before each action">manual</option>
+          <option value="auto" title="Acts without asking - stays least-privilege">auto</option>
+        </select>
+      </label>
+      {% endif %}
+      <span id="chat-status"></span>
+    </div>
     <button type="submit" id="chat-send" title="Send" aria-label="Send">&uarr;</button>
   </div>
 </form>
 </div>
-{% else %}
-<form method="post" action="/dashboard/chat/new">
-  <button type="submit">Start a new chat</button>
-</form>
-{% endif %}
 
 <script>
   // Chat theme toggle (light default, persisted as "webchat-theme").
@@ -83,7 +71,8 @@ Actions run on your paired PC when its agent is connected, else here.</p>
       catch (e) { /* private mode: session-only */ }
       var meta = document.querySelector('meta[name="color-scheme"]');
       if (meta) meta.setAttribute("content", theme === "dark" ? "dark" : "light");
-      btn.textContent = theme === "dark" ? "light" : "dark";
+      // Bulb on = light, bulb off = dark. Emoji only, no text.
+      btn.textContent = theme === "dark" ? "\uD83C\uDF19" : "\uD83D\uDCA1";
     }
     var initial = document.documentElement.getAttribute("data-theme") || "light";
     apply(initial);
@@ -94,7 +83,6 @@ Actions run on your paired PC when its agent is connected, else here.</p>
   })();
 </script>
 
-{% if active_session %}
 <script>
   // Webchat streaming: POST + fetch reader (EventSource cannot POST).
   // Deltas are textContent-only; the server-escaped final bubble is the
@@ -331,5 +319,4 @@ Actions run on your paired PC when its agent is connected, else here.</p>
     });
   })();
 </script>
-{% endif %}
 {% endblock content %}
