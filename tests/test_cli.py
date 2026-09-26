@@ -40,9 +40,9 @@ def test_cli_help():
 
 
 def test_cli_help_leads_with_hosted_commands():
-    """Phase 6 client-mode pass: --help leads with login/harness under a
-    hosted-service heading; server administration is a separate section
-    below. Command names and paths are unchanged."""
+    """Phase 6 client-mode pass: --help leads with login/connect/harness
+    under a hosted-service heading; server administration is a separate
+    section below. Command names and paths are unchanged."""
     result = CliRunner().invoke(cli, ["--help"])
     assert result.exit_code == 0
     assert "Use the hosted service" in result.output
@@ -51,9 +51,10 @@ def test_cli_help_leads_with_hosted_commands():
     admin_at = result.output.index("Self-host & server administration")
     assert hosted_at < admin_at
     login_at = result.output.index("  login", hosted_at)
+    connect_at = result.output.index("  connect", hosted_at)
     harness_at = result.output.index("  harness", hosted_at)
     setup_at = result.output.index("  setup", admin_at)
-    assert login_at < harness_at < admin_at < setup_at
+    assert login_at < connect_at < harness_at < admin_at < setup_at
 
 
 def test_cli_version():

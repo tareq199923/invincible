@@ -81,7 +81,7 @@ It serves three roles in one process:
 
 ```bash
 pip install invincible-ai
-invincible harness connect   # first run: browser opens → sign in or register → Approve
+invincible connect   # first run: browser opens → sign in or register → Approve
 ```
 
 The first run pairs your machine with the hosted service
@@ -122,7 +122,7 @@ start command, required secrets, and the go-live checklist:
 
 ```bash
 pip install invincible-ai
-invincible harness connect   # first run: browser opens → sign in or register → Approve
+invincible connect   # first run: browser opens → sign in or register → Approve
 ```
 
 Pairing registers your account on `https://invincible-ai.me` and saves the
@@ -173,7 +173,7 @@ follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Development-only database
 shortcuts are covered in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 Clients of your own server point at it explicitly:
-`invincible harness connect --server https://mycompany.ai` (or
+`invincible connect --server https://mycompany.ai` (or
 `ANTHROPIC_BASE_URL=https://mycompany.ai` for Claude Code). The hosted
 service is the CLI default, so your users pass no flag at all.
 
@@ -232,6 +232,7 @@ server administration:
 | Command | Purpose |
 |---|---|
 | `invincible login [--server URL]` | Pair this machine with an Invincible server (device flow): opens the approval page in your browser — click Approve and the command finishes, saving the `inv_` key to `~/.invincible/config.json`. Defaults to the hosted service (`https://invincible-ai.me`); pass `--server` for a self-hosted or local server. URL + code are printed for headless terminals; the Account page also has a "Pair a device" box for typing a code by hand. |
+| `invincible connect` | Keep this machine online — short spelling of `harness connect` (WS-first relay, long-poll fallback). First run pairs automatically. |
 | `invincible harness setup` | Pair this machine and print its MCP connector config (idempotent — never re-pairs silently). Then `harness connect` brings it online. |
 | `invincible harness connect` | Keep this machine online (WS-first relay, long-poll fallback): executes confirmed tool jobs on **this machine** with your own user privileges — denylist re-checked locally, reads/writes sandboxed to your home. Ctrl+C to stop. First run pairs automatically (device flow); `invincible login` is the explicit pairing/repair tool. |
 | `invincible harness status` | Show this account's agent liveness + machine inventory from the terminal. |
@@ -403,7 +404,7 @@ separate pairing step:
 
 ```bash
 pip install invincible-ai
-invincible harness connect   # first run: browser opens → sign in or register → Approve
+invincible connect   # first run: browser opens → sign in or register → Approve
 ```
 
 On first run the harness pairs the machine itself: the browser opens on
@@ -411,11 +412,11 @@ the approval page (create your account right there if you don't have
 one, then click **Approve**), the minted key is saved to
 `~/.invincible/config.json`, and the relay connects straight into its
 WS-first loop — it never asks you to run another command first. Every
-later start is just `invincible harness connect` again; pairing happens once per
+later start is just `invincible connect` again; pairing happens once per
 machine, ever.
 
 Self-hosters point at their own server once:
-`invincible harness connect --server https://mycompany.ai` (or
+`invincible connect --server https://mycompany.ai` (or
 `--server http://127.0.0.1:8000` against a local `invincible start`).
 `invincible login` remains as the explicit re-pair/repair tool.
 

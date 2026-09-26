@@ -1909,6 +1909,26 @@ def harness_connect(config_path: str | None, server: str):
         click.echo("\nHarness stopped.")
 
 
+@click.command("connect")
+@click.option("--config", "config_path",
+              type=click.Path(dir_okay=False, path_type=str), default=None,
+              help="Pairing credentials to use "
+                   "(default ~/.invincible/config.json).")
+@click.option("--server", default=DEFAULT_SERVER,
+              show_default=True, envvar="INVINCIBLE_SERVER",
+              help="Server to pair with on first run, before saved "
+                   "credentials exist.")
+def connect(config_path: str | None, server: str):
+    """Keep this machine online (Ctrl+C to stop).
+
+    Short spelling of ``invincible harness connect`` — same WS-first
+    relay, same pairing file. (The bare ``setup`` name stays with server
+    provisioning, so first-time pairing lives under ``harness setup``.)
+    """
+    ctx = click.get_current_context()
+    ctx.invoke(harness_connect, config_path=config_path, server=server)
+
+
 def _format_harness_status(payload: dict) -> str:
     """Render GET /agent/status for the terminal (pure, tested)."""
     lines = ["Agent online: "
@@ -2147,16 +2167,17 @@ def db_upgrade():
 
 # --- top-level group: remote-first help -------------------------------------
 # Every user is their own operator against the hosted service; nobody runs
-# a server to use Invincible. The --help listing leads with the two hosted
-# commands (login, harness) and groups everything else as self-host and
-# server administration. Command NAMES and paths are unchanged - only the
-# presentation order differs from click's default alphabetical listing.
+# a server to use Invincible. The --help listing leads with the hosted
+# commands (login, connect, harness) and groups everything else as
+# self-host and server administration. Command NAMES and paths are
+# unchanged - only the presentation order differs from click's default
+# alphabetical listing.
 
 
 class _RemoteFirstGroup(click.Group):
     """click.Group with a curated two-section command listing."""
 
-    HOSTED_COMMANDS = ("login", "harness")
+    HOSTED_COMMANDS = ("login", "connect", "harness")
 
     def format_commands(
         self, ctx: click.Context, formatter: click.HelpFormatter
@@ -2192,14 +2213,16 @@ def cli():
     """Invincible - your AI continuity service.
 
     Most users only need two commands: login (pair this machine with the
-    hosted service) and harness connect (run confirmed tool jobs on this
-    machine). Everything else is self-host and server administration.
+    hosted service) and connect (run confirmed tool jobs on this
+    machine; full harness surface lives under `harness`). Everything else
+    is self-host and server administration.
     """
 
 
 cli.add_command(setup)
 cli.add_command(start)
 cli.add_command(login)
+cli.add_command(connect)
 cli.add_command(harness)
 cli.add_command(doctor)
 cli.add_command(secret)

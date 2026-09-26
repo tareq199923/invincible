@@ -275,6 +275,7 @@ and server administration (same order as the tool prints it):
 
 ```
 invincible login [--server URL] [--config PATH]
+invincible connect [--server URL] [--config PATH]
 invincible harness setup [--server URL] [--config PATH]
 invincible harness connect [--server URL] [--config PATH]
 invincible harness status [--config PATH]

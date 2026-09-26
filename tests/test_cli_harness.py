@@ -17,6 +17,33 @@ def test_harness_group_registered():
         "setup", "connect", "status", "service"}
 
 
+def test_connect_alias_delegates_to_harness_connect(monkeypatch, tmp_path):
+    """Top-level `connect` is `harness connect` with a shorter spelling:
+    same pairing discipline, same loop, same teaching line."""
+    from invincible.cli import _save_client_config
+    from invincible.cli import connect as connect_cmd
+
+    config_target = tmp_path / "config.json"
+    _save_client_config(server="https://selfhost.example",
+                        api_key="inv_saved", path=str(config_target))
+    captured: dict = {}
+
+    async def _must_not_pair(base_url, **kwargs):
+        raise AssertionError("must not pair when credentials exist")
+
+    async def _fake_run(server, api_key, **kwargs):
+        captured.update(server=server, api_key=api_key)
+
+    monkeypatch.setattr("invincible.cli._pair_device", _must_not_pair)
+    monkeypatch.setattr("invincible.agent.runner.run_harness", _fake_run)
+    result = CliRunner().invoke(
+        connect_cmd, ["--config", str(config_target)])
+    assert result.exit_code == 0, result.output
+    assert captured == {"server": "https://selfhost.example",
+                        "api_key": "inv_saved"}
+    assert "connecting (WS-first)" in result.output
+
+
 def test_format_status_empty():
     text = _format_harness_status(
         {"agent_online": False, "machines": []})
