@@ -80,6 +80,22 @@ Local/self-hosted mode itself is **not** deprecated and stays.
 
 ## Recently completed
 
+### 0.5.0 released — harness surface + Phase 8 retirements (2026-09-26)
+
+`invincible-ai` **0.5.0** is on PyPI, published from tag `v0.5.0` via the
+trusted-publisher dispatch. Minor bump carrying: the harness surface
+(WS-first agent relay, machine inventory, `harness` CLI group), the
+`invincible agent` removal (`harness connect` is the only entry point),
+the `facts` table drop (revision `0013`, audited empty), user-voice-only
+auto memories, the owner-secret consent retirement, the
+`MCP_SHARED_SECRET` fallback removal, and the remote-first CLI help.
+
+Verified: `ruff check` clean; packaging smoke test passed in CI;
+install from PyPI into a scratch venv outside the repo reports 0.5.0.
+Production cutover pending: Railway redeploy picks up the tag and its
+startup `db upgrade` runs through `0013`; confirm `/health` → 0.5.0
+after the swap (~7 min, it serves the old version until then).
+
 ### 0.4.0 released — `db import` removal ships as a minor bump (2026-09-25)
 
 `invincible-ai` **0.4.0** is on PyPI, published from tag `v0.4.0` via the
