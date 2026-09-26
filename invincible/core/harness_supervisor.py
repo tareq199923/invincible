@@ -26,11 +26,45 @@ from invincible.core.harness_events import HarnessEventType
 from invincible.core.harness_router import AGENTS, Agent
 
 PLAN_SYSTEM = (
-    "Decompose a task into independent sub-tasks — one per area the task "
-    "actually raises. Only include relevant areas. Reply with an object: "
-    '{"steps": [{"id": "<short id>", "agent": "<name>", '
-    '"objective": "<what this investigator should find out>"}]}.'
+    "Decompose a task into independent sub-tasks - one per area the task "
+    "actually raises. Only include relevant areas. Reply with a JSON "
+    "object only, no other text: "
+    "'{\"steps\": [{\"id\": \"<short id>\", \"agent\": \"<name>\", "
+    "\"objective\": \"<what this investigator should find out>\"}]}'. "
+    "Every step needs a non-empty id, an agent from the valid list, and "
+    "a concrete objective; the plan may be empty when there is nothing "
+    "worth splitting."
 )
+
+
+def build_subagent_prompt(agent_name: str, objective: str) -> str:
+    """Minimal per-step prompt for one fanned-out sub-agent (openclaw
+    ``promptMode=minimal`` parity): one role line + the bounded
+    objective + a findings-only reply contract.
+
+    Sub-agents get the objective, not the full harness prompt - the
+    supervisor owns synthesis, so findings stay small and cheap.
+    Unknown agent names degrade to a generic specialist line instead
+    of raising. Pure and hermetic."""
+    if agent_name == "triage":
+        role = (
+            "You are the triage investigator sub-agent. "
+            "Investigate with read-only tools; you cannot run commands "
+            "or write files."
+        )
+    elif agent_name == "operator":
+        role = (
+            "You are the machine operator sub-agent. Inspect, then act "
+            "through the normal staged tool flow, then verify."
+        )
+    else:
+        role = f"You are the {agent_name} specialist sub-agent."
+    return (
+        f"{role} Objective: {objective.strip() or '(none given)'} "
+        "Reply with your findings only - concise, with file:line "
+        "evidence where relevant. Do not synthesize the whole task; "
+        "the supervisor merges findings."
+    )
 
 
 def validate_plan(plan: Any, agents: dict[str, Agent]) -> list[dict]:

@@ -50,6 +50,8 @@ async def test_summarize_passes_system_and_transcript():
     )
     assert out == "new summary"
     assert "terse" in seen["system"]
+    assert "file paths" in seen["system"]
+    assert "what failed" in seen["system"]
     assert "item-1" in seen["user"]
     assert "old" in seen["user"]
 

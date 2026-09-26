@@ -184,8 +184,9 @@ KEEP_CONTEXT_TOKENS = 1500
 
 SUMMARIZER_SYSTEM = (
     "You compress an agent's work log into a short running summary. "
-    "Preserve concrete facts: item ids, categories, draft ids, amounts, "
-    "and what was already sent. Be terse."
+    "Preserve concrete facts: file paths, tool names, item ids, "
+    "categories, draft ids, amounts, what failed, and what was already "
+    "sent. Be terse."
 )
 
 
@@ -204,7 +205,10 @@ def hydrate_context(
     of ``context_builder.assemble``: continuity brief first, memories
     second, already budget-fitted) → recent turns verbatim.
 
-    The task is pinned, never summarized away. Pure and hermetic.
+    The task is pinned, never summarized away. The system prompt is
+    typically ``harness_router.build_system_prompt(...)`` (base +
+    task overlay + environment line, volatile facts last). Pure and
+    hermetic.
     """
     context: list[dict] = []
     if system_prompt:

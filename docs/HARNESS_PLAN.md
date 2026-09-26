@@ -156,6 +156,26 @@ structure, auth realms, wire protocols, or conventions.
 - Tests: `tests/test_harness_router.py`, `tests/test_harness_supervisor.py`
   (handoff switch, fan-out isolation per `user_id`, partial failure).
 
+### H4 follow-up — task-aware system prompts (shipped)
+
+- `harness_router.py`: shared `BASE_PROMPT` (identity + least-privilege +
+  tool-loop discipline) plus read/do/plan overlays. `classify_task()`
+  sniffs the task kind (plan wins over do, else read — keyword-only, no
+  LLM call); `build_system_prompt(agent, task, model/cwd/date)` assembles
+  base → role+overlay → environment line (volatile facts last). The static
+  `TRIAGE_AGENT`/`OPERATOR_AGENT` prompts are the per-agent defaults
+  (triage→read, operator→do); tool tuples unchanged.
+- `harness_supervisor.py`: `PLAN_SYSTEM` demands a JSON-only plan;
+  `build_subagent_prompt(agent, objective)` renders the minimal per-step
+  prompt (role line + bounded objective + findings-only contract) so fan-out
+  stays cheap. `harness_runtime.py` summarizer keeps file paths, tool
+  names, and failures (still terse).
+- Not wired into a live caller yet: `run_workflow`'s `agent_next` contract
+  is still `{task, turns}`, and the router stays off `/mcp` by design —
+  binding happens with the H-later assistant.
+- Tests: classify cases, section order (identity first, env last), overlay
+  contents, unknown-agent degrade, minimal-prompt bounds.
+
 ### H5 — Durable approvals + durable log (L2+L7)
 
 - `core/db.py` metadata + migrations: `0011_workflow_events` (`id,

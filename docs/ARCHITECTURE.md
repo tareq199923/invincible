@@ -101,7 +101,10 @@ invincible/
     ├── harness_runtime.py      Durable agent-loop spine: policy → emit → execute (H2)
     │                           + context hydration/compaction (H3)
     ├── harness_router.py       Agent defs + lateral handoff interception (H4; not on /mcp)
+    │                           + task-aware prompts: shared base + read/do/plan
+    │                           overlays via classify_task/build_system_prompt
     ├── harness_supervisor.py   Plan → parallel sub-agents → fan-in → synthesize (H4)
+    │                           + minimal per-step prompts (build_subagent_prompt)
     ├── harness_approvals.py    Durable suspend/resume approvals over pending_actions (H5)
     ├── credential_store.py     BYOK credential persistence (ciphertext at rest)
     ├── credential_crypto.py    Fernet primitives + the INVINCIBLE_CREDENTIAL_KEY gate

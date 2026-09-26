@@ -9,6 +9,8 @@ from invincible.core.harness_bus import HarnessBus
 from invincible.core.harness_events import HarnessEventType
 from invincible.core.harness_router import AGENTS
 from invincible.core.harness_supervisor import (
+    PLAN_SYSTEM,
+    build_subagent_prompt,
     make_plan,
     run_supervisor,
     validate_plan,
@@ -119,3 +121,28 @@ async def test_supervisor_empty_plan_still_synthesizes():
         complete=complete, bus=None,
     )
     assert out == "nothing to do"
+
+
+def test_plan_system_demands_json_only():
+    assert "JSON" in PLAN_SYSTEM
+    assert "no other text" in PLAN_SYSTEM
+
+
+def test_build_subagent_prompt_is_minimal_and_bounded():
+    triage = build_subagent_prompt("triage", "check the refund query")
+    assert "triage investigator sub-agent" in triage
+    assert "Objective: check the refund query" in triage
+    assert "findings only" in triage
+    # Minimal: no full-prompt sections leak in.
+    assert "Environment:" not in triage
+    assert "least-privilege" not in triage
+
+    operator = build_subagent_prompt("operator", "restart the worker")
+    assert "operator sub-agent" in operator
+    assert "Objective: restart the worker" in operator
+
+    generic = build_subagent_prompt("ghost", "look around")
+    assert "ghost specialist sub-agent" in generic  # degrades, never raises
+
+    empty = build_subagent_prompt("triage", "   ")
+    assert "(none given)" in empty
