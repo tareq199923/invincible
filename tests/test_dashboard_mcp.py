@@ -31,14 +31,18 @@ async def test_page_requires_session(client):
     assert (await client.get("/dashboard/mcp")).status_code == 401
 
 
-async def test_page_empty_state_documents_oauth_only(client):
+async def test_page_empty_state_with_connect_hint(client):
     await logged_in(client, 1)
     page = await client.get("/dashboard/mcp")
     assert page.status_code == 200
     assert "No MCP clients registered yet" in page.text
-    # Q1 posture is documented on the page itself.
-    assert "not" in page.text and "inv_" in page.text
+    # One-line connect hint with the server's own /mcp URL.
+    assert "/mcp" in page.text
     assert "OAuth 2.1" in page.text
+    # The long OAuth walkthrough is gone; the posture stays documented
+    # in docs/MCP_PROTOCOL.md and docs/SECURITY.md.
+    assert "Connecting a client" not in page.text
+    assert "Registered clients" not in page.text
 
 
 async def test_page_lists_client_and_active_tokens(client):
@@ -63,8 +67,10 @@ async def test_htmx_revocation_kills_mcp_bearer(client):
     htmx = await client.delete(
         f"/dashboard/mcp/clients/{client_id}/tokens",
         headers={"HX-Request": "true"})
+    # Bare 204: hx-swap="delete" drops the row in place, no redirect.
     assert htmx.status_code == 204
-    assert (htmx.headers["HX-Redirect"] == "/dashboard/mcp?revoked=1")
+    assert "HX-Redirect" not in htmx.headers
+    assert ">Revoke</button>" in (await client.get("/dashboard/mcp")).text
 
     # The revoked bearer no longer opens /mcp.
     denied = await client.post("/mcp", headers={
@@ -72,8 +78,7 @@ async def test_htmx_revocation_kills_mcp_bearer(client):
         content=b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
     assert denied.status_code == 401
 
-    page = await client.get("/dashboard/mcp?revoked=1")
-    assert "All tokens for that client were revoked" in page.text
+    page = await client.get("/dashboard/mcp")
     assert re.search(r"<td>\s*0\s*</td>", page.text)  # no active tokens
 
 

@@ -51,26 +51,10 @@ you.</p>
     });
 </script>
 
-{% if revoked %}<p class="banner">All tokens for that client were revoked
-&mdash; it must reconnect and be approved again.</p>{% endif %}
+<p class="muted">Point any MCP client at
+<code>{{ base_url }}/mcp</code> &mdash; approve the browser prompt and its
+tokens act as you.</p>
 
-<h3>Connecting a client</h3>
-<ul class="plain">
-  <li>Register it: <code>POST /oauth/register</code> (dynamic client
-      registration; send <code>redirect_uris</code> and a
-      <code>client_name</code>).</li>
-  <li>Send the user to <code>GET /oauth/authorize</code> with PKCE
-      (<code>S256</code>); consent is granted in the browser.</li>
-  <li>Exchange the code at <code>POST /oauth/token</code>; call
-      <code>POST /mcp</code> with
-      <code>Authorization: Bearer &lt;access_token&gt;</code>.</li>
-  <li>Revoking a client's tokens below cuts off its live access
-      immediately.</li>
-</ul>
-<p class="muted">API keys (<code>inv_...</code>) are <strong>not</strong>
-accepted on /mcp &mdash; OAuth bearer tokens only (owner decision, Q1).</p>
-
-<h3>Registered clients</h3>
 {% if clients %}
 <div class="table-scroll">
 <table>
@@ -86,7 +70,8 @@ accepted on /mcp &mdash; OAuth bearer tokens only (owner decision, Q1).</p>
     <td>
       <button class="linklike revoke-mcp-tokens"
               hx-delete="/dashboard/mcp/clients/{{ c.client_id }}/tokens"
-              hx-confirm="Revoke all tokens for {{ c.client_name or c.client_id }}? Its live MCP access stops immediately.">Revoke tokens</button>
+              hx-target="closest tr" hx-swap="delete"
+              hx-confirm="Revoke all tokens for {{ c.client_name or c.client_id }}?">Revoke</button>
     </td>
   </tr>
   {% endfor %}

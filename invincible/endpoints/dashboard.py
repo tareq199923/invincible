@@ -838,7 +838,7 @@ async def mcp_page(
         "mcp.html", request,
         user_email=await _email(_engine(request), principal),
         clients=rows,
-        revoked=request.query_params.get("revoked") == "1",
+        base_url=str(request.base_url).rstrip("/"),
     )
 
 
@@ -893,6 +893,7 @@ async def revoke_mcp_client_tokens(
                  resource_type="oauth_client", resource_id=client_id,
                  meta={"count": count})
     if request.headers.get("HX-Request") == "true":
-        return Response(status_code=204, headers={
-            "HX-Redirect": "/dashboard/mcp?revoked=1"})
+        # HTMX row removal: empty 204 lets hx-swap="delete" drop the row
+        # in place (same pattern as the memory and API-key deletes).
+        return Response(status_code=204)
     return {"revoked": count}
