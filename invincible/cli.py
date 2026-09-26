@@ -1843,6 +1843,18 @@ def _ensure_paired(server: str, config_path: str | None) -> dict:
     return _load_client_config(config_path)
 
 
+def _print_mcp_config(server: str) -> None:
+    """Print the copy-paste MCP connector block (pure output helper,
+    shared by `harness setup` and first-run `harness connect`)."""
+    import json
+
+    click.echo("Add this MCP server to your AI client "
+               "(Cursor: Settings → MCP → Add Server):")
+    click.echo(
+        json.dumps({"mcpServers": {"invincible": {"url": f"{server}/mcp"}}},
+                   indent=2))
+
+
 @harness.command("setup")
 @click.option("--config", "config_path",
               type=click.Path(dir_okay=False, path_type=str), default=None,
@@ -1858,18 +1870,12 @@ def harness_setup(config_path: str | None, server: str):
     Idempotent: an already-paired machine just re-prints its config, it
     is never re-paired silently. Then `harness connect` brings it online.
     """
-    import json
-
     from invincible.agent.runner import machine_id
 
     config = _ensure_paired(server, config_path)
     server = config["server"].rstrip("/")
     click.echo(f"Paired with {server} (machine id: {machine_id()}).")
-    click.echo("Add this MCP server to your AI client "
-               "(Cursor: Settings → MCP → Add Server):")
-    click.echo(
-        json.dumps({"mcpServers": {"invincible": {"url": f"{server}/mcp"}}},
-                   indent=2))
+    _print_mcp_config(server)
     click.echo("Next: invincible harness connect  (this machine goes "
                "online; memory tools work immediately, machine tools once "
                "connected).")
@@ -1899,10 +1905,10 @@ def harness_connect(config_path: str | None, server: str):
     click.echo(f"Harness for {server} - connecting (WS-first). Ctrl+C "
                "to stop.")
     if fresh_pair:
-        # The one remaining setup step, taught at the moment it matters.
-        click.echo(
-            f"Next: connect your AI - add {server}/mcp as its MCP "
-            "connector URL.")
+        # The one remaining setup step, taught at the moment it matters:
+        # first run pairs AND shows the MCP block, so `setup` stays an
+        # idempotent re-print helper rather than a required step.
+        _print_mcp_config(server)
     try:
         run_coro_sync(run_harness(server, config["api_key"]))
     except KeyboardInterrupt:

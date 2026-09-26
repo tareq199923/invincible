@@ -110,3 +110,23 @@ def test_service_install_dry_run(tmp_path):
     ])
     assert result.exit_code == 0, result.output
     assert "harness" in result.output
+
+
+def test_setup_reprints_config_without_pairing(monkeypatch, tmp_path):
+    """Already paired: `harness setup` re-prints the MCP block without
+    pairing again and without starting any loop."""
+    from invincible.cli import _save_client_config
+
+    config_target = tmp_path / "config.json"
+    _save_client_config(server="https://paired.example",
+                        api_key="inv_saved", path=str(config_target))
+
+    async def _must_not_pair(base_url, **kwargs):
+        raise AssertionError("must not pair when credentials exist")
+
+    monkeypatch.setattr("invincible.cli._pair_device", _must_not_pair)
+    result = CliRunner().invoke(
+        cli, ["harness", "setup", "--config", str(config_target)])
+    assert result.exit_code == 0, result.output
+    assert "mcpServers" in result.output
+    assert "https://paired.example/mcp" in result.output

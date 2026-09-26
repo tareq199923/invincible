@@ -456,7 +456,9 @@ def test_agent_self_pairs_on_first_run(monkeypatch, tmp_path):
         assert json.load(handle)["api_key"] == "inv_selfpair"
         assert "isn't paired yet" in result.output
         assert "Paired" in result.output
-        assert "Next: connect your AI" in result.output
+        # First run teaches the MCP block inline (merged from setup).
+        assert "mcpServers" in result.output
+        assert "https://invincible-ai.me/mcp" in result.output
 
 
 def test_agent_first_run_honors_server_flag(monkeypatch, tmp_path):
@@ -504,7 +506,7 @@ def test_agent_uses_saved_config_without_pairing(monkeypatch, tmp_path):
     assert captured == {"agent_server": "https://selfhost.example",
                         "agent_key": "inv_saved"}
     assert "isn't paired yet" not in result.output
-    assert "Next: connect your AI" not in result.output
+    assert "mcpServers" not in result.output
 
 
 def test_agent_pairing_failure_exits_cleanly(monkeypatch, tmp_path):
