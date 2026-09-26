@@ -247,6 +247,7 @@ async def chat_stream(
 
     # Capture state now: the generator runs after the response starts.
     store = _state(request, "sessions")
+    engine = getattr(request.app.state, "engine", None)
     memory = getattr(request.app.state, "memory", None)
     retrieval = getattr(request.app.state, "retrieval", None)
     continuity = getattr(request.app.state, "continuity", None)
@@ -296,6 +297,8 @@ async def chat_stream(
                 principal=principal, mode=mode,
                 pending_store=pending_store, executor=executor,
                 waiter=waiter, audit=_audit_tool,
+                retrieval=retrieval, continuity=continuity,
+                engine=engine,
             ):
                 if ev_name == "approval":
                     waited.append(ev_data["token"])

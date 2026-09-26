@@ -28,20 +28,29 @@ waiter are passed in; the endpoint formats the yielded
 ``(event, data)`` pairs as SSE.
 """
 import asyncio
+import contextlib
 import json
 import logging
 
 from invincible.compat.common import upstream_error_detail
 from invincible.core import tool_executor
+from invincible.core.accounts import AccountError, ProjectService
 from invincible.core.chat_service import _persist_new_turns
+from invincible.core.continuity import ContinuityConflictError
 from invincible.core.harness_policy import before_tool_call
+from invincible.core.identity import resolve_project_by_name
+from invincible.core.memory import (
+    MAX_CONTENT_CHARS,
+    MCP_CONFIDENCE,
+    MEMORY_KINDS,
+)
 from invincible.core.principal import Principal
 from invincible.core.router import (
     AllProvidersFailedError,
     NoCredentialsConfiguredError,
     UpstreamClientError,
 )
-from invincible.core.settings import AGENT_JOB_GRACE_SECONDS
+from invincible.core.settings import AGENT_JOB_GRACE_SECONDS, settings
 
 logger = logging.getLogger("invincible.webchat.agent")
 
@@ -58,6 +67,24 @@ READ_ONLY_TOOLS = (
     "process_list",
 )
 MUTATING_TOOLS = ("execute_bash", "write_file")
+# Data-plane reads (memory/project/continuity) - safe in plan mode.
+DATA_READ_TOOLS = (
+    "memory_search",
+    "memory_list",
+    "project_list",
+    "task_state_get",
+)
+# Data-plane writes - manual/auto only, never plan.
+DATA_WRITE_TOOLS = (
+    "memory_save",
+    "project_create",
+    "task_state_set",
+    "checkpoint_create",
+)
+# Agent-only read: runs on the paired machine, never on the server host
+# (same SSRF posture as POST /mcp screenshot).
+AGENT_ONLY_TOOLS = ("screenshot",)
+ALL_DATA_TOOLS = DATA_READ_TOOLS + DATA_WRITE_TOOLS
 
 # Hard cap on tool iterations per turn: bounds provider spend and keeps
 # a runaway model from looping forever. On exhaustion the loop makes one
@@ -70,6 +97,13 @@ APPROVAL_WAIT_SECONDS = 300.0
 # UI truncation bounds (approvals show the user their own data, but the
 # model context and event bodies stay bounded regardless).
 _PREVIEW_CHARS = 500
+# Response caps mirrored from POST /mcp (endpoints/mcp.py): MCP results
+# land in model context, so the same token discipline applies here.
+_MEMORY_SEARCH_DEFAULT = 5
+_MEMORY_SEARCH_MAX = 10
+_MEMORY_LIST_DEFAULT = 10
+_MEMORY_LIST_MAX = 20
+_PROJECT_CAP = 50
 
 
 def _tool(name: str, description: str, properties: dict,
@@ -127,11 +161,61 @@ WEBCHAT_TOOL_SCHEMAS = [
           "or pauses for the user's approval first.",
           {"path": {"type": "string"},
            "content": {"type": "string"}}, ["path", "content"]),
+    _tool("screenshot", "Capture a headless-Chrome screenshot (1280x800 "
+          "PNG) of an http(s) URL for visual validation. Runs ONLY on "
+          "your paired machine - the server never fetches caller URLs.",
+          {"url": {"type": "string"}}, ["url"]),
+    _tool("memory_save", "Deliberately store a fact about the user or one "
+          "of their projects into their memory store - the same store "
+          "dashboard and gateway chats read. Use for durable facts worth "
+          "recalling later; for task progress use task_state_set instead.",
+          {"content": {"type": "string"},
+           "kind": {"type": "string",
+                    "enum": list(MEMORY_KINDS)},
+           "project": {"type": "string"}}, ["content"]),
+    _tool("memory_search", "Search the user's memory store with the same "
+          "ranking gateway chats use. Returns a small ranked list, never "
+          "a dump.",
+          {"query": {"type": "string"},
+           "project": {"type": "string"},
+           "limit": {"type": "integer"}}, ["query"]),
+    _tool("memory_list", "Browse the user's most recent memories, newest "
+          "first. Optional kind/project filters; capped rows. No delete "
+          "over chat: deletion stays dashboard-only.",
+          {"limit": {"type": "integer"},
+           "kind": {"type": "string",
+                    "enum": list(MEMORY_KINDS)},
+           "project": {"type": "string"}}, []),
+    _tool("project_create", "Create a new project for the user. Projects "
+          "scope memories. Names 1-100 chars, unique per user.",
+          {"name": {"type": "string"}}, ["name"]),
+    _tool("project_list", "List the user's projects (id, name, "
+          "is_default). Call before project-scoped memory_save.",
+          {"include_archived": {"type": "boolean"}}, []),
+    _tool("task_state_set", "Persist canonical task progress into the "
+          "shared continuity store for this session. Payload must be a "
+          "JSON OBJECT of structured facts to preserve verbatim.",
+          {"payload": {"type": "string"},
+           "task_key": {"type": "string"},
+           "status": {"type": "string",
+                      "enum": ["active", "blocked", "done", "cancelled"]},
+           "expected_version": {"type": "integer"},
+           "session_id": {"type": "string"}}, ["payload"]),
+    _tool("task_state_get", "Read the latest trusted task state "
+          "previously persisted via task_state_set.",
+          {"task_key": {"type": "string"},
+           "session_id": {"type": "string"}}, []),
+    _tool("checkpoint_create", "Snapshot the current task-state version "
+          "as a named checkpoint (e.g. 'completed through 37').",
+          {"note": {"type": "string"},
+           "task_key": {"type": "string"},
+           "session_id": {"type": "string"}}, []),
 ]
 
+_PLAN_TOOLS = READ_ONLY_TOOLS + AGENT_ONLY_TOOLS + DATA_READ_TOOLS
 _TOOLS_BY_MODE = {
     "plan": [s for s in WEBCHAT_TOOL_SCHEMAS
-             if s["function"]["name"] in READ_ONLY_TOOLS],
+             if s["function"]["name"] in _PLAN_TOOLS],
     "manual": list(WEBCHAT_TOOL_SCHEMAS),
     "auto": list(WEBCHAT_TOOL_SCHEMAS),
 }
@@ -141,23 +225,28 @@ MODE_SYSTEM_PROMPTS = {
         "You are helping plan work on the user's own machine. Produce a "
         "concrete step-by-step plan and stop. You have read-only "
         "inspection tools (read files, list directories, search code, "
-        "git info, processes) - use them to ground the plan in reality. "
+        "git info, processes, screenshot) plus read-only memory/project/"
+        "task lookups (memory_search/list, project_list, task_state_get) "
+        "- use them to ground the plan in reality. "
         "You cannot change anything: no mutating tools are available. "
         "Never claim an action was taken; end with the plan."
     ),
     "manual": (
         "You help operate the user's own machine. You have inspection "
-        "tools plus execute_bash and write_file. Reads run immediately; "
-        "each execute_bash/write_file call pauses for the user's "
-        "explicit approval before running - call the tool, briefly say "
-        "what will happen, and wait for the result to come back. If the "
-        "user declines (or approval times out), respect it and offer an "
-        "alternative. Keep commands least-privilege; never exfiltrate "
+        "tools plus execute_bash and write_file, plus memory/project/"
+        "continuity tools (memory_save/search/list, project_create/list, "
+        "task_state_set/get, checkpoint_create) and screenshot. Reads run "
+        "immediately; each execute_bash/write_file call pauses for the "
+        "user's explicit approval before running - call the tool, briefly "
+        "say what will happen, and wait for the result to come back. If "
+        "the user declines (or approval times out), respect it and offer "
+        "an alternative. Keep commands least-privilege; never exfiltrate "
         "data off the machine."
     ),
     "auto": (
         "You help operate the user's own machine autonomously. You have "
-        "inspection tools plus execute_bash and write_file, which run "
+        "inspection tools plus execute_bash and write_file, plus "
+        "memory/project/continuity tools and screenshot, which run "
         "immediately without further confirmation. Act carefully and "
         "least-privilege: inspect before mutating, verify afterwards, "
         "and stop when done. Never exfiltrate data off the machine."
@@ -267,6 +356,24 @@ def summarize_call(name: str, args: dict) -> str:
         return f"Git {name.split('_', 1)[1]} at {args.get('path', '')}"
     if name == "process_list":
         return "List processes"
+    if name == "screenshot":
+        return f"Screenshot {str(args.get('url', ''))[:200]}"
+    if name == "memory_save":
+        return f"Save memory ({len(str(args.get('content', '')))} chars)"
+    if name == "memory_search":
+        return f"Search memory: {str(args.get('query', ''))[:150]}"
+    if name == "memory_list":
+        return "List memories"
+    if name == "project_create":
+        return f"Create project {str(args.get('name', ''))[:100]}"
+    if name == "project_list":
+        return "List projects"
+    if name == "task_state_set":
+        return f"Set task state {str(args.get('task_key', 'default'))[:50]}"
+    if name == "task_state_get":
+        return f"Get task state {str(args.get('task_key', 'default'))[:50]}"
+    if name == "checkpoint_create":
+        return f"Checkpoint: {str(args.get('note', ''))[:150]}"
     return f"{name} {json.dumps(args)[:200]}"
 
 
@@ -362,6 +469,287 @@ def _stage_mutating(store, name: str, args: dict,
     raise tool_executor.ToolBlocked(f"Unknown mutating tool: {name}")
 
 
+async def _webchat_project_id(engine, user_id: int, args: dict):
+    """Resolve webchat memory tools' optional ``project`` name to id.
+
+    Returns ``(project_id, error)`` - exactly one is set. Mirrors
+    ``endpoints/mcp.py::_mcp_project_id``: unknown names error rather
+    than silently de-scoping.
+    """
+    name = str(args.get("project") or "").strip()
+    if not name:
+        return None, None
+    if engine is None:
+        return None, "Project lookup is not available on this server."
+    project_id = await resolve_project_by_name(engine, user_id, name)
+    if project_id is None:
+        return None, (
+            f"Unknown project: {name}. Save without 'project' for "
+            "user-scope, or use one of the user's existing project names."
+        )
+    return project_id, None
+
+
+async def _run_screenshot(executor, args: dict) -> dict:
+    """Agent-only screenshot: never falls back to local (SSRF posture).
+
+    Mirrors POST /mcp screenshot: without routing, report unavailability
+    instead of fetching caller URLs on the server host.
+    """
+    if executor is None:
+        return {
+            "status": "unavailable",
+            "reason": (
+                "Screenshots run on your paired machine: "
+                "set INVINCIBLE_AGENT_ROUTING=1 and start "
+                "one with: invincible harness connect"
+            ),
+        }
+    return await executor("screenshot", {"url": str(args.get("url", ""))})
+
+
+async def _run_data_tool(
+    name: str,
+    args: dict,
+    *,
+    principal: Principal,
+    mode: str,
+    memory,
+    retrieval,
+    continuity,
+    sessions,
+    engine,
+) -> tuple[dict, bool]:
+    """Execute one MCP-parity data tool for webchat. Returns (result, ok).
+
+    Same validation, ownership predicates, kill-switch, and caps as
+    POST /mcp so the two surfaces can never drift. No confirm gate:
+    data-plane rows are user-owned and dashboard-reversible.
+    """
+    user_id = principal.user_id
+    # -- memory_save --
+    if name == "memory_save":
+        if not settings.memory_enabled():
+            return {
+                "status": "error",
+                "error": "Memory saving is disabled on this server "
+                         "(INVINCIBLE_MEMORY is off).",
+            }, False
+        if memory is None:
+            return {
+                "status": "error",
+                "error": "Memory store is not available on this server.",
+            }, False
+        content = str(args.get("content") or "").strip()
+        if not content:
+            return {
+                "status": "error",
+                "error": "memory_save requires non-empty 'content'.",
+            }, False
+        if len(content) > MAX_CONTENT_CHARS:
+            return {
+                "status": "error",
+                "error": f"Memory content must be at most "
+                         f"{MAX_CONTENT_CHARS} characters.",
+            }, False
+        kind = str(args.get("kind") or "note")
+        if kind not in MEMORY_KINDS:
+            return {
+                "status": "error",
+                "error": "kind must be one of: " + ", ".join(MEMORY_KINDS),
+            }, False
+        project_id, project_error = await _webchat_project_id(
+            engine, user_id, args)
+        if project_error:
+            return {"status": "error", "error": project_error}, False
+        made_id = await memory.save_memory(
+            user_id=user_id,
+            content=content,
+            layer="explicit",
+            kind=kind,
+            confidence=MCP_CONFIDENCE,
+            provenance=f"webchat:{mode}",
+            project_id=project_id,
+        )
+        return {
+            "saved": True,
+            "id": made_id,
+            "kind": kind,
+            "scope": "project" if project_id is not None else "user",
+        }, True
+    # -- memory_search --
+    if name == "memory_search":
+        if retrieval is None:
+            return {
+                "status": "error",
+                "error": "Memory retrieval is not available on this server.",
+            }, False
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return {
+                "status": "error",
+                "error": "memory_search requires non-empty 'query'.",
+            }, False
+        limit = _coerce_int(args.get("limit"), _MEMORY_SEARCH_DEFAULT)
+        limit = max(1, min(limit, _MEMORY_SEARCH_MAX))
+        project_id, project_error = await _webchat_project_id(
+            engine, user_id, args)
+        if project_error:
+            return {"status": "error", "error": project_error}, False
+        found = await retrieval.retrieve(
+            user_id=user_id, query=query,
+            project_id=project_id, limit=limit,
+        )
+        return {
+            "results": [
+                {
+                    "id": m.id, "kind": m.kind, "content": m.content,
+                    "relevance": round(m.score, 4),
+                    "created_at": m.created_at,
+                }
+                for m in found
+            ],
+            "count": len(found),
+        }, True
+    # -- memory_list --
+    if name == "memory_list":
+        if memory is None:
+            return {
+                "status": "error",
+                "error": "Memory store is not available on this server.",
+            }, False
+        limit = _coerce_int(args.get("limit"), _MEMORY_LIST_DEFAULT)
+        limit = max(1, min(limit, _MEMORY_LIST_MAX))
+        kind = args.get("kind")
+        if kind is not None and kind not in MEMORY_KINDS:
+            return {
+                "status": "error",
+                "error": "kind must be one of: " + ", ".join(MEMORY_KINDS),
+            }, False
+        project_id, project_error = await _webchat_project_id(
+            engine, user_id, args)
+        if project_error:
+            return {"status": "error", "error": project_error}, False
+        rows = await memory.list_for_user(
+            user_id, kind=kind, project_id=project_id, limit=limit)
+        return {"memories": rows, "count": len(rows)}, True
+    # -- project_create / project_list --
+    if name in ("project_create", "project_list"):
+        if engine is None:
+            return {
+                "status": "error",
+                "error": "Project tools are not available on this server.",
+            }, False
+        service = ProjectService(engine)
+        if name == "project_list":
+            include_archived = args.get("include_archived") is True
+            listing = await service.list(
+                user_id, include_archived=include_archived)
+            return {"projects": listing, "count": len(listing)}, True
+        project_name = str(args.get("name") or "").strip()
+        if not project_name:
+            return {
+                "status": "error",
+                "error": "project_create requires non-empty 'name'.",
+            }, False
+        if len(project_name) > 100:
+            return {
+                "status": "error",
+                "error": "Project name must be at most 100 characters.",
+            }, False
+        try:
+            made = await service.create(user_id, project_name)
+        except AccountError as exc:
+            return {"status": "error", "error": exc.message}, False
+        listing = await service.list(user_id)
+        if len(listing) > _PROJECT_CAP:
+            from sqlalchemy import text as _text
+
+            async with engine.begin() as conn:
+                await conn.execute(
+                    _text("DELETE FROM projects WHERE id = :id"),
+                    {"id": made["id"]},
+                )
+            return {
+                "status": "error",
+                "error": f"Project limit reached ({_PROJECT_CAP} projects). "
+                         "Archive or rename existing ones first.",
+            }, False
+        return {
+            "created": True, "id": made["id"], "name": made["name"],
+        }, True
+    # -- task_state_set / get / checkpoint_create --
+    if name in ("task_state_set", "task_state_get", "checkpoint_create"):
+        if continuity is None or sessions is None:
+            return {
+                "status": "error",
+                "error": "Continuity engine not initialized on this server.",
+            }, False
+        session_id = str(args.get("session_id") or "") or "webchat"
+        task_key = str(args.get("task_key") or "") or "default"
+        try:
+            if name == "task_state_get":
+                session_pk = await sessions.lookup(
+                    session_id, user_id=user_id,
+                    project_id=principal.project_id,
+                )
+            else:
+                session_pk = await sessions.resolve_or_create(
+                    session_id, user_id=user_id,
+                    project_id=principal.project_id,
+                )
+        except Exception:
+            return {
+                "status": "error",
+                "error": "Could not resolve the session for this subject.",
+            }, False
+        if name == "task_state_get" and session_pk is None:
+            return {
+                "note": f"no state tracked for task "
+                        f"'{task_key}' in this session",
+                "payload": None, "version": 0,
+            }, True
+        try:
+            if name == "task_state_set":
+                try:
+                    payload = json.loads(args.get("payload") or "")
+                except (json.JSONDecodeError, TypeError):
+                    return {
+                        "status": "error",
+                        "error": "payload must be a JSON object.",
+                    }, False
+                head = await continuity.set_state(
+                    session_id, payload,
+                    actor=f"webchat:{user_id}:task_state_set",
+                    task_key=task_key,
+                    status=str(args.get("status") or "active"),
+                    expected_version=args.get("expected_version"),
+                    session_pk=session_pk,
+                )
+                return head, True
+            if name == "task_state_get":
+                state = await continuity.get_state(
+                    session_id, task_key, session_pk=session_pk)
+                if state is None:
+                    return {
+                        "note": f"no state tracked for task "
+                                f"'{task_key}' in this session",
+                        "payload": None, "version": 0,
+                    }, True
+                return state, True
+            cp = await continuity.create_checkpoint(
+                session_id, task_key=task_key,
+                note=str(args.get("note") or ""),
+                session_pk=session_pk,
+            )
+            return cp, True
+        except ContinuityConflictError as e:
+            return {"status": "error", "error": str(e)}, False
+        except ValueError as e:
+            return {"status": "error", "error": str(e)}, False
+    return {"status": "error", "error": f"Unknown tool: {name}."}, False
+
+
 def _error_text(body: object) -> str:
     return upstream_error_detail(body) or "gateway error"
 
@@ -380,6 +768,9 @@ async def run_agent_turn(
     executor,
     waiter: ApprovalWaiter,
     audit=None,
+    retrieval=None,
+    continuity=None,
+    engine=None,
 ):
     """Run one agentic turn, yielding ``(event, data)`` pairs.
 
@@ -501,7 +892,10 @@ async def run_agent_turn(
                 result_doc = {"status": "error",
                               "error": "Tool arguments were not valid JSON."}
                 ok = False
-            elif fname not in READ_ONLY_TOOLS + MUTATING_TOOLS:
+            elif fname not in (
+                READ_ONLY_TOOLS + MUTATING_TOOLS
+                + ALL_DATA_TOOLS + AGENT_ONLY_TOOLS
+            ):
                 result_doc = {"status": "error",
                               "error": f"Unknown tool: {fname}."}
                 ok = False
@@ -515,7 +909,9 @@ async def run_agent_turn(
                     fname, fargs, call_id=call_id, mode=mode,
                     ctx_principal=principal, pending_store=pending_store,
                     executor=executor, waiter=waiter, audit=_audit,
-                    outcome=outcome,
+                    outcome=outcome, memory=memory,
+                    retrieval=retrieval, continuity=continuity,
+                    sessions=sessions, engine=engine,
                 ):
                     yield ev_name, ev_data
                 result_doc, ok = outcome["result"], outcome["ok"]
@@ -538,6 +934,8 @@ async def _execute_call(
     name: str, args: dict, *, call_id: str, mode: str,
     ctx_principal: Principal, pending_store, executor,
     waiter: ApprovalWaiter, audit, outcome: dict,
+    memory=None, retrieval=None, continuity=None,
+    sessions=None, engine=None,
 ):
     """Execute one validated tool call per the mode.
 
@@ -550,6 +948,23 @@ async def _execute_call(
         result = await _run_read(executor, name, args,
                                  agent_routed=executor is not None)
         outcome["result"], outcome["ok"] = result, _result_ok(result)
+        return
+    if name in AGENT_ONLY_TOOLS:
+        result = await _run_screenshot(executor, args)
+        outcome["result"], outcome["ok"] = result, _result_ok(result)
+        return
+    if name in ALL_DATA_TOOLS:
+        result, ok = await _run_data_tool(
+            name, args, principal=ctx_principal, mode=mode,
+            memory=memory, retrieval=retrieval, continuity=continuity,
+            sessions=sessions, engine=engine,
+        )
+        with contextlib.suppress(Exception):
+            await audit(
+                f"webchat.{name}.{'ok' if ok else 'error'}",
+                meta={"action": name, "call_id": call_id},
+            )
+        outcome["result"], outcome["ok"] = result, ok
         return
     # Mutating tools: stage first (denylist enforced, no token on hit).
     try:

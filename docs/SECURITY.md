@@ -239,6 +239,14 @@ chat that can run shell commands — so every rule below is load-bearing):
   only — never commands, paths, or file contents. Approval cards show
   the user their own command/content (rendered as text) because
   informed approval is the point.
+- **Data-plane parity with `/mcp`:** `memory_save/search/list`,
+  `project_create/list`, `task_state_set/get`, `checkpoint_create`, and
+  agent-only `screenshot` share the MCP validation (ownership
+  predicates, unknown-project errors, `INVINCIBLE_MEMORY` kill-switch on
+  saves, 50-project cap, `screenshot` never runs on the server host).
+  `plan` offers reads only; `confirm_action` is deliberately absent —
+  webchat approvals go through the browser waiter, so the model can
+  never approve its own staged actions.
 
 - Chat completions themselves are not audited (existing posture), but
   every turn persists through the same ownership-predicated
