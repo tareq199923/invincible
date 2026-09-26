@@ -1,8 +1,8 @@
 # tests/test_wheel_contents.py
 """Packaging smoke test: the wheel/sdist a release actually ships.
 
-The README promises `pip install invincible-ai` -> `invincible agent`
-with no database and no .env. That promise is only true if the built
+The README promises `pip install invincible-ai` -> `invincible harness
+connect` with no database and no .env. That promise is only true if the built
 distribution carries everything: providers.yaml (importlib.resources is
 the only lookup path), the full migrations package (db upgrade / doctor
 resolve it through core.db.migrations_config), every dashboard template,
@@ -149,7 +149,7 @@ def test_wheel_is_complete_and_installable(tmp_path: Path):
     # 6. Entry points work from the bare install: no DB, no .env needed.
     invincible_exe = py.with_name(
         "invincible.exe" if os.name == "nt" else "invincible")
-    for argv in (["--version"], ["agent", "--help"]):
+    for argv in (["--version"], ["harness", "connect", "--help"]):
         subprocess.run(
             [str(invincible_exe), *argv],
             check=True, capture_output=True, text=True,

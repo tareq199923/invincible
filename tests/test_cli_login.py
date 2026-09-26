@@ -23,7 +23,7 @@ from invincible.cli import (
     login,
 )
 from invincible.cli import (
-    agent as agent_command,
+    harness as harness_command,
 )
 from invincible.core.credential_store import ByokCredentialStore
 from invincible.main import app
@@ -424,11 +424,11 @@ async def test_account_page_has_pair_a_device_box(client):
     assert 'action="/auth/devices"' in page.text
 
 
-# --- first-run agent self-pairing (one command, zero prior steps) ----------
+# --- first-run harness self-pairing (one command, zero prior steps) ----------
 
 
 def test_agent_self_pairs_on_first_run(monkeypatch, tmp_path):
-    """No saved credentials: `invincible agent` pairs with the hosted
+    """No saved credentials: `invincible harness connect` pairs with the hosted
     default, saves the token, teaches the MCP-connect step, and starts
     the loop with the minted key."""
     config_target = tmp_path / "config.json"
@@ -442,10 +442,10 @@ def test_agent_self_pairs_on_first_run(monkeypatch, tmp_path):
         captured.update(agent_server=server, agent_key=api_key)
 
     monkeypatch.setattr("invincible.cli._pair_device", _fake_pair)
-    monkeypatch.setattr("invincible.agent.runner.run_agent",
+    monkeypatch.setattr("invincible.agent.runner.run_harness",
                         _fake_run_agent)
     result = CliRunner().invoke(
-        agent_command, ["--config", str(config_target)])
+        harness_command, ["connect", "--config", str(config_target)])
     assert result.exit_code == 0, result.output
     assert captured == {
         "base_url": "https://invincible-ai.me",
@@ -454,9 +454,9 @@ def test_agent_self_pairs_on_first_run(monkeypatch, tmp_path):
     }
     with open(config_target, encoding="utf-8") as handle:
         assert json.load(handle)["api_key"] == "inv_selfpair"
-    assert "isn't paired yet" in result.output
-    assert "Paired" in result.output
-    assert "Next: connect your AI" in result.output
+        assert "isn't paired yet" in result.output
+        assert "Paired" in result.output
+        assert "Next: connect your AI" in result.output
 
 
 def test_agent_first_run_honors_server_flag(monkeypatch, tmp_path):
@@ -471,10 +471,10 @@ def test_agent_first_run_honors_server_flag(monkeypatch, tmp_path):
         captured["agent_server"] = server
 
     monkeypatch.setattr("invincible.cli._pair_device", _fake_pair)
-    monkeypatch.setattr("invincible.agent.runner.run_agent",
+    monkeypatch.setattr("invincible.agent.runner.run_harness",
                         _fake_run_agent)
     result = CliRunner().invoke(
-        agent_command, ["--server", "http://local.test:8000",
+        harness_command, ["connect", "--server", "http://local.test:8000",
                         "--config", str(config_target)])
     assert result.exit_code == 0, result.output
     assert captured["base_url"] == "http://local.test:8000"
@@ -496,10 +496,10 @@ def test_agent_uses_saved_config_without_pairing(monkeypatch, tmp_path):
         captured.update(agent_server=server, agent_key=api_key)
 
     monkeypatch.setattr("invincible.cli._pair_device", _must_not_pair)
-    monkeypatch.setattr("invincible.agent.runner.run_agent",
+    monkeypatch.setattr("invincible.agent.runner.run_harness",
                         _fake_run_agent)
     result = CliRunner().invoke(
-        agent_command, ["--config", str(config_target)])
+        harness_command, ["connect", "--config", str(config_target)])
     assert result.exit_code == 0, result.output
     assert captured == {"agent_server": "https://selfhost.example",
                         "agent_key": "inv_saved"}
@@ -519,10 +519,11 @@ def test_agent_pairing_failure_exits_cleanly(monkeypatch, tmp_path):
         ran.append((server, api_key))
 
     monkeypatch.setattr("invincible.cli._pair_device", _failing)
-    monkeypatch.setattr("invincible.agent.runner.run_agent",
+    monkeypatch.setattr("invincible.agent.runner.run_harness",
                         _fake_run_agent)
     result = CliRunner().invoke(
-        agent_command, ["--config", str(tmp_path / "config.json")])
+        harness_command, ["connect", "--config",
+                          str(tmp_path / "config.json")])
     assert result.exit_code != 0
     assert "Device pairing failed" in result.output
     assert not ran
@@ -540,6 +541,6 @@ def test_agent_corrupt_config_errors_instead_of_repairing(monkeypatch,
 
     monkeypatch.setattr("invincible.cli._pair_device", _must_not_pair)
     result = CliRunner().invoke(
-        agent_command, ["--config", str(config_target)])
+        harness_command, ["connect", "--config", str(config_target)])
     assert result.exit_code != 0
     assert "Corrupt config" in result.output

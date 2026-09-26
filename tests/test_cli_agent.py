@@ -1,5 +1,6 @@
 # tests/test_cli_agent.py
-"""The agent loop (invincible agent -> runner.run_agent) driven
+"""The agent loop (runner.run_agent poll core, driven by
+`harness connect` via run_harness) driven
 hermetically against the ASGI app, same injectable-client pattern as
 device pairing tests.
 

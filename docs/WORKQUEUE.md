@@ -83,7 +83,7 @@ rather than a patch. Replacement path: direct hosted signup/onboarding.
 Verified: `ruff check` clean; full suite 1175 passed; `twine check`
 passed; packaging smoke test passed; install from PyPI into a scratch
 venv outside the repo reports 0.4.0 with `invincible --version` /
-`invincible agent --help` working with no database and no `.env`.
+`invincible harness connect --help` working with no database and no `.env`.
 
 ### Legacy SQLite importer retired — 2026-09-24
 
@@ -177,7 +177,7 @@ Touches pinned CLI tests, so it is deliberately not part of the doc pass.
 ### Distribution (#2) — the strategic frontier
 
 The **user** journey against the hosted service is already one command:
-`pip install invincible-ai` + `invincible agent` (device-flow pairing with
+`pip install invincible-ai` + `invincible harness connect` (device-flow pairing with
 `https://invincible-ai.me` — no database, no `.env`, no provider setup on
 the user's machine). The **operator** journey is
 `install → setup --db-url <DSN> → start` — one command, one argument.

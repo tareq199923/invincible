@@ -1662,7 +1662,7 @@ def login(server: str, config_path: str | None):
     The URL + code are printed as a fallback for headless terminals.
     """
     _pair_and_save(server.rstrip("/"), config_path)
-    click.echo("Start your agent with: invincible agent")
+    click.echo("Keep this machine online with: invincible harness connect")
 
 
 def _pair_and_save(server: str, config_path: str | None) -> str:
@@ -1821,62 +1821,10 @@ def _load_client_config(path: str | None = None) -> dict:
     return config
 
 
-@click.command()
-@click.option("--config", "config_path",
-              type=click.Path(dir_okay=False, path_type=str), default=None,
-              help="Pairing credentials to use "
-                   "(default ~/.invincible/config.json).")
-@click.option("--server", default=DEFAULT_SERVER,
-              show_default=True, envvar="INVINCIBLE_SERVER",
-              help="Server to pair with on first run, before saved "
-                   "credentials exist. Later runs always use the saved "
-                   "server; self-hosters pass their own URL here "
-                   "(e.g. --server http://127.0.0.1:8000).")
-def agent(config_path: str | None, server: str):
-    """Run the local Invincible agent (Ctrl+C to stop).
-
-    Executes this account's confirmed MCP tool actions on THIS machine:
-    polls the paired server for dispatched jobs, re-checks the denylist
-    locally, runs them with your own user privileges, and posts results
-    back. On a machine with no saved credentials it pairs first: the
-    browser opens, you create your account / approve, and the agent
-    starts - `invincible login` is never a required prior step.
-    """
-    from invincible.agent.runner import run_agent
-
-    fresh_pair = False
-    if not os.path.isfile(_client_config_path(config_path)):
-        # First run: become the single entry point instead of refusing
-        # with "run invincible login first". Only a MISSING file pairs -
-        # a corrupt or incomplete one still falls through to
-        # _load_client_config's explicit repair hint (never overwritten
-        # silently).
-        click.echo(
-            "This machine isn't paired yet - starting one-time pairing "
-            f"with {server.rstrip('/')}.")
-        _pair_and_save(server.rstrip("/"), config_path)
-        fresh_pair = True
-    config = _load_client_config(config_path)
-    server = config["server"].rstrip("/")
-    click.echo(f"Agent for {server} - polling for work. Ctrl+C to stop.")
-    if fresh_pair:
-        # The one remaining setup step, taught at the moment it matters.
-        click.echo(
-            f"Next: connect your AI - add {server}/mcp as its MCP "
-            "connector URL.")
-    try:
-        run_coro_sync(run_agent(server, config["api_key"]))
-    except KeyboardInterrupt:
-        click.echo("\nAgent stopped.")
-
-
 @click.group("harness")
 def harness():
     """Machine harness (flexx-style remote hands): pair this PC, keep it
     connected, inspect it, and install it as an always-on service.
-
-    `agent` stays exactly as it was; `harness connect` is its WS-first
-    sibling (same pairing file, same sandbox, falls back to polling).
     """
 
 
@@ -1940,15 +1888,21 @@ def harness_connect(config_path: str | None, server: str):
     """Keep this machine online (Ctrl+C to stop).
 
     WS-first relay with long-poll fallback: the server pushes confirmed
-    jobs over an outbound-only connection (zero inbound ports). Same
-    sandbox and privileges as `agent`.
+    jobs over an outbound-only connection (zero inbound ports). Runs with
+    your own user privileges inside the home sandbox.
     """
     from invincible.agent.runner import run_harness
 
+    fresh_pair = not os.path.isfile(_client_config_path(config_path))
     config = _ensure_paired(server, config_path)
     server = config["server"].rstrip("/")
     click.echo(f"Harness for {server} - connecting (WS-first). Ctrl+C "
                "to stop.")
+    if fresh_pair:
+        # The one remaining setup step, taught at the moment it matters.
+        click.echo(
+            f"Next: connect your AI - add {server}/mcp as its MCP "
+            "connector URL.")
     try:
         run_coro_sync(run_harness(server, config["api_key"]))
     except KeyboardInterrupt:
@@ -2194,7 +2148,7 @@ def db_upgrade():
 # --- top-level group: remote-first help -------------------------------------
 # Every user is their own operator against the hosted service; nobody runs
 # a server to use Invincible. The --help listing leads with the two hosted
-# commands (login, agent) and groups everything else as self-host and
+# commands (login, harness) and groups everything else as self-host and
 # server administration. Command NAMES and paths are unchanged - only the
 # presentation order differs from click's default alphabetical listing.
 
@@ -2202,7 +2156,7 @@ def db_upgrade():
 class _RemoteFirstGroup(click.Group):
     """click.Group with a curated two-section command listing."""
 
-    HOSTED_COMMANDS = ("login", "agent")
+    HOSTED_COMMANDS = ("login", "harness")
 
     def format_commands(
         self, ctx: click.Context, formatter: click.HelpFormatter
@@ -2238,15 +2192,14 @@ def cli():
     """Invincible - your AI continuity service.
 
     Most users only need two commands: login (pair this machine with the
-    hosted service) and agent (run confirmed tool jobs on this machine).
-    Everything else is self-host and server administration.
+    hosted service) and harness connect (run confirmed tool jobs on this
+    machine). Everything else is self-host and server administration.
     """
 
 
 cli.add_command(setup)
 cli.add_command(start)
 cli.add_command(login)
-cli.add_command(agent)
 cli.add_command(harness)
 cli.add_command(doctor)
 cli.add_command(secret)

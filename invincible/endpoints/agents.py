@@ -3,7 +3,7 @@
 (Phase 10, extended H1).
 
 Transport for confirmed MCP tool jobs between the server and the
-user's paired agent (``invincible agent`` on their own machine). Two
+user's paired harness (``invincible harness connect`` on their own machine). Two
 realms meet here, and they never mix:
 
 - ``POST /agent/poll`` + ``POST /agent/result`` + ``WS /agent/ws``

@@ -205,4 +205,4 @@ async def test_mcp_screenshot_unavailable_without_routing(
     assert result["isError"] is False
     payload = json.loads(result["content"][0]["text"])
     assert payload["status"] == "unavailable"
-    assert "invincible agent" in payload["reason"]
+    assert "invincible harness connect" in payload["reason"]

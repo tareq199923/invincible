@@ -35,7 +35,7 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 | `INVINCIBLE_GITHUB_CLIENT_ID` | `/auth/github/*` | GitHub OAuth App client ID. **Unset = GitHub login is hidden entirely** (the rest of the account surface is unaffected). Register `<public base URL>/auth/github/callback` as the app's callback URL. |
 | `INVINCIBLE_GITHUB_CLIENT_SECRET` | `/auth/github/*` | GitHub OAuth App client secret — resolved at request time, never logged or returned. Both values must be set for the feature to enable. |
 
-| `INVINCIBLE_AGENT_ROUTING` | startup (**required on public multi-user deployments**) | Routes confirmed tool execution to the caller's paired agent (`invincible agent`) instead of the server host. Unset/off is the single-user self-host posture — tools then run on the **server host** under the server's privileges, which is never acceptable when strangers can register ([SECURITY.md](SECURITY.md) §10; checklist in [DEPLOYMENT.md](DEPLOYMENT.md)). |
+| `INVINCIBLE_AGENT_ROUTING` | startup (**required on public multi-user deployments**) | Routes confirmed tool execution to the caller's paired harness agent (`invincible harness connect`) instead of the server host. Unset/off is the single-user self-host posture — tools then run on the **server host** under the server's privileges, which is never acceptable when strangers can register ([SECURITY.md](SECURITY.md) §10; checklist in [DEPLOYMENT.md](DEPLOYMENT.md)). |
 | `INVINCIBLE_AGENT_ROOT` | agent | Sandbox root for the local agent (default: the user's home directory). Reads and writes outside it are blocked; `.env*`, `.git`, `.ssh`, SSH keys, `*.pem`, `*credentials*` are blocked by name everywhere. |
 | `INVINCIBLE_HARNESS_WS` | agent transport | **On by default**: the harness agent connects over the WebSocket relay (`WS /agent/ws`), falling back to long-polling when WS is unreachable. Set to `0`/`false`/`off` to force poll-only (useful behind proxies that break WebSockets). Both server and agent read it. |
 | `INVINCIBLE_HARNESS_WS_HEARTBEAT` | agent transport | WS keepalive ping interval in seconds (default `20`). Keeps platform proxies (Railway et al.) from idling the relay connection out; lower it if your proxy cuts quiet connections sooner. |
@@ -275,7 +275,6 @@ and server administration (same order as the tool prints it):
 
 ```
 invincible login [--server URL] [--config PATH]
-invincible agent [--config PATH] [--server URL]
 invincible harness setup [--server URL] [--config PATH]
 invincible harness connect [--server URL] [--config PATH]
 invincible harness status [--config PATH]

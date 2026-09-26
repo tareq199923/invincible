@@ -301,9 +301,9 @@ async def run_harness(
 
     Tries the WS relay once when enabled and the `websockets` package is
     importable; any failure (missing dep, disabled flag, disconnect) falls
-    back to the proven `run_agent()` poll loop, which IS the retry. The
-    `invincible agent` CLI keeps calling `run_agent()` in H1; `harness
-    connect` (H6c) will call this.
+    back to the proven `run_agent()` poll loop, which IS the retry. This is
+    what `harness connect` runs; `run_agent()` stays as the poll-only core
+    the fallback (and the hermetic tests) drive directly.
     """
     stop = stop or asyncio.Event()
     if settings.harness_ws_enabled() and client is None:

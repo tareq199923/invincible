@@ -254,9 +254,9 @@ different session timezones (UTC regression test).
 ### Phase 6 — CLI Client Experience
 **Status: In progress (partly shipped).** Shipped: hosted-by-default device
 pairing (`invincible login`, with `--server` for a self-hosted server) and
-the agent's one-command self-pairing (`invincible agent`), so an ordinary
+the harness's one-command self-pairing (`invincible harness connect`), so an ordinary
 user never touches PostgreSQL/Alembic/tunnel/OAuth details. Client-mode
-pass landed 2026-09-25: `--help` leads with login/agent under a hosted
+pass landed 2026-09-25: `--help` leads with login/harness-connect under a hosted
 heading and groups the rest as self-host administration (command names
 and paths unchanged; every user is their own operator against the
 hosted service). Possible follow-up: a remote `status`/`whoami` so a
@@ -326,8 +326,9 @@ realm/fail-closed gates pinned by ``tests/test_dashboard_providers.py``.
 
 ### Phase 10 — Local Agent (tool execution on the user's PC)
 Move confirmed MCP tool execution off the server host and onto each
-user's own machine: a paired local agent (``invincible agent``,
-WS-first ``invincible harness connect`` since H1) that holds an
+user's own machine: a paired harness (``invincible harness connect``;
+the classic ``invincible agent`` spelling was removed — ``harness
+connect`` is the only entry point) that holds an
 outbound-only relay (``WS /agent/ws`` with long-poll fallback) with its
 ``inv_`` key, executes confirmed ``execute_bash``/``write_file``/
 ``read_file`` jobs locally (plus read-only ``code_search``/

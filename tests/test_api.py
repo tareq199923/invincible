@@ -54,7 +54,7 @@ async def test_root_serves_landing_page_to_browsers(client):
     assert "Pair once. Route everything." in body
     assert "Every provider" not in body
     assert "pip install invincible-ai" in body
-    assert "invincible agent" in body
+    assert "invincible harness connect" in body
     assert "invincible start" not in body
     assert 'href="/register"' in body
     assert 'href="/login"' in body

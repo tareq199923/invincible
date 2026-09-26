@@ -61,7 +61,7 @@ into this runbook or into commit messages.
 - [ ] The production environment still has `INVINCIBLE_AGENT_ROUTING=1`.
 - [ ] Register or use a test account, mint a per-user `inv_` key, connect a
   BYOK credential, and complete one real `/v1/chat/completions` round-trip.
-- [ ] Pair a local `invincible agent` and confirm the dashboard reports the
+- [ ] Pair a local `invincible harness connect` and confirm the dashboard reports the
   expected agent online.
 - [ ] Confirm `INVINCIBLE_AGENT_ROUTING=1` remains set after the transfer; an
   unset flag on a public deployment would route confirmed tools to the

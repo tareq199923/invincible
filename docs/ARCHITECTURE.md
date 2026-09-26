@@ -39,8 +39,8 @@ invincible/
 ├── models/
 │   ├── anthropic.py            Pydantic request model (ignores unknown fields)
 │   └── responses.py            OpenAI Responses request model
-├── agent/                      Phase 10 — runs on the USER's machine (`invincible agent`)
-│   ├── runner.py               pairing config + long-poll loop + local denylist re-check
+├── agent/                      Harness agent — runs on the USER's machine (`invincible harness connect`)
+│   ├── runner.py               pairing config + WS-first loop (poll fallback) + local denylist re-check
 │   └── sandbox.py              home-confined path scoping + credential-file denylist
 ├── compat/
 │   ├── common.py               Protocol-neutral internal-message helpers

@@ -263,7 +263,7 @@
         <div class="terminal" aria-label="Invincible hosted client configuration">
           <div class="bar"><i></i><i></i><i></i><strong>invincible / client-config</strong></div>
           <pre><span class="dim">$</span> <span class="cmd">pip install invincible-ai</span>
-<span class="dim">$</span> <span class="cmd">invincible agent</span>
+<span class="dim">$</span> <span class="cmd">invincible harness connect</span>
 <span class="ok">✓ Paired with invincible-ai.me</span>
 <span class="dim">base</span>  <span class="cmd">https://invincible-ai.me/v1</span>
 <span class="dim">key</span>   <span class="cmd">inv_…</span> <span class="ok">✓ shown once · revocable</span>
@@ -305,7 +305,7 @@
           <article class="step"><span class="num">01</span><h3>Create an account</h3><p>Register with email and password, or sign in with GitHub when your deployment enables it. Your account owns its keys, providers, sessions, and state.</p><p class="unlocks">Unlocks chat + dashboard + memory</p><code class="block">/register</code></article>
           <article class="step"><span class="num">02</span><h3>Connect providers</h3><p>Choose a provider from the catalog or add any OpenAI-compatible Chat Completions endpoint. Each key is encrypted at rest and used only for your account's requests.</p><p class="unlocks">Unlocks every model route</p><code class="block">dashboard → providers</code></article>
           <article class="step"><span class="num">03</span><h3>Create an API key</h3><p>Generate a per-user <code>inv_</code> key from Account. The raw value is shown once, stored as a hash, and can be revoked immediately.</p><p class="unlocks">Unlocks /v1 chat from any client</p><code class="block">dashboard → account → API keys</code></article>
-          <article class="step"><span class="num">04</span><h3>Pair your machine</h3><p>Point any OpenAI-compatible client or Codex at <code>https://invincible-ai.me/v1</code>, or Claude Code via <code>ANTHROPIC_BASE_URL=https://invincible-ai.me</code>. Then pair the agent so approved tool calls run on your PC.</p><p class="unlocks">Unlocks hands on your machine</p><code class="block">pip install invincible-ai · invincible agent</code></article>
+          <article class="step"><span class="num">04</span><h3>Pair your machine</h3><p>Point any OpenAI-compatible client or Codex at <code>https://invincible-ai.me/v1</code>, or Claude Code via <code>ANTHROPIC_BASE_URL=https://invincible-ai.me</code>. Then pair the agent so approved tool calls run on your PC.</p><p class="unlocks">Unlocks hands on your machine</p><code class="block">pip install invincible-ai · invincible harness connect</code></article>
         </div>
       </div>
     </section>
@@ -320,7 +320,7 @@
           <article class="product"><h3>Gateway</h3><p>One stable endpoint for every model. Per-user BYOK failover across <code>auto</code>, <code>pinned</code>, or <code>chain</code> routing — a 429 or 5xx cools down and moves to your next credential instead of killing the run.</p><p class="needs"><strong>Needs:</strong> your own provider keys — there is no shared pool.</p></article>
           <article class="product"><h3>Memory</h3><p>Agents that remember across tools and sessions. Scoped lexical retrieval over PostgreSQL blends full-text relevance, recency, kind, and confidence under one bounded budget. Say "remember this" and it is saved.</p><p class="needs"><strong>Needs:</strong> nothing extra — memories accrue as you chat.</p></article>
           <article class="product"><h3>Continuity</h3><p>Task state that survives provider switches. Versioned states with optimistic checks, immutable checkpoints, and one pre-failover snapshot per request when task state exists.</p><p class="needs"><strong>Needs:</strong> any chat client — state versions itself as you work.</p></article>
-          <article class="product"><h3>Tools + Agent</h3><p>OAuth-protected MCP tools with real hands on your machine. Twelve tools across files, shell, task state, memory, and projects — destructive verbs stage behind a single-use confirmation token, then run on your paired agent inside a home-relative sandbox.</p><p class="needs"><strong>Needs:</strong> <code>invincible agent</code> running on the machine you want to reach.</p></article>
+          <article class="product"><h3>Tools + Agent</h3><p>OAuth-protected MCP tools with real hands on your machine. Fifteen tools across files, shell, search, screenshots, task state, memory, and projects — destructive verbs stage behind a single-use confirmation token, then run on your paired agent inside a home-relative sandbox.</p><p class="needs"><strong>Needs:</strong> <code>invincible harness connect</code> running on the machine you want to reach.</p></article>
         </div>
       </div>
     </section>
@@ -333,7 +333,7 @@
         </div>
         <div class="journeys">
           <article class="journey"><span class="kicker">No machine needed</span><h3>Chat + memory only</h3><p>Mint an <code>inv_</code> key and point any OpenAI-compatible client at <code>https://invincible-ai.me/v1</code>. Sessions, memories, and continuity accrue immediately — no install, no pairing.</p><div class="actions"><a href="/register">Create a free account →</a></div></article>
-          <article class="journey"><span class="kicker">After pairing the agent</span><h3>Chat with hands</h3><p>Run <code>invincible agent</code> on the machine you want to reach, then connect any MCP client to <code>https://invincible-ai.me/mcp</code>. Confirmed commands and writes execute on your PC — zero inbound ports.</p><div class="actions"><a href="#wire">See the wiring →</a></div></article>
+          <article class="journey"><span class="kicker">After pairing the agent</span><h3>Chat with hands</h3><p>Run <code>invincible harness connect</code> on the machine you want to reach, then connect any MCP client to <code>https://invincible-ai.me/mcp</code>. Confirmed commands and writes execute on your PC — zero inbound ports.</p><div class="actions"><a href="#wire">See the wiring →</a></div></article>
           <article class="journey"><span class="kicker">After adding your keys</span><h3>The full system</h3><p>Connect provider credentials and every route, failover, checkpoint, and token count shows up in the dashboard — sessions, task board, memory graph, and per-day usage by provider.</p><div class="actions"><a href="/login">Open the dashboard →</a></div></article>
         </div>
       </div>
@@ -409,7 +409,7 @@
           <p>Short answers with the same semantics the docs pin. Nothing here promises what the code does not do yet.</p>
         </div>
         <div class="faq">
-          <details><summary>Do I need to run a server or a database?</summary><p>No. Create an account on the hosted service and everything — providers, sessions, memory, task state — lives server-side. Pairing a machine is one user command (<code>pip install invincible-ai</code>, then <code>invincible agent</code>). The same code also self-hosts on a laptop backed by PostgreSQL if you prefer to operate it yourself.</p></details>
+          <details><summary>Do I need to run a server or a database?</summary><p>No. Create an account on the hosted service and everything — providers, sessions, memory, task state — lives server-side. Pairing a machine is one user command (<code>pip install invincible-ai</code>, then <code>invincible harness connect</code>). The same code also self-hosts on a laptop backed by PostgreSQL if you prefer to operate it yourself.</p></details>
           <details><summary>What happens when a provider rate-limits me?</summary><p>A 429 or 5xx records a failure, puts that credential in an exponential cooldown (30s up to a 300s cap), and tries your next credential. A 401 or 403 disables that credential in memory for the rest of the server's life and moves to your next one. When every credential is exhausted the gateway answers 503 — your agent retries one stable endpoint instead of dying on the first 429.</p></details>
           <details><summary>Where do approved tool calls actually execute?</summary><p>On a hosted deployment, on your paired machine; on a single-user self-host without agent routing, on the server host itself. Either way the server keeps every security decision (denylist, staging, single-use confirmation token, audit, per-user routing) and the agent only does the work inside a home-relative sandbox, with denylisted credential paths blocked. An offline agent answers immediately instead of hanging.</p></details>
           <details><summary>What does memory remember?</summary><p>Scoped lexical memories in PostgreSQL — notes, facts, preferences, decisions — ranked by full-text relevance, recency, kind, and confidence under one bounded budget shared with the continuity brief. Say "remember this" to save explicitly, and manage or delete everything from the dashboard. Semantic or vector search is not built yet.</p></details>
@@ -426,7 +426,7 @@
           <h2>Pair once. Route everything.</h2>
           <p>Run this on the machine you want to reach. macOS, Linux, and Windows — one package, no server to operate, no database to provision.</p>
           <pre><span class="c">pip install invincible-ai</span>
-<span class="c">invincible agent</span>  <span class="dim" style="color:#747c88;"># browser opens → sign in → Approve</span></pre>
+<span class="c">invincible harness connect</span>  <span class="dim" style="color:#747c88;"># browser opens → sign in → Approve</span></pre>
           <div class="actions">
             <a class="btn" href="/register">Create your account</a>
             <a class="btn ghost" href="/login">Sign in</a>

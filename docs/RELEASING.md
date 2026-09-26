@@ -39,7 +39,7 @@ It builds the real sdist + wheel, installs the wheel into a scratch venv,
 and asserts — from inside that venv — the version, the packaged
 `providers.yaml`, the migration head (wheel == source), every dashboard
 template + static asset, and that `invincible --version` /
-`invincible agent --help` work with no database and no `.env`.
+`invincible harness connect --help` work with no database and no `.env`.
 
 ## Release flow (CI)
 
@@ -113,7 +113,7 @@ Pending Publisher exactly.
 twine upload --repository testpypi dist/*
 # in a throwaway venv:
 pip install --index-url https://test.pypi.org/simple/ invincible-ai
-invincible --version && invincible agent --help
+invincible --version && invincible harness connect --help
 ```
 
 ## After the upload — verify from the outside
@@ -121,7 +121,7 @@ invincible --version && invincible agent --help
 ```bash
 # in a throwaway venv, NOT the repo checkout:
 pip install invincible-ai
-invincible --version && invincible agent --help
+invincible --version && invincible harness connect --help
 ```
 
 Installing from inside the repo directory can shadow the installed

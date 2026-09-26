@@ -567,7 +567,7 @@ the exact token from that request; `approve` must be a real JSON boolean
 | Approved (`approve: true`) | The real action result (`stdout`/`stderr`/`returncode` for bash; `status`/`path`/`bytes` for write), `isError: false`. |
 | Declined (`approve: false`) | `isError: true`, text `Declined.` — entry discarded, nothing runs. |
 | Unknown / expired / already-used token | `isError: true`, text `Unknown or expired confirmation token.` — nothing runs. |
-| Agent offline (agent routing only) | `isError: true`, text `No invincible agent is connected for this account. Start one on your machine with: invincible agent` — answered immediately, nothing waits. |
+| Agent offline (agent routing only) | `isError: true`, text `No invincible agent is connected for this account. Start one on your machine with: invincible harness connect` — answered immediately, nothing waits. |
 | Agent timeout (agent routing only) | `isError: true` — the agent did not return a result within the action's timeout plus grace; the outcome is unknown, re-check state before retrying. |
 
 Tokens are valid for **10 minutes** and are **single-use**: the first
@@ -698,9 +698,10 @@ With `INVINCIBLE_AGENT_ROUTING` unset (the default, and every local
 With routing **on** (deployments set `INVINCIBLE_AGENT_ROUTING=1`), the
 journey gains one hop: the server's checks (denylist, staging, token) are
 unchanged, but after `confirm_action` approves, the work travels to the
-caller's paired agent — `invincible agent` running on the *user's* machine,
-long-polling `POST /agent/poll` with the inv_ key from pairing
-(`invincible login`, or the agent's own first-run self-pairing — it
+caller's paired harness — `invincible harness connect` running on the
+*user's* machine, holding the outbound-only WS relay (long-poll fallback)
+with the inv_ key from pairing
+(`invincible login`, or first-run self-pairing — it
 starts the same device flow when no saved credentials exist).
 The agent re-runs the denylist locally, confines reads/writes to the
 user's home (`INVINCIBLE_AGENT_ROOT` to override; `.env*`, `.git`, `.ssh`,

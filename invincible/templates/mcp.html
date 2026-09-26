@@ -30,8 +30,8 @@ you.</p>
   <p id="agent-status" class="agent-text">Agent status: checking&hellip;</p>
 </div>
 <script>
-  // Phase 10 badge: liveness of this account's paired local agent
-  // (invincible agent). Pure fetch - no htmx dependency, no assets.
+  // Harness badge: liveness of this account's paired machine
+  // (invincible harness connect). Pure fetch - no htmx dependency, no assets.
   fetch("/agent/status", {credentials: "same-origin"})
     .then(r => r.ok ? r.json() : null)
     .then(data => {
@@ -43,7 +43,7 @@ you.</p>
       card.classList.toggle("offline", !data.agent_online);
       el.textContent = data.agent_online
         ? "Agent online — your confirmed tool actions run on your machine."
-        : "Agent offline — start one on your machine with: invincible agent";
+        : "Agent offline — start one on your machine with: invincible harness connect";
     })
     .catch(() => {
       const el = document.getElementById("agent-status");
