@@ -34,7 +34,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # The known-good packaged surface (source of truth — the pyproject globs
 # are deliberately not asserted; the built artifact is).
 EXPECTED_TEMPLATES = {
-    "account.html", "base.html", "dashboard.html", "device.html",
+    "account.html", "base.html", "chat.html", "dashboard.html",
+    "device.html",
     "device_result.html", "landing.html", "login.html", "mcp.html",
     "machines.html",
     "memory.html", "providers.html", "register.html", "sessions.html",

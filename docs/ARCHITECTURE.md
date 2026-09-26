@@ -25,10 +25,14 @@ invincible/
 │   │                           require_user_session (cookies only; inv_* keys,
 │   │                           MCP bearers excluded by construction)
 │   ├── openai_compat.py        POST /v1/chat/completions, GET /v1/models
+│   │                           (thin wrapper over core/chat_service.py)
 │   ├── anthropic_compat.py     POST /v1/messages (Anthropic protocol)
 │   ├── responses_compat.py     POST /v1/responses (OpenAI Responses protocol for Codex CLI)
 │   ├── byok.py                 Per-user provider-credential management
 │   │                           (/providers/mine connect/test/order/routing)
+│   ├── chat.py                 Dashboard webchat (/dashboard/chat*, cookie
+│   │                           realm only): page + new-chat + models JSON +
+│   │                           SSE stream (text-only v1, no tool execution)
 │   ├── mcp.py                  POST /mcp (JSON-RPC 2.0 dispatch, Bearer resource server)
 │   ├── oauth.py                Built-in OAuth 2.1 + PKCE authorization server
 │   │                           (/.well-known/oauth-*, /oauth/register|authorize|token|revoke;
@@ -63,6 +67,10 @@ invincible/
     │                           x confidence; AND→OR query fallback)
     ├── context_builder.py      One unified token budget for memory + continuity
     │                           injections (Phase 4)
+    ├── chat_service.py         Shared chat pipeline behind POST
+    │                           /v1/chat/completions AND the dashboard webchat:
+    │                           prepare (history + injections + pairing repair),
+    │                           non-streaming route + streaming open, persistence
     ├── compression.py          Send-time message compression (tool-result
     │                           truncation + blank-run collapse)
     ├── tool_compression.py     Send-time tool-schema compression (description
@@ -216,6 +224,41 @@ openai_compat
   ▼
 client
 ```
+
+### Dashboard webchat reuses the same pipeline
+
+`POST /v1/chat/completions` is a thin wrapper over `core/chat_service.py`
+(`prepare_chat` + `run_nonstreaming` / `open_stream`); the dashboard
+webchat (`endpoints/chat.py`, cookie realm only) calls the same functions,
+so both surfaces persist identical history and read each other's threads:
+
+```
+browser
+  │  GET /dashboard/chat[?session=]      page: sidebar (≤30 sessions, titles
+  │                                      derived from each first user message)
+  │                                      + BYOK model picker + history
+  │  POST /dashboard/chat/new            fresh web-<hex> id, 303 back to ?session=
+  │  GET /dashboard/chat/models         candidate model ids (empty = link
+  │                                      /dashboard/providers empty state)
+  │  POST /dashboard/chat/stream        {session_id, message, model?} →
+  │                                      text/event-stream (fetch + reader;
+  │                                      EventSource cannot POST)
+  ▼
+chat_service.prepare_chat([user turn])   same injections (never persisted),
+                                         same pairing repair, same 400s
+  ▼
+router.stream_open_detailed              THE single failover loop (§3)
+  ▼
+webchat events: token* → done | error    token deltas as text; done carries
+                                         the server-escaped final bubble +
+                                         provider/model/attempts; error carries
+                                         the API-semantics message only
+                                         (never tracebacks)
+```
+
+Text-only v1: the browser never sends tools, so no tool-call round-trips
+or approvals exist on this surface; turns created over `/v1/*` that carry
+tool payloads are skipped by the template (their text still routes).
 
 ---
 

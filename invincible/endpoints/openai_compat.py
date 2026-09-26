@@ -1,33 +1,25 @@
 # invincible/endpoints/openai_compat.py
-import json
-import logging
-import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from invincible.compat.common import (
-    estimate_token_sum,
-    repair_tool_pairing,
-    route_headers,
+from invincible.compat.common import route_headers
+from invincible.core.chat_service import (
+    ChatError,
+    _stream_body,
+    models_from_providers,
+    open_stream,
+    prepare_chat,
+    run_nonstreaming,
 )
-from invincible.core.context_builder import build_context_messages
-from invincible.core.memory import MemoryStore
 from invincible.core.principal import Principal
-from invincible.core.router import (
-    NO_CREDENTIALS_MESSAGE,
-    AllProvidersFailedError,
-    NoCredentialsConfiguredError,
-    UpstreamClientError,
-)
-from invincible.core.settings import settings
-from invincible.core.user_settings_store import override_flag, override_int
 from invincible.endpoints.auth import require_auth
 from invincible.endpoints.byok import byok_attempt_source
 
-logger = logging.getLogger(__name__)
+# Re-exported for backward compatibility (imported from here before W1).
+__all__ = ["models_from_providers", "router"]
 
 
 class ChatRequest(BaseModel):
@@ -36,185 +28,6 @@ class ChatRequest(BaseModel):
     model: str | None = None
 
 router = APIRouter()
-
-
-def _sse_event(data) -> str:
-    return f"data: {json.dumps(data)}\n\n"
-
-
-def _append_content(content: str, chunk: dict) -> str:
-    for choice in chunk.get("choices") or []:
-        piece = (choice.get("delta") or {}).get("content")
-        if piece:
-            content += piece
-    return content
-
-
-def _delta_tool_calls(chunk: dict) -> list:
-    """The ``delta.tool_calls`` entries carried by one OpenAI stream chunk."""
-    choices = chunk.get("choices") or []
-    if not choices:
-        return []
-    return (choices[0].get("delta") or {}).get("tool_calls") or []
-
-
-def _accumulate_tool_call(states: dict, tool_call: dict) -> None:
-    """Merge one streamed ``tool_calls`` fragment into ``states``.
-
-    Fragments arrive keyed by upstream ``index``: the first carries the id
-    and function name, later ones append argument pieces. Mirrors the
-    Anthropic stream state machine so persisted history matches what the
-    client actually received.
-    """
-    index = tool_call.get("index", 0)
-    function = tool_call.get("function") or {}
-    state = states.get(index)
-    if state is None:
-        state = {
-            "id": tool_call.get("id"),
-            "name": function.get("name"),
-            "arguments": "",
-        }
-        states[index] = state
-    arguments = function.get("arguments")
-    if arguments:
-        state["arguments"] += arguments
-
-
-def _stream_assistant_message(content: str, states: dict) -> dict:
-    """Assemble the assistant turn to persist for a finished stream.
-
-    Same shape a non-streaming upstream would have returned (content is
-    None when the reply was tool calls only), so history stays consistent
-    with the protocol whether the provider streamed or not.
-    """
-    tool_calls = [
-        {
-            "id": state["id"] or f"call_{uuid.uuid4().hex}",
-            "type": "function",
-            "function": {
-                "name": state["name"] or "",
-                "arguments": state["arguments"] or "{}",
-            },
-        }
-        for _, state in sorted(states.items())
-    ]
-    message = {"role": "assistant", "content": content or None}
-    if tool_calls:
-        message["tool_calls"] = tool_calls
-    return message
-
-
-async def _persist_new_turns(
-    to_persist, assistant_message, store, session_id, memory: MemoryStore | None,
-    principal: Principal, *, runs_store=None, request_id: str | None = None,
-    max_turns: int | None = None,
-):
-    """Append this request's new turns, then record the streamed usage.
-
-    ``assistant_message`` is passed separately from the turns it joins
-    because the usage estimate must measure THE REPLY ALONE. It used to be
-    measured off the completed list, ``to_persist + [assistant]``, which
-    counted the caller's own input turns as output (deep code review
-    2026-09-24, finding 5).
-    """
-    new_turns = to_persist + [assistant_message]
-    try:
-        await store.append(
-            session_id,
-            new_turns,
-            user_id=principal.user_id,
-            project_id=principal.project_id,
-            max_turns=max_turns,
-        )
-    except Exception:
-        logger.exception("Failed to persist session history for %s", session_id)
-    if memory is not None:
-        try:
-            await memory.record_memories(
-                user_id=principal.user_id,
-                client_session_id=session_id,
-                messages_list=new_turns,
-            )
-        except Exception:
-            logger.exception("Failed to record memories for %s", session_id)
-    if runs_store is not None and request_id:
-        try:
-            await runs_store.attach_output(
-                # Streaming never sees real upstream counts without a wire
-                # change: a chars/4 estimate of the reply that actually
-                # accumulated, flagged in the run row's meta. Measuring the
-                # message (not its text) counts tool calls too, which is
-                # most of a coding agent's output.
-                request_id=request_id,
-                output_tokens=estimate_token_sum([assistant_message]),
-                estimated=True,
-            )
-        except Exception as exc:
-            logger.warning("Failed to attach stream usage: %s", exc)
-
-
-async def _stream_body(
-    first, tail, store, session_id, to_persist, memory: MemoryStore | None,
-    *, principal: Principal, runs_store=None, request_id: str | None = None,
-    max_turns: int | None = None,
-):
-    content = ""
-    tool_states = {}
-
-    def assistant_turn():
-        return _stream_assistant_message(content, tool_states)
-
-    try:
-        if first is not None:
-            content = _append_content(content, first)
-            for tool_call in _delta_tool_calls(first):
-                _accumulate_tool_call(tool_states, tool_call)
-            yield _sse_event(first)
-        async for chunk in tail:
-            content = _append_content(content, chunk)
-            for tool_call in _delta_tool_calls(chunk):
-                _accumulate_tool_call(tool_states, tool_call)
-            yield _sse_event(chunk)
-    except Exception as e:
-        logger.warning("Stream terminated after an upstream error: %s", e)
-        yield _sse_event({"error": {"message": "stream terminated",
-                                    "type": "stream_error"}})
-        # Persist what accumulated before the failure so history matches
-        # what the client saw (mirrors the Anthropic path's on_complete).
-        await _persist_new_turns(
-            to_persist, assistant_turn(), store, session_id, memory, principal,
-            runs_store=runs_store, request_id=request_id,
-            max_turns=max_turns,
-        )
-        return
-    await _persist_new_turns(
-        to_persist, assistant_turn(), store, session_id, memory, principal,
-        runs_store=runs_store, request_id=request_id,
-        max_turns=max_turns,
-    )
-    yield "data: [DONE]\n\n"
-
-
-def models_from_providers(providers: list) -> list[dict]:
-    """Map a provider pool (the router's loaded providers, or a BYOK
-    user's credential candidates - same dict shape) to OpenAI /v1/models
-    entries.
-
-    The router validates providers at startup, so every entry normally has
-    a ``model_id``; the isinstance/get guard is cheap defense in depth.
-    Runtime provider order is preserved. Aliases are listed after the real
-    model ids so clients can discover and request them.
-    """
-    entries = [
-        {"id": p["model_id"], "object": "model", "owned_by": "invincible"}
-        for p in providers
-        if isinstance(p, dict) and p.get("model_id")
-    ]
-    for p in providers:
-        for alias in p.get("aliases") or []:
-            entries.append({"id": alias, "object": "model", "owned_by": "invincible"})
-    return entries
 
 
 @router.get("/v1/models")
@@ -253,112 +66,41 @@ async def chat_completions(
     store = request.app.state.sessions
     memory = getattr(request.app.state, "memory", None)
 
-    # Phase 2: resolve-or-create the owning session row up front so every
-    # run record, task read, and history write is scoped to this
-    # principal's surrogate session.
-    session_pk = await store.resolve_or_create(
-        session_id,
-        user_id=principal.user_id,
-        project_id=principal.project_id,
-    )
-
-    history = await store.load(
-        session_id,
-        user_id=principal.user_id,
-        project_id=principal.project_id,
-    )
     # Phase 9 BYOK: every /v1/* principal routes ONLY through its own
     # connected credentials - there is no shared pool (the product
     # decision pins this). Loaded before the injections so the user's
     # per-user overrides (Phase 1) can gate memory/continuity for this
     # request.
     byok = await byok_attempt_source(request, principal, model=body.model)
-    user_overrides = {} if byok is None else byok[3]
-    # Phase 4: memory + continuity injections share one budget via the
-    # ContextBuilder. Injected system messages are routed but never
-    # persisted (system role is excluded below), so they never accumulate.
-    injections = await build_context_messages(
-        retrieval=(
-            getattr(request.app.state, "retrieval", None)
-            if override_flag(user_overrides, "memory", settings.memory_enabled)
-            else None
-        ),
-        continuity_engine=(
-            getattr(request.app.state, "continuity", None)
-            if override_flag(
-                user_overrides, "continuity", settings.continuity_enabled)
-            else None
-        ),
-        user_id=principal.user_id,
-        project_id=principal.project_id,
-        session_id=session_id,
-        session_pk=session_pk,
-        new_messages=body.messages,
-    )
-    full_messages = history + injections + body.messages
     try:
-        # Persisted history + the client's replayed messages must satisfy
-        # the provider's tool-call pairing invariant before routing; a
-        # stored assistant tool_calls turn whose tool result only arrives
-        # later is what DeepSeek/vLLM rejects with "insufficient tool
-        # messages following tool_calls". Repaired here, or refused with a
-        # protocol-correct 400 - never forwarded half-paired.
-        full_messages = repair_tool_pairing(full_messages)
-    except ValueError as e:
-        return JSONResponse(
-            content={"error": {"message": str(e),
-                               "type": "invalid_request_error"}},
-            status_code=400,
+        prepared = await prepare_chat(
+            body.messages,
+            principal=principal,
+            session_id=session_id,
+            model=body.model,
+            sessions=store,
+            retrieval=getattr(request.app.state, "retrieval", None),
+            continuity=getattr(request.app.state, "continuity", None),
+            byok=byok,
         )
-    # Clients resend the system prompt on every request; persisting it would
-    # accumulate duplicates that trimming never removes (system messages are
-    # always kept). Route with it, but only persist the new turns.
-    to_persist = [m for m in body.messages if m.get("role") != "system"]
-    if byok is not None and not byok[0]:
-        return JSONResponse(
-            content={"error": {"message": NO_CREDENTIALS_MESSAGE,
-                               "type": "invalid_request_error"}},
-            status_code=400,
-        )
-    byok_kwargs = (
-        {} if byok is None
-        else {
-            "byok_candidates": byok[0],
-            "byok_key_resolver": byok[1],
-            "byok_routing": byok[2],
-            "overrides": byok[3],
-        }
-    )
-    # Phase 1: this user's history turn cap (None = server default).
-    max_turns = override_int(
-        user_overrides, "history_max_turns", settings.history_max_turns)
+    except ChatError as e:
+        return JSONResponse(content=e.body, status_code=e.status_code)
 
     if body.stream:
         try:
-            (first, tail), info = await request.app.state.router.stream_open_detailed(
-                full_messages, model=body.model, session_id=session_id,
-                session_pk=session_pk, **byok_kwargs,
+            (first, tail), info = await open_stream(
+                prepared, model=body.model,
+                router=request.app.state.router,
             )
-        except NoCredentialsConfiguredError:
-            # Defensive: the pre-router check above normally catches this.
-            return JSONResponse(
-                content={"error": {"message": NO_CREDENTIALS_MESSAGE,
-                                   "type": "invalid_request_error"}},
-                status_code=400,
-            )
-        except UpstreamClientError as e:
+        except ChatError as e:
             return JSONResponse(content=e.body, status_code=e.status_code)
-        except AllProvidersFailedError as e:
-            return JSONResponse(
-                content={"error": {"message": str(e), "type": "gateway_error"}},
-                status_code=503,
-            )
         return StreamingResponse(
-            _stream_body(first, tail, store, session_id, to_persist, memory,
+            _stream_body(first, tail, store, session_id, prepared.to_persist,
+                         memory,
                          principal=principal,
                          runs_store=getattr(request.app.state, "runs", None),
                          request_id=info["request_id"],
-                         max_turns=max_turns),
+                         max_turns=prepared.max_turns),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -368,46 +110,14 @@ async def chat_completions(
         )
 
     try:
-        result, info = await request.app.state.router.route_request_detailed(
-            full_messages, model=body.model, session_id=session_id,
-            session_pk=session_pk, **byok_kwargs,
+        result, info = await run_nonstreaming(
+            prepared,
+            principal=principal,
+            model=body.model,
+            sessions=store,
+            memory=memory,
+            router=request.app.state.router,
         )
-        choices = result.get("choices") or []
-        if choices and "message" in choices[0]:
-            new_turns = to_persist + [choices[0]["message"]]
-            await store.append(
-                session_id,
-                new_turns,
-                user_id=principal.user_id,
-                project_id=principal.project_id,
-                max_turns=max_turns,
-            )
-            try:
-                if memory is not None:
-                    await memory.record_memories(
-                        user_id=principal.user_id,
-                        client_session_id=session_id,
-                        messages_list=new_turns,
-                    )
-            except Exception:
-                logger.exception("Failed to record memories for %s", session_id)
         return JSONResponse(content=result, headers=route_headers(info))
-    except NoCredentialsConfiguredError:
-        return JSONResponse(
-            content={"error": {"message": NO_CREDENTIALS_MESSAGE,
-                               "type": "invalid_request_error"}},
-            status_code=400,
-        )
-    except UpstreamClientError as e:
-        return JSONResponse(
-            content=e.body,
-            status_code=e.status_code
-        )
-    except Exception:
-        # Never leak internal exception text (SQL/DSN details) to clients;
-        # the full traceback is already in the server log.
-        logger.exception("chat completion failed")
-        return JSONResponse(
-            content={"error": {"message": "gateway error", "type": "gateway_error"}},
-            status_code=503,
-        )
+    except ChatError as e:
+        return JSONResponse(content=e.body, status_code=e.status_code)

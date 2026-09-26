@@ -34,6 +34,7 @@ from invincible.endpoints.agents import router as agents_router
 from invincible.endpoints.anthropic_compat import router as anthropic_router
 from invincible.endpoints.auth import require_auth
 from invincible.endpoints.byok import router as byok_router
+from invincible.endpoints.chat import router as chat_router
 from invincible.endpoints.dashboard import router as dashboard_router
 from invincible.endpoints.graph import router as graph_router
 from invincible.endpoints.mcp import require_mcp_auth
@@ -207,6 +208,9 @@ app.include_router(accounts_router)
 app.include_router(agents_router)
 # Phase 5 dashboard pages: cookie-realm only (require_user_session inside).
 app.include_router(dashboard_router)
+# Dashboard webchat (text-only BYOK chat with SSE streaming): same
+# cookie realm as the dashboard pages.
+app.include_router(chat_router)
 # Phase 9 BYOK surface: same cookie realm as the dashboard (its own
 # fail-closed INVINCIBLE_CREDENTIAL_KEY gate lives in the router).
 app.include_router(byok_router)

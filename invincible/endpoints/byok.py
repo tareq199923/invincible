@@ -122,10 +122,11 @@ async def byok_attempt_source(
     ciphertext) logs a warning and returns None, which the Router treats
     exactly like a missing env key - skip to the next attempt.
     """
-    # Defensive: /v1/* only ever mints api_key principals now (the legacy
-    # gateway-key/anonymous realms are gone), so a non-api_key kind means
-    # something reached the BYOK path through an unexpected route.
-    if principal.kind != "api_key":
+    # Per-user kinds only: api_key (/v1/* chat) and session (dashboard
+    # webchat) both resolve to the same user's own credentials. Anything
+    # else (e.g. the mcp bearer kind) means something reached the BYOK
+    # path through an unexpected route.
+    if principal.kind not in ("api_key", "session"):
         return None
     store = ByokCredentialStore(request.app.state.engine)
     rows = await store.routing_rows(principal.user_id)

@@ -189,6 +189,26 @@ Properties of this realm:
   `provider_name` + `catalog_key` + id only — never the key, and never
   the base URL (a URL may embed auth parameters).
 
+### Dashboard webchat — cookie realm (text-only v1)
+
+| Property | Value |
+|---|---|
+| Surface | `/dashboard/chat` (HTML), `/dashboard/chat/new`, `/dashboard/chat/models`, `/dashboard/chat/stream` (SSE) |
+| Auth | `invincible_session` cookie ONLY — `inv_*` API keys are rejected (401), same as the providers surface |
+| Tool execution | None: the browser sends one text turn and receives text deltas; no MCP tools, approvals, uploads, or system-prompt field exist on this surface |
+
+- Chat completions themselves are not audited (existing posture), but
+  every turn persists through the same ownership-predicated
+  `resolve_or_create`/`append` path as `/v1/*`, so web and API history
+  share one namespaced store and cross-user reads stay impossible.
+- `?session=` ids unknown to the caller render exactly like foreign ones
+  (empty thread — no enumeration); sidebar titles are derived server-side
+  from each session's first user message and bounded.
+- Stream events carry text only: `token` deltas are inserted as text, the
+  `done` bubble HTML is escaped server-side (`html.escape`) before the
+  single `innerHTML` insertion, and `error` carries the API-semantics
+  message only — never tracebacks, DSNs, or keys.
+
 ### The layering principle
 
 `tool_executor.py` (the code that actually runs commands and writes files)

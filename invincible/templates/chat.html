@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+{% block title %}Chat - Invincible{% endblock %}
+{% block content %}
+<style>
+  .chat-layout {
+    display: grid;
+    grid-template-columns: 15rem minmax(0, 1fr);
+    gap: 1.2rem;
+    align-items: start;
+  }
+  .chat-side {
+    background: var(--bg-raise);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    padding: 0.7rem;
+  }
+  .chat-side ul { list-style: none; margin: 0.6rem 0 0; padding: 0; }
+  .chat-side li { margin: 0; padding: 0; }
+  .chat-side a.sess {
+    display: block;
+    padding: 0.35rem 0.55rem;
+    color: var(--muted);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chat-side a.sess:hover { color: var(--ink); background: var(--surface); }
+  .chat-side a.sess.active {
+    color: var(--accent-ink);
+    border-left-color: var(--accent);
+    background: linear-gradient(90deg, var(--accent-dim), transparent 72%);
+  }
+  .chat-side form { margin: 0; }
+  .chat-side button { margin-top: 0; width: 100%; }
+  #chat-log {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin: 1rem 0;
+  }
+  .bubble {
+    max-width: 46rem;
+    padding: 0.55rem 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .bubble-user {
+    align-self: flex-end;
+    background: var(--surface-2);
+  }
+  .bubble-assistant { align-self: flex-start; }
+  .bubble .meta {
+    display: block;
+    margin-top: 0.4rem;
+    font-size: 0.7rem;
+    color: var(--faint);
+  }
+  .bubble.error { border-color: rgba(243, 114, 125, 0.45); color: var(--err); }
+  .bubble.pending { color: var(--muted); }
+  #chat-form { display: flex; gap: 0.6rem; align-items: flex-end; }
+  #chat-form textarea { flex: 1; min-height: 2.6rem; }
+  #chat-form button { margin-top: 0.3rem; white-space: nowrap; }
+  #chat-model-row { display: flex; gap: 0.6rem; align-items: center; }
+  #chat-model-row select { width: auto; min-width: 12rem; }
+  @media (max-width: 920px) {
+    .chat-layout { grid-template-columns: 1fr; }
+  }
+</style>
+
+<h2>Chat</h2>
+<p class="muted">Chat with your own connected providers, right here.
+History is shared with your API sessions.</p>
+
+{% if not has_provider %}
+<div class="banner">
+  <strong>No AI provider connected yet.</strong><br>
+  <a href="/dashboard/providers">Connect a provider &rarr;</a>
+  <span class="muted">chat requests route only through providers you
+  connect yourself.</span>
+</div>
+{% endif %}
+
+<div class="chat-layout">
+  <aside class="chat-side">
+    <form method="post" action="/dashboard/chat/new">
+      <button type="submit">+ new chat</button>
+    </form>
+    <ul>
+    {% for s in sessions %}
+      <li><a class="sess{% if s.client_session_id == active_session %} active{% endif %}"
+             href="/dashboard/chat?session={{ s.client_session_id }}"
+             title="{{ s.client_session_id }}">{{ s.title }}</a></li>
+    {% else %}
+      <li class="empty">No conversations yet.</li>
+    {% endfor %}
+    </ul>
+  </aside>
+
+  <section>
+    {% if has_provider %}
+    <div id="chat-model-row">
+      <label for="chat-model" class="muted">model</label>
+      <select id="chat-model">
+      {% for m in models %}
+        <option value="{{ m }}">{{ m }}</option>
+      {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+
+    <div id="chat-log">
+    {% for t in history %}
+      <div class="bubble bubble-{{ t.role }}">{{ t.text }}<!--
+       -->{% if t.role == "assistant" %}<span class="meta"></span>{% endif %}</div>
+    {% else %}
+      <p class="muted empty" id="chat-empty">No messages yet. Say hello below.</p>
+    {% endfor %}
+    </div>
+
+    {% if active_session %}
+    <form id="chat-form">
+      <textarea id="chat-input" placeholder="Message your models&hellip;"
+                aria-label="Message"></textarea>
+      <button type="submit" id="chat-send">Send</button>
+    </form>
+    <p class="muted" id="chat-status"></p>
+    {% else %}
+    <form method="post" action="/dashboard/chat/new">
+      <button type="submit">Start a new chat</button>
+    </form>
+    {% endif %}
+  </section>
+</div>
+
+{% if active_session %}
+<script>
+  // Webchat streaming: POST + fetch reader (EventSource cannot POST).
+  // Deltas are textContent-only; the server-escaped final bubble is the
+  // only innerHTML insertion. No htmx dependency, no assets.
+  (function () {
+    var SESSION_ID = {{ active_session | tojson }};
+    var form = document.getElementById("chat-form");
+    var input = document.getElementById("chat-input");
+    var send = document.getElementById("chat-send");
+    var log = document.getElementById("chat-log");
+    var status = document.getElementById("chat-status");
+    var picker = document.getElementById("chat-model");
+    if (!form || !input || !log) return;
+
+    function bubble(role, text) {
+      var empty = document.getElementById("chat-empty");
+      if (empty) empty.remove();
+      var div = document.createElement("div");
+      div.className = "bubble bubble-" + role;
+      div.textContent = text;
+      log.appendChild(div);
+      div.scrollIntoView({block: "nearest"});
+      return div;
+    }
+
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        form.requestSubmit();
+      }
+    });
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var text = input.value.trim();
+      if (!text || send.disabled) return;
+      bubble("user", text);
+      input.value = "";
+      send.disabled = true;
+      var pending = bubble("assistant", "…");
+      pending.classList.add("pending");
+      if (status) status.textContent = "streaming…";
+
+      fetch("/dashboard/chat/stream", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          session_id: SESSION_ID,
+          message: text,
+          model: picker && picker.value ? picker.value : null
+        })
+      }).then(function (resp) {
+        var ctype = resp.headers.get("content-type") || "";
+        if (!resp.ok || ctype.indexOf("text/event-stream") === -1) {
+          return resp.json().then(function (j) {
+            var msg = (j && j.error && j.error.message) || "request failed";
+            pending.textContent = "error: " + msg;
+            pending.classList.remove("pending");
+            pending.classList.add("error");
+          }).catch(function () {
+            pending.textContent = "error: request failed";
+            pending.classList.remove("pending");
+            pending.classList.add("error");
+          }).then(function () {
+            send.disabled = false;
+            if (status) status.textContent = "";
+          });
+          return null;
+        }
+        var reader = resp.body.getReader();
+        var decoder = new TextDecoder();
+        var buf = "";
+        var started = false;
+        function pump() {
+          return reader.read().then(function (res) {
+            if (res.done) {
+              send.disabled = false;
+              if (status) status.textContent = "";
+              return;
+            }
+            buf += decoder.decode(res.value, {stream: true});
+            var parts = buf.split("\n\n");
+            buf = parts.pop();
+            parts.forEach(function (part) {
+              var name = null, payload = null;
+              part.split("\n").forEach(function (line) {
+                if (line.indexOf("event:") === 0) {
+                  name = line.slice(6).trim();
+                } else if (line.indexOf("data:") === 0) {
+                  try {
+                    payload = JSON.parse(line.slice(5).trim());
+                  } catch (err) { payload = null; }
+                }
+              });
+              if (name === "token" && payload && payload.text) {
+                if (!started) {
+                  pending.textContent = "";
+                  pending.classList.remove("pending");
+                  started = true;
+                }
+                pending.textContent += payload.text;
+                pending.scrollIntoView({block: "nearest"});
+              } else if (name === "done" && payload) {
+                pending.classList.remove("pending");
+                if (payload.bubble_html) {
+                  pending.innerHTML = payload.bubble_html;
+                }
+                if (payload.provider || payload.model) {
+                  var meta = document.createElement("span");
+                  meta.className = "meta";
+                  meta.textContent =
+                    (payload.provider || "?") + " · " +
+                    (payload.model || "?");
+                  pending.appendChild(meta);
+                }
+                send.disabled = false;
+                if (status) status.textContent = "";
+              } else if (name === "error" && payload) {
+                pending.textContent = "error: " + (payload.message || "failed");
+                pending.classList.remove("pending");
+                pending.classList.add("error");
+                send.disabled = false;
+                if (status) status.textContent = "";
+              }
+            });
+            return pump();
+          });
+        }
+        return pump();
+      }).catch(function () {
+        pending.textContent = "error: request failed";
+        pending.classList.remove("pending");
+        pending.classList.add("error");
+        send.disabled = false;
+        if (status) status.textContent = "";
+      });
+    });
+  })();
+</script>
+{% endif %}
+{% endblock content %}

@@ -481,6 +481,8 @@
       </div>
       <div class="nav-group">
         <span class="nav-label">activity</span>
+        <a class="nav-link{% if path.startswith('/dashboard/chat') %} active{% endif %}"
+           href="/dashboard/chat">chat</a>
         <a class="nav-link{% if path.startswith('/dashboard/sessions') %} active{% endif %}"
            href="/dashboard/sessions">sessions</a>
         <a class="nav-link{% if path.startswith('/dashboard/tasks') %} active{% endif %}"
