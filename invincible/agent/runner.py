@@ -166,6 +166,41 @@ async def execute_job(job: dict) -> dict:
                 int(args.get("max_results")
                     or tool_executor.SEARCH_DEFAULT_MAX_RESULTS),
             )
+        if job_type == "list_dir":
+            # Read-only like code_search: home sandbox re-check, then
+            # the EXACT shared listing the server uses.
+            sandbox.check_agent_read(args.get("path", "") or ".")
+            try:
+                dir_limit = int(
+                    args.get("limit")
+                    or tool_executor.LIST_DIR_DEFAULT_LIMIT
+                )
+            except (TypeError, ValueError):
+                dir_limit = tool_executor.LIST_DIR_DEFAULT_LIMIT
+            return await tool_executor._list_dir(
+                args.get("path", "") or ".", dir_limit,
+                bool(args.get("show_hidden", False)),
+            )
+        if job_type == "git_status":
+            # Read-only git inspection: same sandbox as reads.
+            sandbox.check_agent_read(args.get("path", "") or ".")
+            return await tool_executor._git_status(
+                args.get("path", "") or ".")
+        if job_type == "git_diff":
+            sandbox.check_agent_read(args.get("path", "") or ".")
+            return await tool_executor._git_diff(
+                args.get("path", "") or ".")
+        if job_type == "git_log":
+            sandbox.check_agent_read(args.get("path", "") or ".")
+            try:
+                log_limit = int(
+                    args.get("limit")
+                    or tool_executor.GIT_LOG_DEFAULT_LIMIT
+                )
+            except (TypeError, ValueError):
+                log_limit = tool_executor.GIT_LOG_DEFAULT_LIMIT
+            return await tool_executor._git_log(
+                args.get("path", "") or ".", log_limit)
         if job_type == "process_list":
             # H6a: no path, no network — runs as-is with the caller's own
             # privileges, same as execute_bash post-approval.

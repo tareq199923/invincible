@@ -233,8 +233,8 @@ Response:
 {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
 ```
 
-Response: `result.tools` is an array of fifteen tool descriptors (the
-file/exec/approval surface, the three H6a read-only machine tools, the
+Response: `result.tools` is an array of nineteen tool descriptors (the
+file/exec/approval surface, the read-only machine tools, the
 Phase 15b continuity tools, the memory tools, and the project tools):
 
 ```json
@@ -307,6 +307,49 @@ Phase 15b continuity tools, the memory tools, and the project tools):
           "type": "object",
           "properties": {"url": {"type": "string"}},
           "required": ["url"]
+        }
+      },
+      {
+        "name": "list_dir",
+        "description": "List a directory's entries (names, dir/file, sizes); same sandbox as read_file. ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {"type": "string"},
+            "limit": {"type": "integer"},
+            "show_hidden": {"type": "boolean"}
+          },
+          "required": ["path"]
+        }
+      },
+      {
+        "name": "git_status",
+        "description": "Git working-tree status for the repo containing a path; read-only. ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {"path": {"type": "string"}},
+          "required": ["path"]
+        }
+      },
+      {
+        "name": "git_diff",
+        "description": "Unstaged git diff (+ stat) for the repo containing a path; read-only, capped. ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {"path": {"type": "string"}},
+          "required": ["path"]
+        }
+      },
+      {
+        "name": "git_log",
+        "description": "Recent commits for the repo containing a path, newest first; read-only. ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {"type": "string"},
+            "limit": {"type": "integer"}
+          },
+          "required": ["path"]
         }
       },
       {
@@ -608,6 +651,52 @@ at 200. No confirmation (read-only).
 
 ```json
 {"status": "processes", "processes": [{"pid": 1234, "name": "python", "...": "..."}], "truncated": false}
+```
+
+#### `list_dir`
+
+```json
+"arguments": {"path": "C:\\Users\\me\\project", "limit": 100, "show_hidden": false}
+```
+
+Lists one directory's entries — names with dir/file kind and file
+sizes, dirs first then alphabetical. Same sandbox as `read_file`
+(server read roots locally, the agent's home when routed). Hidden
+(dot) files are skipped unless `show_hidden` is true; `limit`
+defaults to 100, capped at 500. A missing path or a file (not a
+directory) is an error result; denylisted paths answer `Blocked: ...`,
+`isError: true`. No confirmation (read-only).
+
+```json
+{"status": "directory", "path": "...",
+ "entries": [{"name": "sub", "type": "dir", "size": 0},
+             {"name": "a.txt", "type": "file", "size": 41}],
+ "truncated": false}
+```
+
+#### `git_status` / `git_diff` / `git_log`
+
+```json
+"arguments": {"path": "C:\\Users\\me\\project"}
+"arguments": {"path": "C:\\Users\\me\\project", "limit": 20}
+```
+
+Read-only git inspection for the repository containing `path`:
+working-tree status (branch + changed files), the unstaged diff
+(plus stat summary, truncated over 100KB with a flag), and recent
+commits newest-first (hash, author, date, subject; `limit` defaults
+to 20, capped at 50). Same sandbox as `read_file`; a path outside a
+git repository (or a machine without git) is an error result, never
+a block. No confirmation (read-only).
+
+```json
+{"status": "git_status", "path": "...", "branch": "main",
+ "clean": false, "changes": [" M a.txt"]}
+{"status": "git_diff", "path": "...", "stat": "...",
+ "diff": "...", "truncated": false}
+{"status": "git_log", "path": "...",
+ "commits": [{"hash": "...", "author": "...",
+              "date": "...", "subject": "..."}]}
 ```
 
 #### `screenshot`

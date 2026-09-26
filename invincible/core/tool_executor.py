@@ -964,6 +964,184 @@ async def search_code(
     return await _search_code(pattern, path, max_results)
 
 
+LIST_DIR_DEFAULT_LIMIT = 100
+LIST_DIR_LIMIT_CAP = 500
+
+GIT_LOG_DEFAULT_LIMIT = 20
+GIT_LOG_LIMIT_CAP = 50
+GIT_TIMEOUT_SECONDS = 15.0
+# Unstaged diffs bigger than this are truncated, not sent (same spirit
+# as the search file-bytes cap: bounded work per call, no context
+# blowups from a vendored-directory diff).
+GIT_DIFF_BYTES_CAP = 100 * 1024
+
+
+async def _list_dir(path: str, limit: int,
+                    show_hidden: bool = False) -> dict:
+    """List one directory's entries. Path is ASSUMED vetted by the
+    caller (server read denylist or agent home sandbox) — this
+    function only executes. Entry names (not contents) are returned,
+    dirs-first then case-insensitive alpha, capped with a flag."""
+    try:
+        capped = max(1, min(int(limit or LIST_DIR_DEFAULT_LIMIT),
+                            LIST_DIR_LIMIT_CAP))
+    except (TypeError, ValueError):
+        capped = LIST_DIR_DEFAULT_LIMIT
+    target = os.path.abspath(os.path.expanduser(path or "."))
+    try:
+        with os.scandir(target) as it:
+            entries = []
+            for entry in it:
+                if not show_hidden and entry.name.startswith("."):
+                    continue
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                    size = 0
+                    if not is_dir:
+                        size = entry.stat(
+                            follow_symlinks=False).st_size
+                except OSError:
+                    is_dir, size = False, 0
+                entries.append({
+                    "name": entry.name,
+                    "type": "dir" if is_dir else "file",
+                    "size": size,
+                })
+    except FileNotFoundError:
+        return {"status": "error",
+                "error": f"Directory not found: {path}"}
+    except NotADirectoryError:
+        return {"status": "error",
+                "error": f"Path is not a directory: {path}"}
+    except Exception as e:
+        logger.error(f"list_dir failed: {e}")
+        return {"status": "error", "error": str(e)}
+    entries.sort(key=lambda e: (e["type"] != "dir", e["name"].lower()))
+    return {"status": "directory", "path": path,
+            "entries": entries[:capped],
+            "truncated": len(entries) > capped}
+
+
+async def list_dir(path: str, limit: int = LIST_DIR_DEFAULT_LIMIT,
+                   show_hidden: bool = False) -> dict:
+    """Server-side entry: read-denylist gate, then shared listing."""
+    check_read_denylist(path or ".")  # raises ToolBlocked
+    return await _list_dir(path, limit, show_hidden)
+
+
+async def _git_run(path: str, args: list,
+                   timeout: float = GIT_TIMEOUT_SECONDS) -> dict:
+    """Run one git command under ``path``. Returns
+    ``{"ok": True, "stdout": ...}`` or ``{"ok": False, "error": ...}``
+    — never raises, so dispatch shapes stay uniform. A non-zero exit
+    (not a repo, unknown revision) is an error result, not a block."""
+    target = os.path.abspath(os.path.expanduser(path or "."))
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "-C", target, *args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        return {"ok": False,
+                "error": "git is not installed on this machine"}
+    except Exception as e:
+        logger.error(f"git command failed: {e}")
+        return {"ok": False, "error": str(e)}
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return {"ok": False,
+                "error": f"git command timed out after {timeout}s"}
+    if proc.returncode != 0:
+        detail = stderr.decode(errors="replace").strip()
+        return {"ok": False,
+                "error": detail or f"git exited with code {proc.returncode}"}
+    return {"ok": True, "stdout": stdout.decode(errors="replace")}
+
+
+async def _git_status(path: str) -> dict:
+    """Working-tree status. Path is ASSUMED vetted by the caller —
+    this function only executes."""
+    result = await _git_run(path, ["status", "--short", "--branch"])
+    if not result["ok"]:
+        return {"status": "error", "error": result["error"]}
+    lines = [line for line in result["stdout"].splitlines() if line]
+    branch = ""
+    changes = []
+    for line in lines:
+        if line.startswith("##"):
+            branch = line[2:].strip()
+        else:
+            changes.append(line)
+    return {"status": "git_status", "path": path, "branch": branch,
+            "clean": not changes, "changes": changes}
+
+
+async def git_status(path: str) -> dict:
+    """Server-side entry: read-denylist gate, then shared status."""
+    check_read_denylist(path or ".")  # raises ToolBlocked
+    return await _git_status(path or ".")
+
+
+async def _git_diff(path: str) -> dict:
+    """Unstaged diff + stat, truncated at GIT_DIFF_BYTES_CAP. Path is
+    ASSUMED vetted by the caller — this function only executes."""
+    stat = await _git_run(path, ["diff", "--stat"])
+    if not stat["ok"]:
+        return {"status": "error", "error": stat["error"]}
+    diff = await _git_run(path, ["diff"])
+    if not diff["ok"]:
+        return {"status": "error", "error": diff["error"]}
+    body = diff["stdout"]
+    truncated = len(body.encode("utf-8")) > GIT_DIFF_BYTES_CAP
+    if truncated:
+        encoded = body.encode("utf-8")[:GIT_DIFF_BYTES_CAP]
+        body = encoded.decode("utf-8", errors="ignore")
+    return {"status": "git_diff", "path": path,
+            "stat": stat["stdout"], "diff": body, "truncated": truncated}
+
+
+async def git_diff(path: str) -> dict:
+    """Server-side entry: read-denylist gate, then shared diff."""
+    check_read_denylist(path or ".")  # raises ToolBlocked
+    return await _git_diff(path or ".")
+
+
+async def _git_log(path: str, limit: int) -> dict:
+    """Recent commits, newest first. Path is ASSUMED vetted by the
+    caller — this function only executes."""
+    try:
+        capped = max(1, min(int(limit or GIT_LOG_DEFAULT_LIMIT),
+                            GIT_LOG_LIMIT_CAP))
+    except (TypeError, ValueError):
+        capped = GIT_LOG_DEFAULT_LIMIT
+    result = await _git_run(path, [
+        "log", f"-n{capped}", "--decorate",
+        "--format=%H%x1f%an%x1f%ad%x1f%s", "--date=short",
+    ])
+    if not result["ok"]:
+        return {"status": "error", "error": result["error"]}
+    commits = []
+    for line in result["stdout"].splitlines():
+        parts = line.split("\x1f")
+        if len(parts) != 4:
+            continue
+        commits.append({"hash": parts[0], "author": parts[1],
+                        "date": parts[2], "subject": parts[3]})
+    return {"status": "git_log", "path": path, "commits": commits}
+
+
+async def git_log(path: str,
+                  limit: int = GIT_LOG_DEFAULT_LIMIT) -> dict:
+    """Server-side entry: read-denylist gate, then shared log."""
+    check_read_denylist(path or ".")  # raises ToolBlocked
+    return await _git_log(path or ".", limit)
+
+
 async def _list_processes(limit: int) -> dict:
     """Process table via stdlib subprocess only. No paths, no network —
     safe to run on either side; the routing posture (server-local vs

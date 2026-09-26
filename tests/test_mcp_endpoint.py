@@ -97,10 +97,12 @@ async def test_mcp_tools_list(client, bearer_headers):
     # the memory tools (save/search/list) are the data-plane layer on top;
     # project_create/project_list feed the memory tools valid names; the
     # harness H6a read-only machine tools (search/process/screenshot) need
-    # no confirmation gate, like read_file.
+    # no confirmation gate, like read_file; list_dir and the git
+    # inspection tools extend the same read-only posture.
     assert names == {
         "read_file", "execute_bash", "write_file", "confirm_action",
         "code_search", "process_list", "screenshot",
+        "list_dir", "git_status", "git_diff", "git_log",
         "task_state_set", "task_state_get", "checkpoint_create",
         "memory_save", "memory_search", "memory_list",
         "project_create", "project_list",

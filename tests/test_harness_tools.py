@@ -230,6 +230,161 @@ async def test_runner_processes_and_screenshot_shapes(monkeypatch):
     assert out["status"] == "error"
 
 
+def _dir_tree(tmp_path):
+    (tmp_path / "b.py").write_text("x = 1\n")
+    (tmp_path / "a.txt").write_text("hello\n")
+    (tmp_path / ".hidden").write_text("shh\n")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "c.py").write_text("y = 2\n")
+    return tmp_path
+
+
+async def test_list_dir_shape_and_order(tmp_path):
+    root = _dir_tree(tmp_path)
+    out = await tool_executor._list_dir(str(root), 100)
+    assert out["status"] == "directory"
+    assert out["truncated"] is False
+    names = [e["name"] for e in out["entries"]]
+    # dirs first, then alpha; hidden skipped by default.
+    assert names == ["sub", "a.txt", "b.py"]
+    by_name = {e["name"]: e for e in out["entries"]}
+    assert by_name["sub"]["type"] == "dir"
+    assert by_name["a.txt"]["type"] == "file"
+    assert by_name["a.txt"]["size"] > 0
+
+
+async def test_list_dir_hidden_and_cap(tmp_path):
+    root = _dir_tree(tmp_path)
+    out = await tool_executor._list_dir(str(root), 100, True)
+    assert ".hidden" in {e["name"] for e in out["entries"]}
+    out = await tool_executor._list_dir(str(root), 2)
+    assert len(out["entries"]) == 2
+    assert out["truncated"] is True
+
+
+async def test_list_dir_errors(tmp_path):
+    out = await tool_executor._list_dir(
+        str(tmp_path / "missing"), 10)
+    assert out["status"] == "error"
+    target = tmp_path / "f.txt"
+    target.write_text("x\n")
+    out = await tool_executor._list_dir(str(target), 10)
+    assert out["status"] == "error"
+
+
+async def test_list_dir_server_gate_blocks_outside_roots(
+        tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(tool_executor.ToolBlocked):
+        await tool_executor.list_dir(
+            os.path.abspath(os.path.join("..", "x")), 10)
+
+
+async def test_runner_list_dir_sandbox(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_AGENT_ROOT", str(tmp_path))
+    (tmp_path / "note.txt").write_text("hi\n")
+    out = await execute_job({
+        "job_id": "j5", "type": "list_dir",
+        "args": {"path": str(tmp_path), "limit": 10},
+    })
+    assert out["status"] == "directory"
+    assert any(e["name"] == "note.txt" for e in out["entries"])
+    out = await execute_job({
+        "job_id": "j6", "type": "list_dir",
+        "args": {"path": "/etc", "limit": 10},
+    })
+    assert out["status"] == "blocked"
+
+
+def _git_repo(tmp_path):
+    import subprocess
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True,
+                   capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t.t"],
+                   cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"],
+                   cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / "a.txt").write_text("one\n")
+    subprocess.run(["git", "add", "a.txt"], cwd=tmp_path, check=True,
+                   capture_output=True)
+    subprocess.run(["git", "commit", "-m", "first"],
+                   cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / "a.txt").write_text("two\n")
+    return tmp_path
+
+
+async def test_git_status_clean_and_dirty(tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git not installed")
+    root = _git_repo(tmp_path)
+    out = await tool_executor._git_status(str(root))
+    assert out["status"] == "git_status"
+    assert out["clean"] is False
+    assert any("a.txt" in line for line in out["changes"])
+    assert out["branch"] != ""
+
+
+async def test_git_diff_and_log(tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git not installed")
+    root = _git_repo(tmp_path)
+    out = await tool_executor._git_diff(str(root))
+    assert out["status"] == "git_diff"
+    assert "two" in out["diff"]
+    assert out["truncated"] is False
+    out = await tool_executor._git_log(str(root), 5)
+    assert out["status"] == "git_log"
+    assert len(out["commits"]) == 1
+    assert out["commits"][0]["subject"] == "first"
+    assert len(out["commits"][0]["hash"]) == 40
+
+
+async def test_git_not_a_repo_is_error(tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git not installed")
+    (tmp_path / "plain.txt").write_text("x\n")
+    for coro in (tool_executor._git_status(str(tmp_path)),
+                 tool_executor._git_diff(str(tmp_path)),
+                 tool_executor._git_log(str(tmp_path), 5)):
+        out = await coro
+        assert out["status"] == "error"
+
+
+async def test_git_wrappers_gate_outside_roots(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    outside = os.path.abspath(os.path.join("..", "x"))
+    with pytest.raises(tool_executor.ToolBlocked):
+        await tool_executor.git_status(outside)
+    with pytest.raises(tool_executor.ToolBlocked):
+        await tool_executor.git_diff(outside)
+    with pytest.raises(tool_executor.ToolBlocked):
+        await tool_executor.git_log(outside, 5)
+
+
+async def test_runner_git_sandbox(tmp_path, monkeypatch):
+    if shutil.which("git") is None:
+        pytest.skip("git not installed")
+    monkeypatch.setenv("INVINCIBLE_AGENT_ROOT", str(tmp_path))
+    root = _git_repo(tmp_path)
+    out = await execute_job({
+        "job_id": "j7", "type": "git_status",
+        "args": {"path": str(root)},
+    })
+    assert out["status"] == "git_status"
+    out = await execute_job({
+        "job_id": "j8", "type": "git_log",
+        "args": {"path": str(root), "limit": 5},
+    })
+    assert out["status"] == "git_log"
+    out = await execute_job({
+        "job_id": "j9", "type": "git_diff",
+        "args": {"path": "/etc"},
+    })
+    assert out["status"] == "blocked"
+
+
 # --- live MCP dispatch (needs Postgres via client fixture) ---
 
 
@@ -274,6 +429,80 @@ async def test_mcp_process_list_round_trip(client, bearer_headers):
     payload = json.loads(result["content"][0]["text"])
     assert payload["status"] == "processes"
     assert len(payload["processes"]) <= 5
+
+
+async def test_mcp_list_dir_round_trip(client, bearer_headers, tmp_path,
+                                       monkeypatch):
+    from invincible.core import settings as settings_module
+
+    monkeypatch.setattr(
+        settings_module.settings, "read_roots",
+        lambda: [str(tmp_path)])
+    (tmp_path / "app.py").write_text("x = 1\n")
+    result = await _call(client, bearer_headers, "list_dir", {
+        "path": str(tmp_path), "limit": 10})
+    assert result["isError"] is False
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["status"] == "directory"
+    assert any(e["name"] == "app.py" for e in payload["entries"])
+
+
+async def test_mcp_list_dir_blocked_outside_roots(client, bearer_headers):
+    result = await _call(client, bearer_headers, "list_dir",
+                         {"path": "/etc", "limit": 10})
+    assert result["isError"] is True
+    assert "Blocked" in result["content"][0]["text"]
+
+
+async def test_mcp_git_round_trip(client, bearer_headers, tmp_path,
+                                  monkeypatch):
+    import subprocess
+
+    from invincible.core import settings as settings_module
+
+    if shutil.which("git") is None:
+        pytest.skip("git not installed")
+    monkeypatch.setattr(
+        settings_module.settings, "read_roots",
+        lambda: [str(tmp_path)])
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True,
+                   capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t.t"],
+                   cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"],
+                   cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / "a.txt").write_text("one\n")
+    subprocess.run(["git", "add", "a.txt"], cwd=tmp_path, check=True,
+                   capture_output=True)
+    subprocess.run(["git", "commit", "-m", "first"],
+                   cwd=tmp_path, check=True, capture_output=True)
+    result = await _call(client, bearer_headers, "git_log",
+                         {"path": str(tmp_path), "limit": 5})
+    assert result["isError"] is False
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["status"] == "git_log"
+    assert payload["commits"][0]["subject"] == "first"
+    result = await _call(client, bearer_headers, "git_status",
+                         {"path": str(tmp_path)})
+    assert result["isError"] is False
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["status"] == "git_status"
+
+
+async def test_mcp_git_not_a_repo(client, bearer_headers, tmp_path,
+                                  monkeypatch):
+    from invincible.core import settings as settings_module
+
+    if shutil.which("git") is None:
+        pytest.skip("git not installed")
+    monkeypatch.setattr(
+        settings_module.settings, "read_roots",
+        lambda: [str(tmp_path)])
+    result = await _call(client, bearer_headers, "git_status",
+                         {"path": str(tmp_path)})
+    assert result["isError"] is False
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["status"] == "error"
 
 
 async def test_mcp_screenshot_unavailable_without_routing(

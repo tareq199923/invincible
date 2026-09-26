@@ -145,6 +145,78 @@ TOOLS = [
         },
     },
     {
+        "name": "list_dir",
+        "description": (
+            "List a directory's entries (names, dir/file kind, file "
+            "sizes) on the machine that executes tools — the server "
+            "host by default, your own paired machine when agent "
+            "routing is on. Same sandbox as read_file (server read "
+            "roots, or the agent's home when routed); hidden files "
+            "are skipped unless show_hidden is true, entries are "
+            "capped. No confirmation is required since listing is "
+            "non-destructive."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "limit": {"type": "integer"},
+                "show_hidden": {"type": "boolean"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "git_status",
+        "description": (
+            "Show the git working-tree status (branch, changed files) "
+            "for the repository containing a path. Read-only; same "
+            "sandbox as read_file. Returns an error (not a block) "
+            "when the path is not inside a git repository."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "git_diff",
+        "description": (
+            "Show the unstaged git diff (plus stat summary) for the "
+            "repository containing a path. Read-only; same sandbox "
+            "as read_file. Diffs over 100KB are truncated with a "
+            "flag. Returns an error when the path is not inside a "
+            "git repository."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "git_log",
+        "description": (
+            "List recent commits (hash, author, date, subject), "
+            "newest first, for the repository containing a path. "
+            "Read-only; same sandbox as read_file. Returns an error "
+            "when the path is not inside a git repository."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
         "name": "process_list",
         "description": (
             "List running processes (pid, name, cpu/mem where available) "
@@ -680,6 +752,130 @@ async def _dispatch(method, rpc_id, params, request,
                         args.get("pattern", ""), args.get("path", ""),
                         max_results,
                     )
+                status = result.get("status")
+                if status in ("agent_offline", "agent_timeout"):
+                    await _audit_action(request, name, status,
+                                        subject=owner_subject)
+                    return _result(rpc_id, _tool_content(
+                        result.get("message", status), is_error=True
+                    ))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
+
+            if name == "list_dir":
+                # Read-only like code_search — sandbox gate, no
+                # confirm step. Routed reads run on the caller's machine
+                # (home sandbox there); local reads under server roots.
+                try:
+                    dir_limit = int(
+                        args.get("limit")
+                        or tool_executor.LIST_DIR_DEFAULT_LIMIT
+                    )
+                except (TypeError, ValueError):
+                    dir_limit = tool_executor.LIST_DIR_DEFAULT_LIMIT
+                agent_executor = await _agent_executor(request, owner_subject)
+                if agent_executor is not None:
+                    before_tool_call(
+                        "list_dir", {"path": args.get("path", "")},
+                        agent_routed=True,
+                    )
+                    result = await agent_executor(
+                        "list_dir", {
+                            "path": args.get("path", ""),
+                            "limit": dir_limit,
+                            "show_hidden": args.get("show_hidden", False),
+                        },
+                    )
+                else:
+                    before_tool_call(
+                        "list_dir", {"path": args.get("path", "")})
+                    result = await tool_executor.list_dir(
+                        args.get("path", ""), dir_limit,
+                        bool(args.get("show_hidden", False)),
+                    )
+                status = result.get("status")
+                if status in ("agent_offline", "agent_timeout"):
+                    await _audit_action(request, name, status,
+                                        subject=owner_subject)
+                    return _result(rpc_id, _tool_content(
+                        result.get("message", status), is_error=True
+                    ))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
+
+            if name == "git_status":
+                # Read-only git inspection — same sandbox posture as
+                # code_search; a non-repo path is an error result.
+                agent_executor = await _agent_executor(request, owner_subject)
+                if agent_executor is not None:
+                    before_tool_call(
+                        "git_status", {"path": args.get("path", "")},
+                        agent_routed=True,
+                    )
+                    result = await agent_executor(
+                        "git_status", {"path": args.get("path", "")})
+                else:
+                    before_tool_call(
+                        "git_status", {"path": args.get("path", "")})
+                    result = await tool_executor.git_status(
+                        args.get("path", ""))
+                status = result.get("status")
+                if status in ("agent_offline", "agent_timeout"):
+                    await _audit_action(request, name, status,
+                                        subject=owner_subject)
+                    return _result(rpc_id, _tool_content(
+                        result.get("message", status), is_error=True
+                    ))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
+
+            if name == "git_diff":
+                # Same posture as git_status (read-only, capped diff).
+                agent_executor = await _agent_executor(request, owner_subject)
+                if agent_executor is not None:
+                    before_tool_call(
+                        "git_diff", {"path": args.get("path", "")},
+                        agent_routed=True,
+                    )
+                    result = await agent_executor(
+                        "git_diff", {"path": args.get("path", "")})
+                else:
+                    before_tool_call(
+                        "git_diff", {"path": args.get("path", "")})
+                    result = await tool_executor.git_diff(
+                        args.get("path", ""))
+                status = result.get("status")
+                if status in ("agent_offline", "agent_timeout"):
+                    await _audit_action(request, name, status,
+                                        subject=owner_subject)
+                    return _result(rpc_id, _tool_content(
+                        result.get("message", status), is_error=True
+                    ))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
+
+            if name == "git_log":
+                # Same posture as git_status (read-only, capped lines).
+                try:
+                    log_limit = int(
+                        args.get("limit")
+                        or tool_executor.GIT_LOG_DEFAULT_LIMIT
+                    )
+                except (TypeError, ValueError):
+                    log_limit = tool_executor.GIT_LOG_DEFAULT_LIMIT
+                agent_executor = await _agent_executor(request, owner_subject)
+                if agent_executor is not None:
+                    before_tool_call(
+                        "git_log", {"path": args.get("path", "")},
+                        agent_routed=True,
+                    )
+                    result = await agent_executor(
+                        "git_log", {
+                            "path": args.get("path", ""),
+                            "limit": log_limit,
+                        },
+                    )
+                else:
+                    before_tool_call(
+                        "git_log", {"path": args.get("path", "")})
+                    result = await tool_executor.git_log(
+                        args.get("path", ""), log_limit)
                 status = result.get("status")
                 if status in ("agent_offline", "agent_timeout"):
                     await _audit_action(request, name, status,

@@ -48,8 +48,10 @@ def before_tool_call(
             return
         tool_executor.check_read_denylist(str(argv.get("path", "")))
         return
-    if tool_name == "code_search":
+    if tool_name in ("code_search", "list_dir", "git_status",
+                       "git_diff", "git_log"):
         # Same sandbox as read_file (H6a): path-shaped, non-destructive.
+        # Directory/git inspection runs under it with no confirm step.
         if agent_routed:
             return
         tool_executor.check_read_denylist(str(argv.get("path", "") or "."))
