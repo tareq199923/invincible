@@ -234,8 +234,10 @@ so both surfaces persist identical history and read each other's threads:
 
 ```
 browser
-  │  GET /dashboard/chat[?session=]      page: sidebar (≤30 sessions, titles
-  │                                      derived from each first user message)
+  │  GET /dashboard/chat[?session=]      page: sidebar (≤30 dashboard-created
+  │                                      web-* sessions only - API-client
+  │                                      threads stay out; titles derived
+  │                                      from each first user message)
   │                                      + BYOK model picker + history
   │  POST /dashboard/chat/new            fresh web-<hex> id, 303 back to ?session=
   │  GET /dashboard/chat/models         candidate model ids (empty = link

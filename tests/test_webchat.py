@@ -264,6 +264,30 @@ async def test_history_shared_with_api_path(client, byok_env, router_setter):
     assert "from client" in page.text
 
 
+async def test_sidebar_lists_only_dashboard_sessions(client, byok_env):
+    uid, pid = await webchat_user(client, "filter@example.com",
+                                  credential_count=0)
+    store = app.state.sessions
+    await store.append(
+        "web-aaa",
+        [{"role": "user", "content": "browser chat"}],
+        user_id=uid, project_id=pid)
+    await store.append(
+        "09ba1cbf-0837-425a-93c6-89ec011caac7",
+        [{"role": "user", "content": "agent chat"}],
+        user_id=uid, project_id=pid)
+    page = await client.get("/dashboard/chat")
+    assert page.status_code == 200, page.text
+    assert "browser chat" in page.text
+    assert "agent chat" not in page.text
+    assert "09ba1cbf" not in page.text
+    # Direct links to owned API sessions still resolve.
+    direct = await client.get(
+        "/dashboard/chat?session=09ba1cbf-0837-425a-93c6-89ec011caac7")
+    assert direct.status_code == 200, direct.text
+    assert "agent chat" in direct.text
+
+
 async def test_sidebar_title_from_first_message(
     client, byok_env, router_setter
 ):

@@ -50,12 +50,17 @@ _SIDEBAR_LIMIT = 30
 _TITLE_CHARS = 60
 _MAX_ID_CHARS = 200
 _MAX_MODEL_CHARS = 200
+# Marker distinguishing dashboard-created conversations from API-client
+# (Claude Code / Codex / ...) sessions sharing the same store. Creation
+# (_new_web_session_id) and listing (_sidebar) both go through this so
+# the two can never drift apart.
+_WEB_SESSION_PREFIX = "web-"
 
 
 def _new_web_session_id() -> str:
     """Client session id for a browser-started conversation (lazy: no DB
     row until the first message persists via resolve_or_create)."""
-    return f"web-{uuid.uuid4().hex}"
+    return f"{_WEB_SESSION_PREFIX}{uuid.uuid4().hex}"
 
 
 def _session_title(history: list, fallback: str) -> str:
@@ -107,11 +112,15 @@ def _bad_request(message: str) -> JSONResponse:
 
 
 async def _sidebar(request: Request, principal: Principal) -> list[dict]:
-    """Newest-first sidebar rows (all user sessions: web+API continuity
-    is a feature), each with a bounded derived title."""
+    """Newest-first sidebar rows, dashboard-created conversations only
+    (``web-`` ids): API-client threads (Claude Code / Codex / ...) stay
+    out of the webchat sidebar. Each row carries a bounded derived title.
+    Direct ``?session=`` links to owned API sessions still resolve (see
+    ``chat_page``) - the store itself stays shared."""
     store = _state(request, "sessions")
     rows = await store.list_for_user(
-        principal.user_id, limit=_SIDEBAR_LIMIT)
+        principal.user_id, limit=_SIDEBAR_LIMIT,
+        client_session_id_prefix=_WEB_SESSION_PREFIX)
     sidebar = []
     for row in rows:
         client_id = row["client_session_id"]

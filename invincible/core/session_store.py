@@ -119,10 +119,13 @@ class SessionStore:
 
     async def list_for_user(
         self, user_id: int, *, project_id: int | None = None,
-        limit: int = 100,
+        limit: int = 100, client_session_id_prefix: str | None = None,
     ) -> list[dict]:
         """Read-only session listing for one owner (Phase 3 account API).
-        Ownership predicate is mandatory - there is no fallback here."""
+        Ownership predicate is mandatory - there is no fallback here.
+        ``client_session_id_prefix`` optionally narrows to ids starting
+        with the prefix (the dashboard webchat lists its own ``web-``
+        conversations this way); None lists everything, as before."""
         query = (
             select(
                 sessions.c.id,
@@ -137,6 +140,11 @@ class SessionStore:
         )
         if project_id is not None:
             query = query.where(sessions.c.project_id == project_id)
+        if client_session_id_prefix:
+            query = query.where(
+                sessions.c.client_session_id.startswith(
+                    client_session_id_prefix)
+            )
         async with self.engine.connect() as conn:
             rows = (await conn.execute(query)).mappings().all()
         return [dict(r) for r in rows]
