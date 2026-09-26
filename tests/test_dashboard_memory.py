@@ -330,3 +330,23 @@ async def test_graph_js_is_served_vendored(client):
     # small movement threshold), not via the click event - pointer
     # capture retargets click to the svg, so it never reaches the node.
     assert "pressNode" in resp.text
+
+
+async def test_delete_uses_confirm_modal_and_total_hooks(client):
+    """Confirm-modal UX: the Delete button carries data-confirm-* hooks
+    (no native hx-confirm); the heading/card totals carry hooks so
+    confirm.js decrements them in place without a reload."""
+    await make_user(client, "confirm@example.com")
+    await add_memory(client, "modal hooked memory")
+
+    page = await client.get("/dashboard/memory")
+    assert page.status_code == 200
+    assert 'data-confirm-title="Delete memory?"' in page.text
+    assert 'data-confirm-ok="Delete"' in page.text
+    assert 'data-toast="Memory deleted"' in page.text
+    assert "data-memory-total" in page.text
+    assert "data-memory-plural" in page.text
+    assert "hx-confirm" not in page.text
+    assert 'id="confirm-modal"' in page.text
+    assert 'id="toast-stack"' in page.text
+    assert "/static/confirm.js?v=" in page.text

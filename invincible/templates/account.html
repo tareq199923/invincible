@@ -68,7 +68,7 @@ login</code>): type the code it printed.</p>
 <table>
   <thead><tr><th>Prefix</th><th>Label</th><th>Created</th><th>Status</th>
       <th></th></tr></thead>
-  <tbody>
+  <tbody data-empty-message="No API keys yet - generate one above.">
   {% for key in api_keys %}
   <tr class="api-key-row" data-key-id="{{ key.id }}">
     <td><code>{{ key.prefix }}</code></td>
@@ -80,8 +80,10 @@ login</code>): type the code it printed.</p>
       <button class="linklike revoke-key"
               hx-delete="/api-keys/{{ key.id }}"
               hx-target="closest tr" hx-swap="delete"
-              hx-confirm="Revoke this API key? Clients using it stop
-                          working immediately.">Revoke</button>
+              data-confirm-title="Revoke API key?"
+              data-confirm-body="Clients using it stop working immediately. This cannot be undone."
+              data-confirm-ok="Revoke"
+              data-toast="API key revoked">Revoke</button>
       {% endif %}
     </td>
   </tr>

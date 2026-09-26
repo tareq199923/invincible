@@ -511,7 +511,8 @@ async def delete_memory(
     await _audit(request, "memory.deleted", actor_user_id=principal.user_id,
                  resource_type="memory", resource_id=str(memory_id))
     if request.headers.get("HX-Request") == "true":
-        # HTMX row removal: empty 204 lets hx-swap="delete" drop the row.
+        # Empty 204: htmx never swaps 204s, so confirm.js removes the row
+        # in place on success (modal + toast + empty-state included).
         return Response(status_code=204)
     return {"deleted": True}
 
@@ -893,7 +894,8 @@ async def revoke_mcp_client_tokens(
                  resource_type="oauth_client", resource_id=client_id,
                  meta={"count": count})
     if request.headers.get("HX-Request") == "true":
-        # HTMX row removal: empty 204 lets hx-swap="delete" drop the row
-        # in place (same pattern as the memory and API-key deletes).
+        # Empty 204: htmx never swaps 204s, so confirm.js flips the token
+        # count to 0 in place on success (modal + toast included); the
+        # client row stays because the client is still registered.
         return Response(status_code=204)
     return {"revoked": count}

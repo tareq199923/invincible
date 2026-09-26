@@ -618,7 +618,8 @@ async def revoke_api_key(
                      actor_user_id=principal.user_id,
                      resource_type="api_key", resource_id=owned[0]["prefix"])
     if request.headers.get("HX-Request") == "true":
-        # HTMX row removal: empty 204 lets hx-swap="delete" drop the row.
+        # Empty 204: htmx never swaps 204s, so confirm.js removes the row
+        # in place on success (modal + toast + empty-state included).
         return Response(status_code=204)
     return {"revoked": revoked}
 

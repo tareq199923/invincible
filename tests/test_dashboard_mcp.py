@@ -53,7 +53,7 @@ async def test_page_lists_client_and_active_tokens(client):
     assert page.status_code == 200
     assert "test-client" in page.text
     # obtain_access_token mints an access AND a refresh token.
-    assert re.search(r"<td>\s*2\s*</td>", page.text)
+    assert re.search(r'data-token-count>\s*2\s*<', page.text)
 
 
 async def test_htmx_revocation_kills_mcp_bearer(client):
@@ -67,7 +67,8 @@ async def test_htmx_revocation_kills_mcp_bearer(client):
     htmx = await client.delete(
         f"/dashboard/mcp/clients/{client_id}/tokens",
         headers={"HX-Request": "true"})
-    # Bare 204: hx-swap="delete" drops the row in place, no redirect.
+    # Bare 204, no redirect. confirm.js flips the token count to 0 in
+    # place (the client row stays - the client is still registered).
     assert htmx.status_code == 204
     assert "HX-Redirect" not in htmx.headers
     assert ">Revoke</button>" in (await client.get("/dashboard/mcp")).text
@@ -79,7 +80,26 @@ async def test_htmx_revocation_kills_mcp_bearer(client):
     assert denied.status_code == 401
 
     page = await client.get("/dashboard/mcp")
-    assert re.search(r"<td>\s*0\s*</td>", page.text)  # no active tokens
+    assert re.search(r'data-token-count>\s*0\s*<', page.text)  # no tokens
+
+
+async def test_revoke_keeps_row_and_uses_modal_hooks(client):
+    """Option A: no row swap - confirm.js flips the count cell to 0 in
+    place. The button carries the shared modal/toast hooks."""
+    await logged_in(client, 7)
+    tokens = await obtain_access_token(client)
+    client_id = tokens["client_id"]
+
+    page = await client.get("/dashboard/mcp")
+    assert f'hx-delete="/dashboard/mcp/clients/{client_id}/tokens"' in page.text
+    assert 'hx-swap="none"' in page.text
+    assert 'data-delete-mode="mcp-tokens"' in page.text
+    assert "data-token-count" in page.text
+    assert 'data-confirm-title="Revoke tokens?"' in page.text
+    assert 'data-toast="Tokens revoked"' in page.text
+    assert "hx-confirm" not in page.text
+    assert 'id="confirm-modal"' in page.text
+    assert 'id="toast-stack"' in page.text
 
 
 async def test_foreign_client_hidden_and_revocation_is_predicated(client):

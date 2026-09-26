@@ -7,6 +7,7 @@
   <title>{% block title %}Invincible{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css?v={{ asset_rev('app.css') }}">
   <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/confirm.js?v={{ asset_rev('confirm.js') }}" defer></script>
   <script>
     // Apply the saved theme before first paint (light default).
     (function () {
@@ -139,5 +140,23 @@
     })();
   </script>
   {% endif %}
+
+  {# Shared destructive-action confirmation + toast stack (confirm.js).
+     Rendered on every page so account/MCP/provider/memory Revoke/Remove/
+     Delete buttons get a centered OK/Deny modal and a bottom-right toast
+     with zero per-page JS. Hidden until used. #}
+  <div id="confirm-modal" hidden>
+    <div class="confirm-backdrop" data-confirm-close></div>
+    <div class="confirm-card" role="dialog" aria-modal="true"
+         aria-labelledby="confirm-title" aria-describedby="confirm-body">
+      <h3 id="confirm-title"></h3>
+      <p id="confirm-body" class="muted"></p>
+      <div class="confirm-actions">
+        <button type="button" id="confirm-deny">Deny</button>
+        <button type="button" id="confirm-ok" class="danger">Delete</button>
+      </div>
+    </div>
+  </div>
+  <div id="toast-stack" aria-live="polite" aria-atomic="false"></div>
 </body>
 </html>

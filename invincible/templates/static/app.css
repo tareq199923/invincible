@@ -388,6 +388,78 @@ html[data-theme="dark"] #chat-send { color: #1e1e1e; }
 .hint-chips { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; margin: 1rem 0 0; }
 .hint-chips button { margin: 0; border-radius: 999px; font-size: 0.82rem; color: var(--muted); }
 
+/* ---------- confirm modal + toasts (destructive actions) ---------- */
+#confirm-modal[hidden] { display: none; }
+#confirm-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+.confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+}
+.confirm-card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.25rem 1.35rem;
+  max-width: 26rem;
+  width: 100%;
+}
+.confirm-card h3 { margin: 0 0 0.35rem; }
+.confirm-card p { margin: 0 0 1rem; }
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+.confirm-actions button { margin-top: 0; }
+#confirm-ok {
+  background: var(--err);
+  border-color: var(--err);
+  color: #fff;
+}
+#confirm-ok:hover { color: #fff; filter: brightness(1.08); }
+html[data-theme="dark"] #confirm-ok { color: #1e1e1e; }
+button.linklike:disabled {
+  color: var(--faint);
+  cursor: default;
+  text-decoration: none;
+}
+#toast-stack {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+.toast {
+  background: var(--ink);
+  color: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.95rem;
+  font-size: 0.85rem;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  max-width: 22rem;
+  animation: toast-in 0.18s ease;
+}
+.toast-error { background: var(--err); color: #fff; }
+html[data-theme="dark"] .toast-error { color: #1e1e1e; }
+@keyframes toast-in {
+  from { transform: translateY(0.5rem); opacity: 0; }
+}
+
 /* ---------- a11y / motion ---------- */
 a:focus-visible, button:focus-visible, summary:focus-visible,
 input:focus-visible, select:focus-visible, textarea:focus-visible,

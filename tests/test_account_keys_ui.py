@@ -121,3 +121,20 @@ async def test_revoked_key_stops_authorizing(client):
             base_url="http://test") as fresh:
         assert (await fresh.get(
             "/api-keys", headers=headers)).status_code == 401
+
+
+async def test_revoke_uses_confirm_modal_and_toast_shell(client):
+    """Confirm-modal UX: the Revoke button carries data-confirm-* hooks
+    (no native hx-confirm), and base.html ships the shared modal +
+    toast stack plus confirm.js."""
+    await logged_in(client)
+    await client.post("/api-keys", json={"label": "tmp"})
+    page = await client.get("/account")
+    assert page.status_code == 200
+    assert 'data-confirm-title="Revoke API key?"' in page.text
+    assert 'data-confirm-ok="Revoke"' in page.text
+    assert 'data-toast="API key revoked"' in page.text
+    assert "hx-confirm" not in page.text
+    assert 'id="confirm-modal"' in page.text
+    assert 'id="toast-stack"' in page.text
+    assert "/static/confirm.js?v=" in page.text

@@ -3,7 +3,7 @@
 {% block content %}
 <script src="/static/graph.js?v={{ asset_rev('graph.js') }}" defer></script>
 <h2>Memory</h2>
-<p class="muted">{{ total }} memor{{ 'y' if total == 1 else 'ies' }}
+<p class="muted"><span data-memory-total>{{ total }}</span> memor<span data-memory-plural>{{ 'y' if total == 1 else 'ies' }}</span>
 {% if q %} matching <strong>{{ q }}</strong>{% endif %}
 &middot; who saved what, when, across which projects.</p>
 
@@ -13,7 +13,7 @@
 {% endif %}
 
 <div class="cards">
-  <div class="card"><span class="num">{{ graph.summary.total }}</span><span class="label">Memories</span></div>
+  <div class="card"><span class="num" data-memory-total>{{ graph.summary.total }}</span><span class="label">Memories</span></div>
   <div class="card"><span class="num">{{ graph.summary.by_source | length }}</span><span class="label">Sources</span></div>
   <div class="card"><span class="num">{{ graph.summary.by_project | length }}</span><span class="label">Projects</span></div>
   <div class="card"><span class="num">{{ graph.summary.growth_7d }}</span><span class="label">This week</span></div>

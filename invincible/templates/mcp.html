@@ -66,12 +66,16 @@ tokens act as you.</p>
     <td>{{ c.client_name or '(unnamed)' }}</td>
     <td class="muted"><code>{{ c.client_id }}</code></td>
     <td class="muted">{{ c.redirect_uris | join(', ') }}</td>
-    <td>{{ c.active_tokens }}</td>
+    <td data-token-count>{{ c.active_tokens }}</td>
     <td>
       <button class="linklike revoke-mcp-tokens"
               hx-delete="/dashboard/mcp/clients/{{ c.client_id }}/tokens"
-              hx-target="closest tr" hx-swap="delete"
-              hx-confirm="Revoke all tokens for {{ c.client_name or c.client_id }}?">Revoke</button>
+              hx-swap="none"
+              data-confirm-title="Revoke tokens?"
+              data-confirm-body="Revoke all tokens for {{ c.client_name or c.client_id }}? The client stays registered but its tokens stop working immediately."
+              data-confirm-ok="Revoke"
+              data-toast="Tokens revoked"
+              data-delete-mode="mcp-tokens">Revoke</button>
     </td>
   </tr>
   {% endfor %}

@@ -508,3 +508,24 @@ async def test_settings_rejects_bad_values(client):
     # Nothing was stored by the rejected attempt.
     assert await UserSettingsStore(
         app.state.engine).overrides_for(uid) == {}
+
+
+async def test_remove_uses_confirm_modal(credential_key, client):
+    """Confirm-modal UX: the Remove button carries data-confirm-* hooks
+    (no native hx-confirm); the page ships the routing block id and the
+    provider tbody so confirm.js can refresh in place without reload."""
+    await logged_in(client)
+    made = await client.post("/providers/mine", json={
+        "provider_name": "My Groq", "catalog_key": "groq",
+        "api_key": RAW_KEY})
+    cred_id = made.json()["id"]
+
+    page = await client.get("/dashboard/providers")
+    assert f'hx-delete="/providers/mine/{cred_id}"' in page.text
+    assert 'data-confirm-title="Remove provider?"' in page.text
+    assert 'data-confirm-ok="Remove"' in page.text
+    assert 'data-toast="Provider removed"' in page.text
+    assert 'id="routing-block"' in page.text
+    assert 'id="provider-rows"' in page.text
+    assert "hx-confirm" not in page.text
+    assert 'id="confirm-modal"' in page.text

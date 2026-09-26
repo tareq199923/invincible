@@ -506,7 +506,8 @@ async def delete_provider(
                  resource_id=str(credential_id),
                  meta=_audit_meta(row))
     if request.headers.get("HX-Request") == "true":
-        # HTMX row removal: empty 204 lets hx-swap="delete" drop the row.
+        # Empty 204: htmx never swaps 204s, so confirm.js removes the row
+        # in place on success (modal + toast + empty-state included).
         return Response(status_code=204)
     return {"deleted": True}
 

@@ -30,6 +30,9 @@
     <button class="linklike delete-provider"
             hx-delete="/providers/mine/{{ r.id }}"
             hx-target="closest tr" hx-swap="delete"
-            hx-confirm="Disconnect {{ r.provider_name }}?">Remove</button>
+            data-confirm-title="Remove provider?"
+            data-confirm-body="Disconnect {{ r.provider_name }}? Chat requests will no longer route through it."
+            data-confirm-ok="Remove"
+            data-toast="Provider removed">Remove</button>
   </td>
 </tr>

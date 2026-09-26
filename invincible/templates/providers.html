@@ -60,7 +60,7 @@ longer resolves to a public address.</p>{% endif %}
 
 <h3>Connected providers</h3>
 {% if rows %}
-<div class="table-scroll">
+<div class="table-scroll" id="providers-table-wrap">
 <table>
   <thead><tr><th></th><th>Name</th><th>Model</th><th>Base URL</th>
       <th>Key</th><th>Status</th><th></th></tr></thead>
@@ -73,6 +73,7 @@ your first provider &rarr;</a></p>
 {% endif %}
 
 {% if rows %}
+<div id="routing-block">
 <h3 id="routing">Routing</h3>
 <p class="muted">How requests pick among your connected providers.</p>
 {% if routing_saved %}<p class="banner-ok">Routing saved.</p>{% endif %}
@@ -127,5 +128,6 @@ your first provider &rarr;</a></p>
   </div>
   <div><button type="submit">Save routing</button></div>
 </form>
+</div>
 {% endif %}
 {% endblock content %}
