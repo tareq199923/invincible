@@ -35,10 +35,22 @@ async def test_base_template_links_htmx_for_all_pages(client):
     assert "/static/htmx.min.js" in page.text
 
 
+async def test_dashboard_home_redirects_to_chat(client):
+    await register_account(client, "empty@example.com")
+    resp = await client.get("/dashboard", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/dashboard/chat"
+    page = await client.get("/dashboard/chat")
+    assert page.status_code == 200
+    assert "/static/app.css" in page.text
+    assert "+ New chat" in page.text
+    assert 'id="side-history"' in page.text
+
+
 async def test_dashboard_renders_empty_state(client):
     made, _ = await register_account(client, "empty@example.com")
     assert made.status_code == 201
-    page = await client.get("/dashboard")
+    page = await client.get("/dashboard/overview")
     assert page.status_code == 200
     assert "empty@example.com" in page.text
     assert "No sessions yet." in page.text
@@ -69,7 +81,7 @@ async def test_dashboard_counts_seeded_rows(client):
     assert revoke.status_code == 200
     assert revoke.json()["revoked"] is True
 
-    page = await client.get("/dashboard")
+    page = await client.get("/dashboard/overview")
     assert page.status_code == 200
     assert card_count(page.text, "projects") == 2
     assert card_count(page.text, "sessions") == 2
@@ -86,13 +98,13 @@ async def test_dashboard_isolated_per_user(client):
     await app.state.sessions.append(
         "private-alpha", [{"role": "user", "content": "secret"}],
         user_id=body_a["id"], project_id=body_a["project_id"])
-    own = await client.get("/dashboard")
+    own = await client.get("/dashboard/overview")
     assert "private-alpha" in own.text
 
     # Registering user B replaces the session cookie; B's dashboard must
     # show none of A's rows.
     await register_account(client, "other@example.com")
-    theirs = await client.get("/dashboard")
+    theirs = await client.get("/dashboard/overview")
     assert theirs.status_code == 200
     assert "private-alpha" not in theirs.text
     assert card_count(theirs.text, "sessions") == 0
@@ -105,7 +117,7 @@ async def test_recent_sessions_cap_at_ten(client):
     for i in range(12):
         await store.append(f"s-{i}", [{"role": "user", "content": "x"}],
                            user_id=body["id"], project_id=body["project_id"])
-    page = await client.get("/dashboard")
+    page = await client.get("/dashboard/overview")
     assert card_count(page.text, "sessions") == 12
     assert page.text.count("client-session-row") == 10
 
@@ -128,7 +140,7 @@ async def test_setup_page_shows_both_steps_pending(client):
     assert "ANTHROPIC_BASE_URL" not in page.text
     assert "model_providers.invincible" not in page.text
     # The dashboard carries the matching first-run signpost.
-    overview = await client.get("/dashboard")
+    overview = await client.get("/dashboard/overview")
     assert "You're 2 steps away" in overview.text
 
 
@@ -176,7 +188,7 @@ async def test_setup_page_unlocks_config_once_key_exists(
     # The RAW key never renders on this page - only Account shows it once.
     assert key["raw"] not in page.text
     # And the dashboard signpost is gone once setup is complete.
-    overview = await client.get("/dashboard")
+    overview = await client.get("/dashboard/overview")
     assert "You're 2 steps away" not in overview.text
 
 
@@ -184,5 +196,5 @@ async def test_setup_signpost_clears_with_key_only(client):
     """A key without a provider still cannot chat - the signpost stays."""
     await register_account(client, "half@example.com")
     await client.post("/api-keys", json={"label": "only-key"})
-    overview = await client.get("/dashboard")
+    overview = await client.get("/dashboard/overview")
     assert "You're 2 steps away" in overview.text

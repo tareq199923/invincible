@@ -105,7 +105,7 @@ async def test_page_renders_one_card_per_catalog_entry(credential_key, client):
 
 async def test_nav_links_providers(credential_key, client):
     await logged_in(client)
-    page = await client.get("/dashboard")
+    page = await client.get("/dashboard/chat")
     # Sidebar nav (ui overhaul 2026-09): attribute order/labels changed,
     # the link targets are the contract.
     assert 'href="/dashboard/providers"' in page.text

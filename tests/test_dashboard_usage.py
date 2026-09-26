@@ -161,10 +161,10 @@ async def test_usage_page_renders_bars_and_provider_table(client):
 
 async def test_overview_tokens_card_matches_summary(client):
     await seed_two_day_spread(client, "cardy@example.com")
-    page = await client.get("/dashboard")
+    page = await client.get("/dashboard/overview")
     # 150 input + 25 output across the seeded window.
     assert card_count(page.text, "usage-7d") == 175
 
     await register_account(client, "cardy-other@example.com")
-    theirs = await client.get("/dashboard")
+    theirs = await client.get("/dashboard/overview")
     assert card_count(theirs.text, "usage-7d") == 0

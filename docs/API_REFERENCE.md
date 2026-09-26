@@ -422,7 +422,8 @@ Server-rendered Jinja2 + HTMX pages on the same cookie realm:
 
 | Path | Purpose |
 |---|---|
-| `/dashboard` | Overview: owned count cards (projects, sessions, active keys, task heads, memories, 7-day tokens) + 10 recent sessions |
+| `/dashboard` | Chat-first home (303 to `/dashboard/chat`) |
+| `/dashboard/overview` | Overview: owned count cards (projects, sessions, active keys, task heads, memories, 7-day tokens) + 10 recent sessions |
 | `/dashboard/sessions` | Owned sessions index |
 | `/dashboard/sessions/{session_pk}` | Continuity-projection detail: runs chain, failover pairs, checkpoints, task states, activity |
 | `/dashboard/tasks` | Cross-session active task heads |

@@ -294,3 +294,18 @@ async def test_sidebar_title_from_first_message(
     page = await client.get("/dashboard/chat")
     assert page.status_code == 200, page.text
     assert "plan the migration carefully" in page.text
+
+
+async def test_chat_list_requires_session(client):
+    anon = await client.get("/dashboard/chat/list")
+    assert anon.status_code == 401
+
+
+async def test_chat_list_feeds_sidebar(client, byok_env):
+    await webchat_user(client, "list@example.com", credential_count=0)
+    body = (await client.get("/dashboard/chat/list")).json()
+    assert body == {"sessions": []}
+    page = await client.get("/dashboard/chat")
+    assert 'id="side-history"' in page.text
+    assert 'id="side-search"' in page.text
+    assert "/static/app.css" in page.text

@@ -183,6 +183,7 @@ async def chat_page(
         "chat.html", request,
         user_email=await _email(request.app.state.engine, principal),
         sessions=sidebar,
+        side_history=sidebar,
         active_session=active_id,
         history=_renderable_turns(history),
         models=models,
@@ -211,6 +212,16 @@ async def chat_models(
     # Empty list = no connected credentials; the template renders the
     # no-credentials empty state linking /dashboard/providers.
     return {"models": await _model_ids(request, principal)}
+
+
+@router.get("/dashboard/chat/list")
+async def chat_list(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    """Sidebar history for non-chat pages: the global sidebar lazy-loads
+    this (same cookie realm, ownership-predicated via _sidebar)."""
+    return {"sessions": await _sidebar(request, principal)}
 
 
 @router.post("/dashboard/chat/stream")

@@ -167,5 +167,5 @@ async def test_overview_tasks_card_counts_heads(client):
     await app.state.continuity.set_state(
         "countme-1", {"b": 2}, actor="mcp:t", task_key="second",
         session_pk=pk)
-    page = await client.get("/dashboard")
+    page = await client.get("/dashboard/overview")
     assert card_count(page.text, "tasks") == 2

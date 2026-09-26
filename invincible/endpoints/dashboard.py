@@ -126,6 +126,25 @@ async def _project_names(engine, user_id: int) -> dict[int, str]:
 
 
 @router.get("/dashboard")
+async def dashboard_home(
+    request: Request,
+    session: str | None = None,
+    principal: Principal = Depends(require_user_session),
+):
+    """Chat-first home: the harness opens on the chat dashboard.
+
+    The old overview cards live on at GET /dashboard/overview so
+    bookmarks and the setup signpost keep working.
+    """
+    target = "/dashboard/chat"
+    if session:
+        from urllib.parse import urlencode
+
+        target = f"{target}?{urlencode({'session': session})}"
+    return RedirectResponse(target, status_code=303)
+
+
+@router.get("/dashboard/overview")
 async def overview_page(
     request: Request,
     principal: Principal = Depends(require_user_session),

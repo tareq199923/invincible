@@ -306,10 +306,10 @@ async def test_memory_page_renders_rows_search_and_delete_buttons(client):
 
 async def test_overview_memories_card_counts_owned_rows(client):
     await make_user(client, "cardy@example.com")
-    empty = await client.get("/dashboard")
+    empty = await client.get("/dashboard/overview")
     assert card_count(empty.text, "memories") == 0
     await add_memory(client, "counted once")
-    again = await client.get("/dashboard")
+    again = await client.get("/dashboard/overview")
     assert card_count(again.text, "memories") == 1
 
 

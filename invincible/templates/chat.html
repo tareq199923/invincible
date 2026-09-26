@@ -1,328 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Chat - Invincible{% endblock %}
 {% block content %}
-<style>
-  /* ---------------------------------------------------------------
-     Webchat theme (Claude-style, chat page only - the rest of the
-     dashboard keeps the terminal tokens from base.html).
-     Light is the default; html[data-theme="dark"] overrides below.
-     The toggle persists in localStorage ("webchat-theme").
-  ---------------------------------------------------------------- */
-  .chat-scope {
-    --chat-bg: #f7f5f0;
-    --chat-surface: #fffdf9;
-    --chat-raise: #efebe0;
-    --chat-ink: #1f1e1b;
-    --chat-muted: #6f6a5e;
-    --chat-faint: #a39d8d;
-    --chat-border: #e3ddcd;
-    --chat-user: #ece7d9;
-    --chat-accent: #c15f3c;
-    --chat-accent-ink: #9c4a2d;
-    --chat-danger: #b3261e;
-    --chat-warn-bg: #fdf3e1;
-    --chat-warn-border: #d9a441;
-    --chat-code-bg: #efeadd;
-    --chat-shadow: 0 1px 2px rgba(31, 30, 27, 0.06),
-                   0 4px 16px rgba(31, 30, 27, 0.06);
-    color-scheme: light;
-    background: var(--chat-bg);
-    color: var(--chat-ink);
-    font-family: ui-sans-serif, system-ui, -apple-system,
-                 "Segoe UI", Roboto, sans-serif;
-    border: 1px solid var(--chat-border);
-    border-radius: 12px;
-    padding: clamp(1rem, 3vw, 1.75rem);
-  }
-  html[data-theme="dark"] .chat-scope {
-    --chat-bg: #1e1e1e;
-    --chat-surface: #2a2a2a;
-    --chat-raise: #333333;
-    --chat-ink: #ececec;
-    --chat-muted: #a8a8a8;
-    --chat-faint: #757575;
-    --chat-border: #3d3d3d;
-    --chat-user: #333333;
-    --chat-accent: #d08a63;
-    --chat-accent-ink: #e0a37e;
-    --chat-danger: #f28b82;
-    --chat-warn-bg: rgba(227, 179, 65, 0.10);
-    --chat-warn-border: #e3b341;
-    --chat-code-bg: #262626;
-    --chat-shadow: 0 1px 2px rgba(0, 0, 0, 0.3),
-                   0 4px 16px rgba(0, 0, 0, 0.3);
-    color-scheme: dark;
-  }
-  .chat-scope h2 {
-    margin: 0;
-    font-size: 1.25rem;
-    font-weight: 650;
-    letter-spacing: -0.01em;
-  }
-  .chat-scope a { color: var(--chat-accent-ink); }
-  .chat-scope .muted { color: var(--chat-muted); }
-  .chat-scope code {
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    background: var(--chat-code-bg);
-    border-color: var(--chat-border);
-  }
-
-  .chat-top {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem 1.5rem;
-    align-items: flex-end;
-    justify-content: space-between;
-    margin-bottom: 1rem;
-  }
-  .chat-top p { margin: 0.25rem 0 0; font-size: 0.85rem; }
-  .chat-controls {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem 0.75rem;
-    align-items: center;
-    font-size: 0.82rem;
-  }
-  .chat-controls label { margin: 0; font-weight: 500; color: var(--chat-muted); }
-  .chat-scope select {
-    width: auto;
-    min-width: 0;
-    margin: 0;
-    padding: 0.35rem 0.55rem;
-    font-size: 0.82rem;
-    background: var(--chat-surface);
-    border: 1px solid var(--chat-border);
-    border-radius: 8px;
-    color: var(--chat-ink);
-  }
-  .chat-scope select:focus {
-    border-color: var(--chat-accent);
-    box-shadow: 0 0 0 3px rgba(193, 95, 60, 0.18);
-  }
-  .theme-btn {
-    margin: 0;
-    padding: 0.35rem 0.8rem;
-    font-size: 0.82rem;
-    background: var(--chat-surface);
-    border: 1px solid var(--chat-border);
-    border-radius: 999px;
-    color: var(--chat-muted);
-  }
-  .theme-btn:hover { border-color: var(--chat-accent); color: var(--chat-accent-ink); }
-  button:focus-visible, a:focus-visible, select:focus-visible,
-  textarea:focus-visible {
-    outline: 2px solid var(--chat-accent);
-    outline-offset: 2px;
-  }
-
-  .chat-scope .banner {
-    border-color: var(--chat-warn-border);
-    background: var(--chat-warn-bg);
-    color: var(--chat-ink);
-  }
-
-  .chat-layout {
-    display: grid;
-    grid-template-columns: 14rem minmax(0, 1fr);
-    gap: 1.25rem;
-    align-items: start;
-  }
-  /* History rail (Claude-style). */
-  .chat-side {
-    background: transparent;
-    border: 0;
-    border-radius: 0;
-    padding: 0;
-  }
-  .chat-side ul { list-style: none; margin: 0.6rem 0 0; padding: 0; }
-  .chat-side li { margin: 0; padding: 0; }
-  .chat-side a.sess {
-    display: block;
-    padding: 0.45rem 0.65rem;
-    color: var(--chat-muted);
-    text-decoration: none;
-    border: 0;
-    border-radius: 8px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.85rem;
-  }
-  .chat-side a.sess:hover { color: var(--chat-ink); background: var(--chat-raise); }
-  .chat-side a.sess.active {
-    color: var(--chat-ink);
-    border: 0;
-    background: var(--chat-raise);
-    font-weight: 600;
-  }
-  .chat-side form { margin: 0; }
-  .chat-side button {
-    margin-top: 0;
-    width: 100%;
-    background: var(--chat-accent);
-    border-color: var(--chat-accent);
-    color: #fffdf9;
-    border-radius: 8px;
-    font-weight: 600;
-  }
-  .chat-side button:hover { color: #fffdf9; border-color: var(--chat-accent-ink); }
-  html[data-theme="dark"] .chat-side button { color: #1e1e1e; }
-  html[data-theme="dark"] .chat-side button:hover { color: #1e1e1e; }
-  .chat-side .empty { color: var(--chat-faint); }
-
-  /* Reading column. */
-  .chat-main { min-width: 0; max-width: 48rem; }
-  #chat-log {
-    display: flex;
-    flex-direction: column;
-    gap: 1.1rem;
-    margin: 0.5rem 0 1.25rem;
-  }
-  /* Claude-style: user turns are soft blocks, assistant turns are
-     plain rows. Class names are kept for the streaming script. */
-  .bubble {
-    max-width: none;
-    padding: 0;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    font-size: 0.95rem;
-    line-height: 1.65;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .bubble-user {
-    align-self: auto;
-    background: var(--chat-user);
-    border-radius: 12px;
-    padding: 0.6rem 0.9rem;
-  }
-  .bubble-assistant { align-self: auto; }
-  .bubble .meta {
-    display: block;
-    margin-top: 0.4rem;
-    font-size: 0.72rem;
-    color: var(--chat-faint);
-  }
-  .bubble.error { color: var(--chat-danger); }
-  .bubble.pending { color: var(--chat-faint); }
-  #chat-log .empty { color: var(--chat-faint); }
-
-  .tool-line {
-    align-self: auto;
-    font-size: 0.8rem;
-    color: var(--chat-muted);
-  }
-  .tool-line.ok { color: var(--chat-faint); }
-  .tool-line.failed { color: var(--chat-danger); }
-
-  .approval-card {
-    align-self: auto;
-    border: 1px solid var(--chat-warn-border);
-    border-left: 3px solid var(--chat-warn-border);
-    background: var(--chat-warn-bg);
-    border-radius: 10px;
-    padding: 0.7rem 0.9rem;
-    font-size: 0.85rem;
-    color: var(--chat-ink);
-  }
-  .approval-card pre {
-    white-space: pre-wrap;
-    word-break: break-word;
-    background: var(--chat-code-bg);
-    border: 1px solid var(--chat-border);
-    border-radius: 8px;
-    padding: 0.5rem 0.65rem;
-    font-size: 0.78rem;
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    max-height: 12rem;
-    overflow-y: auto;
-    color: var(--chat-ink);
-  }
-  .approval-card .row { display: flex; gap: 0.6rem; margin-top: 0.55rem; }
-  .approval-card button { margin-top: 0; border-radius: 8px; }
-  .approval-card button.approve {
-    background: var(--chat-accent);
-    border-color: var(--chat-accent);
-    color: #fffdf9;
-  }
-  html[data-theme="dark"] .approval-card button.approve { color: #1e1e1e; }
-  .approval-card button.resolved { opacity: 0.55; }
-
-  /* Sticky composer. */
-  #chat-composer {
-    position: sticky;
-    bottom: 0.75rem;
-    background: var(--chat-surface);
-    border: 1px solid var(--chat-border);
-    border-radius: 16px;
-    box-shadow: var(--chat-shadow);
-    padding: 0.6rem 0.6rem 0.5rem;
-  }
-  #chat-form { display: block; margin: 0; }
-  #chat-form textarea {
-    width: 100%;
-    margin: 0;
-    padding: 0.35rem 0.5rem;
-    min-height: 2.4rem;
-    font-size: 0.95rem;
-    line-height: 1.55;
-    font-family: inherit;
-    color: var(--chat-ink);
-    background: transparent;
-    border: 0;
-    border-radius: 0;
-    resize: vertical;
-  }
-  #chat-form textarea:focus { outline: none; border: 0; box-shadow: none; }
-  #chat-composer:focus-within { border-color: var(--chat-accent); }
-  .composer-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.6rem;
-    padding: 0.15rem 0.2rem 0;
-  }
-  #chat-status { font-size: 0.76rem; color: var(--chat-faint); }
-  #chat-form button {
-    margin-top: 0;
-    width: 2.4rem;
-    height: 2.4rem;
-    padding: 0;
-    border-radius: 50%;
-    background: var(--chat-accent);
-    border-color: var(--chat-accent);
-    color: #fffdf9;
-    font-size: 1.05rem;
-    line-height: 1;
-    flex-shrink: 0;
-  }
-  #chat-form button:hover:not(:disabled) { border-color: var(--chat-accent-ink); color: #fffdf9; }
-  html[data-theme="dark"] #chat-form button { color: #1e1e1e; }
-  #chat-form button:disabled { opacity: 0.45; cursor: default; }
-  .chat-main > form button {
-    background: var(--chat-accent);
-    border-color: var(--chat-accent);
-    color: #fffdf9;
-    border-radius: 8px;
-  }
-  html[data-theme="dark"] .chat-main > form button { color: #1e1e1e; }
-
-  @media (max-width: 920px) {
-    .chat-layout { grid-template-columns: 1fr; }
-    .chat-main { max-width: none; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .chat-scope * { transition: none !important; animation: none !important; }
-  }
-</style>
-
-<div class="chat-scope">
-<div class="chat-top">
+<div class="chat-head">
   <div>
     <h2>Chat</h2>
-    <p class="muted">Chat with your own connected providers, right here.
-    History is shared with your API sessions.</p>
+    <p class="muted">Chat with your own connected providers. History is shared with your API sessions.</p>
   </div>
   <div class="chat-controls">
     {% if has_provider %}
@@ -356,55 +38,42 @@ Actions run on your paired PC when its agent is connected, else here.</p>
 </div>
 {% endif %}
 
-<div class="chat-layout">
-  <aside class="chat-side">
-    <form method="post" action="/dashboard/chat/new">
-      <button type="submit">+ new chat</button>
-    </form>
-    <ul>
-    {% for s in sessions %}
-      <li><a class="sess{% if s.client_session_id == active_session %} active{% endif %}"
-             href="/dashboard/chat?session={{ s.client_session_id }}"
-             title="{{ s.client_session_id }}">{{ s.title }}</a></li>
-    {% else %}
-      <li class="empty">No conversations yet.</li>
-    {% endfor %}
-    </ul>
-  </aside>
-
-  <section class="chat-main">
-    <div id="chat-log">
-    {% for t in history %}
-      <div class="bubble bubble-{{ t.role }}">{{ t.text }}<!--
-       -->{% if t.role == "assistant" %}<span class="meta"></span>{% endif %}</div>
-    {% else %}
-      <p class="muted empty" id="chat-empty">No messages yet. Say hello below.</p>
-    {% endfor %}
-    </div>
-
-    {% if active_session %}
-    <div id="chat-composer">
-    <form id="chat-form">
-      <textarea id="chat-input" placeholder="Message your models&hellip;"
-                aria-label="Message"></textarea>
-      <div class="composer-row">
-        <span id="chat-status"></span>
-        <button type="submit" id="chat-send" title="Send" aria-label="Send">&uarr;</button>
-      </div>
-    </form>
-    </div>
-    {% else %}
-    <form method="post" action="/dashboard/chat/new">
-      <button type="submit">Start a new chat</button>
-    </form>
-    {% endif %}
-  </section>
+{% if not history %}
+<div class="chat-hero">
+  <h2>What can I help with?</h2>
+  <p class="muted">Pick a model above, then ask anything. Your chats live in the left sidebar.</p>
 </div>
+{% endif %}
+
+<div id="chat-log">
+{% for t in history %}
+  <div class="bubble bubble-{{ t.role }}">{{ t.text }}<!--
+   -->{% if t.role == "assistant" %}<span class="meta"></span>{% endif %}</div>
+{% else %}
+  <p class="muted empty" id="chat-empty">No messages yet. Say hello below.</p>
+{% endfor %}
 </div>
+
+{% if active_session %}
+<div id="chat-composer">
+<form id="chat-form">
+  <textarea id="chat-input" placeholder="Message your models&hellip;"
+            aria-label="Message"></textarea>
+  <div class="composer-row">
+    <span id="chat-status"></span>
+    <button type="submit" id="chat-send" title="Send" aria-label="Send">&uarr;</button>
+  </div>
+</form>
+</div>
+{% else %}
+<form method="post" action="/dashboard/chat/new">
+  <button type="submit">Start a new chat</button>
+</form>
+{% endif %}
 
 <script>
-  // Chat theme: light default, dark toggle, persisted. Scoped to this
-  // page (the rest of the dashboard keeps the terminal tokens).
+  // Chat theme toggle (light default, persisted as "webchat-theme").
+  // base.html applies the saved value before first paint.
   (function () {
     var btn = document.getElementById("theme-toggle");
     if (!btn) return;
@@ -416,11 +85,7 @@ Actions run on your paired PC when its agent is connected, else here.</p>
       if (meta) meta.setAttribute("content", theme === "dark" ? "dark" : "light");
       btn.textContent = theme === "dark" ? "light" : "dark";
     }
-    var initial = "light";
-    try {
-      var saved = window.localStorage.getItem("webchat-theme");
-      if (saved === "dark" || saved === "light") initial = saved;
-    } catch (e) { /* storage unavailable */ }
+    var initial = document.documentElement.getAttribute("data-theme") || "light";
     apply(initial);
     btn.addEventListener("click", function () {
       var current = document.documentElement.getAttribute("data-theme") || "light";
