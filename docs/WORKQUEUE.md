@@ -64,7 +64,15 @@ still owes:
   and stays.
 - **Client-supplied `session_id` as storage identity** — relational
   session identity landed in Phase 1 and the transitional helper was
-  only meant to be retained briefly. Check whether it is still there.
+  only meant to be retained briefly. **AUDITED 2026-09-25 (retained,
+  justified):** the remaining legacy path is the `UNSCOPED` default in
+  `core/scope.py`, and no request path relies on it — all three chat
+  endpoints resolve-or-create the principal's surrogate session up front;
+  graph/dashboard 404 before projecting on failed lookups; MCP tools
+  scope under the caller subject. It stays for unit tests and local
+  tooling only (recorded in the `scope.py` docstring); the `None`
+  fail-closed contract is pinned by `tests/test_scope_contract.py` +
+  `tests/test_isolation.py`.
 
 Local/self-hosted mode itself is **not** deprecated and stays.
 

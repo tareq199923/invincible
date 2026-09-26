@@ -148,6 +148,15 @@ documented command (replacement: direct hosted signup/onboarding).
 Published from tag `v0.4.0` via the trusted-publisher dispatch and
 verified serving in production (`/health` → 0.4.0).
 
+**0.5.0 is next (pending):** minor bump carrying the harness surface
+(WS-first agent relay, machine inventory, `harness` CLI group,
+`connect` shortcut), the `invincible agent` removal (`harness connect`
+is the only entry point — update scripts), the `facts` table drop
+(revision `0013`; deploy runs `db upgrade` at startup as usual),
+user-voice-only auto memories, the owner-secret consent retirement,
+the `MCP_SHARED_SECRET` fallback removal (rename stale values to
+`INVINCIBLE_OWNER_SECRET`), and the remote-first CLI help.
+
 Everything from here is immutable: `0.3.0` can never be replaced or
 re-uploaded, only yanked and superseded. Bump `invincible/__init__.py` to
 the next unused number before tagging the next release.

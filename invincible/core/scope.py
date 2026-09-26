@@ -24,6 +24,19 @@ resolve", and every store treats it as an empty result (reads) or an
 
 The distinction is the whole point, so the sentinel is a unique object
 rather than a second magic value.
+
+Audit record (2026-09-25, Phase 8 session-scope audit): every request
+path passes explicit scope - the three chat endpoints resolve-or-create
+the principal's surrogate session up front and thread it through
+history, injections, routing, runs, and persistence; the graph and
+dashboard-detail endpoints 404 before projecting on a failed lookup;
+MCP task tools scope under the caller's subject (get early-returns on
+an unknown session, writes raise ``UnresolvedScopeError``). No request
+path relies on the UNSCOPED default; it remains for unit tests and
+local tooling on single-tenant databases only. The ``None``
+(unresolved) fail-closed contract is pinned by
+``tests/test_scope_contract.py`` and the cross-principal suite in
+``tests/test_isolation.py``.
 """
 
 
