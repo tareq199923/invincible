@@ -14,23 +14,7 @@
   }
   .prov-mark-sm { width: 1.6rem; height: 1.6rem; font-size: 0.78rem;
                   border-radius: 5px; }
-  .provider-card .label {
-    font-size: 0.95rem; letter-spacing: 0; text-transform: none;
-    color: var(--ink); font-weight: 600;
-  }
-  .prov-card-head { display: flex; align-items: center; gap: 0.7rem;
-                    margin-bottom: 0.6rem; }
-  .status-connected { color: var(--ok); }
-  .status-not-connected { color: var(--muted); }
-  .provider-card.connected .label { color: var(--ink); }
-  details.custom-provider {
-    border: 1px dashed var(--border); border-radius: var(--radius);
-    padding: 0.85rem 1.05rem; margin: 1rem 0; background: transparent;
-  }
-  details.custom-provider summary { cursor: pointer; color: var(--muted);
-                                    font-size: 0.88rem; }
-  details.custom-provider summary:hover { color: var(--accent-ink); }
-  details.custom-provider[open] summary { margin-bottom: 0.7rem; }
+  .connect-form { max-width: 34rem; }
   .routing-form { display: flex; flex-direction: column; gap: 0.55rem;
                   max-width: 46rem; }
   .routing-form label.radio { display: flex; gap: 0.5rem; align-items: baseline;
@@ -60,54 +44,19 @@ check the API key or base URL.</p>{% endif %}
 longer resolves to a public address.</p>{% endif %}
 
 <h3 id="connect">Connect a provider</h3>
-<div class="cards">
-  {% for c in catalog %}
-  <div class="card provider-card{% if c.key in connected_keys %} connected{% endif %}">
-    <div class="prov-card-head">
-      <span class="prov-mark" style="--mark: {{ c.color }}">{{ c.label[0] | upper }}</span>
-      <div>
-        <span class="label">{{ c.label }}</span>
-        {% if c.key in connected_keys %}
-        <p class="muted status-connected">Connected</p>
-        {% else %}
-        <p class="muted status-not-connected">Not connected</p>
-        {% endif %}
-      </div>
-    </div>
-    {% if c.key not in connected_keys %}
-    <form method="post" action="/providers/mine" class="connect-form">
-      <input type="hidden" name="catalog_key" value="{{ c.key }}">
-      <input type="text" name="provider_name" value="{{ c.label }}"
-             maxlength="80" aria-label="Connection name" required>
-      <input type="text" name="model_id" value="{{ c.model_id }}"
-             aria-label="Model id" title="Default model - requests naming a model override this"
-             required>
-      <input type="text" name="base_url" value="{{ c.base_url }}"
-             aria-label="Base URL" required>
-      <input type="password" name="api_key" placeholder="API key"
-             autocomplete="off" required>
-      <button type="submit">Connect</button>
-    </form>
-    {% endif %}
-  </div>
-  {% endfor %}
-</div>
-
-<details class="custom-provider">
-  <summary>+ Add a custom provider</summary>
-  <form method="post" action="/providers/mine" class="connect-form">
-    <input type="text" name="provider_name" placeholder="Name"
-           maxlength="80" required>
-    <input type="text" name="base_url" placeholder="https://api.example.com/v1"
-           required>
-    <input type="text" name="model_id" placeholder="default model id"
-           title="Default model - requests naming a model override this"
-           required>
-    <input type="password" name="api_key" placeholder="API key"
-           autocomplete="off" required>
-    <button type="submit">Connect</button>
-  </form>
-</details>
+<form method="post" action="/providers/mine" class="connect-form">
+  <input type="text" name="provider_name" placeholder="Name"
+         maxlength="80" aria-label="Name" required>
+  <input type="text" name="base_url" placeholder="https://api.example.com/v1"
+         aria-label="Base URL" required>
+  <input type="text" name="model_id" placeholder="default model id"
+         aria-label="Default model id"
+         title="Default model - requests naming a model override this"
+         required>
+  <input type="password" name="api_key" placeholder="API key"
+         aria-label="API key" autocomplete="off" required>
+  <button type="submit">Connect</button>
+</form>
 
 <h3>Connected providers</h3>
 {% if rows %}

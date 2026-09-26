@@ -319,9 +319,10 @@ and a dashboard Providers page. **Status: Complete.** PR-A (storage
 landed the connect/list/test/remove API with the SSRF guard and audit
 rows; PR-C landed the per-user router candidate pool
 (``byok_attempt_source``). PR-D (`27bebf4`) landed the dashboard
-Providers UI: catalog connect cards with connected-state flip, custom
-provider form, HTMX test/remove with row delete, nav entry, and
-realm/fail-closed gates pinned by ``tests/test_dashboard_providers.py``.
+Providers UI: single custom connect form (catalog cards removed;
+``catalog_key`` prefill stays API-only), HTMX test/remove with row
+delete, nav entry, and realm/fail-closed gates pinned by
+``tests/test_dashboard_providers.py``.
 
 
 ### Phase 10 — Local Agent (tool execution on the user's PC)

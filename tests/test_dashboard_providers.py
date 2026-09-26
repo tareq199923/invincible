@@ -2,11 +2,11 @@
 """Phase 9 PR-D: the /dashboard/providers Providers page.
 
 Gates: session-only realm (anon 401, inv_ keys 401, 503 fail-closed
-without the credential key); the catalog renders one connect card per
-CATALOG entry with a connected/not-connected state; a browser form
-connect round-trips through a 303 redirect and the raw key never
-appears in any later render; the HTMX Test button flips the stored
-status against a fake upstream; Remove uses the HTMX 204 row delete.
+without the credential key); the page renders a single custom connect
+form (no catalog cards); a browser form connect round-trips through a
+303 redirect and the raw key never appears in any later render; the
+HTMX Test button flips the stored status against a fake upstream;
+Remove uses the HTMX 204 row delete.
 """
 from itertools import count
 
@@ -16,7 +16,6 @@ from cryptography.fernet import Fernet
 
 from invincible.core.accounts import SESSION_COOKIE
 from invincible.core.identity import ApiKeyStore
-from invincible.core.provider_catalog import CATALOG
 from invincible.core.user_settings_store import UserSettingsStore
 from invincible.main import app
 from tests.conftest import register_account
@@ -86,21 +85,23 @@ async def test_page_fail_closed_without_credential_key(
     assert (await client.get("/dashboard/providers")).status_code == 503
 
 
-# --- catalog rendering ----------------------------------------------------------
+# --- connect form rendering -----------------------------------------------------
 
 
-async def test_page_renders_one_card_per_catalog_entry(credential_key, client):
+async def test_page_renders_single_custom_connect_form(credential_key, client):
     await logged_in(client)
     page = await client.get("/dashboard/providers")
     assert page.status_code == 200
-    for key, entry in CATALOG.items():
-        assert f'name="catalog_key" value="{key}"' in page.text
-        assert entry["label"] in page.text
-        assert f'value="{entry["base_url"]}"' in page.text
-        assert f'value="{entry["model_id"]}"' in page.text
-    # Nothing connected yet: every card shows the not-connected state.
-    assert page.text.count("Not connected") == len(CATALOG)
-    assert "Add a custom provider" in page.text
+    assert "Connect a provider" in page.text
+    # One generic form: name, base URL, default model, key. No catalog
+    # cards and no catalog_key prefill inputs.
+    assert 'action="/providers/mine"' in page.text
+    assert 'name="provider_name"' in page.text
+    assert 'name="base_url"' in page.text
+    assert 'name="model_id"' in page.text
+    assert 'name="api_key"' in page.text
+    assert 'name="catalog_key"' not in page.text
+    assert "Not connected" not in page.text
 
 
 async def test_nav_links_providers(credential_key, client):
@@ -114,17 +115,17 @@ async def test_nav_links_providers(credential_key, client):
     assert 'href="/dashboard/mcp"' in page.text
 
 
-async def test_connected_card_flips_state(credential_key, client):
+async def test_connected_provider_appears_in_table(credential_key, client):
     await logged_in(client)
     made = await client.post("/providers/mine", json={
         "provider_name": "My Groq", "catalog_key": "groq",
         "api_key": RAW_KEY})
     assert made.status_code == 201, made.text
     page = await client.get("/dashboard/providers")
-    # groq flips to connected; the rest stay open.
-    assert "Connected" in page.text
-    assert page.text.count("Not connected") == len(CATALOG) - 1
+    # The connection lands in the connected-providers table; the
+    # connect form stays a single generic form.
     assert "My Groq" in page.text
+    assert 'name="catalog_key"' not in page.text
 
 # --- browser connect round-trip -----------------------------------------------
 

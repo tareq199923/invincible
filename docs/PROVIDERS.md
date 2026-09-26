@@ -9,12 +9,14 @@ Since Phase 9 (BYOK), **live `/v1/*` traffic never reads
 `providers.yaml`**. Every request routes through the calling user's own
 connected credentials:
 
-- A user connects a provider on the dashboard's **Providers page** — either
-  a pre-filled **catalog card** (`core/provider_catalog.py`, the
-  operator-supplied starter set) or a **custom** `base_url` + `model_id` +
-  key. A custom URL must pass the SSRF guard
+- A user connects a provider on the dashboard's **Providers page** with a
+  single form: name + `base_url` + default `model_id` + key. A custom URL
+  must pass the SSRF guard
   (`core/url_safety.py::validate_public_https_url`: public HTTPS only,
   and re-checked on every request because DNS can be rebound).
+  (`core/provider_catalog.py` remains as the operator-supplied constants
+  behind the API's `catalog_key` prefill, but the page renders no catalog
+  cards.)
 - Keys are Fernet-encrypted at rest under `INVINCIBLE_CREDENTIAL_KEY`, and
   the same surface is available over HTTP at `/providers/mine`. A remote
   deployment therefore needs **no provider keys of its own**.
@@ -26,8 +28,8 @@ connected credentials:
 packaged config the tests and direct `Router` construction use, the schema
 `invincible doctor` validates, and the shape per-user credentials mirror.
 The rest of this document is the reference for that schema and for adding a
-provider *shape*; to also surface it as a one-click card, add the entry to
-both `core/provider_catalog.py` and the packaged `providers.yaml`.
+provider *shape*. (`core/provider_catalog.py` still holds the
+operator-supplied constants backing the API's `catalog_key` prefill.)
 
 ## The 10-minute task
 

@@ -281,8 +281,7 @@ button.linklike {
 }
 .card .num { display: block; font-size: 1.6rem; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .card .label { display: block; color: var(--muted); font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; margin-top: 0.3rem; }
-.provider-card.connected { border-color: rgba(26, 127, 75, 0.45); }
-html[data-theme="dark"] .provider-card.connected { border-color: rgba(63, 214, 143, 0.45); }
+
 
 /* ---------- callouts ---------- */
 .banner, .banner-ok {
