@@ -29,6 +29,7 @@ from invincible.core.run_store import RunStore
 from invincible.core.session_store import SessionStore
 from invincible.core.settings import settings
 from invincible.core.tool_executor import PendingActionStore
+from invincible.core.webchat_agent import ApprovalWaiter
 from invincible.endpoints.accounts import router as accounts_router
 from invincible.endpoints.agents import router as agents_router
 from invincible.endpoints.anthropic_compat import router as anthropic_router
@@ -118,6 +119,10 @@ async def lifespan(app: FastAPI):
     if settings.persist_pending_actions():
         pending.attach_engine(engine)
     app.state.pending_actions = pending
+    # Webchat manual-approval rendezvous (in-memory by design, same
+    # trade-off as the agent registry: a restart orphans in-flight
+    # approvals and the stream timeout declines them).
+    app.state.webchat_approvals = ApprovalWaiter()
     app.state.oauth_store = oauth_store
     app.state.memory = memory
     app.state.retrieval = retrieval

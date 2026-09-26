@@ -1,11 +1,16 @@
 # tests/test_webchat.py
-"""Dashboard webchat: cookie-realm BYOK chat with SSE streaming (text-only v1).
+"""Dashboard webchat: cookie-realm BYOK chat with SSE streaming and
+plan/manual/auto agent modes.
 
 Covers the realm gates (anonymous 401 everywhere; inv_ API keys rejected
 on every new route - realms never merge), cross-user isolation through the
 new endpoints, the SSE happy path on mocked providers (persisted history
-identical to the API path), the model picker contents, and the
-no-credentials error event.
+identical to the API path), the model picker contents, the
+no-credentials error event, and the web-only sidebar.
+
+Upstream mocks are non-streaming JSON bodies: the agent loop routes each
+iteration through ``route_request_detailed`` (whole messages, so tool
+calls arrive complete), while the browser still receives live SSE.
 """
 import httpx
 
@@ -13,12 +18,7 @@ from invincible.core.accounts import SESSION_COOKIE
 from invincible.core.credential_store import ByokCredentialStore
 from invincible.core.identity import ApiKeyStore
 from invincible.main import app
-from tests.conftest import (
-    provider_body,
-    register_account,
-    sse_body,
-    stream_chunk,
-)
+from tests.conftest import provider_body, register_account
 
 
 async def webchat_user(client, email, credential_count=1):
@@ -40,13 +40,9 @@ async def webchat_user(client, email, credential_count=1):
 
 
 def stream_handlers(content="hello"):
-    chunks = [
-        stream_chunk("w1", {"content": content}),
-        stream_chunk("w1", {}, finish_reason="stop"),
-    ]
     return {
         f"w{i + 1}.example.com": httpx.Response(
-            200, content=sse_body(*chunks))
+            200, json=provider_body(f"w{i + 1}", content=content))
         for i in range(2)
     }
 

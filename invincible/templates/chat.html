@@ -62,6 +62,39 @@
   }
   .bubble.error { border-color: rgba(243, 114, 125, 0.45); color: var(--err); }
   .bubble.pending { color: var(--muted); }
+  .tool-line {
+    align-self: flex-start;
+    font-size: 0.78rem;
+    color: var(--muted);
+    max-width: 46rem;
+  }
+  .tool-line.ok { color: var(--faint); }
+  .tool-line.failed { color: var(--err); }
+  .approval-card {
+    align-self: flex-start;
+    max-width: 46rem;
+    border: 1px solid rgba(227, 179, 65, 0.45);
+    border-left: 3px solid var(--warn);
+    background: var(--warn-dim);
+    border-radius: var(--radius);
+    padding: 0.6rem 0.8rem;
+    font-size: 0.82rem;
+  }
+  .approval-card pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: #0b0f16;
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.6rem;
+    font-size: 0.75rem;
+    max-height: 12rem;
+    overflow-y: auto;
+  }
+  .approval-card .row { display: flex; gap: 0.6rem; margin-top: 0.5rem; }
+  .approval-card button { margin-top: 0; }
+  .approval-card button.approve { border-color: rgba(63, 214, 143, 0.5); }
+  .approval-card button.resolved { opacity: 0.55; }
   #chat-form { display: flex; gap: 0.6rem; align-items: flex-end; }
   #chat-form textarea { flex: 1; min-height: 2.6rem; }
   #chat-form button { margin-top: 0.3rem; white-space: nowrap; }
@@ -110,7 +143,15 @@ History is shared with your API sessions.</p>
         <option value="{{ m }}">{{ m }}</option>
       {% endfor %}
       </select>
+      <label for="chat-mode" class="muted">mode</label>
+      <select id="chat-mode">
+        <option value="plan" title="Plan only - reads your machine, changes nothing">plan</option>
+        <option value="manual" selected title="Asks your approval before each action">manual</option>
+        <option value="auto" title="Acts without asking - stays least-privilege">auto</option>
+      </select>
     </div>
+    <p class="muted">plan only looks, manual asks first, auto acts.
+    Actions run on your paired PC when its agent is connected, else here.</p>
     {% endif %}
 
     <div id="chat-log">
@@ -150,7 +191,68 @@ History is shared with your API sessions.</p>
     var log = document.getElementById("chat-log");
     var status = document.getElementById("chat-status");
     var picker = document.getElementById("chat-model");
+    var modePicker = document.getElementById("chat-mode");
+    var toolLines = {};
     if (!form || !input || !log) return;
+    if (modePicker) {
+      try {
+        var savedMode = window.localStorage.getItem("webchat-mode");
+        if (savedMode === "plan" || savedMode === "manual" ||
+            savedMode === "auto") {
+          modePicker.value = savedMode;
+        }
+        modePicker.addEventListener("change", function () {
+          try {
+            window.localStorage.setItem("webchat-mode", modePicker.value);
+          } catch (e) { /* private mode: sticky default is fine */ }
+        });
+      } catch (e) { /* storage unavailable: sticky default is fine */ }
+    }
+
+    function renderApprovalCard(p) {
+      var card = document.createElement("div");
+      card.className = "approval-card";
+      var head = document.createElement("div");
+      head.textContent = "Approval needed — " + (p.summary || p.action || "action");
+      card.appendChild(head);
+      if (p.detail) {
+        var pre = document.createElement("pre");
+        pre.textContent = p.detail;
+        card.appendChild(pre);
+      }
+      var row = document.createElement("div");
+      row.className = "row";
+      var okBtn = document.createElement("button");
+      okBtn.textContent = "Approve";
+      okBtn.className = "approve";
+      var noBtn = document.createElement("button");
+      noBtn.textContent = "Deny";
+      function settle(approved) {
+        okBtn.disabled = true;
+        noBtn.disabled = true;
+        okBtn.classList.add("resolved");
+        noBtn.classList.add("resolved");
+        fetch("/dashboard/chat/approve", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({token: p.token, approve: approved})
+        }).then(function (r) {
+          head.textContent = (approved ? "Approved" : "Denied") + " — " +
+            (p.summary || p.action || "") +
+            (r.ok ? "" : " (already settled?)");
+        }).catch(function () {
+          head.textContent = "Approval request failed — the action timed out.";
+        });
+      }
+      okBtn.addEventListener("click", function () { settle(true); });
+      noBtn.addEventListener("click", function () { settle(false); });
+      row.appendChild(okBtn);
+      row.appendChild(noBtn);
+      card.appendChild(row);
+      log.appendChild(card);
+      card.scrollIntoView({block: "nearest"});
+    }
 
     function bubble(role, text) {
       var empty = document.getElementById("chat-empty");
@@ -188,7 +290,8 @@ History is shared with your API sessions.</p>
         body: JSON.stringify({
           session_id: SESSION_ID,
           message: text,
-          model: picker && picker.value ? picker.value : null
+          model: picker && picker.value ? picker.value : null,
+          mode: modePicker && modePicker.value ? modePicker.value : "manual"
         })
       }).then(function (resp) {
         var ctype = resp.headers.get("content-type") || "";
@@ -241,17 +344,51 @@ History is shared with your API sessions.</p>
                 }
                 pending.textContent += payload.text;
                 pending.scrollIntoView({block: "nearest"});
+              } else if (name === "tool_call" && payload) {
+                if (status) status.textContent = "working…";
+                var line = document.createElement("div");
+                line.className = "tool-line";
+                line.textContent = "⚙ " + (payload.summary || payload.name || "tool") + "…";
+                log.appendChild(line);
+                line.scrollIntoView({block: "nearest"});
+                if (payload.call_id) toolLines[payload.call_id] = line;
+              } else if (name === "approval" && payload) {
+                if (status) status.textContent = "waiting for your approval…";
+                renderApprovalCard(payload);
+              } else if (name === "tool_result" && payload) {
+                var target = payload.call_id ? toolLines[payload.call_id] : null;
+                var resultText = (payload.ok ? "✓ " : "✗ ") +
+                  (payload.preview || payload.name || "done");
+                if (target) {
+                  target.textContent = target.textContent.replace(/…$/, "") + " — " + resultText;
+                  target.classList.add(payload.ok ? "ok" : "failed");
+                } else {
+                  var rline = document.createElement("div");
+                  rline.className = "tool-line " + (payload.ok ? "ok" : "failed");
+                  rline.textContent = resultText;
+                  log.appendChild(rline);
+                }
+                if (status) status.textContent = "working…";
               } else if (name === "done" && payload) {
                 pending.classList.remove("pending");
                 if (payload.bubble_html) {
                   pending.innerHTML = payload.bubble_html;
                 }
+                var metaParts = [];
                 if (payload.provider || payload.model) {
+                  metaParts.push((payload.provider || "?") + " · " +
+                    (payload.model || "?"));
+                }
+                if (payload.mode) metaParts.push(payload.mode);
+                if (payload.tools_used) {
+                  metaParts.push(payload.tools_used + " tool" +
+                    (payload.tools_used === 1 ? "" : "s"));
+                }
+                if (payload.execution) metaParts.push(payload.execution);
+                if (metaParts.length) {
                   var meta = document.createElement("span");
                   meta.className = "meta";
-                  meta.textContent =
-                    (payload.provider || "?") + " · " +
-                    (payload.model || "?");
+                  meta.textContent = metaParts.join(" · ");
                   pending.appendChild(meta);
                 }
                 send.disabled = false;

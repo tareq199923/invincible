@@ -32,7 +32,8 @@ invincible/
 │   │                           (/providers/mine connect/test/order/routing)
 │   ├── chat.py                 Dashboard webchat (/dashboard/chat*, cookie
 │   │                           realm only): page + new-chat + models JSON +
-│   │                           SSE stream (text-only v1, no tool execution)
+│   │                           SSE stream (plan/manual/auto agent modes) +
+│   │                           approval endpoint for manual mode
 │   ├── mcp.py                  POST /mcp (JSON-RPC 2.0 dispatch, Bearer resource server)
 │   ├── oauth.py                Built-in OAuth 2.1 + PKCE authorization server
 │   │                           (/.well-known/oauth-*, /oauth/register|authorize|token|revoke;
@@ -71,6 +72,10 @@ invincible/
     │                           /v1/chat/completions AND the dashboard webchat:
     │                           prepare (history + injections + pairing repair),
     │                           non-streaming route + streaming open, persistence
+    ├── webchat_agent.py        Agentic loop over the chat pipeline (plan /
+    │                           manual / auto modes): mode tool schemas, the
+    │                           tool-call iteration, staged approvals via
+    │                           ApprovalWaiter, agent-or-local execution
     ├── compression.py          Send-time message compression (tool-result
     │                           truncation + blank-run collapse)
     ├── tool_compression.py     Send-time tool-schema compression (description
@@ -258,9 +263,19 @@ webchat events: token* → done | error    token deltas as text; done carries
                                          (never tracebacks)
 ```
 
-Text-only v1: the browser never sends tools, so no tool-call round-trips
-or approvals exist on this surface; turns created over `/v1/*` that carry
-tool payloads are skipped by the template (their text still routes).
+Agent modes (v2): the stream request carries `mode` (default `manual`).
+`plan` offers the 7 read-only tools only (offered by construction - the
+model cannot mutate); `manual` offers all 9 with every `execute_bash` /
+`write_file` pausing for a browser approval (`approval` event with a
+single-use token, resolved via `POST /dashboard/chat/approve`, awaited
+up to 300s); `auto` runs all tools immediately. Execution mirrors
+`/mcp`: agent-routed with `INVINCIBLE_AGENT_ROUTING=1` (offline agent is
+a plain tool error), else local on the server host. The loop reuses the
+single router loop per iteration (cap 10, then a no-tools closing call)
+and persists the whole turn (user + tool_calls + tool results + final
+text) in one append, so follow-up turns replay paired. Turns created
+over `/v1/*` that carry tool payloads are skipped by the template
+(their text still routes).
 
 ---
 

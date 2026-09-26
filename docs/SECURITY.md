@@ -189,13 +189,56 @@ Properties of this realm:
   `provider_name` + `catalog_key` + id only — never the key, and never
   the base URL (a URL may embed auth parameters).
 
-### Dashboard webchat — cookie realm (text-only v1)
+### Dashboard webchat — cookie realm (agent modes v2)
 
 | Property | Value |
 |---|---|
-| Surface | `/dashboard/chat` (HTML), `/dashboard/chat/new`, `/dashboard/chat/models`, `/dashboard/chat/stream` (SSE) |
+| Surface | `/dashboard/chat` (HTML), `/dashboard/chat/new`, `/dashboard/chat/models`, `/dashboard/chat/stream` (SSE), `/dashboard/chat/approve` (JSON) |
 | Auth | `invincible_session` cookie ONLY — `inv_*` API keys are rejected (401), same as the providers surface |
-| Tool execution | None: the browser sends one text turn and receives text deltas; no MCP tools, approvals, uploads, or system-prompt field exist on this surface |
+| Modes | `plan` (read-only tools only), `manual` (approvals per mutating action, the default), `auto` (acts without asking). Per stream request; no system-prompt field, no uploads |
+
+- Chat completions themselves are not audited (existing posture), but
+  every turn persists through the same ownership-predicated
+  `resolve_or_create`/`append` path as `/v1/*`, so web and API history
+  share one namespaced store and cross-user reads stay impossible.
+- `?session=` ids unknown to the caller render exactly like foreign ones
+  (empty thread — no enumeration); sidebar titles are derived server-side
+  from each session's first user message and bounded.
+- Stream events carry text only: `token` deltas are inserted as text, the
+  `done` bubble HTML is escaped server-side (`html.escape`) before the
+  single `innerHTML` insertion, and `error` carries the API-semantics
+  message only — never tracebacks, DSNs, or keys.
+
+Agent-mode rules (the highest-risk surface in the system — a browser
+chat that can run shell commands — so every rule below is load-bearing):
+
+- **Plan mode cannot mutate by construction:** the mutating tools are
+  absent from the request, not merely forbidden by prompt. A prompt
+  injection cannot conjure tools the provider never received.
+- **Manual approvals are single-use and subject-bound:** the token is a
+  fresh `secrets.token_urlsafe(16)` per staged action, resolvable only
+  by the staging user's live stream (`ApprovalWaiter`, in-memory by
+  design like the agent registry). Unknown, foreign, expired, and
+  already-settled tokens share one 404 body. Only a real JSON boolean
+  decides (no deny-default: a browser misclick is a loud 400, never an
+  accidental execution). The stream holds at most 300s; disconnects and
+  timeouts decline, and orphaned staging rows are popped so a late
+  approval can never fire.
+- **Denylists run before staging on every path** (including auto): a
+  blocked command yields an error result to the model and no token is
+  ever issued. The agent re-checks locally as Wall 2 when routed.
+- **Execution locality == `/mcp`:** agent-routed work runs on the
+  caller's paired machine; an offline agent is a plain tool error
+  (never a silent local run). With routing off, tools execute on the
+  server host — safe on a self-host (the server IS the user's PC) and
+  the reason public deployments must set
+  `INVINCIBLE_AGENT_ROUTING=1` (§10 posture). The `done` event reports
+  which (`execution: agent|local`) next to the mode and tool count.
+- **Audit:** approval grants/denies, auto/manual executions, and
+  denylist blocks write `webchat.*` audit rows carrying action + mode
+  only — never commands, paths, or file contents. Approval cards show
+  the user their own command/content (rendered as text) because
+  informed approval is the point.
 
 - Chat completions themselves are not audited (existing posture), but
   every turn persists through the same ownership-predicated

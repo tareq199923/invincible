@@ -263,6 +263,9 @@ async def client(pg_engine, router_setter, monkeypatch):
         pending.attach_engine(pg_engine)
         await pending.load_persisted()
     app.state.pending_actions = pending
+    from invincible.core.webchat_agent import ApprovalWaiter
+
+    app.state.webchat_approvals = ApprovalWaiter()
     oauth_store = OAuthStore(engine=pg_engine)
     await oauth_store.init()
     app.state.oauth_store = oauth_store
@@ -304,6 +307,7 @@ async def client(pg_engine, router_setter, monkeypatch):
     app.state.byok_http_client = None
     app.state.agent_registry = None
     app.state.harness_bus = None
+    app.state.webchat_approvals = None
 
 
 # --- Phase 3 account helpers ----------------------------------------------------
