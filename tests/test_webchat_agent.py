@@ -252,10 +252,16 @@ async def _collect_with_approval(client, body, uid, approve):
                 outcome["token"] = live[0]
                 return
 
-    async with asyncio.timeout(60):
+    # asyncio.wait_for (not asyncio.timeout: 3.10 compat, CI matrix
+    # starts at 3.10) bounds the interactive turn so a regression fails
+    # fast instead of hanging on the approval wait.
+    async def _run():
         task = asyncio.create_task(approver())
         resp = await client.post("/dashboard/chat/stream", json=body)
         await task
+        return resp
+
+    resp = await asyncio.wait_for(_run(), timeout=60)
     assert resp.status_code == 200, resp.text
     return parse_web_events(resp.text), outcome.get("resp")
 
@@ -414,13 +420,17 @@ async def test_double_approve_is_404(client, byok_env, router_setter,
                 assert first.status_code == 200, first.text
                 return
 
-    async with asyncio.timeout(60):
+    # asyncio.wait_for (not asyncio.timeout: 3.10 compat) - see helper.
+    async def _run():
         task = asyncio.create_task(approver())
         resp = await client.post("/dashboard/chat/stream", json={
             "session_id": "web-dbl", "message": "run it",
             "mode": "manual",
         })
         await task
+        return resp
+
+    resp = await asyncio.wait_for(_run(), timeout=60)
     assert resp.status_code == 200, resp.text
     assert "token" in seen
     second = await client.post(
