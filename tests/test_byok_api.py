@@ -285,6 +285,34 @@ async def test_probe_success_updates_status(
     assert RAW_KEY not in report.text
 
 
+async def test_probe_trailing_slash_base_url_probes_clean_url(
+    credential_key, client, public_dns
+):
+    """A stored base_url with a trailing slash must still probe a clean
+    single-slash /models URL (no "//models" double slash)."""
+    await logged_in(client)
+    made = await connect(
+        client, catalog_key=None, provider_name="Mock",
+        base_url="https://mockprov.test/v1/", model_id="mock-model")
+    assert made.status_code == 201, made.text
+    # Normalized at creation time so every URL build starts clean.
+    assert made.json()["base_url"] == "https://mockprov.test/v1"
+    cred_id = made.json()["id"]
+    transport, calls = _upstream_transport(200)
+    app.state.byok_http_client = httpx.AsyncClient(transport=transport)
+    try:
+        report = await client.post(f"/providers/mine/{cred_id}/test")
+    finally:
+        await app.state.byok_http_client.aclose()
+        app.state.byok_http_client = None
+
+    assert report.status_code == 200, report.text
+    body = report.json()
+    assert body["ok"] is True
+    assert body["credential_status"] == "ok"
+    assert calls and calls[0]["url"] == "https://mockprov.test/v1/models"
+
+
 async def test_probe_failure_marks_failed(
     credential_key, client, public_dns
 ):

@@ -184,7 +184,7 @@ async def _probe(request: Request, base_url: str, api_key: str) -> dict:
     started = time.monotonic()
     try:
         resp = await client.get(
-            f"{base_url}/models",
+            f"{base_url.rstrip('/')}/models",
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=resolve_timeout({}),
         )
@@ -332,6 +332,10 @@ async def connect_provider(
     base_url = str(body.get("base_url") or "").strip() or (
         entry["base_url"] if entry else ""
     )
+    # Normalize trailing slashes so "/v1/" and "/v1" store identically;
+    # done before the catalog-constant comparison so a pasted catalog URL
+    # with a trailing slash keeps its operator-supplied exemption.
+    base_url = base_url.rstrip("/")
     model_id = str(body.get("model_id") or "").strip() or (
         entry["model_id"] if entry else ""
     )

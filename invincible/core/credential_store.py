@@ -68,6 +68,7 @@ class ByokCredentialStore:
     ) -> dict:
         """Encrypt and store one credential; returns the public row."""
         now = time.time()
+        base_url = base_url.rstrip("/")
         try:
             async with self.engine.begin() as conn:
                 row = (await conn.execute(

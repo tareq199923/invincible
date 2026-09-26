@@ -548,7 +548,8 @@ class Router:
 
     def _request_url(self, provider: dict) -> str:
         """Chat-completions URL for a provider (``chat_path`` override)."""
-        return f"{provider['base_url']}{provider.get('chat_path', '/chat/completions')}"
+        base = provider["base_url"].rstrip("/")
+        return f"{base}{provider.get('chat_path', '/chat/completions')}"
 
     def _request_headers(self, provider: dict, api_key: str) -> dict:
         """Auth + content headers for a provider attempt (see
