@@ -20,12 +20,23 @@ Prompts are task-aware (MVP): one shared ``BASE_PROMPT`` (identity +
 safety + loop discipline, in opencode's concise style) plus a per-task
 overlay — read / do / plan — chosen by ``classify_task`` and assembled
 by ``build_system_prompt``. The static ``Agent.system_prompt`` values
-are the each-agent defaults (triage→read, operator→do); callers that
-know the live facts pass ``build_system_prompt(agent, task,
-model=..., cwd=..., date_str=...)`` into
-``harness_runtime.hydrate_context(system_prompt=...)`` so the model
+are the each-agent defaults (triage→read, operator→do). Section order
+is stable on purpose: identity → role+overlay → env.
+
+NOT WIRED INTO A LIVE CALLER YET (H4, deliberate — see
+``docs/HARNESS_PLAN.md`` H4 follow-up). Nothing in ``invincible/``
+imports this module outside its own tests: the live webchat path builds
+its prompt in ``webchat_agent.MODE_SYSTEM_PROMPTS``, keyed on the
+*permission* mode (plan/manual/auto), which is a different axis from
+this module's *intent* kind (read/do/plan). Binding the two is not a
+drop-in: ``DO_OVERLAY`` tells the model to act without seeking extra
+permission, which contradicts ``manual`` mode's per-call approval gate,
+so the merge lands with the H-later assistant that owns the mode/policy
+split. The tests here pin the prompt shapes; they do NOT prove the
+prompts are live. A caller that knows the live facts will pass
+``build_system_prompt(agent, task, model=..., cwd=..., date_str=...)``
+into ``harness_runtime.hydrate_context(system_prompt=...)`` so the model
 also sees the environment line (openclaw's volatile-last section).
-Section order is stable on purpose: identity → role+overlay → env.
 """
 from __future__ import annotations
 
@@ -95,6 +106,14 @@ _DO_RE = re.compile(
     r"\b(?:" + "|".join(re.escape(w) for w in _DO_WORDS) + r")\b",
     re.IGNORECASE,
 )
+# An interrogative opener ("how do I fix X?") names a change word but
+# wants an explanation, not an edit — the DO_OVERLAY would push a
+# mutating loop onto a question. Plan words still win over this.
+_QUESTION_RE = re.compile(
+    r"^\s*(?:how|why|what|when|where|who|which|is|are|does|do|did|"
+    r"can|could|should|would|will)\b",
+    re.IGNORECASE,
+)
 
 
 def classify_task(task: str) -> str:
@@ -103,11 +122,17 @@ def classify_task(task: str) -> str:
     Keyword-only on purpose (cheap, deterministic, no LLM call): a
     task mentioning planning words wants a plan even when it also
     names a change ("plan the fix"); a task naming a change wants
-    action; everything else is investigation. Pure and hermetic.
+    action; everything else is investigation. An interrogative opener
+    ("how do I fix login?") is read even when it names a change word,
+    since the ask is an explanation — unless a plan word appears. Pure
+    and hermetic.
     """
-    if _PLAN_RE.search(task or ""):
+    text = task or ""
+    if _PLAN_RE.search(text):
         return "plan"
-    if _DO_RE.search(task or ""):
+    if _QUESTION_RE.search(text):
+        return "read"
+    if _DO_RE.search(text):
         return "do"
     return "read"
 

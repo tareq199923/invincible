@@ -205,10 +205,11 @@ def hydrate_context(
     of ``context_builder.assemble``: continuity brief first, memories
     second, already budget-fitted) → recent turns verbatim.
 
-    The task is pinned, never summarized away. The system prompt is
-    typically ``harness_router.build_system_prompt(...)`` (base +
-    task overlay + environment line, volatile facts last). Pure and
-    hermetic.
+    The task is pinned, never summarized away. The system prompt, when
+    supplied, is intended to be ``harness_router.build_system_prompt(...)``
+    (base + task overlay + environment line, volatile facts last) — but
+    no live caller does so yet (H4 is unwired; see that module's header).
+    Pure and hermetic.
     """
     context: list[dict] = []
     if system_prompt:

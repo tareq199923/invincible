@@ -82,6 +82,15 @@ def test_classify_task_kinds():
     assert classify_task("") == "read"
     # Word boundaries: "outlines" in prose is not the planning keyword.
     assert classify_task("he outlines the facts") == "read"
+    # An interrogative naming a change word wants an explanation, not an
+    # edit — read, so the do-overlay never pushes a mutating loop.
+    assert classify_task("how do I fix the login redirect?") == "read"
+    assert classify_task("should I delete the old index?") == "read"
+    assert classify_task("what does the deploy script do") == "read"
+    # A plan word still wins over the interrogative.
+    assert classify_task("how should we plan the migration?") == "plan"
+    # The same change word in a bare imperative stays "do".
+    assert classify_task("fix the login redirect") == "do"
 
 
 def test_static_prompts_carry_base_and_matching_tools():

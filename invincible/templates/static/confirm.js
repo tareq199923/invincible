@@ -103,17 +103,24 @@
   }
 
   function decrementMemoryTotals() {
-    var next = null;
     document.querySelectorAll('[data-memory-total]').forEach(function (el) {
       var n = parseInt(el.textContent, 10);
       if (isNaN(n)) return;
-      next = Math.max(0, n - 1);
-      el.textContent = String(next);
+      el.textContent = String(Math.max(0, n - 1));
     });
+    // The plural belongs to the sentence that owns it, and the page shows
+    // two independent totals (the filtered count vs the node-capped graph
+    // count) that diverge under a search or a truncated graph. Pluralise
+    // from the count adjacent to the span, never from whichever total the
+    // loop happened to visit last.
     var plural = document.querySelector('[data-memory-plural]');
-    if (plural && next !== null) {
-      plural.textContent = next === 1 ? 'y' : 'ies';
+    if (!plural) return;
+    var owner = plural.previousElementSibling;
+    while (owner && !owner.hasAttribute('data-memory-total')) {
+      owner = owner.previousElementSibling;
     }
+    var n = owner ? parseInt(owner.textContent, 10) : NaN;
+    if (!isNaN(n)) plural.textContent = n === 1 ? 'y' : 'ies';
   }
 
   function afterProviderDelete(tbody) {
