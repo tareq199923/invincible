@@ -14,6 +14,9 @@ realms meet here, and they never mix:
   and registry queues/sockets are keyed by that user - routing is the
   isolation. WS is outbound-only from the agent (flexx-style relay);
   WS-first with long-poll fallback.
+- Read-only companions in that same inv_-key realm: ``GET
+  /agent/machines`` (machine inventory) and ``GET /agent/whoami`` (which
+  account a paired key belongs to - never the key itself).
 - ``GET /agent/status`` + ``WS /harness/events`` authenticate with a
   dashboard session cookie (``resolve_session``, the same resolver every
   account page uses). The events socket is read-only: replay + live
@@ -37,8 +40,9 @@ from fastapi import (
     WebSocketDisconnect,
 )
 
-from invincible.core.accounts import resolve_session
+from invincible.core.accounts import UserService, resolve_session
 from invincible.core.agent_registry import PollCapacityExceeded
+from invincible.core.identity import ensure_default_project
 from invincible.core.settings import AGENT_POLL_HOLD_SECONDS, settings
 
 router = APIRouter()
@@ -72,13 +76,15 @@ async def _resolve_ws_key(websocket: WebSocket) -> int | None:
     return int(resolved["user_id"])
 
 
-async def require_agent_auth(request: Request) -> int:
-    """Resolve the inv_ Bearer key to its owning user_id, or 401.
+async def _resolve_agent_principal(request: Request) -> dict:
+    """Resolve the inv_ Bearer key to its stored record, or 401.
 
     ApiKeyStore.resolve (core/identity.py) is the single source of
     truth for key validity and revocation; an unrevoked key implies a
     completed device pairing. The store touches last_used_at
-    best-effort on its own.
+    best-effort on its own. The record carries ``user_id`` (the
+    isolation key every queue/socket/machine table is keyed by) and
+    ``prefix`` (the visible non-secret slice). Never the raw key.
     """
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
@@ -90,7 +96,16 @@ async def require_agent_auth(request: Request) -> int:
     )
     if resolved is None:
         raise HTTPException(status_code=401, detail="Unknown or revoked key")
-    return int(resolved["user_id"])
+    return resolved
+
+
+async def require_agent_auth(request: Request) -> int:
+    """The inv_ key's owning user_id - the isolation key agent routing
+    and machine inventory are built on. Thin wrapper over
+    ``_resolve_agent_principal`` so there is exactly one resolution
+    path (and one set of 401s) on this surface.
+    """
+    return int((await _resolve_agent_principal(request))["user_id"])
 
 
 @router.post("/agent/poll")
@@ -152,6 +167,29 @@ async def agent_machines(
     are all keyed by the resolved user."""
     registry = request.app.state.agent_registry
     return {"machines": registry.machines_for(user_id)}
+
+
+@router.get("/agent/whoami")
+async def agent_whoami(
+    request: Request,
+    resolved: dict = Depends(_resolve_agent_principal),
+) -> dict:
+    """Which account this paired inv_ key belongs to (Phase 6 follow-up).
+
+    Read-only and secret-safe: the visible key ``prefix`` is reported,
+    never the raw key or its hash. Same narrow inv_-key realm as
+    poll/result/machines - deliberately NOT require_auth, and no cookie
+    path, because the realms never merge (docs/HARNESS_PLAN.md §5).
+    """
+    engine = request.app.state.engine
+    user_id = int(resolved["user_id"])
+    user = await UserService(engine).get(user_id)
+    return {
+        "user_id": user_id,
+        "email": user["email"] if user else None,
+        "project_id": await ensure_default_project(engine, user_id),
+        "key_prefix": resolved["prefix"],
+    }
 
 
 @router.get("/agent/status")

@@ -1,7 +1,7 @@
 import asyncio
 
 from invincible.core.agent_registry import AgentRegistry
-from invincible.core.identity import ApiKeyStore
+from invincible.core.identity import ApiKeyStore, ensure_default_project
 from invincible.main import app
 from tests.conftest import register_account
 
@@ -229,3 +229,68 @@ async def test_machines_lists_own_machines_only(client):
     theirs = await client.get(
         "/agent/machines", headers=agent_headers(key2))
     assert theirs.json() == {"machines": []}
+
+
+async def test_whoami_reports_account_and_key_prefix(client):
+    """A paired key can confirm which account it belongs to without
+    touching the server - account, default project, and the visible key
+    prefix, never the raw key."""
+    uid, key = await _mint_key(client, "whoami@example.com")
+    listed = await ApiKeyStore(app.state.engine).list(uid)
+    response = await client.get("/agent/whoami", headers=agent_headers(key))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["user_id"] == uid
+    assert body["email"] == "whoami@example.com"
+    assert body["project_id"] == await ensure_default_project(
+        app.state.engine, uid)
+    assert body["key_prefix"] == listed[0]["prefix"]
+    # Secret-safety: the raw key is never echoed back.
+    assert key not in response.text
+
+
+async def test_whoami_is_scoped_to_the_key_owner(client):
+    """Structural isolation: each key reports exactly its own account,
+    never a sibling account's."""
+    uid_a, key_a = await _mint_key(client, "who-a@example.com")
+    uid_b, key_b = await _mint_key(client, "who-b@example.com")
+    first = await client.get("/agent/whoami", headers=agent_headers(key_a))
+    second = await client.get("/agent/whoami", headers=agent_headers(key_b))
+    assert first.json()["user_id"] == uid_a
+    assert first.json()["email"] == "who-a@example.com"
+    assert second.json()["user_id"] == uid_b
+    assert second.json()["email"] == "who-b@example.com"
+
+
+async def test_whoami_requires_inv_key(client):
+    assert (await client.get("/agent/whoami")).status_code == 401
+    assert (await client.get(
+        "/agent/whoami", headers=agent_headers("inv_garbage")
+    )).status_code == 401
+    assert (await client.get(
+        "/agent/whoami", headers=agent_headers("not-a-real-key")
+    )).status_code == 401
+
+
+async def test_whoami_rejects_revoked_key(client):
+    """Revocation is the store's single source of truth - a revoked key
+    is indistinguishable from an unknown one on every agent route."""
+    uid, key = await _mint_key(client, "revoked@example.com")
+    assert (await client.get(
+        "/agent/whoami", headers=agent_headers(key))).status_code == 200
+    listed = await ApiKeyStore(app.state.engine).list(uid)
+    assert await ApiKeyStore(app.state.engine).revoke(listed[0]["id"]) is True
+    assert (await client.get(
+        "/agent/whoami", headers=agent_headers(key))).status_code == 401
+
+
+async def test_whoami_rejects_session_cookie(client):
+    """Realms never merge: a signed-in dashboard cookie is not an agent
+    credential, so it cannot read the agent surface."""
+    await _mint_key(client, "cookie@example.com")
+    login = await client.post(
+        "/auth/login",
+        json={"email": "cookie@example.com", "password": "longenough1"},
+    )
+    assert login.status_code == 200
+    assert (await client.get("/agent/whoami")).status_code == 401

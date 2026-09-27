@@ -235,7 +235,11 @@ async def test_device_poll_pending_then_approve_claims_once(devices):
     raw_key = claimed["api_key"]["raw"]
     assert raw_key.startswith("inv_")
     resolved = await store.api_keys.resolve(raw_key)
-    assert resolved == {"id": claimed["api_key"]["id"], "user_id": user_id}
+    # Additive prefix (Phase 6 follow-up): the visible slice rides along
+    # so /agent/whoami can say *which* key authenticated without a second
+    # lookup. The raw key and its hash still never leave the store.
+    assert resolved == {"id": claimed["api_key"]["id"], "user_id": user_id,
+                        "prefix": claimed["api_key"]["prefix"]}
 
     # single winner: the second poll finds nothing left to claim
     with pytest.raises(AccountError) as excinfo:

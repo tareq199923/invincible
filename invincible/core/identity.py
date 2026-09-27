@@ -132,21 +132,28 @@ class ApiKeyStore:
         }
 
     async def resolve(self, raw: str) -> dict | None:
-        """Look up an unrevoked key by raw value; returns
-        ``{"id", "user_id"}`` or None. Touches last_used_at best-effort."""
+        """Look up an unrevoked key by raw value; returns ``{"id",
+        "user_id", "prefix"}`` or None. Touches last_used_at best-effort.
+
+        ``prefix`` is the visible non-secret slice stored at creation
+        (never the raw key) — it lets a caller report *which* key
+        authenticated (``/agent/whoami``) without a second lookup. The
+        field is additive: existing callers read by key and are
+        unaffected."""
         if not raw.startswith(API_KEY_PREFIX):
             return None
         key_hash = _hash_api_key(raw)
         async with self.engine.connect() as conn:
             row = (await conn.execute(
-                select(api_keys.c.id, api_keys.c.user_id)
+                select(api_keys.c.id, api_keys.c.user_id, api_keys.c.prefix)
                 .where(api_keys.c.key_hash == key_hash,
                        api_keys.c.revoked_at.is_(None))
             )).first()
         if row is None:
             return None
         await self._touch(int(row[0]))
-        return {"id": int(row[0]), "user_id": int(row[1])}
+        return {"id": int(row[0]), "user_id": int(row[1]),
+                "prefix": row[2]}
 
     async def _touch(self, key_id: int) -> None:
         try:

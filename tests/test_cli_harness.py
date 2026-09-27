@@ -130,3 +130,106 @@ def test_setup_reprints_config_without_pairing(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert "mcpServers" in result.output
     assert "https://paired.example/mcp" in result.output
+
+
+def test_format_status_includes_account_when_supplied():
+    """The account block is additive: it renders above the machine list
+    and only when the caller supplied it (pre-whoami payloads unchanged)."""
+    text = _format_harness_status({
+        "account": {"user_id": 7, "email": "me@example.com",
+                    "project_id": 3, "key_prefix": "inv_abcdef12"},
+        "agent_online": True,
+        "machines": [],
+    })
+    assert "Account: me@example.com (user 7)" in text
+    assert "Key: inv_abcdef12..." in text
+    assert "Project: 3" in text
+    assert text.index("Account:") < text.index("Agent online:")
+
+
+def test_format_status_account_degrades_without_email():
+    """A missing email or project never breaks the render."""
+    text = _format_harness_status({
+        "account": {"user_id": 7, "email": None, "project_id": None,
+                    "key_prefix": ""},
+        "agent_online": False,
+        "machines": [],
+    })
+    assert "Account: unknown (user 7)" in text
+    assert "Key:" not in text and "Project:" not in text
+
+
+def _paired_config(tmp_path):
+    from invincible.cli import _save_client_config
+
+    target = tmp_path / "config.json"
+    _save_client_config(server="https://paired.example",
+                        api_key="inv_saved", path=str(target))
+    return target
+
+
+def test_status_command_renders_account_above_machines(monkeypatch, tmp_path):
+    """`harness status` asks whoami + machines and prints the account
+    line above the machine list (hermetic: no server, no DB)."""
+    import httpx
+
+    seen: list[str] = []
+
+    def _fake_get(url, **kwargs):
+        seen.append(url)
+        if url.endswith("/agent/whoami"):
+            return httpx.Response(200, request=httpx.Request("GET", url),
+                                  json={"user_id": 7,
+                                        "email": "me@example.com",
+                                        "project_id": 3,
+                                        "key_prefix": "inv_abcdef12"})
+        return httpx.Response(200, request=httpx.Request("GET", url), json={
+            "machines": [{"machine_id": "m1", "machine_name": "laptop",
+                          "platform": "win", "online": True,
+                          "capabilities": {"chrome": True}}]})
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    result = CliRunner().invoke(cli, [
+        "harness", "status", "--config", str(_paired_config(tmp_path))])
+    assert result.exit_code == 0, result.output
+    assert "Account: me@example.com (user 7)" in result.output
+    assert "inv_abcdef12" in result.output
+    assert "laptop" in result.output
+    assert seen == ["https://paired.example/agent/whoami",
+                    "https://paired.example/agent/machines"]
+
+
+def test_status_command_tolerates_server_without_whoami(monkeypatch, tmp_path):
+    """An older server (no /agent/whoami -> 404) still yields the machine
+    list instead of failing the whole command."""
+    import httpx
+
+    def _fake_get(url, **kwargs):
+        if url.endswith("/agent/whoami"):
+            return httpx.Response(404, request=httpx.Request("GET", url))
+        return httpx.Response(200, request=httpx.Request("GET", url), json={
+            "machines": [{"machine_id": "m1", "machine_name": "laptop",
+                          "platform": "win", "online": True,
+                          "capabilities": {}}]})
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    result = CliRunner().invoke(cli, [
+        "harness", "status", "--config", str(_paired_config(tmp_path))])
+    assert result.exit_code == 0, result.output
+    assert "Account:" not in result.output
+    assert "laptop" in result.output
+
+
+def test_status_command_401_teaches_re_pairing(monkeypatch, tmp_path):
+    """A rejected pairing key is a loud, actionable failure - the same
+    message for the whoami and machines calls."""
+    import httpx
+
+    def _fake_get(url, **kwargs):
+        return httpx.Response(401, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    result = CliRunner().invoke(cli, [
+        "harness", "status", "--config", str(_paired_config(tmp_path))])
+    assert result.exit_code != 0
+    assert "re-pair" in result.output

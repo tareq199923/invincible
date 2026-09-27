@@ -259,8 +259,10 @@ user never touches PostgreSQL/Alembic/tunnel/OAuth details. Client-mode
 pass landed 2026-09-25: `--help` leads with login/harness-connect under a hosted
 heading and groups the rest as self-host administration (command names
 and paths unchanged; every user is their own operator against the
-hosted service). Possible follow-up: a remote `status`/`whoami` so a
-hosted user can check login + agent state without touching the server.
+hosted service). The remote `whoami`/`status` follow-up landed: `harness
+status` prints the account (`GET /agent/whoami` on the inv_-key realm —
+account, default project, visible key prefix) above the machine list, so a
+hosted user can confirm login + agent state without touching the server.
 
 ### Phase 7 — Deployment
 **Status: Deployed 2026-09-02 — production operational; Railway ownership
@@ -350,7 +352,9 @@ long-poll over plain HTTPS, in-memory registry (restart orphans
 in-flight jobs; agents re-register on next poll). Dashboard MCP page
 gained a live agent online/offline badge (``GET /agent/status``),
 and the dashboard Machines page lists per-machine inventory
-(``GET /agent/status`` machines + ``GET /agent/machines`` for the CLI).
+(``GET /agent/status`` machines + ``GET /agent/machines`` for the CLI),
+while ``GET /agent/whoami`` reports which account a paired key belongs to
+(account, default project, visible key prefix — never the key itself).
 Pinned by ``tests/test_agent_registry.py``,
 ``tests/test_agent_endpoints.py``, ``tests/test_agent_routing.py``,
 ``tests/test_agent_sandbox.py``, ``tests/test_cli_agent.py``,

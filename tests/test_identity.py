@@ -106,7 +106,10 @@ async def test_api_key_lifecycle(pg_engine, keys):
 
     resolved = await keys.resolve(record["raw"])
     assert resolved is not None
-    assert resolved == {"id": record["id"], "user_id": uid}
+    # The visible prefix rides along (Phase 6 follow-up: /agent/whoami
+    # reports which key authenticated); the raw key still never does.
+    assert resolved == {"id": record["id"], "user_id": uid,
+                        "prefix": record["prefix"]}
 
     # wrong/foreign tokens never resolve
     assert await keys.resolve(record["raw"] + "x") is None
@@ -125,7 +128,7 @@ async def test_revoked_keys_excluded_from_resolution(pg_engine, keys):
     await keys.revoke(a["prefix"])
     assert await keys.resolve(a["raw"]) is None
     assert await keys.resolve(b["raw"]) == {
-        "id": b["id"], "user_id": uid,
+        "id": b["id"], "user_id": uid, "prefix": b["prefix"],
     }
 
 

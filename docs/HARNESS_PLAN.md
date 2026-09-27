@@ -56,7 +56,7 @@ structure, auth realms, wire protocols, or conventions.
 | Provider routing | `core/router.py`, `core/selection.py`, `core/provider_health.py` | single `_iter_attempts` loop, tier order, 429/5xx cooldown 30s→300s, 401/403 disable, per-provider trim |
 | MCP server | `endpoints/mcp.py:1-948` | `POST /mcp` JSON-RPC 2.0, `TOOLS` list (12 tools: `read_file/execute_bash/write_file/confirm_action`, `task_state_*`, `memory_*`, `project_*`), OAuth `require_mcp_auth`, per-user `owner_subject` binding |
 | Tool execution | `core/tool_executor.py:1-632` | denylist + path denylist, `PendingActionStore` (10-min TTL, single-use `secrets.token_urlsafe(16)`), `confirm_action` with optional `executor` callback (Phase 10 hook) |
-| Agent transport | `endpoints/agents.py`, `core/agent_registry.py`, `agent/runner.py`, `agent/sandbox.py` | long-poll `POST /agent/poll` (hold 25s) + `POST /agent/result`, `GET /agent/status`; in-memory per-`user_id` queues/futures, `MAX_POLLS_PER_USER=5`; runner re-checks denylist (Wall 2) + home sandbox (Wall 3), byte-identical result shapes |
+| Agent transport | `endpoints/agents.py`, `core/agent_registry.py`, `agent/runner.py`, `agent/sandbox.py` | long-poll `POST /agent/poll` (hold 25s) + `POST /agent/result`, `GET /agent/status` (session realm) + `GET /agent/machines` / `GET /agent/whoami` (inv_ key realm); in-memory per-`user_id` queues/futures, `MAX_POLLS_PER_USER=5`; runner re-checks denylist (Wall 2) + home sandbox (Wall 3), byte-identical result shapes |
 | Memory/continuity | `core/memory.py`, `core/retrieval.py`, `core/context_builder.py`, `core/relay.py`, `core/continuity.py` | scoped `memories`, lexical FTS×recency×kind×confidence, unified 1200-token budget, relay digest, versioned `task_states` + reactive failover checkpoints |
 | Settings | `core/settings.py` | `AGENT_ONLINE_TTL=60`, `POLL_HOLD=25`, `JOB_GRACE=10`, all toggles live-read |
 | Deps | `pyproject.toml` | `fastapi, uvicorn, httpx, sqlalchemy[asyncio], asyncpg, alembic, argon2-cffi, cryptography, jinja2, click, PyYAML, python-dotenv`. No `websockets`, no `langchain`. Python 3.10–3.14 |
@@ -219,7 +219,8 @@ structure, auth realms, wire protocols, or conventions.
 
 - `cli.py`: `harness setup` (pair + print MCP config), `harness connect`
   (WS loop), `harness service install` (systemd/Windows service),
-  `harness status` (machines + capabilities).
+  `harness status` (account + machines + capabilities: `GET /agent/whoami`
+  for account identity, `GET /agent/machines` for inventory).
 - Dashboard: `Machines` page (per-machine online, capabilities, enable
   toggles in `user_settings`) + `Workflows` timeline (from `workflow_events`
   via `projection.py`). Cookie realm only.

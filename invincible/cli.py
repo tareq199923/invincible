@@ -1936,9 +1936,24 @@ def connect(config_path: str | None, server: str):
 
 
 def _format_harness_status(payload: dict) -> str:
-    """Render GET /agent/status for the terminal (pure, tested)."""
-    lines = ["Agent online: "
-             f"{'yes' if payload.get('agent_online') else 'no'}"]
+    """Render GET /agent/machines (+ /agent/whoami when supplied) for the
+    terminal (pure, tested).
+
+    The ``account`` block is optional so every pre-whoami payload still
+    renders exactly as it did (machines-only callers are unaffected).
+    """
+    lines: list[str] = []
+    account = payload.get("account")
+    if account:
+        lines.append(
+            f"Account: {account.get('email') or 'unknown'} "
+            f"(user {account.get('user_id')})")
+        if account.get("key_prefix"):
+            lines.append(f"Key: {account['key_prefix']}...")
+        if account.get("project_id") is not None:
+            lines.append(f"Project: {account['project_id']}")
+    lines.append("Agent online: "
+                 f"{'yes' if payload.get('agent_online') else 'no'}")
     machines = payload.get("machines") or []
     if not machines:
         lines.append("Machines: none seen yet "
@@ -1963,31 +1978,42 @@ def _format_harness_status(payload: dict) -> str:
               help="Pairing credentials to use "
                    "(default ~/.invincible/config.json).")
 def harness_status(config_path: str | None):
-    """Show this account's agent liveness + machine inventory."""
+    """Show which account this pairing belongs to, plus agent liveness
+    and machine inventory."""
     import httpx
 
     config = _load_client_config(config_path)
     server = config["server"].rstrip("/")
-    try:
-        response = httpx.get(
-            f"{server}/agent/machines",
-            headers={"Authorization": f"Bearer {config['api_key']}"},
-            timeout=15,
-        )
-    except Exception as exc:
-        raise click.ClickException(
-            f"Could not reach {server}: {exc}") from exc
-    if response.status_code == 401:
-        raise click.ClickException(
-            "Pairing key rejected (401) - re-pair with "
-            "`invincible harness setup`.")
-    try:
-        response.raise_for_status()
-        payload = response.json()
-    except Exception as exc:
-        raise click.ClickException(
-            f"Bad status response from {server}: {exc}") from exc
+    headers = {"Authorization": f"Bearer {config['api_key']}"}
+
+    def _get(path: str) -> dict | None:
+        """GET one agent endpoint. None when the server predates the
+        route (404/405), so `harness status` keeps working - with the
+        machine list - against an older server instead of failing whole.
+        """
+        try:
+            response = httpx.get(f"{server}{path}", headers=headers,
+                                 timeout=15)
+        except Exception as exc:
+            raise click.ClickException(
+                f"Could not reach {server}: {exc}") from exc
+        if response.status_code == 401:
+            raise click.ClickException(
+                "Pairing key rejected (401) - re-pair with "
+                "`invincible harness setup`.")
+        if response.status_code in (404, 405):
+            return None
+        try:
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            raise click.ClickException(
+                f"Bad status response from {server}: {exc}") from exc
+
+    account = _get("/agent/whoami")
+    payload = _get("/agent/machines") or {}
     click.echo(_format_harness_status({
+        "account": account,
         "agent_online": any(
             m.get("online") for m in (payload.get("machines") or [])),
         "machines": payload.get("machines"),

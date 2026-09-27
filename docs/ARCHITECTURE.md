@@ -39,7 +39,8 @@ invincible/
 │   │                           (/.well-known/oauth-*, /oauth/register|authorize|token|revoke;
 │   │                           self-service consent since Phase 2)
 │   ├── agents.py               Phase 10 agent surface: POST /agent/poll + /agent/result
-│   │                           (inv_ key realm), GET /agent/status (session realm)
+│   │                           (inv_ key realm), GET /agent/machines + /agent/whoami
+│   │                           (inv_ key realm, read-only), GET /agent/status (session realm)
 │   └── graph.py                GET /api/v1/sessions/{id}/graph (continuity projection, owner-scoped)
 ├── models/
 │   ├── anthropic.py            Pydantic request model (ignores unknown fields)
