@@ -102,11 +102,16 @@ export ANTHROPIC_AUTH_TOKEN="&lt;your inv_ key from Account&gt;"<button class="c
 export ANTHROPIC_AUTH_TOKEN=&quot;&lt;your inv_ key from Account&gt;&quot;"
   onclick="navigator.clipboard.writeText(this.dataset.copy)">Copy</button></div>
     <p class="muted">No <code>/v1</code> suffix here — Claude appends
-       <code>/v1/messages</code> itself. On older Claude Code versions use
-       <code>ANTHROPIC_API_KEY</code> instead of
-       <code>ANTHROPIC_AUTH_TOKEN</code>. Windows PowerShell:
+       <code>/v1/messages</code> itself. Newer Claude Code versions read
+       <code>ANTHROPIC_AUTH_TOKEN</code>; older ones read
+       <code>ANTHROPIC_API_KEY</code> instead — if one is ignored, set
+       the other to the same <code>inv_</code> key (the gateway accepts
+       both). Windows PowerShell:
        <code>$env:ANTHROPIC_BASE_URL="{{ base_url }}"</code> and
-       <code>$env:ANTHROPIC_AUTH_TOKEN="…"</code>. Verify with
+       <code>$env:ANTHROPIC_AUTH_TOKEN="…"</code>. Model slugs are exact:
+       <code>deepseek-v4.1-flash-free</code> and
+       <code>deepseek-v4.1-flash:free</code> are different models — copy
+       the id verbatim from
        <code>curl {{ base_url }}/v1/models -H "Authorization: Bearer …"</code>.</p>
 
     <p class="client-tab-note"><strong>Codex CLI</strong> — paste into

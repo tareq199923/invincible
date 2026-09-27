@@ -307,6 +307,7 @@ other Anthropic-native clients work without modification:
 # .env for Claude Code (or your shell):
 # No /v1 suffix — Claude appends /v1/messages itself.
 ANTHROPIC_BASE_URL=http://127.0.0.1:8000
+ANTHROPIC_AUTH_TOKEN=inv_...   # older Claude Code: ANTHROPIC_API_KEY instead
 ```
 
 Claude Code probes `HEAD /`, then calls `POST /v1/messages?beta=true` — both
@@ -324,6 +325,9 @@ to). A model none of your providers serves fails with the provider's
 own "not a valid model" error, surfaced as an Anthropic
 `invalid_request_error` — set `/model` to one exact id from
 `/v1/models`, or omit `model` to use each credential's stored default.
+Provider slugs are exact: `deepseek-v4.1-flash-free` and
+`deepseek-v4.1-flash:free` are different models — a near-miss fails
+upstream with "not a valid model".
 In `chain`/`pinned` routing each step carries its own model and the
 request model only picks the entry point. The response reports the
 model that actually served, so a fallback across models stays visible
