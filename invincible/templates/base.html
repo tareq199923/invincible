@@ -40,8 +40,14 @@
     <nav class="nav-list" aria-label="Primary">
       <a class="nav-link{% if path.startswith('/dashboard/setup') %} active{% endif %}"
          href="/dashboard/setup">Get started</a>
+      <span class="side-section-label" aria-hidden="true">Workspace</span>
       <a class="nav-link{% if path.startswith('/dashboard/providers') %} active{% endif %}"
          href="/dashboard/providers">Providers</a>
+      <a class="nav-link{% if path.startswith('/dashboard/mcp') %} active{% endif %}"
+         href="/dashboard/mcp">MCP</a>
+      <a class="nav-link{% if path.startswith('/dashboard/machines') %} active{% endif %}"
+         href="/dashboard/machines">Machines</a>
+      <span class="side-section-label" aria-hidden="true">Monitor</span>
       <a class="nav-link{% if path.startswith('/dashboard/memory') %} active{% endif %}"
          href="/dashboard/memory">Memories</a>
       <a class="nav-link{% if path.startswith('/dashboard/tasks') %} active{% endif %}"
@@ -50,10 +56,7 @@
          href="/dashboard/sessions">Sessions</a>
       <a class="nav-link{% if path.startswith('/dashboard/usage') %} active{% endif %}"
          href="/dashboard/usage">Usage</a>
-      <a class="nav-link{% if path.startswith('/dashboard/mcp') %} active{% endif %}"
-         href="/dashboard/mcp">MCP</a>
-      <a class="nav-link{% if path.startswith('/dashboard/machines') %} active{% endif %}"
-         href="/dashboard/machines">Machines</a>
+      <span class="side-section-label" aria-hidden="true">Account</span>
       <a class="nav-link{% if path.startswith('/dashboard/settings') %} active{% endif %}"
          href="/dashboard/settings">Settings</a>
       <a class="nav-link{% if path == '/account' %} active{% endif %}"

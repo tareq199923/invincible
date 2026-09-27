@@ -16,6 +16,7 @@
 
 {% if not history %}
 <div class="chat-hero">
+  <span class="brand-mark brand-mark-hero" aria-hidden="true">I/</span>
   <h2>What can I help with?</h2>
   <p class="muted">Ask anything below. Your chats live in the left sidebar.</p>
 </div>
@@ -56,6 +57,7 @@
     </div>
     <button type="submit" id="chat-send" title="Send" aria-label="Send">&uarr;</button>
   </div>
+  <div class="mode-hint muted" id="mode-hint" aria-live="polite"></div>
 </form>
 </div>
 
@@ -98,6 +100,15 @@
     var modePicker = document.getElementById("chat-mode");
     var toolLines = {};
     if (!form || !input || !log) return;
+    var MODE_HINTS = {
+      plan: "plan \u2014 reads only, changes nothing.",
+      manual: "manual \u2014 asks approval before each action.",
+      auto: "auto \u2014 acts without asking, stays least-privilege."
+    };
+    function renderModeHint() {
+      var hint = document.getElementById("mode-hint");
+      if (hint && modePicker) hint.textContent = MODE_HINTS[modePicker.value] || "";
+    }
     if (modePicker) {
       try {
         var savedMode = window.localStorage.getItem("webchat-mode");
@@ -105,10 +116,12 @@
             savedMode === "auto") {
           modePicker.value = savedMode;
         }
+        renderModeHint();
         modePicker.addEventListener("change", function () {
           try {
             window.localStorage.setItem("webchat-mode", modePicker.value);
           } catch (e) { /* private mode: sticky default is fine */ }
+          renderModeHint();
         });
       } catch (e) { /* storage unavailable: sticky default is fine */ }
     }

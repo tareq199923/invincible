@@ -33,11 +33,11 @@
 
 html[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #1e1e1e;
-  --surface: #2a2a2a;
-  --raise: #333333;
-  --border: #3d3d3d;
-  --border-soft: #343434;
+  --bg: #1b1b1b;
+  --surface: #2e2e2e;
+  --raise: #3a3a3a;
+  --border: #454545;
+  --border-soft: #383838;
   --ink: #ececec;
   --muted: #a8a8a8;
   --faint: #757575;
@@ -343,6 +343,10 @@ main.bare .panel { background: var(--surface); border: 1px solid var(--border); 
 }
 .theme-btn:hover { color: var(--accent-ink); }
 .chat-hero { text-align: center; padding: 3rem 1rem 1rem; }
+.chat-hero .brand-mark-hero {
+  width: 3rem; height: 3rem; font-size: 1.35rem; border-radius: 12px;
+  margin: 0 auto 1rem;
+}
 .chat-hero h2 { font-size: clamp(1.6rem, 3vw, 2.1rem); }
 #chat-log { display: flex; flex-direction: column; gap: 1.1rem; margin: 0.5rem 0 1.25rem; }
 .bubble { font-size: 0.96rem; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
@@ -381,6 +385,7 @@ html[data-theme="dark"] .approval-card button.approve { color: #1e1e1e; }
   text-overflow: ellipsis;
 }
 #chat-status { font-size: 0.76rem; color: var(--faint); }
+.mode-hint { min-height: 1.25rem; font-size: 0.78rem; padding: 0.15rem 0.2rem 0; }
 #chat-send { margin-top: 0; width: 2.4rem; height: 2.4rem; padding: 0; border-radius: 50%; background: var(--accent); border-color: var(--accent); color: #fff; font-size: 1.05rem; line-height: 1; flex-shrink: 0; }
 html[data-theme="dark"] #chat-send { color: #1e1e1e; }
 #chat-send:disabled { opacity: 0.45; cursor: default; }
