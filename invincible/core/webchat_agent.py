@@ -220,6 +220,13 @@ _TOOLS_BY_MODE = {
     "auto": list(WEBCHAT_TOOL_SCHEMAS),
 }
 
+# NOTE: these prompts semantically duplicate ``harness_router``'s
+# BASE_PROMPT + read/do/plan overlays (same four behavioral rules in
+# different words). The axes do not map 1:1 — live manual/auto both "act"
+# and differ only in the approval pause, which harness's single DO_OVERLAY
+# lacks. Reconcile in the H-later mode/policy split; do not edit one copy
+# alone. No test pins this text (test_webchat_agent checks tool gating and
+# event shape, not prompt wording), so drift here is silent.
 MODE_SYSTEM_PROMPTS = {
     "plan": (
         "You are helping plan work on the user's own machine. Produce a "

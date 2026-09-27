@@ -156,7 +156,12 @@ structure, auth realms, wire protocols, or conventions.
 - Tests: `tests/test_harness_router.py`, `tests/test_harness_supervisor.py`
   (handoff switch, fan-out isolation per `user_id`, partial failure).
 
-### H4 follow-up — task-aware system prompts (shipped)
+### H4 follow-up — task-aware system prompts (built, not yet live)
+
+> "Built" means the code and tests exist. It does **not** mean it runs:
+> nothing in `invincible/` imports `harness_supervisor`, and the router
+> stays off `/mcp` by design (see the last bullet). The prompts here
+> duplicate `webchat_agent.py`'s live ones — reconcile them at merge.
 
 - `harness_router.py`: shared `BASE_PROMPT` (identity + least-privilege +
   tool-loop discipline) plus read/do/plan overlays. `classify_task()`

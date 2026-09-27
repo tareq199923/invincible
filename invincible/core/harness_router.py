@@ -24,16 +24,27 @@ are the each-agent defaults (triage→read, operator→do). Section order
 is stable on purpose: identity → role+overlay → env.
 
 NOT WIRED INTO A LIVE CALLER YET (H4, deliberate — see
-``docs/HARNESS_PLAN.md`` H4 follow-up). Nothing in ``invincible/``
-imports this module outside its own tests: the live webchat path builds
+``docs/HARNESS_PLAN.md`` H4 follow-up). ``harness_supervisor`` imports
+``AGENTS``/``Agent`` from here, but nothing imports ``harness_supervisor``,
+so no live caller reaches this module: the live webchat path builds
 its prompt in ``webchat_agent.MODE_SYSTEM_PROMPTS``, keyed on the
 *permission* mode (plan/manual/auto), which is a different axis from
 this module's *intent* kind (read/do/plan). Binding the two is not a
 drop-in: ``DO_OVERLAY`` tells the model to act without seeking extra
 permission, which contradicts ``manual`` mode's per-call approval gate,
 so the merge lands with the H-later assistant that owns the mode/policy
-split. The tests here pin the prompt shapes; they do NOT prove the
-prompts are live. A caller that knows the live facts will pass
+split.
+
+NOTE: ``BASE_PROMPT`` + the read/do/plan overlays semantically duplicate
+the live ``webchat_agent.MODE_SYSTEM_PROMPTS`` (same four rules — no
+false claims, inspect-then-verify, no exfiltration, least-privilege —
+in different words). The overlap is asymmetric under test: the tests
+below pin a couple of overlay substrings ("Inspect, then act, then
+verify"; "end with the plan"), while the live copy has no text coverage
+at all — ``test_webchat_agent`` asserts tool gating and event shape only
+— so a reword there trips nothing and the two can drift silently.
+Reconcile when the mode/policy split lands; do not "fix" one side alone.
+A caller that knows the live facts will pass
 ``build_system_prompt(agent, task, model=..., cwd=..., date_str=...)``
 into ``harness_runtime.hydrate_context(system_prompt=...)`` so the model
 also sees the environment line (openclaw's volatile-last section).
