@@ -126,8 +126,20 @@ Shipped aliases:
 The gateway routes to **OpenAI-compatible chat-completions JSON**:
 `POST {base_url}{chat_path}` with a `{"model", "messages", "stream", ...}`
 payload and a standard OpenAI JSON or SSE response. Providers outside that
-shape (e.g. raw Gemini generateContent, key-in-header-only auth) are not
-supported.
+shape are not supported — notably there is **no native Anthropic upstream
+client**: the gateway speaks the Anthropic Messages API to *clients*
+(Claude Code via `POST /v1/messages`), but upstream credentials must be
+OpenAI-compatible (`/chat/completions` + Bearer). A native
+`https://api.anthropic.com` credential would be called at the wrong path
+with the wrong auth and fail.
+
+The BYOK `catalog_key` prefill (`core/provider_catalog.py`) therefore
+lists OpenAI-compatible constants only: `openai`, `nvidia_nim`, `groq`,
+`openrouter`, `gemini`. There is deliberately no `anthropic` entry and no
+`openai_compatible` `api.example.com` placeholder — custom URLs go through
+the dashboard connect form and always pass the SSRF guard. Rows whose
+`catalog_key` was removed from the catalog (e.g. older entries) keep
+working as custom credentials with the default context budget.
 
 Two small hooks exist for providers close to the OpenAI shape:
 

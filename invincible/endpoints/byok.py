@@ -160,6 +160,15 @@ async def byok_attempt_source(
     candidates = []
     for index, row in enumerate(rows):
         entry = catalog_entry(row.get("catalog_key"))
+        if row.get("catalog_key") and entry is None:
+            # A stored catalog_key whose entry no longer exists (e.g. a
+            # removed catalog card): the row keeps working as a custom
+            # credential with the default context budget, but the user
+            # should re-connect it to pick up current defaults.
+            logger.warning(
+                "BYOK credential %s references removed catalog key %r; "
+                "treating as custom",
+                row["id"], row.get("catalog_key"))
         candidates.append({
             "name": row["provider_name"],
             "tier": index + 1,

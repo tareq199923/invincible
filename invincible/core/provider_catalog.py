@@ -2,32 +2,30 @@
 """Starter BYOK provider catalog (Platform Phase 9).
 
 Operator-supplied constants mirroring the packaged ``providers.yaml``:
-the dashboard's connect cards pre-fill ``base_url``/``model_id`` from
+the API's ``catalog_key`` prefill fills ``base_url``/``model_id`` from
 here and the user only pastes an API key. A stored credential whose
 ``base_url`` EQUALS the catalog constant skips the SSRF check at create
 time (operator-supplied, not user input); the moment a user edits the
 URL it is treated as fully custom and validated. Test and chat-time use
 always re-validates regardless.
+
+Only OpenAI-compatible chat-completions providers belong here. The
+gateway speaks the Anthropic Messages API to *clients* (Claude Code),
+but upstream it only speaks ``POST {base_url}/chat/completions`` with
+Bearer auth — a native Anthropic upstream (``POST /v1/messages`` with
+``x-api-key`` + ``anthropic-version``) has no outbound client, so no
+``anthropic`` entry is offered. Likewise no ``openai_compatible``
+placeholder is offered: the dashboard connect form already covers
+custom URLs, and an ``https://api.example.com`` constant would be
+storable verbatim via the exemption.
 """
 import copy
 
 CATALOG: dict[str, dict] = {
-    "anthropic": {
-        "label": "Anthropic",
-        "base_url": "https://api.anthropic.com/v1",
-        "model_id": "claude-sonnet-4-5",
-        "max_context": 200_000,
-    },
     "openai": {
         "label": "OpenAI",
         "base_url": "https://api.openai.com/v1",
         "model_id": "gpt-4o-mini",
-        "max_context": 128_000,
-    },
-    "openai_compatible": {
-        "label": "OpenAI Compatible",
-        "base_url": "https://api.example.com/v1",
-        "model_id": "model-id-from-provider",
         "max_context": 128_000,
     },
     "nvidia_nim": {

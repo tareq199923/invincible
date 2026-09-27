@@ -305,6 +305,7 @@ other Anthropic-native clients work without modification:
 
 ```bash
 # .env for Claude Code (or your shell):
+# No /v1 suffix — Claude appends /v1/messages itself.
 ANTHROPIC_BASE_URL=http://127.0.0.1:8000
 ```
 
@@ -315,14 +316,18 @@ are served. Supported request fields: `model`, `system`, `messages`,
 `stop_sequences`, unknown fields, `anthropic-beta` / `anthropic-version`
 headers, the `?beta=true` query) is **accepted and ignored** — never a 422.
 
-The `model` field is treated as a **client hint**: if it matches one of
-**your** connected credentials (an alias or an exact `model_id`) that
-credential is *preferred* — the Router still fails over through the rest of
-your routing order if it is down. An unknown model name (like Claude Code's
-own model ids) changes nothing. The upstream model always comes from your
-connected credentials, and the response reports **that** model — the one
-that actually served — so a fallback across models stays visible to the
-client instead of being masked by an echo of what you asked for.
+The `model` field overrides each of **your** connected credentials'
+stored default in `auto` routing: the request's model is sent verbatim
+upstream to every credential in your order (check
+`GET /v1/models` — it lists exactly the model ids your key can route
+to). A model none of your providers serves fails with the provider's
+own "not a valid model" error, surfaced as an Anthropic
+`invalid_request_error` — set `/model` to one exact id from
+`/v1/models`, or omit `model` to use each credential's stored default.
+In `chain`/`pinned` routing each step carries its own model and the
+request model only picks the entry point. The response reports the
+model that actually served, so a fallback across models stays visible
+instead of being masked by an echo of what you asked for.
 
 - **Streaming**: `stream: true` returns Anthropic SSE events in the
   canonical order — `message_start` → `content_block_start` →
