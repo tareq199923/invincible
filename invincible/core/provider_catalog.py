@@ -12,11 +12,23 @@ always re-validates regardless.
 import copy
 
 CATALOG: dict[str, dict] = {
-    "tokenrouter": {
-        "label": "TokenRouter",
-        "base_url": "https://api.tokenrouter.com/v1",
-        "model_id": "qwen/qwen3.8-max-free",
-        "max_context": 1_000_000,
+    "anthropic": {
+        "label": "Anthropic",
+        "base_url": "https://api.anthropic.com/v1",
+        "model_id": "claude-sonnet-4-5",
+        "max_context": 200_000,
+    },
+    "openai": {
+        "label": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "model_id": "gpt-4o-mini",
+        "max_context": 128_000,
+    },
+    "openai_compatible": {
+        "label": "OpenAI Compatible",
+        "base_url": "https://api.example.com/v1",
+        "model_id": "model-id-from-provider",
+        "max_context": 128_000,
     },
     "nvidia_nim": {
         "label": "NVIDIA NIM",

@@ -101,6 +101,13 @@ export ANTHROPIC_AUTH_TOKEN="&lt;your inv_ key from Account&gt;"<button class="c
   data-copy="export ANTHROPIC_BASE_URL=&quot;{{ base_url }}&quot;
 export ANTHROPIC_AUTH_TOKEN=&quot;&lt;your inv_ key from Account&gt;&quot;"
   onclick="navigator.clipboard.writeText(this.dataset.copy)">Copy</button></div>
+    <p class="muted">No <code>/v1</code> suffix here — Claude appends
+       <code>/v1/messages</code> itself. On older Claude Code versions use
+       <code>ANTHROPIC_API_KEY</code> instead of
+       <code>ANTHROPIC_AUTH_TOKEN</code>. Windows PowerShell:
+       <code>$env:ANTHROPIC_BASE_URL="{{ base_url }}"</code> and
+       <code>$env:ANTHROPIC_AUTH_TOKEN="…"</code>. Verify with
+       <code>curl {{ base_url }}/v1/models -H "Authorization: Bearer …"</code>.</p>
 
     <p class="client-tab-note"><strong>Codex CLI</strong> — paste into
        <code>~/.codex/config.toml</code>:</p>
@@ -121,12 +128,15 @@ base_url = &quot;{{ base_url }}/v1&quot;
 env_key = &quot;INVINCIBLE_API_KEY&quot;
 wire_api = &quot;responses&quot;"
   onclick="navigator.clipboard.writeText(this.dataset.copy)">Copy</button></div>
-    <p class="muted">Codex reads the key from that env var — set it before
-       launching (<code>export INVINCIBLE_API_KEY=…</code>, or on Windows
-       <code>setx INVINCIBLE_API_KEY "…"</code> then open a new terminal),
-       and restart Codex after editing the config. The
-       <code>model</code> line is just a default — switch anytime with
-       <code>/model</code>.</p>
+    <p class="muted">The <code>model</code> line above is pre-filled with
+       your connected default — not a fixed example — switch anytime with
+       <code>/model</code>. Codex reads the key from that env var — set it
+       before launching (<code>export INVINCIBLE_API_KEY=…</code> on
+       Mac/Linux, or on Windows
+       <code>setx INVINCIBLE_API_KEY "…"</code> then open a new terminal;
+       PowerShell-only session:
+       <code>$env:INVINCIBLE_API_KEY="…"</code>), and restart Codex after
+       editing the config.</p>
 
     <p class="client-tab-note"><strong>OpenAI SDK</strong> (Python etc.) —
        config or environment:</p>
@@ -136,9 +146,14 @@ OPENAI_API_KEY=&lt;your inv_ key from Account&gt;<button class="copy-btn" type="
 OPENAI_API_KEY=&lt;your inv_ key from Account&gt;"
   onclick="navigator.clipboard.writeText(this.dataset.copy)">Copy</button></div>
 
-    <p class="muted">MCP tools connect separately: add
+    <p class="muted">Works with any OpenAI-compatible client or SDK —
+       point it at <code>{{ base_url }}/v1</code> with your
+       <code>inv_</code> key.</p>
+
+    <p class="muted">MCP tools connect separately from chat: add
        <code>{{ base_url }}/mcp</code> in your client's MCP settings and
-       approve it in the browser when prompted.</p>
+       approve it in the browser when prompted. MCP uses OAuth there —
+       never paste your <code>inv_</code> key into the MCP settings.</p>
     {% else %}
     <p class="muted">The exact copy-paste config appears here once your
        key exists.</p>
