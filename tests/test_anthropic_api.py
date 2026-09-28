@@ -10,11 +10,12 @@ from invincible.compat.anthropic import (
     translate_finish_reason,
 )
 from invincible.core.credential_store import ByokCredentialStore
-from invincible.core.identity import ensure_default_project
+from invincible.core.identity import ApiKeyStore, ensure_default_project
 from invincible.core.user_settings_store import UserSettingsStore
 from invincible.main import app
 from tests.conftest import (
     provider_body,
+    register_account,
     sse_body,
     stream_chunk,
     v1_user,
@@ -1151,6 +1152,92 @@ async def test_anthropic_streamed_second_missing_tool_id_replays_paired(
     assert stored_ids == streamed_ids
     tool_ids = [m["tool_call_id"] for m in outgoing if m["role"] == "tool"]
     assert tool_ids == streamed_ids
+
+
+async def test_anthropic_bounded_history_still_pairs_tools(
+    client, router_setter, byok_env, monkeypatch
+):
+    """The read cap (INVINCIBLE_HISTORY_READ_MAX_TURNS) must not strand the
+    tool-call/tool-result pair at the truncation boundary: a stored history
+    far longer than the cap is read back tail-first, and the assembled
+    full_messages still satisfies the pairing invariant."""
+    monkeypatch.setenv("INVINCIBLE_HISTORY_READ_MAX_TURNS", "5")
+    registered, _ = await register_account(client, "bounded@example.com")
+    uid = registered.json()["id"]
+    pid = registered.json()["project_id"]
+    raw_key = (await ApiKeyStore(app.state.engine).create(
+        uid, label="t"))["raw"]
+    from tests.conftest import default_providers
+    store = ByokCredentialStore(app.state.engine)
+    for provider in default_providers():
+        await store.create(
+            user_id=uid, provider_name=provider["name"],
+            model_id=provider["model_id"],
+            base_url=provider["base_url"],
+            api_key=f"test-key-{provider['name']}")
+
+    # 12 stored turns of prior chatter - well past the 5-turn read cap.
+    sessions = app.state.sessions
+    for i in range(12):
+        await sessions.append(
+            "cc-bounded",
+            [{"role": "user", "content": f"turn {i}"},
+             {"role": "assistant", "content": f"reply {i}"}],
+            user_id=uid, project_id=pid)
+
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    received = []
+
+    def alpha_handler(request: httpx.Request):
+        received.append(json.loads(request.read()))
+        # First upstream call emits a tool-call turn (id supplied); the
+        # replay's call answers with plain text.
+        if len(received) == 1:
+            return httpx.Response(
+                200, content=sse_body(
+                    stream_chunk("alpha", {"role": "assistant"}),
+                    stream_chunk("alpha", {"tool_calls": [
+                        {"index": 0, "id": "call_keep", "type": "function",
+                         "function": {"name": "read_file",
+                                      "arguments": '{"path": "k.txt"}'}},
+                    ]}),
+                    stream_chunk("alpha", {}, finish_reason="tool_calls"),
+                ),
+            )
+        return httpx.Response(200, json=provider_body("alpha", content="done"))
+
+    router_setter({"alpha.example.com": alpha_handler})
+    headers = {**auth, "X-Session-Id": "cc-bounded"}
+
+    # Persist the assistant tool_calls turn (the first user turn of this
+    # session), then replay its tool_result the way Claude Code does.
+    await client.post(
+        "/v1/messages", headers=headers,
+        json={**ANTHROPIC_BODY, "stream": True})
+    await client.post("/v1/messages", headers=headers, json={
+        "model": "claude-sonnet-4",
+        "messages": [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "call_keep",
+             "content": "k"}]}]})
+
+    outgoing = received[-1]["messages"]
+    roles = [m["role"] for m in outgoing]
+    assert "tool" in roles
+    # Every assistant tool_calls turn is immediately followed by tool
+    # messages covering ALL of its ids - no dangling pair, despite the cap.
+    for idx, message in enumerate(outgoing):
+        calls = message.get("tool_calls")
+        if not calls:
+            continue
+        ids = [c["id"] for c in calls]
+        following = []
+        for nxt in outgoing[idx + 1:]:
+            if nxt.get("role") != "tool":
+                break
+            following.append(nxt.get("tool_call_id"))
+        assert sorted(following) == sorted(ids), outgoing
+    # The trailing pair sits at the END of the (bounded) window.
+    assert roles[-2:] == ["assistant", "tool"]
 
 
 async def test_anthropic_streaming_failover_before_first_chunk(

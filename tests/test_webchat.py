@@ -12,6 +12,8 @@ Upstream mocks are non-streaming JSON bodies: the agent loop routes each
 iteration through ``route_request_detailed`` (whole messages, so tool
 calls arrive complete), while the browser still receives live SSE.
 """
+import json
+
 import httpx
 
 from invincible.core.accounts import SESSION_COOKIE
@@ -167,6 +169,51 @@ async def test_stream_happy_path_and_history(
     ]
 
 
+async def test_stream_bounded_read_of_long_history(
+    client, byok_env, router_setter
+):
+    """A webchat turn in a 100-turn session reads only the newest
+    INVINCIBLE_HISTORY_READ_MAX_TURNS turns from Postgres (bounded prompt,
+    bounded transfer) and still persists the new turn correctly."""
+    captured = []
+
+    def alpha_handler(request):
+        captured.append(json.loads(request.read()))
+        return httpx.Response(
+            200, json=provider_body("Web1", content="hello"))
+
+    router_setter({"w1.example.com": alpha_handler, "w2.example.com":
+                   httpx.Response(200, json=provider_body("Web2", content="hi"))})
+    uid, pid = await webchat_user(client, "bounded@example.com")
+    store = app.state.sessions
+    for i in range(50):
+        await store.append(
+            "web-abc123",
+            [{"role": "user", "content": f"q{i}"},
+             {"role": "assistant", "content": f"a{i}"}],
+            user_id=uid, project_id=pid)
+
+    resp = await client.post("/dashboard/chat/stream", json=STREAM_BODY)
+    assert resp.status_code == 200, resp.text
+    assert [d for n, d in parse_web_events(resp.text) if n == "error"] == []
+
+    # The upstream prompt carried only the bounded window: q0 (the oldest
+    # of 50 stored turns) is NOT in it, the newest turns are.
+    contents = [m.get("content") for m in captured[-1]["messages"]]
+    assert "q0" not in contents
+    assert "q49" in contents
+    # 30 turns x 2 + the new user turn (+ a system prompt).
+    assert len(contents) <= 30 * 2 + 2
+
+    # The new turn persisted once on top of the retained tail.
+    history = await store.load("web-abc123", user_id=uid, project_id=pid)
+    assert history[-2:] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]
+    assert len(history) <= 30 * 2
+
+
 async def test_stream_no_credentials_error_event(client, byok_env):
     await webchat_user(client, "nocreds@example.com", credential_count=0)
     resp = await client.post("/dashboard/chat/stream", json=STREAM_BODY)
@@ -309,3 +356,61 @@ async def test_chat_list_feeds_sidebar(client, byok_env):
     assert 'id="side-history"' in page.text
     assert 'id="side-search"' in page.text
     assert "/static/app.css" in page.text
+
+
+async def test_sidebar_query_count_is_constant(
+    client, byok_env, statements
+):
+    """A chat page with many conversations must not issue a load() per
+    session. Before: one full-payload SELECT per sidebar row (~1 + N, up
+    to ~61 with the active session's second load). Now: the sidebar is ONE
+    bounded SELECT (title snippet only), plus the active session's history
+    - a small constant, independent of how many sessions exist."""
+    uid, pid = await webchat_user(client, "many@example.com",
+                                  credential_count=0)
+    store = app.state.sessions
+    for i in range(12):
+        await store.append(
+            f"web-many-{i:02d}",
+            [{"role": "user", "content": f"conversation number {i}"},
+             {"role": "assistant", "content": "ok"}],
+            user_id=uid, project_id=pid)
+
+    del statements[:]
+    page = await client.get("/dashboard/chat")
+    assert page.status_code == 200, page.text
+    assert "conversation number 11" in page.text
+
+    selects = [sql for sql, _ in statements
+               if sql.lstrip().upper().startswith("SELECT")]
+    # Only the queries that actually read message history matter for the
+    # transfer bound (auth/credential reads are unrelated and constant).
+    history_selects = [sql for sql in selects if "messages.payload" in sql]
+    # One sidebar title query + the active session's history load - NOT one
+    # per listed session (12 sessions here would have meant 13 before).
+    assert len(history_selects) <= 2, selects
+    # The sidebar query must NOT transfer the full payload column; it
+    # extracts a bounded title server-side.
+    assert any("substr" in sql.lower() for sql in history_selects), \
+        history_selects
+
+
+async def test_sidebar_rows_title_extraction(client, byok_env):
+    """The single sidebar query derives titles from the first user message
+    without pulling full payloads - behaviour matches the old load()-based
+    derivation (first user content, whitespace-collapsed, elided)."""
+    uid, pid = await webchat_user(client, "sql-title@example.com",
+                                  credential_count=0)
+    store = app.state.sessions
+    await store.append(
+        "web-sqltitle",
+        [{"role": "assistant", "content": "greeting"},
+         {"role": "user", "content": "   fix   the\n\nflaky   test  "}],
+        user_id=uid, project_id=pid)
+    rows = await store.sidebar_rows(
+        uid, project_id=pid, client_session_id_prefix="web-")
+    by_id = {r["client_session_id"]: r["first_user_content"] for r in rows}
+    assert by_id["web-sqltitle"] == "   fix   the\n\nflaky   test  "
+    page = await client.get("/dashboard/chat")
+    assert "fix the flaky test" in page.text
+

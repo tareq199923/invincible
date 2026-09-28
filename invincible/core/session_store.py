@@ -36,8 +36,16 @@ from invincible.core.settings import settings
 
 
 def history_max_turns() -> int | None:
-    """Stored-history turn cap (default 200); ``0``/``off`` disables."""
+    """Stored-history RETENTION turn cap (default 200); ``0``/``off`` disables.
+    Turns past this are deleted on write."""
     return settings.history_max_turns()
+
+
+def history_read_max_turns() -> int | None:
+    """Stored-history READ turn cap (default 30); ``0``/``off`` disables.
+    Bounds how many newest turns a request loads out of Postgres - never what
+    is stored."""
+    return settings.history_read_max_turns()
 
 
 class SessionStore:
@@ -89,19 +97,63 @@ class SessionStore:
     # Reads
 
     async def load(self, session_id: str, *,
-                   user_id: int, project_id: int) -> list:
+                   user_id: int, project_id: int,
+                   max_turns: int | None = None) -> list:
+        """Newest stored messages for the session, oldest-first.
+
+        Reads are bounded to the newest ``max_turns`` whole turns so a long
+        conversation cannot pull its entire history (JSONB payloads and all)
+        out of Postgres on every request. ``max_turns`` semantics:
+        ``None`` = the ``INVINCIBLE_HISTORY_READ_MAX_TURNS`` default; a
+        positive int = that many newest turns; ``0``/negative = unbounded
+        (read everything). This only bounds the READ - nothing is deleted.
+
+        Whole turns, not messages: the tool-pairing invariant is defined
+        over a turn, so cutting mid-turn would strand a ``tool_result``
+        whose assistant ``tool_calls`` fell outside the window. A window
+        that still begins on such an orphan (its turn boundary is a user
+        message, but the turn can also start with a replayed tool result)
+        has that leading run dropped here, so callers never hand
+        :func:`repair_tool_pairing` an unpairable head.
+        """
+        limit = (history_read_max_turns() if max_turns is None
+                 else (max_turns if max_turns > 0 else None))
         async with self.engine.begin() as conn:
             pk = await self._lookup_pk(conn, session_id, user_id, project_id)
             if pk is None:
                 return []
-            rows = (await conn.execute(
-                select(messages.c.payload)
-                .join(turns, messages.c.turn_id == turns.c.id)
-                .where(turns.c.session_id == pk)
-                .order_by(turns.c.seq.asc(), messages.c.seq.asc())
-            )).scalars().all()
+            truncated = False
+            if limit is None:
+                rows = (await conn.execute(
+                    select(messages.c.payload)
+                    .join(turns, messages.c.turn_id == turns.c.id)
+                    .where(turns.c.session_id == pk)
+                    .order_by(turns.c.seq.asc(), messages.c.seq.asc())
+                )).scalars().all()
+            else:
+                newest = (
+                    select(turns.c.id)
+                    .where(turns.c.session_id == pk)
+                    .order_by(turns.c.seq.desc())
+                    .limit(limit)
+                )
+                result = await conn.execute(
+                    select(turns.c.seq, messages.c.payload)
+                    .join(messages, messages.c.turn_id == turns.c.id)
+                    .where(turns.c.id.in_(newest))
+                    .order_by(turns.c.seq.asc(), messages.c.seq.asc())
+                )
+                pairs = result.all()
+                # Turn seqs are dense from 0, so a window whose first turn
+                # is not seq 0 means older turns were left behind.
+                truncated = bool(pairs) and int(pairs[0][0]) > 0
+                rows = [payload for _, payload in pairs]
         # payload is JSONB: SQLAlchemy already decoded each row to a dict.
-        return [r for r in rows if isinstance(r, dict)]
+        decoded = [r for r in rows if isinstance(r, dict)]
+        if truncated:
+            while decoded and decoded[0].get("role") == "tool":
+                decoded.pop(0)
+        return decoded
 
     async def session_meta(self, session_id: str, *,
                            user_id: int, project_id: int) -> dict | None:
@@ -148,6 +200,58 @@ class SessionStore:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(query)).mappings().all()
         return [dict(r) for r in rows]
+
+    async def sidebar_rows(
+        self, user_id: int, *, project_id: int | None = None,
+        limit: int = 100, client_session_id_prefix: str | None = None,
+        title_chars: int = 60,
+    ) -> list[dict]:
+        """Session list + a bounded first-user-message title snippet, in ONE
+        query (dashboard webchat sidebar).
+
+        The title is derived server-side from ``payload->>'content'`` of the
+        session's first user message, capped to ``title_chars`` with no full
+        payload crossing the wire - the previous shape issued one ``load()``
+        per listed session (up to the sidebar cap) purely to build the label,
+        which was the dashboard's biggest per-render transfer. Ownership and
+        ordering are identical to :meth:`list_for_user`; the snippet is raw
+        (untruncated-as-JSON, untrimmed) - the caller collapses/elides it
+        exactly as ``_session_title`` used to.
+        """
+        first_user_content = (
+            # payload is JSONB: ->> 'content' extracts the text; PG has no
+            # substr(jsonb, ...), so the substring is taken on the TEXT.
+            select(func.substr(
+                messages.c.payload.op("->>")("content").cast(Text),
+                1, title_chars,
+            ))
+            .join(turns, messages.c.turn_id == turns.c.id)
+            .where(turns.c.session_id == sessions.c.id,
+                   messages.c.role == "user")
+            .order_by(turns.c.seq.asc(), messages.c.seq.asc())
+            .limit(1)
+            .correlate(sessions)
+            .scalar_subquery()
+        )
+        query = (
+            select(sessions.c.client_session_id, first_user_content)
+            .where(sessions.c.user_id == user_id)
+            .order_by(sessions.c.updated_at.desc())
+            .limit(limit)
+        )
+        if project_id is not None:
+            query = query.where(sessions.c.project_id == project_id)
+        if client_session_id_prefix:
+            query = query.where(
+                sessions.c.client_session_id.startswith(
+                    client_session_id_prefix)
+            )
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(query)).all()
+        return [
+            {"client_session_id": client_id, "first_user_content": snippet}
+            for client_id, snippet in rows
+        ]
 
     async def count_for_user(
         self, user_id: int, *, project_id: int | None = None,

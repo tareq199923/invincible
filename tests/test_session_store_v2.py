@@ -177,6 +177,76 @@ async def test_load_missing_session_is_empty(store, owner):
     assert await store.load("nope", **owner) == []
 
 
+# ------------------------------------------- bounded reads (transfer)
+
+
+async def _seed_turns(store, owner, count):
+    """Append ``count`` user/assistant turn pairs, returning the flat list
+    in stored order."""
+    flat = []
+    for i in range(count):
+        batch = [user(f"q{i}"), assistant(f"a{i}")]
+        await store.append("s", batch, **owner)
+        flat.extend(batch)
+    return flat
+
+
+async def test_load_returns_only_newest_max_turns(monkeypatch, store, owner):
+    """A 100-turn session read with the default cap returns exactly the
+    newest 30 turns, oldest-first - the transfer bound (neon quota)."""
+    monkeypatch.delenv("INVINCIBLE_HISTORY_READ_MAX_TURNS", raising=False)
+    flat = await _seed_turns(store, owner, 100)
+    assert await turn_count(store) == 100
+
+    bounded = await store.load("s", **owner)
+    assert bounded == flat[-60:]          # 30 turns x 2 messages
+    assert len(bounded) == 60
+    # Order is oldest->newest across the kept window.
+    assert bounded[0] == user("q70") and bounded[-1] == assistant("a99")
+
+
+async def test_load_explicit_max_turns_and_off(monkeypatch, store, owner):
+    monkeypatch.delenv("INVINCIBLE_HISTORY_READ_MAX_TURNS", raising=False)
+    flat = await _seed_turns(store, owner, 50)
+
+    # Explicit override wins over the default.
+    assert await store.load("s", max_turns=5, **owner) == flat[-10:]
+    # 0 / off = unbounded (the pre-change behaviour).
+    assert await store.load("s", max_turns=0, **owner) == flat
+    monkeypatch.setenv("INVINCIBLE_HISTORY_READ_MAX_TURNS", "off")
+    assert await store.load("s", **owner) == flat
+
+
+async def test_load_window_drops_leading_orphan_tool_result(
+    monkeypatch, store, owner
+):
+    """A window can begin on a replayed tool result whose assistant call
+    fell outside it. That leading orphan is dropped so it never reaches
+    ``repair_tool_pairing`` (which would 400 on it)."""
+    monkeypatch.setenv("INVINCIBLE_HISTORY_READ_MAX_TURNS", "2")
+    call = {
+        "role": "assistant", "content": None,
+        "tool_calls": [{"id": "c1", "type": "function",
+                        "function": {"name": "f", "arguments": "{}"}}],
+    }
+    # Turn 1: assistant tool_calls; then its tool result arrives in its own
+    # batch (attaches to turn 1), followed by a user turn -> turn 2.
+    await store.append("s", [call], **owner)
+    await store.append(
+        "s",
+        [{"role": "tool", "tool_call_id": "c1", "content": "res"},
+         user("q2"), assistant("a2")],
+        **owner,
+    )
+    await store.append("s", [user("q3"), assistant("a3")], **owner)
+
+    loaded = await store.load("s", **owner)
+    # Newest 2 turns would start with the tool result of turn 1; it is
+    # dropped, leaving the paired-free tail.
+    assert loaded[0].get("role") != "tool"
+    assert loaded == [user("q2"), assistant("a2"), user("q3"), assistant("a3")]
+
+
 # ------------------------------------------- boundary rule (note #1/#5)
 
 
@@ -414,7 +484,9 @@ async def test_property_equivalence_with_blob_semantics(store, owner):
         await store.append("s", batch, **owner)
         reference.extend(batch)
 
-    loaded = await store.load("s", **owner)
+    # Storage equivalence, not read bounds: read the whole session
+    # (max_turns=0 = unbounded) so the 30-turn default cap does not apply.
+    loaded = await store.load("s", max_turns=0, **owner)
     assert loaded == reference
     stored_sizes = await turn_sizes(store)
     grouped_sizes = [len(t) for t in group_into_turns(reference)]

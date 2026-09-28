@@ -47,8 +47,15 @@ DEFAULT_MEMORY_MIN_SCORE = 0.01
 # provider with a ~4k-token context still has room for history.
 DEFAULT_INJECTION_BUDGET_TOKENS = 1200
 
-# Stored-history turn cap when INVINCIBLE_HISTORY_MAX_TURNS is unset.
+# Stored-history RETENTION cap when INVINCIBLE_HISTORY_MAX_TURNS is unset:
+# history past this many turns is DELETED on write.
 DEFAULT_HISTORY_MAX_TURNS = 200
+
+# Stored-history READ cap when INVINCIBLE_HISTORY_READ_MAX_TURNS is unset:
+# only this many newest turns are loaded per request. Independent of the
+# retention default above - this bounds what leaves Postgres, never what is
+# stored (Neon free-tier transfer limit).
+DEFAULT_HISTORY_READ_MAX_TURNS = 30
 
 # Tool-schema compression caps (core/tool_compression.py): tool-level and
 # property-level description truncation, in characters.
@@ -271,7 +278,8 @@ class Settings:
             return DEFAULT_INJECTION_BUDGET_TOKENS
 
     def history_max_turns(self) -> int | None:
-        """Stored-history turn cap; ``0``/``off`` disables the cap."""
+        """Stored-history RETENTION turn cap; ``0``/``off`` disables the cap.
+        Past this many turns are DELETED on write."""
         raw = os.getenv("INVINCIBLE_HISTORY_MAX_TURNS", "").strip().lower()
         if raw in _OFF_VALUES:
             return None
@@ -279,6 +287,20 @@ class Settings:
             return max(1, int(raw)) if raw else DEFAULT_HISTORY_MAX_TURNS
         except ValueError:
             return DEFAULT_HISTORY_MAX_TURNS
+
+    def history_read_max_turns(self) -> int | None:
+        """Stored-history READ turn cap: how many newest turns a request
+        loads. ``0``/``off`` disables the cap (read everything). Independent
+        of :meth:`history_max_turns` (retention): this only bounds what is
+        read out of Postgres, never what is stored."""
+        raw = os.getenv(
+            "INVINCIBLE_HISTORY_READ_MAX_TURNS", "").strip().lower()
+        if raw in _OFF_VALUES:
+            return None
+        try:
+            return max(1, int(raw)) if raw else DEFAULT_HISTORY_READ_MAX_TURNS
+        except ValueError:
+            return DEFAULT_HISTORY_READ_MAX_TURNS
 
     def read_roots(self) -> list[str]:
         """Extra read_file sandbox roots, os.pathsep-separated, stripped."""

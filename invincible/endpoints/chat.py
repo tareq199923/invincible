@@ -58,8 +58,9 @@ logger = logging.getLogger("invincible.webchat")
 
 router = APIRouter()
 
-# Sidebar cap (bounded per-page DB work: one load per listed session for
-# title derivation) and display/validation bounds for web-supplied fields.
+# Sidebar cap and display/validation bounds for web-supplied fields. The
+# sidebar's titles come from ONE bounded query (SessionStore.sidebar_rows),
+# not a load() per listed session.
 _SIDEBAR_LIMIT = 30
 _TITLE_CHARS = 60
 _MAX_ID_CHARS = 200
@@ -77,21 +78,13 @@ def _new_web_session_id() -> str:
     return f"{_WEB_SESSION_PREFIX}{uuid.uuid4().hex}"
 
 
-def _session_title(history: list, fallback: str) -> str:
-    """Sidebar label: the session's first user message, bounded; the raw
-    client id when the session has no user text yet (or is foreign)."""
-    for message in history:
-        if not isinstance(message, dict):
-            continue
-        if message.get("role") != "user":
-            continue
-        content = message.get("content")
-        if isinstance(content, str) and content.strip():
-            text = " ".join(content.split())
-            if len(text) > _TITLE_CHARS:
-                return text[:_TITLE_CHARS].rstrip() + "…"
-            return text
-    return fallback
+def _bound_title(text: str) -> str:
+    """Collapse whitespace and elide a sidebar label to ``_TITLE_CHARS``.
+    Used on the bounded first-user-message snippet the store returns."""
+    text = " ".join(text.split())
+    if len(text) > _TITLE_CHARS:
+        return text[:_TITLE_CHARS].rstrip() + "…"
+    return text
 
 
 def _renderable_turns(history: list) -> list[dict]:
@@ -129,24 +122,25 @@ async def _sidebar(request: Request, principal: Principal) -> list[dict]:
     """Newest-first sidebar rows, dashboard-created conversations only
     (``web-`` ids): API-client threads (Claude Code / Codex / ...) stay
     out of the webchat sidebar. Each row carries a bounded derived title.
+
+    One query: ``sidebar_rows`` derives the title server-side from the first
+    user message's ``content`` (bounded substring) so no full payload leaves
+    Postgres - the old shape issued one ``load()`` per listed session.
+
     Direct ``?session=`` links to owned API sessions still resolve (see
     ``chat_page``) - the store itself stays shared."""
     store = _state(request, "sessions")
-    rows = await store.list_for_user(
-        principal.user_id, limit=_SIDEBAR_LIMIT,
-        client_session_id_prefix=_WEB_SESSION_PREFIX)
+    rows = await store.sidebar_rows(
+        principal.user_id,
+        limit=_SIDEBAR_LIMIT, client_session_id_prefix=_WEB_SESSION_PREFIX,
+        title_chars=_TITLE_CHARS)
     sidebar = []
     for row in rows:
         client_id = row["client_session_id"]
-        history = await store.load(
-            client_id,
-            user_id=principal.user_id,
-            project_id=principal.project_id,
-        )
-        sidebar.append({
-            "client_session_id": client_id,
-            "title": _session_title(history, client_id),
-        })
+        snippet = row["first_user_content"]
+        title = (client_id if not isinstance(snippet, str)
+                 or not snippet.strip() else _bound_title(snippet))
+        sidebar.append({"client_session_id": client_id, "title": title})
     return sidebar
 
 
