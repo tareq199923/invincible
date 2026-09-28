@@ -154,11 +154,19 @@ async def create_response(
 
     # The request already carries the full conversation (stateless
     # client) - stored history is only the persistence dedupe baseline,
-    # never routing input.
+    # never routing input. It is read UNBOUNDED (``max_turns=0``): the
+    # prefix match in ``_suffix_after_history`` compares oldest-first,
+    # so the newest-N read window would compare the wrong end, silently
+    # stop persisting new user turns past the window (bounded-transfer
+    # follow-up of commit 800d096; regression test
+    # ``test_dedupe_survives_history_longer_than_read_window``). This
+    # row list never reaches the upstream payload, so bounding it saves
+    # only read transfer - correctness wins here.
     history = await store.load(
         session_id,
         user_id=principal.user_id,
         project_id=principal.project_id,
+        max_turns=0,
     )
     # BYOK: every /v1/* principal routes ONLY through its own connected
     # credentials - there is no shared pool. Loaded before the injections

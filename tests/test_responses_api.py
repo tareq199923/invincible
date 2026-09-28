@@ -1164,6 +1164,82 @@ async def test_resent_conversation_does_not_duplicate(client, router_setter, byo
     assert contents == ["hi", "ok", "again", "ok"]
 
 
+async def test_dedupe_survives_history_longer_than_read_window(
+    client, router_setter, byok_env
+):
+    """A Codex session past INVINCIBLE_HISTORY_READ_MAX_TURNS must keep
+    persisting new user turns.
+
+    The dedupe prefix-compares stored history against the resent
+    conversation, so it needs the FULL oldest-first list - a newest-N
+    read window compares the wrong end, the match silently fails, and
+    every subsequent turn persists ONLY the assistant reply (the user
+    turns vanish, exactly the production Codex breakage). Regression
+    guard for the shipped default-bounded load() swallowing this call
+    site (commit 800d096).
+    """
+    from invincible.core.settings import settings
+
+    read_cap = settings.history_read_max_turns()
+    assert read_cap is not None and read_cap > 0, (
+        "this test is meaningless with reads unbounded")
+    uid, raw_key = await v1_user(client, "responses@example.com")
+    auth = {"Authorization": f"Bearer {raw_key}"}
+    owner = await _user_kwargs(uid)
+    store = app.state.sessions
+
+    # Seed a clean (no tool calls) alternating conversation comfortably
+    # past the read window. group_into_turns pairs user+assistant into ONE
+    # turn each, so 40 pairs = 40 turns > the 30 default window.
+    seeded: list[dict] = []
+    for i in range(40):
+        seeded.append({"role": "user", "content": f"u{i}"})
+        seeded.append({"role": "assistant", "content": f"ok {i}"})
+    await store.save("long-dedupe", seeded, **owner)
+    probe = await store.load("long-dedupe", **owner, max_turns=0)
+    assert len(probe) // 2 > read_cap, (
+        "seeding must exceed the read window for this to be a real test")
+
+    captured = []
+
+    def alpha_handler(request: httpx.Request):
+        captured.append(json.loads(request.read()))
+        return httpx.Response(
+            200, json=provider_body("alpha", content="ok 20"))
+
+    router_setter({"alpha.example.com": alpha_handler})
+    headers = {**auth, "X-Session-Id": "long-dedupe"}
+
+    # Codex's next turn: resend the WHOLE conversation plus the new user
+    # message, assistant outputs interleaved as the client does.
+    full_input: list[dict] = []
+    for i in range(40):
+        full_input.append({"type": "message", "role": "user",
+                           "content": f"u{i}"})
+        full_input.append({"type": "message", "role": "assistant",
+                           "content": f"ok {i}"})
+    full_input.append({"type": "message", "role": "user",
+                       "content": "newest"})
+    resp = await client.post(
+        "/v1/responses", headers=headers,
+        json={"model": "m", "input": full_input},
+    )
+    assert resp.status_code == 200
+
+    # The new user turn persisted (dedupe matched, suffix appended), and
+    # exactly once.
+    history = await store.load("long-dedupe", **owner, max_turns=0)
+    contents = [m.get("content") for m in history]
+    assert contents.count("newest") == 1, contents[-6:]
+    assert contents[-2:] == ["newest", "ok 20"], contents[-6:]
+
+    # Upstream saw the conversation exactly once - no doubled history.
+    user_contents = [m["content"] for m in captured[0]["messages"]
+                     if m["role"] == "user"]
+    assert user_contents.count("newest") == 1
+    assert user_contents.count("u0") == 1
+
+
 async def test_codex_session_id_header_creates_its_own_session(
     client, router_setter, byok_env
 ):
