@@ -276,6 +276,12 @@ async def test_memory_page_renders_rows_search_and_delete_buttons(client):
     assert 'id="memgraph"' in page.text
     assert 'aria-label="Memory graph' in page.text
     assert 'data-graph-src="/memories/graph"' in page.text
+    assert 'id="memgraph-search"' in page.text
+    assert 'id="memgraph-zoom-in"' in page.text
+    assert 'id="memgraph-zoom-out"' in page.text
+    assert 'id="memgraph-fit"' in page.text
+    assert 'id="memgraph-labels"' in page.text
+    assert 'aria-describedby="memgraph-help memgraph-announcer"' in page.text
     # Cache-busted asset URL: graph.js changes bust browser caches.
     assert 'src="/static/graph.js?v=' in page.text
 
@@ -326,6 +332,9 @@ async def test_graph_js_is_served_vendored(client):
     assert "memgraph-tip" in resp.text
     assert "local-hidden" in resp.text
     assert "mem-label" in resp.text
+    assert "MemoryGraph.prototype.fit" in resp.text
+    assert "MemoryGraph.prototype.zoom" in resp.text
+    assert 'getElementById("memgraph-search")' in resp.text
     # Node selection is detected on pointerup (press-release within a
     # small movement threshold), not via the click event - pointer
     # capture retargets click to the svg, so it never reaches the node.

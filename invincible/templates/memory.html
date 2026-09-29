@@ -53,11 +53,44 @@
         {% endfor %}
       </select>
       <button type="submit">Filter</button>
-      <button type="button" id="memgraph-reset" class="memgraph-reset">Reset view</button>
     </form>
 
     {% if has_memory_nodes %}
-    <p class="muted">
+    <div class="memgraph-toolbar" role="toolbar" aria-label="Memory graph controls">
+      <label class="memgraph-search" for="memgraph-search">
+        <span aria-hidden="true">⌕</span>
+        <input id="memgraph-search" type="search"
+               placeholder="Find memories, sources, or kinds"
+               aria-label="Search graph memories">
+      </label>
+      <div class="memgraph-actions">
+        <button type="button" id="memgraph-zoom-out" title="Zoom out"
+                aria-label="Zoom out">−</button>
+        <button type="button" id="memgraph-zoom-in" title="Zoom in"
+                aria-label="Zoom in">+</button>
+        <button type="button" id="memgraph-fit" title="Fit all nodes"
+                aria-label="Fit graph to view">Fit</button>
+        <label class="memgraph-label-toggle" for="memgraph-labels">
+          <input type="checkbox" id="memgraph-labels">
+          <span>Labels</span>
+        </label>
+        <button type="button" id="memgraph-reset" class="memgraph-reset"
+                title="Clear selection and restore the full graph"
+                aria-label="Reset graph view">Reset</button>
+      </div>
+      <span id="memgraph-results" class="memgraph-results"
+            aria-live="polite">{{ graph.summary.shown }} memories</span>
+    </div>
+    <div class="memgraph-key" aria-label="Graph node legend">
+      <span><i class="key-user"></i>You</span>
+      <span><i class="key-project"></i>Project</span>
+      <span><i class="key-source"></i>Source</span>
+      <span><i class="key-memory"></i>Memory</span>
+      <span><i class="key-link"></i>Shared keywords</span>
+    </div>
+    <p class="muted memgraph-help" id="memgraph-help">Select a memory to focus its neighborhood. Drag to rearrange; drag the canvas to pan; scroll to zoom.</p>
+    <p class="sr-only" id="memgraph-announcer" aria-live="polite"></p>
+    <p class="muted memgraph-sources">
       {% for source, count in graph.summary.by_source.items() %}
       <span class="legend-item">
         <svg width="10" height="10" style="vertical-align: middle;">
@@ -70,8 +103,9 @@
     </p>
     <svg id="memgraph" data-graph-src="/memories/graph"
          data-graph-kind="{{ kind }}" data-graph-project="{{ project_id }}"
-         viewBox="0 0 800 560" width="100%" role="application"
-         aria-label="Memory graph - drag nodes, scroll to zoom, click a node for details">
+          viewBox="0 0 800 560" width="100%" role="application"
+          aria-label="Interactive memory graph. Search or select a node to explore related memories."
+          aria-describedby="memgraph-help memgraph-announcer">
       <g id="memgraph-root"></g>
     </svg>
     <noscript><p class="muted">The interactive graph needs JavaScript; the
@@ -112,14 +146,82 @@
   /* page-scoped: the graph-first split view and its toggle */
   .memgraph-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 16rem;
-    gap: 1.2rem;
+    grid-template-columns: minmax(0, 1fr) 18rem;
+    gap: 1rem;
     align-items: start;
     margin: 1.3rem 0;
   }
   .memgraph-layout .memgraph-stage { min-width: 0; position: relative; }
+  .memgraph-toolbar {
+    display: flex;
+    gap: 0.65rem;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    margin: 0.6rem 0 0.5rem;
+  }
+  .memgraph-search {
+    display: flex;
+    flex: 1 1 15rem;
+    min-width: 10rem;
+    align-items: center;
+    gap: 0.45rem;
+    margin: 0;
+    padding: 0 0.65rem;
+    color: var(--faint);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .memgraph-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+  .memgraph-search > span { font-size: 1.1rem; line-height: 1; }
+  .memgraph-search input {
+    min-width: 0;
+    margin: 0;
+    padding: 0.48rem 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .memgraph-search input:focus { outline: 0; box-shadow: none; }
+  .memgraph-actions { display: flex; gap: 0.3rem; align-items: center; }
+  .memgraph-actions > button {
+    min-width: 2.1rem;
+    height: 2.1rem;
+    margin: 0;
+    padding: 0.25rem 0.55rem;
+    font-size: 0.78rem;
+    line-height: 1;
+  }
+  .memgraph-actions > button:first-child,
+  .memgraph-actions > button:nth-child(2) { font-size: 1rem; }
+  .memgraph-label-toggle {
+    display: inline-flex;
+    gap: 0.3rem;
+    align-items: center;
+    margin: 0 0.2rem;
+    color: var(--muted);
+    font-size: 0.75rem;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .memgraph-label-toggle input { width: auto; margin: 0; }
+  .memgraph-results { flex: 1 0 100%; color: var(--faint); font-size: 0.72rem; }
+  .memgraph-key { display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; margin: 0.5rem 0 0.2rem; color: var(--muted); font-size: 0.7rem; }
+  .memgraph-key span { display: inline-flex; gap: 0.35rem; align-items: center; }
+  .memgraph-key i { display: inline-block; width: 0.55rem; height: 0.55rem; background: var(--faint); border-radius: 50%; }
+  .memgraph-key .key-project { border: 1px solid var(--accent-ink); background: var(--surface); border-radius: 2px; }
+  .memgraph-key .key-source { background: var(--accent); border-radius: 2px; }
+  .memgraph-key .key-memory { background: var(--ok); }
+  .memgraph-key .key-link { width: 0.9rem; height: 0; border-top: 1px dashed var(--accent); border-radius: 0; }
+  .memgraph-help { margin: 0.2rem 0 0.55rem; font-size: 0.72rem; }
+  .memgraph-sources { margin: 0.2rem 0 0.4rem; }
   #memgraph {
-    background: var(--bg-raise);
+    min-height: 32rem;
+    max-height: 70vh;
+    background-color: var(--surface);
+    background-image: radial-gradient(var(--border) 0.8px, transparent 0.8px);
+    background-size: 22px 22px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     display: block;
@@ -128,13 +230,18 @@
     user-select: none;
   }
   #memgraph.panning { cursor: grabbing; }
-  #memgraph .mg-edge { stroke: var(--border); stroke-width: 1; }
+  #memgraph .mg-edge { stroke: var(--border); stroke-width: 1.1; }
   #memgraph .mg-edge.similar_to {
-    stroke: var(--accent); stroke-opacity: 0.25;
-    stroke-dasharray: 3 3;
+    stroke: var(--accent); stroke-opacity: 0.42;
+    stroke-dasharray: 4 5;
   }
   #memgraph .mg-node { cursor: pointer; }
-  #memgraph .mg-node circle { fill-opacity: 0.9; }
+  #memgraph .mg-node circle, #memgraph .mg-node rect { vector-effect: non-scaling-stroke; }
+  #memgraph .mg-node.user circle { fill: var(--ink); stroke: var(--surface); stroke-width: 3; }
+  #memgraph .mg-node.project circle { fill: var(--surface); stroke: var(--accent); stroke-width: 2; }
+  #memgraph .mg-node.source rect { stroke: var(--surface); stroke-width: 1.5; }
+  #memgraph .mg-node.memory circle { stroke: var(--surface); stroke-width: 1.5; }
+  #memgraph .mg-node:hover circle, #memgraph .mg-node:hover rect { stroke: var(--ink); stroke-width: 2; }
   #memgraph .mg-node text {
     font-size: 11px; fill: var(--muted);
     text-anchor: middle; pointer-events: none;
@@ -147,6 +254,7 @@
     opacity: var(--mem-label-opacity, 0);
     transition: opacity 0.15s;
   }
+  #memgraph.show-all-labels .mg-node text.mem-label { opacity: 1; }
   /* Local graph mode: nodes/edges outside the selected neighborhood
      hide entirely (not just dim). */
   #memgraph .local-hidden { display: none; }
@@ -165,8 +273,8 @@
   #memgraph-tip .tip-meta {
     color: var(--muted); font-size: 0.68rem; margin-top: 0.25rem;
   }
-  #memgraph .mg-node.dimmed { opacity: 0.18; }
-  #memgraph .mg-edge.dimmed { opacity: 0.08; }
+  #memgraph .mg-node.dimmed { opacity: 0.12; }
+  #memgraph .mg-edge.dimmed { opacity: 0.06; }
   #memgraph .mg-node.selected circle {
     stroke: var(--accent-ink); stroke-width: 2.5;
   }
@@ -177,6 +285,8 @@
     padding: 0.9rem 1rem;
     position: sticky;
     top: 1rem;
+    max-height: calc(70vh + 4rem);
+    overflow-y: auto;
   }
   .memdetail-hint { margin-top: 0.4rem; }
   #memdetail-body dl { margin: 0; font-size: 0.8rem; }
@@ -228,7 +338,6 @@
     display: none;
   }
   .memgraph-filters button { margin-left: 0.5rem; }
-  .memgraph-reset { margin-left: 0.5rem; }
 
   /* table pass: content previews, source dots (same palette hash as
      the graph/legend), and a real-looking delete button */
@@ -268,6 +377,13 @@
   @media (max-width: 920px) {
     .memgraph-layout { grid-template-columns: 1fr; }
     .memdetail { position: static; }
+    #memgraph { min-height: 26rem; max-height: 64vh; }
+  }
+  @media (max-width: 620px) {
+    .memgraph-actions { width: 100%; flex-wrap: wrap; }
+    .memgraph-search { flex-basis: 100%; }
+    .memgraph-actions > button { flex: 1 1 auto; }
+    #memgraph { min-height: 22rem; }
   }
   @media (prefers-reduced-motion: reduce) {
     #memgraph .mg-node, #memgraph .mg-edge { transition: none; }

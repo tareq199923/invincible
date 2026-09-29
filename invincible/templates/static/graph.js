@@ -69,6 +69,7 @@
     this.adj = {};
     this.selected = null;
     this.hovered = null;
+    this.query = "";
     this.view = { x: 0, y: 0, k: 1 };  // pan/zoom transform
     this.energy = Infinity;
     this.running = false;
@@ -117,6 +118,7 @@
     this._seedPositions();
     this._buildDom();
     this._tick(300);  // settle synchronously first
+    this.fit();
     this._render();
     if (!this.reduced) this._run();
     this._bind();
@@ -135,6 +137,36 @@
     }
   };
 
+  MemoryGraph.prototype.fit = function () {
+    if (!this.nodes.length) return;
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (var i = 0; i < this.nodes.length; i++) {
+      var n = this.nodes[i];
+      minX = Math.min(minX, n.x);
+      minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x);
+      maxY = Math.max(maxY, n.y);
+    }
+    var pad = 90;
+    var width = Math.max(1, maxX - minX + pad * 2);
+    var height = Math.max(1, maxY - minY + pad * 2);
+    var scale = Math.max(0.4, Math.min(2.2, 800 / width, 560 / height));
+    this.view = {
+      x: 400 - (minX + maxX) / 2 * scale,
+      y: 280 - (minY + maxY) / 2 * scale,
+      k: scale
+    };
+    this._render();
+  };
+
+  MemoryGraph.prototype.zoom = function (factor) {
+    var scale = Math.max(0.4, Math.min(6, this.view.k * factor));
+    this.view.x = 400 - (400 - this.view.x) * (scale / this.view.k);
+    this.view.y = 280 - (280 - this.view.y) * (scale / this.view.k);
+    this.view.k = scale;
+    this._render();
+  };
+
   MemoryGraph.prototype._buildDom = function () {
     var i;
     for (i = 0; i < this.edges.length; i++) {
@@ -148,35 +180,33 @@
     for (i = 0; i < this.nodes.length; i++) {
       var n = this.nodes[i];
       var g = el("g", {
-        "class": "mg-node", "data-node": n.id, tabindex: "0",
+        "class": "mg-node mg-" + n.kind, "data-node": n.id, tabindex: "0",
         role: "button",
         "aria-label": (n.kind === "memory"
           ? "memory: " + n.label + " (" + n.memory_kind + ", " + n.source + ")"
           : n.kind + ": " + n.label)
       });
       var r = this._radius(n);
-      var circle = el("circle", { r: r });
-      if (n.kind === "user") {
-        circle.setAttribute("fill", "#e6edf3");
-      } else if (n.kind === "project") {
-        circle.setAttribute("fill", "#11161f");
-        circle.setAttribute("stroke", "#7e8a9e");
-        circle.setAttribute("stroke-width", "2");
-      } else if (n.kind === "source") {
-        circle.setAttribute("fill", sourceColor(n.label));
-        circle.setAttribute("fill-opacity", "0.55");
+      var shape;
+      if (n.kind === "source") {
+        shape = el("rect", {
+          x: -7, y: -7, width: 14, height: 14, rx: 3,
+          fill: sourceColor(n.label)
+        });
       } else {
-        circle.setAttribute("fill", sourceColor(n.source));
-        circle.setAttribute("stroke", "#0a0d13");
-        var dash = KIND_STROKE[n.memory_kind];
-        if (dash) {
-          circle.setAttribute("stroke-dasharray", dash);
-          circle.setAttribute("stroke-width", "1.5");
+        shape = el("circle", { r: r });
+        if (n.kind === "memory") {
+          shape.setAttribute("fill", sourceColor(n.source));
+          var dash = KIND_STROKE[n.memory_kind];
+          if (dash) {
+            shape.setAttribute("stroke-dasharray", dash);
+            shape.setAttribute("stroke-width", "1.5");
+          }
+          var conf = typeof n.confidence === "number" ? n.confidence : 1;
+          shape.setAttribute("fill-opacity", 0.55 + 0.45 * conf);
         }
-        var conf = typeof n.confidence === "number" ? n.confidence : 1;
-        circle.setAttribute("fill-opacity", 0.55 + 0.45 * conf);
       }
-      g.appendChild(circle);
+      g.appendChild(shape);
       if (n.kind === "project" || n.kind === "user") {
         n.labelEl = el("text", { y: r + 18 });
         n.labelEl.textContent = n.label + (
@@ -188,6 +218,10 @@
         n.labelEl = el("text", { "class": "mem-label", y: r + 12 });
         n.labelEl.textContent = (n.content || n.label).slice(0, 26) +
           ((n.content || n.label).length > 26 ? "…" : "");
+        g.appendChild(n.labelEl);
+      } else if (n.kind === "source") {
+        n.labelEl = el("text", { y: 19 });
+        n.labelEl.textContent = n.label;
         g.appendChild(n.labelEl);
       }
       n.el = g;
@@ -278,7 +312,8 @@
     // are always on.
     this.root.style.setProperty(
       "--mem-label-opacity",
-      String(Math.max(0, Math.min(1, (v.k - 1) / 1.5))));
+      String(this.svg.classList.contains("show-all-labels") ? 1
+        : Math.max(0, Math.min(1, (v.k - 0.9) / 1.5))));
     for (var i = 0; i < this.edges.length; i++) {
       var e = this.edges[i];
       e.el.setAttribute("x1", e.source.x); e.el.setAttribute("y1", e.source.y);
@@ -306,10 +341,23 @@
     // by Esc / Clear / Reset view via select(null).
     var local = this.local;
     var localKeep = local ? this.adj[local] || {} : null;
+    var searchKeep = {};
+    var query = this.query.trim().toLowerCase();
+    if (query) {
+      for (i = 0; i < this.nodes.length; i++) {
+        var candidate = this.nodes[i];
+        if (candidate.kind !== "memory" || !this._matches(candidate, query))
+          continue;
+        searchKeep[candidate.id] = true;
+        var neighbors = this.adj[candidate.id] || {};
+        for (var neighborId in neighbors) searchKeep[neighborId] = true;
+      }
+    }
     var i;
     for (i = 0; i < this.nodes.length; i++) {
       var n = this.nodes[i];
-      var dim = focus && n.id !== focus && !keep[n.id];
+      var dim = (focus && n.id !== focus && !keep[n.id]) ||
+        (query && !searchKeep[n.id]);
       n.el.classList.toggle("dimmed", !!dim);
       n.el.classList.toggle("selected", n.id === focus);
       n.el.classList.toggle(
@@ -324,6 +372,28 @@
         "local-hidden",
         !!(local && e.source.id !== local && e.target.id !== local));
     }
+  };
+
+  MemoryGraph.prototype._matches = function (n, query) {
+    var terms = [n.content, n.label, n.source, n.memory_kind, n.layer]
+      .concat(n.keywords || []);
+    return terms.some(function (value) {
+      return String(value || "").toLowerCase().indexOf(query) !== -1;
+    });
+  };
+
+  MemoryGraph.prototype._updateSearchStatus = function () {
+    var query = this.query.trim().toLowerCase();
+    var count = query ? this.nodes.filter(function (n) {
+      return n.kind === "memory" && this._matches(n, query);
+    }, this).length : this.nodes.filter(function (n) {
+      return n.kind === "memory";
+    }).length;
+    var results = document.getElementById("memgraph-results");
+    var announcer = document.getElementById("memgraph-announcer");
+    var text = query ? count + " matching memories" : count + " memories";
+    if (results) results.textContent = text;
+    if (announcer) announcer.textContent = text;
   };
 
   // --- hover preview card (Obsidian page preview) ---------------------------
@@ -513,13 +583,51 @@
 
     var reset = document.getElementById("memgraph-reset");
     if (reset) reset.addEventListener("click", function () {
-      self.select(null);  // exits local graph mode + clears the panel
-      self.view = { x: 0, y: 0, k: 1 };
-      self._seedPositions();
-      self._tick(300);
-      self._render();
+      var search = document.getElementById("memgraph-search");
+      if (search) search.value = "";
+      self.query = "";
+      self.select(null);
+      self.fit();
+      self._updateSearchStatus();
       if (!self.reduced) self._run();
     });
+
+    var search = document.getElementById("memgraph-search");
+    if (search) {
+      search.addEventListener("input", function () {
+        self.query = search.value;
+        self.select(null);
+        self._highlight();
+        self._updateSearchStatus();
+      });
+      search.addEventListener("keydown", function (evt) {
+        if (evt.key === "Enter") {
+          var query = search.value.trim().toLowerCase();
+          if (!query) return;
+          var match = self.nodes.find(function (n) {
+            return n.kind === "memory" && self._matches(n, query);
+          });
+          if (match) self.select(match);
+        } else if (evt.key === "Escape") {
+          search.value = "";
+          self.query = "";
+          self.select(null);
+          self._updateSearchStatus();
+        }
+      });
+    }
+
+    var zoomIn = document.getElementById("memgraph-zoom-in");
+    var zoomOut = document.getElementById("memgraph-zoom-out");
+    var fit = document.getElementById("memgraph-fit");
+    var labels = document.getElementById("memgraph-labels");
+    if (zoomIn) zoomIn.addEventListener("click", function () { self.zoom(1.25); });
+    if (zoomOut) zoomOut.addEventListener("click", function () { self.zoom(0.8); });
+    if (fit) fit.addEventListener("click", function () { self.fit(); });
+    if (labels) labels.addEventListener("change", function () {
+      self.svg.classList.toggle("show-all-labels", labels.checked);
+    });
+    this._updateSearchStatus();
   };
 
   // --- selection / detail panel ---------------------------------------------
@@ -551,9 +659,7 @@
       rows.push(["source", n.source]);
       if (when) rows.push(["saved", when]);
       if (n.keywords && n.keywords.length)
-        rows.push(["keywords", n.keywords.map(function (k) {
-          return "<code>" + k.replace(/[<>&]/g, "") + "</code>";
-        }).join(" ")]);
+        rows.push(["keywords", n.keywords.join(" · ")]);
       var rel = [];
       for (var id in (this.adj[n.id] || {})) {
         var e = this.adj[n.id][id];
@@ -563,7 +669,7 @@
         }
       }
       if (rel.length)
-        rows.push(["related", rel.slice(0, 6).join("<br>")]);
+        rows.push(["related", rel.slice(0, 6).join(" · ")]);
     } else if (n.kind === "project") {
       rows.push(["project", n.label]);
       rows.push(["memories", n.count]);
@@ -574,9 +680,16 @@
       rows.push(["user", n.label]);
       rows.push(["projects", n.count || ""]);
     }
-    body.innerHTML = "<dl>" + rows.map(function (r) {
-      return "<dt>" + r[0] + "</dt><dd>" + r[1] + "</dd>";
-    }).join("") + "</dl>";
+    var dl = document.createElement("dl");
+    rows.forEach(function (row) {
+      var dt = document.createElement("dt");
+      dt.textContent = row[0];
+      var dd = document.createElement("dd");
+      dd.textContent = row[1];
+      dl.appendChild(dt);
+      dl.appendChild(dd);
+    });
+    body.replaceChildren(dl);
     if (hint) hint.hidden = true;
     if (clear) {
       var self = this;
