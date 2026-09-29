@@ -293,6 +293,7 @@ invincible db upgrade [--env-file .env]
 invincible oauth list | revoke <client_id> | test-client
 invincible api-key create --user <id-or-email> [--label TEXT] | list | revoke <id-or-prefix>
 invincible users list | reset-password <email> [--generate]
+invincible update [--check] [--yes] [--pre] [--target VERSION]
 invincible --version | --help
 ```
 
@@ -379,3 +380,17 @@ Notes on `login` (Platform Phase 3; Phase 11 default change):
   mode 600 where supported).
 - Polling respects the server's interval and backs off on `slow_down`; a
   denied or expired request fails with a clear error and writes nothing.
+
+Notes on `update`:
+
+- Strict command only (no `--update` flag): checks PyPI `invincible-ai`
+  JSON for the newest release and upgrades with
+  `python -m pip install --upgrade invincible-ai==<latest>`.
+- `--check` reports `current -> latest` and exits 1 when behind without
+  installing; `--yes` installs without prompting (required
+  non-interactively); `--pre` includes pre-releases; `--target` pins an
+  exact version.
+- Refuses on editable installs (`pip install -e .`) — update with
+  `git pull` then `pip install -e .` instead.
+- Restart the shell after upgrading, then verify with
+  `invincible --version`.

@@ -2161,6 +2161,170 @@ def dev_db(port, env_file, write_env):
         click.echo(f"Wrote INVINCIBLE_DB_URL to {env_path}")
 
 
+# --- self-update (strict `update` only; no --update flag) ------------------------
+
+
+PYPI_JSON_URL = "https://pypi.org/pypi/invincible-ai/json"
+PYPI_TIMEOUT = 10.0
+
+
+def _is_editable_install() -> bool:
+    """True when invincible-ai is an editable install (refuse PyPI upgrade).
+
+    Editable checkouts must update via ``git pull`` + ``pip install -e .``;
+    a PyPI ``pip install --upgrade`` would shadow or break the checkout.
+    Unknown metadata fails open (False) so regular installs keep working.
+    """
+    try:
+        import json
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import distribution as _dist
+    except ImportError:  # pragma: no cover - importlib.metadata is stdlib 3.8+
+        return False
+    try:
+        dist = _dist("invincible-ai")
+    except PackageNotFoundError:
+        return False
+    except Exception:
+        return False
+    try:
+        direct_url = dist.read_text("direct_url.json")
+    except Exception:
+        direct_url = None
+    if direct_url:
+        try:
+            if json.loads(direct_url).get("editable", False) is True:
+                return True
+        except (ValueError, AttributeError):
+            pass
+    try:
+        files = dist.files or []
+    except Exception:
+        return False
+    for item in files:
+        name = str(item).lower()
+        if "__editable__" in name or name.endswith(".egg-link"):
+            return True
+    return False
+
+
+def _fetch_pypi_payload() -> dict:
+    """Fetch the PyPI JSON payload for invincible-ai (network boundary)."""
+    import httpx
+
+    try:
+        response = httpx.get(PYPI_JSON_URL, timeout=PYPI_TIMEOUT)
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        raise click.ClickException(
+            f"Could not check PyPI for updates: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise click.ClickException("Could not check PyPI for updates: bad payload")
+    return payload
+
+
+def _select_desired_version(payload: dict, *, pre: bool) -> str:
+    """Pick the newest release from a PyPI payload (pure; testable)."""
+    from packaging.version import InvalidVersion
+    from packaging.version import Version as _Version
+
+    releases = payload.get("releases")
+    candidates: list = []
+    if isinstance(releases, dict):
+        for raw in releases:
+            try:
+                parsed = _Version(str(raw))
+            except InvalidVersion:
+                continue
+            if not pre and (parsed.is_prerelease or parsed.is_devrelease):
+                continue
+            candidates.append(parsed)
+    if candidates:
+        return str(max(candidates))
+    info = payload.get("info")
+    if isinstance(info, dict) and info.get("version"):
+        return str(info["version"])
+    raise click.ClickException("Could not check PyPI for updates: no releases found")
+
+
+@click.command()
+@click.option("--check", is_flag=True,
+              help="Only report current vs latest; never install (exit 1 when behind).")
+@click.option("--yes", is_flag=True,
+              help="Install without prompting (required non-interactively).")
+@click.option("--pre", is_flag=True,
+              help="Include pre-releases when resolving the latest version.")
+@click.option("--target", default=None, metavar="VERSION",
+              help="Install an exact version instead of the latest.")
+def update(check, yes, pre, target):
+    """Install the latest invincible-ai release from PyPI."""
+    from packaging.version import InvalidVersion
+    from packaging.version import Version as _Version
+
+    try:
+        current = _Version(__version__)
+    except InvalidVersion as exc:  # pragma: no cover - version is controlled
+        raise click.ClickException(
+            f"Current version {__version__!r} is not parseable; refusing to update."
+        ) from exc
+    if target is not None:
+        try:
+            desired = _Version(str(target))
+        except InvalidVersion:
+            raise click.ClickException(
+                f"Invalid --target version {target!r} (expected e.g. 0.5.1)."
+            ) from None
+    else:
+        payload = _fetch_pypi_payload()
+        desired = _Version(_select_desired_version(payload, pre=pre))
+
+    if desired <= current:
+        click.echo(f"Up to date ({__version__})")
+        return
+
+    if _is_editable_install():
+        raise click.ClickException(
+            "This is an editable install - refusing PyPI upgrade. "
+            "Update with `git pull` then `pip install -e .` instead."
+        )
+
+    if check:
+        click.echo(f"Update available: {__version__} -> {desired}")
+        raise click.exceptions.Exit(1)
+
+    if not yes:
+        if not sys.stdin.isatty():
+            raise click.ClickException(
+                f"Update available: {__version__} -> {desired}. "
+                "Rerun with --yes to install non-interactively."
+            )
+        click.confirm(
+            f"Install invincible-ai {desired} (current {__version__})?",
+            abort=True,
+        )
+
+    argv = [
+        sys.executable, "-m", "pip", "install", "--upgrade",
+        f"invincible-ai=={desired}",
+    ]
+    try:
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise click.ClickException(f"pip upgrade failed: {exc}") from exc
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        first = detail[0][:200] if detail else f"exit {proc.returncode}"
+        raise click.ClickException(f"pip upgrade failed: {first}")
+    click.echo(
+        f"Installed invincible-ai {desired} (was {__version__}). "
+        "Restart your shell, then verify with `invincible --version`."
+    )
+
+
 # --- database maintenance -----------------------------------------------------
 
 
@@ -2256,6 +2420,7 @@ cli.add_command(start)
 cli.add_command(login)
 cli.add_command(connect)
 cli.add_command(harness)
+cli.add_command(update)
 cli.add_command(doctor)
 cli.add_command(secret)
 cli.add_command(oauth)
