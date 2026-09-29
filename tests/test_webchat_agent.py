@@ -15,9 +15,11 @@ import httpx
 import pytest
 
 from invincible.core.accounts import SESSION_COOKIE
+from invincible.core.chat_service import PreparedChat
 from invincible.core.credential_store import ByokCredentialStore
 from invincible.core.identity import ApiKeyStore
-from invincible.core.webchat_agent import ApprovalWaiter
+from invincible.core.principal import Principal
+from invincible.core.webchat_agent import ApprovalWaiter, run_agent_turn
 from invincible.main import app
 from tests.conftest import provider_body, register_account
 
@@ -452,3 +454,85 @@ async def test_waiter_timeout_and_discard(monkeypatch):
         await asyncio.sleep(0)
         waiter.discard("tok-x")
         await task
+
+
+async def test_stream_close_after_final_token_persists_assistant_reply():
+    class FakeRouter:
+        async def route_request_detailed(self, *args, **kwargs):
+            return (
+                {"choices": [{"message": {
+                    "role": "assistant", "content": "final answer",
+                }}]},
+                {"request_id": "request-1", "provider_name": "test",
+                 "model_id": "test-model", "attempts": 1},
+            )
+
+    class FakeSessions:
+        def __init__(self):
+            self.messages = []
+
+        async def append(self, session_id, messages, **kwargs):
+            self.messages.extend(messages)
+
+    sessions = FakeSessions()
+    prepared = PreparedChat(
+        session_id="disconnect", session_pk=1,
+        full_messages=[{"role": "user", "content": "question"}],
+        to_persist=[{"role": "user", "content": "question"}],
+    )
+    stream = run_agent_turn(
+        prepared, model=None, router=FakeRouter(), sessions=sessions,
+        memory=None, runs_store=None,
+        principal=Principal(user_id=1, project_id=1, kind="session"),
+        mode="plan", pending_store=None, executor=None,
+        waiter=ApprovalWaiter(),
+    )
+
+    assert await stream.__anext__() == ("token", {"text": "final answer"})
+    await stream.aclose()
+
+    assert sessions.messages == [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "final answer"},
+    ]
+
+
+async def test_read_only_tool_calls_run_concurrently(
+    client, byok_env, router_setter, monkeypatch
+):
+    bodies, handler = scripted([
+        tool_body("w1", [
+            fn_call("c1", "read_file", {"path": "one.txt"}),
+            fn_call("c2", "read_file", {"path": "two.txt"}),
+        ]),
+        provider_body("w1", content="read both"),
+    ])
+    router_setter({"w1.example.com": handler})
+    arrived = set()
+    both_started = asyncio.Event()
+
+    async def fake_read(path):
+        arrived.add(path)
+        if len(arrived) == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+        return {"status": "read", "path": path, "content": path}
+
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te, "read_file", fake_read)
+    user_id, project_id = await agent_user(client, "parallel-reads@example.com")
+    response = await client.post("/dashboard/chat/stream", json={
+        "session_id": "parallel-reads", "message": "read two files",
+        "mode": "plan",
+    })
+
+    assert response.status_code == 200, response.text
+    events = parse_web_events(response.text)
+    assert arrived == {"one.txt", "two.txt"}
+    assert len([data for name, data in events if name == "tool_result"]) == 2
+    history = await app.state.sessions.load(
+        "parallel-reads", user_id=user_id, project_id=project_id)
+    assert [message.get("role") for message in history] == [
+        "user", "assistant", "tool", "tool", "assistant",
+    ]

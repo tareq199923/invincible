@@ -85,11 +85,14 @@ DATA_WRITE_TOOLS = (
 # (same SSRF posture as POST /mcp screenshot).
 AGENT_ONLY_TOOLS = ("screenshot",)
 ALL_DATA_TOOLS = DATA_READ_TOOLS + DATA_WRITE_TOOLS
+READ_ONLY_BATCH_TOOLS = frozenset(
+    READ_ONLY_TOOLS + AGENT_ONLY_TOOLS + DATA_READ_TOOLS)
 
 # Hard cap on tool iterations per turn: bounds provider spend and keeps
 # a runaway model from looping forever. On exhaustion the loop makes one
 # final no-tools call so the turn still ends with an answer.
 MAX_TOOL_ITERATIONS = 10
+READ_BATCH_CONCURRENCY = 4
 # How long one turn holds its SSE stream open waiting for a browser
 # approval (comfortably inside PendingActionStore's 600s TTL; a late
 # approval past this lands on the endpoint's expired-token path).
@@ -797,6 +800,11 @@ async def run_agent_turn(
     tools_used = 0
     full_text = ""
     agent_routed = executor is not None
+    # True once this turn has been appended to history, by either the happy
+    # path or _persist_partial. Guarantees at most one append per turn, so a
+    # disconnect racing the final commit cannot double-write.
+    committed = False
+    pending_completion = None
 
     async def _audit(action: str, **meta):
         if audit is not None:
@@ -806,16 +814,42 @@ async def run_agent_turn(
                 logger.warning("webchat audit write failed for %s", action)
 
     async def _persist_partial():
-        if turn:
-            try:
-                await sessions.append(
+        """Commit the turn accumulated so far - cancel-safe.
+
+        Reached on a route error and when the SSE stream is torn down
+        mid-turn (browser disconnect / proxy idle timeout / deploy). Both
+        are exactly when the surrounding task is being cancelled, so the
+        append is shielded: a bare ``await`` here would be cancelled before
+        it commits, which is the data loss this exists to prevent. Only the
+        happy path may skip it (it persists the whole turn itself), and
+        ``commit`` guarantees at most one append per turn.
+        """
+        nonlocal committed
+        if not turn or committed:
+            return
+        committed = True
+        try:
+            if pending_completion is not None:
+                assistant_message, request_id = pending_completion
+                persist = _persist_new_turns(
+                    turn, assistant_message, sessions, prepared.session_id,
+                    memory, principal, runs_store=runs_store,
+                    request_id=request_id, max_turns=prepared.max_turns,
+                )
+            else:
+                persist = sessions.append(
                     prepared.session_id, turn,
                     user_id=principal.user_id,
                     project_id=principal.project_id,
                     max_turns=prepared.max_turns,
                 )
-            except Exception:
-                logger.exception("Failed to persist partial webchat turn")
+            await asyncio.shield(asyncio.ensure_future(persist))
+        except asyncio.CancelledError:
+            # The shielded append keeps running; re-raising is the caller's
+            # job (both call sites sit inside an except block that does).
+            pass
+        except Exception:
+            logger.exception("Failed to persist partial webchat turn")
 
     def _route_error(exc: Exception):
         if isinstance(exc, NoCredentialsConfiguredError):
@@ -833,108 +867,185 @@ async def run_agent_turn(
                                "type": "gateway_error"}}
 
     iteration = 0
-    while True:
-        current_tools = tools if iteration <= MAX_TOOL_ITERATIONS else None
-        if iteration > MAX_TOOL_ITERATIONS:
-            full = full + [{
-                "role": "system",
-                "content": ("Tool budget exhausted - answer the user now "
-                            "with what you have, no more tool calls."),
-            }]
-        try:
-            result, info = await router.route_request_detailed(
-                full, tools=current_tools, model=model,
-                session_id=prepared.session_id,
-                session_pk=prepared.session_pk, **prepared.byok_kwargs,
-            )
-        except Exception as exc:  # noqa: BLE001 - mapped below, never leaks
-            await _persist_partial()
-            status, body = _route_error(exc)
-            yield "error", {"message": _error_text(body),
-                            "status": status}
-            return
-        choices = result.get("choices") or []
-        message = choices[0].get("message") if choices else None
-        if not isinstance(message, dict):
-            await _persist_partial()
-            yield "error", {"message": "gateway error"}
-            return
-        text = message.get("content")
-        if isinstance(text, str) and text:
-            full_text += text
-            yield "token", {"text": text}
-        calls = message.get("tool_calls") or []
-        if not calls:
-            final_message = {"role": "assistant", "content": text or None}
-            await _persist_new_turns(
-                turn, final_message, sessions, prepared.session_id,
-                memory, principal, runs_store=runs_store,
-                request_id=info["request_id"],
-                max_turns=prepared.max_turns,
-            )
-            yield "done", {
-                "text": full_text,
-                "provider": info["provider_name"],
-                "model": info["model_id"],
-                "attempts": info["attempts"],
-                "mode": mode,
-                "tools_used": tools_used,
-                "execution": "agent" if agent_routed else "local",
-            }
-            return
-        # The model wants tools: persist the assistant turn as-is (ids
-        # preserved, so the pairing invariant holds on replay).
-        turn.append(message)
-        full.append(message)
-        for call in calls:
-            call_id = call.get("id") or f"call_{len(turn)}"
-            fname = ((call.get("function") or {}).get("name")) or ""
-            raw_args = ((call.get("function") or {}).get("arguments")) or "{}"
+    # A client disconnect (browser close / proxy idle timeout) closes
+    # this generator at the current yield; GeneratorExit is a BaseException,
+    # so only a finally commits the partial turn. Without it the whole turn
+    # is dropped and the next send restarts from the last committed turn.
+    try:
+        while True:
+            current_tools = tools if iteration <= MAX_TOOL_ITERATIONS else None
+            if iteration > MAX_TOOL_ITERATIONS:
+                full = full + [{
+                    "role": "system",
+                    "content": ("Tool budget exhausted - answer the user now "
+                                "with what you have, no more tool calls."),
+                }]
             try:
-                fargs = json.loads(raw_args) if isinstance(
-                    raw_args, str) else dict(raw_args)
-            except (json.JSONDecodeError, TypeError, ValueError):
-                fargs = None
-            if not isinstance(fargs, dict):
-                result_doc = {"status": "error",
-                              "error": "Tool arguments were not valid JSON."}
-                ok = False
-            elif fname not in (
-                READ_ONLY_TOOLS + MUTATING_TOOLS
-                + ALL_DATA_TOOLS + AGENT_ONLY_TOOLS
-            ):
-                result_doc = {"status": "error",
-                              "error": f"Unknown tool: {fname}."}
-                ok = False
-            else:
-                yield "tool_call", {
-                    "call_id": call_id, "name": fname,
-                    "summary": summarize_call(fname, fargs),
+                result, info = await router.route_request_detailed(
+                    full, tools=current_tools, model=model,
+                    session_id=prepared.session_id,
+                    session_pk=prepared.session_pk, **prepared.byok_kwargs,
+                )
+            except Exception as exc:  # noqa: BLE001 - mapped below, never leaks
+                await _persist_partial()
+                status, body = _route_error(exc)
+                yield "error", {"message": _error_text(body),
+                                "status": status}
+                return
+            choices = result.get("choices") or []
+            message = choices[0].get("message") if choices else None
+            if not isinstance(message, dict):
+                await _persist_partial()
+                yield "error", {"message": "gateway error"}
+                return
+            text = message.get("content")
+            calls = message.get("tool_calls") or []
+            final_message = None
+            if not calls:
+                final_message = {
+                    "role": "assistant", "content": text or None,
                 }
-                outcome: dict = {}
-                async for ev_name, ev_data in _execute_call(
-                    fname, fargs, call_id=call_id, mode=mode,
-                    ctx_principal=principal, pending_store=pending_store,
-                    executor=executor, waiter=waiter, audit=_audit,
-                    outcome=outcome, memory=memory,
-                    retrieval=retrieval, continuity=continuity,
-                    sessions=sessions, engine=engine,
-                ):
-                    yield ev_name, ev_data
+                pending_completion = (final_message, info["request_id"])
+            if isinstance(text, str) and text:
+                full_text += text
+                yield "token", {"text": text}
+            if not calls:
+                committed = True
+                await _persist_new_turns(
+                    turn, final_message, sessions, prepared.session_id,
+                    memory, principal, runs_store=runs_store,
+                    request_id=info["request_id"],
+                    max_turns=prepared.max_turns,
+                )
+                yield "done", {
+                    "text": full_text,
+                    "provider": info["provider_name"],
+                    "model": info["model_id"],
+                    "attempts": info["attempts"],
+                    "mode": mode,
+                    "tools_used": tools_used,
+                    "execution": "agent" if agent_routed else "local",
+                }
+                return
+            # The model wants tools: persist the assistant turn as-is (ids
+            # preserved, so the pairing invariant holds on replay).
+            turn.append(message)
+            full.append(message)
+            parsed_calls = []
+            for call in calls:
+                call_id = call.get("id") or f"call_{len(turn)}"
+                fname = ((call.get("function") or {}).get("name")) or ""
+                raw_args = ((call.get("function") or {}).get("arguments")) or "{}"
+                try:
+                    fargs = json.loads(raw_args) if isinstance(
+                        raw_args, str) else dict(raw_args)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    fargs = None
+                parsed_calls.append({
+                    "call_id": call_id,
+                    "name": fname,
+                    "args": fargs,
+                    "valid_args": isinstance(fargs, dict),
+                })
+
+            parallel_reads = (
+                len(parsed_calls) > 1
+                and all(
+                    item["valid_args"]
+                    and item["name"] in READ_ONLY_BATCH_TOOLS
+                    for item in parsed_calls
+                )
+            )
+            outcomes = []
+            if parallel_reads:
+                semaphore = asyncio.Semaphore(READ_BATCH_CONCURRENCY)
+                for item in parsed_calls:
+                    yield "tool_call", {
+                        "call_id": item["call_id"], "name": item["name"],
+                        "summary": summarize_call(item["name"], item["args"]),
+                    }
+
+                async def _execute_read_call(item, batch_semaphore):
+                    outcome: dict = {}
+                    async with batch_semaphore:
+                        async for _event_name, _event_data in _execute_call(
+                            item["name"], item["args"],
+                            call_id=item["call_id"], mode=mode,
+                            ctx_principal=principal,
+                            pending_store=pending_store, executor=executor,
+                            waiter=waiter, audit=_audit, outcome=outcome,
+                            memory=memory, retrieval=retrieval,
+                            continuity=continuity, sessions=sessions,
+                            engine=engine,
+                        ):
+                            pass
+                    return outcome
+
+                outcomes = await asyncio.gather(
+                    *(
+                        _execute_read_call(item, semaphore)
+                        for item in parsed_calls
+                    ))
+            else:
+                for item in parsed_calls:
+                    fname = item["name"]
+                    fargs = item["args"]
+                    if not item["valid_args"]:
+                        outcome = {
+                            "result": {
+                                "status": "error",
+                                "error": "Tool arguments were not valid JSON.",
+                            },
+                            "ok": False,
+                        }
+                    elif fname not in (
+                        READ_ONLY_TOOLS + MUTATING_TOOLS
+                        + ALL_DATA_TOOLS + AGENT_ONLY_TOOLS
+                    ):
+                        outcome = {
+                            "result": {
+                                "status": "error",
+                                "error": f"Unknown tool: {fname}.",
+                            },
+                            "ok": False,
+                        }
+                    else:
+                        yield "tool_call", {
+                            "call_id": item["call_id"], "name": fname,
+                            "summary": summarize_call(fname, fargs),
+                        }
+                        outcome = {}
+                        async for ev_name, ev_data in _execute_call(
+                            fname, fargs, call_id=item["call_id"], mode=mode,
+                            ctx_principal=principal,
+                            pending_store=pending_store, executor=executor,
+                            waiter=waiter, audit=_audit, outcome=outcome,
+                            memory=memory, retrieval=retrieval,
+                            continuity=continuity, sessions=sessions,
+                            engine=engine,
+                        ):
+                            yield ev_name, ev_data
+                    outcomes.append(outcome)
+
+            for item, outcome in zip(parsed_calls, outcomes, strict=True):
+                fname = item["name"]
+                call_id = item["call_id"]
                 result_doc, ok = outcome["result"], outcome["ok"]
-            tools_used += 1
-            tool_message = {
-                "role": "tool",
-                "tool_call_id": call_id,
-                "content": json.dumps(result_doc, ensure_ascii=False),
-            }
-            turn.append(tool_message)
-            full.append(tool_message)
-            yield "tool_result", {
-                "call_id": call_id, "name": fname, "ok": ok,
-                "preview": _preview(result_doc),
-            }
-        iteration += 1
+                tools_used += 1
+                tool_message = {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": json.dumps(result_doc, ensure_ascii=False),
+                }
+                turn.append(tool_message)
+                full.append(tool_message)
+                yield "tool_result", {
+                    "call_id": call_id, "name": fname, "ok": ok,
+                    "preview": _preview(result_doc),
+                }
+            iteration += 1
+    finally:
+        await _persist_partial()
 
 
 async def _execute_call(
