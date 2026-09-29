@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Invincible — AI gateway and continuity platform</title>
   <meta name="description" content="A remote-first AI continuity platform. Bring your provider keys, use OpenAI, Anthropic, or Codex clients, keep scoped memory and task checkpoints, and optionally pair a machine for confirmed tools.">
+  <meta property="og:title" content="Invincible — One gateway. Your providers. Your continuity.">
+  <meta property="og:description" content="One stable endpoint for OpenAI, Anthropic, and Codex clients through your own provider keys. No machine needed to start; pair one only for remote file and shell tools.">
+  <meta property="og:type" content="website">
+  <meta name="theme-color" content="#0a0d13">
   <style>
     :root {
       color-scheme: dark;
@@ -81,6 +85,8 @@
     .hero h1 em { color: var(--accent); font-style: normal; }
     .hero__copy > p.sub { max-width: 640px; margin: 0; color: #adb4bf; font-size: clamp(1rem, 1.6vw, 1.16rem); line-height: 1.62; }
     .hero .actions { display: flex; gap: 9px; margin-top: 28px; flex-wrap: wrap; }
+    .hero-note { max-width: 640px; margin: 14px 0 0; color: #7f8792; font-size: 0.78rem; line-height: 1.55; }
+    .hero-note strong { color: #adb4bf; }
     .btn { display: inline-flex; min-height: 44px; padding: 8px 15px; align-items: center; justify-content: center; color: var(--night); background: var(--accent); border: 1px solid var(--accent); border-radius: 6px; font-size: 0.74rem; font-weight: 850; text-decoration: none; transition: background .15s ease, transform .15s ease, box-shadow .15s ease; }
     .btn:hover { color: var(--night); background: #aeb4ff; box-shadow: 0 6px 0 rgba(139, 147, 255, 0.18); transform: translateY(-2px); }
     .btn.ghost { color: #c9ced6; background: transparent; border-color: #414752; }
@@ -241,6 +247,7 @@
         <a href="#products">Products</a>
         <a href="#setup">Get started</a>
         <a href="#wire">Models</a>
+        <a href="#architecture">Security</a>
         <a href="#faq">FAQ</a>
         <a href="/login">Sign in</a>
         <a class="cta" href="/register">Create account</a>
@@ -254,17 +261,19 @@
         <div class="hero__copy">
           <p class="eyebrow">Remote-first · Your provider keys · Account-scoped continuity</p>
           <h1><span>One gateway.</span><span>Your providers.</span><em>Your continuity.</em></h1>
-          <p class="sub">Connect your own provider credentials and use one stable gateway from OpenAI, Anthropic, and Codex clients. Conversations, lexical memories, and versioned task state stay scoped to your account. Pair a machine only when you want confirmed tools to reach your files and shell.</p>
+          <p class="sub">One stable endpoint for OpenAI, Anthropic, and Codex clients — routed through your own provider keys, with automatic failover on rate limits. Your conversations, memories, and task state stay scoped to your account.</p>
           <div class="actions">
             <a class="btn" href="/register">Create your account</a>
             <a class="btn ghost" href="#setup">See the hosted setup</a>
           </div>
+          <p class="hero-note"><strong>No machine needed to start</strong> — chat, memory, and continuity work from your account alone. Pair a machine only when you want AI tools to reach its files and shell.</p>
         </div>
         <div class="terminal" aria-label="Invincible hosted client configuration">
           <div class="bar"><i></i><i></i><i></i><strong>invincible / client-config</strong></div>
           <pre><span class="dim">$</span> <span class="cmd">pip install invincible-ai</span>
-<span class="dim">$</span> <span class="cmd">invincible harness connect</span>
-<span class="ok">✓ Paired with invincible-ai.me</span>
+<span class="dim">$</span> <span class="cmd">invincible harness setup</span> <span class="dim"># pair once, prints MCP config</span>
+<span class="dim">$</span> <span class="cmd">invincible harness connect</span> <span class="dim"># this machine goes online</span>
+<span class="ok">✓ Paired — machine tools appear once connected</span>
 <span class="dim">base</span>  <span class="cmd">https://invincible-ai.me/v1</span>
 <span class="dim">key</span>   <span class="cmd">inv_…</span> <span class="ok">✓ shown once · revocable</span>
 <span class="dim">chat</span>  OpenAI Chat · Anthropic Messages · Responses (Codex)
@@ -298,14 +307,14 @@
     <section id="setup" class="content-section">
       <div class="wrap">
         <div class="section-heading">
-          <div><p class="eyebrow">Get started</p><h2>Four steps. Pair only when you need machine tools.</h2></div>
-          <p>Start with an account and your own provider key. Pairing is optional: connect a machine only when you want remote tools to work with its files and shell. No local database or server process is needed for the hosted service.</p>
+          <div><p class="eyebrow">Get started</p><h2>Three steps to chat. Pair only when you need machine tools.</h2></div>
+          <p>Steps 1–3 are enough for chat, memory, and continuity — no machine, server, or database to run. Step 4 is optional: pair a computer only when you want remote tools to work with its files and shell.</p>
         </div>
         <div class="steps">
           <article class="step"><span class="num">01</span><h3>Create an account</h3><p>Register with email and password, or use GitHub when enabled. Your account owns its projects, API keys, provider credentials, conversations, and continuity state.</p><p class="unlocks">Unlocks your dashboard and personal workspace</p><code class="block">/register</code></article>
           <article class="step"><span class="num">02</span><h3>Connect a provider</h3><p>Add a name, public HTTPS base URL, default model, and your key. Upstream providers must support OpenAI-compatible Chat Completions. Provider credentials are encrypted at rest.</p><p class="unlocks">Unlocks models available through your credentials</p><code class="block">dashboard → providers</code></article>
           <article class="step"><span class="num">03</span><h3>Choose how to connect</h3><p>Use the web chat, or create an <code>inv_</code> API key for your own client. The raw key is shown once, stored as a hash, and can be revoked from your account.</p><p class="unlocks">OpenAI Chat · Anthropic Messages · OpenAI Responses</p><code class="block">dashboard → account → API keys</code></article>
-          <article class="step"><span class="num">04</span><h3>Pair a machine (optional)</h3><p>Install the CLI and connect the computer you want to reach. The agent connects outbound; confirmed machine actions run in its home-relative sandbox. Hosted deployments must enable agent routing.</p><p class="unlocks">Unlocks remote file, shell, and inspection tools</p><code class="block">pip install invincible-ai · invincible connect</code></article>
+          <article class="step"><span class="num">04</span><h3>Pair a machine (optional)</h3><p>Install the CLI on the computer you want to reach, pair it once, then bring it online. The agent dials out — your machine never opens a port. Hosted deployments must enable agent routing.</p><p class="unlocks">Optional — unlocks remote file, shell, and inspection tools</p><code class="block">harness setup → harness connect</code></article>
         </div>
       </div>
     </section>
@@ -333,7 +342,7 @@
         </div>
         <div class="journeys">
           <article class="journey"><span class="kicker">No machine needed</span><h3>Chat + continuity</h3><p>Connect your provider credentials, then use the dashboard chat or create an <code>inv_</code> key for an OpenAI, Anthropic, or Responses client. Sessions and account-scoped state stay on the service.</p><div class="actions"><a href="/register">Create an account →</a></div></article>
-          <article class="journey"><span class="kicker">When you need machine access</span><h3>Connect an MCP client</h3><p>Authorize an MCP client with OAuth 2.1 + PKCE. Pair your computer with <code>invincible connect</code> to enable machine tools; the agent connects outbound, with no inbound ports to open.</p><div class="actions"><a href="#wire">See the connection →</a></div></article>
+          <article class="journey"><span class="kicker">When you need machine access</span><h3>Connect an MCP client</h3><p>Authorize an MCP client with OAuth 2.1 + PKCE. Pair your computer once with <code>invincible harness setup</code>, then keep it online with <code>invincible harness connect</code> to enable machine tools; the agent connects outbound, with no inbound ports to open.</p><div class="actions"><a href="#wire">See the connection →</a></div></article>
           <article class="journey"><span class="kicker">Across every client</span><h3>One account, shared context</h3><p>Use compatible clients with your connected models. Review sessions, versioned task state, memory, provider attempts, and usage from the dashboard.</p><div class="actions"><a href="/login">Open the dashboard →</a></div></article>
         </div>
       </div>
@@ -392,12 +401,12 @@
           <p>Provider choice stays replaceable. Your account, projects, credentials, memory, and continuity state remain attached to Invincible.</p>
         </div>
         <div class="features">
-          <article class="feature"><h3>Per-user BYOK failover</h3><p>Choose <code>auto</code>, <code>pinned</code>, or <code>chain</code> routing. Eligible rate limits, server errors, and network failures can move to another of your credentials. Provider keys are encrypted at rest; account API keys are shown once and stored as hashes.</p></article>
-          <article class="feature"><h3>Versioned continuity</h3><p>Task state is versioned with optimistic checks, immutable checkpoints pin important states, and one pre-failover snapshot captures the provider failure before routing continues — only when task state exists.</p></article>
-          <article class="feature"><h3>Scoped lexical memory</h3><p>PostgreSQL stores memories with layer, confidence, provenance, and project scope. Retrieval uses full-text matching, recency, kind, and confidence under a bounded context budget. Semantic/vector search is not implemented; say "remember this" to save explicitly.</p></article>
-          <article class="feature"><h3>Nineteen OAuth-protected MCP tools</h3><p>Use file and shell operations, search, directory and Git inspection, screenshots, task state, checkpoints, memory, and projects. Shell execution and file writes require a single-use confirmation token.</p></article>
-          <article class="feature"><h3>Paired machine execution</h3><p>When agent routing is enabled, machine jobs run on your paired computer over its outbound connection, with a long-poll fallback. File and shell access stays inside a home-relative sandbox; confirmed actions retain their approval gate.</p></article>
-          <article class="feature"><h3>Usage and run history</h3><p>The dashboard aggregates attempts, failovers, and input/output token counts by day and provider/model. Provider-attempt history and continuity projections show how tracked work moved forward.</p></article>
+          <article class="feature"><h3>Per-user BYOK failover</h3><p>One stable endpoint for your agents. Choose <code>auto</code>, <code>pinned</code>, or <code>chain</code> routing; eligible rate limits, server errors, and network failures move to another of your credentials. Provider keys are encrypted at rest; account API keys are shown once and stored as hashes.</p></article>
+          <article class="feature"><h3>Versioned continuity</h3><p>Pick up where you left off, even when a provider fails. Task state is versioned with optimistic checks, immutable checkpoints pin important states, and one pre-failover snapshot is captured before routing continues — only when task state exists.</p></article>
+          <article class="feature"><h3>Scoped lexical memory</h3><p>Remember what matters across sessions and clients. PostgreSQL stores memories with layer, confidence, provenance, and project scope; retrieval uses full-text matching, recency, kind, and confidence under one bounded budget. Semantic/vector search is not implemented; say "remember this" to save explicitly.</p></article>
+          <article class="feature"><h3>Nineteen OAuth-protected MCP tools</h3><p>Let capable clients act — carefully. File and shell operations, search, directory and Git inspection, screenshots, task state, checkpoints, memory, and projects are exposed over MCP. Shell execution and file writes require a single-use confirmation token.</p></article>
+          <article class="feature"><h3>Paired machine execution</h3><p>Keep the security decisions server-side, run the work on your machine. When agent routing is enabled, machine jobs run on your paired computer over its outbound connection, inside a home-relative sandbox; confirmed actions keep their approval gate.</p></article>
+          <article class="feature"><h3>Usage and run history</h3><p>See what your agents actually used. The dashboard aggregates attempts, failovers, and input/output token counts by day and provider/model, with provider-attempt history and continuity projections for tracked work.</p></article>
         </div>
       </div>
     </section>
@@ -409,8 +418,8 @@
           <p>Short answers with the same semantics the docs pin. Nothing here promises what the code does not do yet.</p>
         </div>
         <div class="faq">
-          <details><summary>Do I need to run a server or a database?</summary><p>No. Create an account on the hosted service and everything — providers, sessions, memory, task state — lives server-side. Pairing a machine is one user command (<code>pip install invincible-ai</code>, then <code>invincible harness connect</code>). The same code also self-hosts on a laptop backed by PostgreSQL if you prefer to operate it yourself.</p></details>
-          <details><summary>What happens when a provider rate-limits me?</summary><p>A 429 or 5xx records a failure, puts that credential in an exponential cooldown (30s up to a 300s cap), and tries your next credential. A 401 or 403 disables that credential in memory for the rest of the server's life and moves to your next one. When every credential is exhausted the gateway answers 503 — your agent retries one stable endpoint instead of dying on the first 429.</p></details>
+          <details><summary>Do I need to run a server or a database?</summary><p>No. Create an account on the hosted service and everything — providers, sessions, memory, task state — lives server-side. To reach a machine, install the CLI (<code>pip install invincible-ai</code>), pair it once (<code>invincible harness setup</code>), then keep it online (<code>invincible harness connect</code>). The same code also self-hosts on a laptop backed by PostgreSQL if you prefer to operate it yourself.</p></details>
+          <details><summary>What happens when a provider rate-limits me?</summary><p>Your agent retries one stable endpoint instead of dying on the first 429. A 429 or 5xx cools that credential down (30s, doubling to a 300s cap) and tries your next credential; a 401 or 403 disables it for the server's life and moves on. When every credential is exhausted the gateway answers 503.</p></details>
           <details><summary>Where do approved tool calls actually execute?</summary><p>On a hosted deployment, on your paired machine; on a single-user self-host without agent routing, on the server host itself. Either way the server keeps every security decision (denylist, staging, single-use confirmation token, audit, per-user routing) and the agent only does the work inside a home-relative sandbox, with denylisted credential paths blocked. An offline agent answers immediately instead of hanging.</p></details>
           <details><summary>What does memory remember?</summary><p>Scoped lexical memories in PostgreSQL — notes, facts, preferences, decisions — ranked by full-text relevance, recency, kind, and confidence under one bounded budget shared with the continuity brief. Say "remember this" to save explicitly, and manage or delete everything from the dashboard. Semantic or vector search is not built yet.</p></details>
           <details><summary>Which clients work with Invincible?</summary><p>Any OpenAI-compatible chat client against <code>/v1/chat/completions</code>, Claude Code against <code>/v1/messages</code> via <code>ANTHROPIC_BASE_URL</code>, Codex against <code>/v1/responses</code>, and any MCP-compatible client against <code>/mcp</code> through the browser OAuth flow.</p></details>
@@ -423,10 +432,11 @@
     <section class="content-section">
       <div class="wrap">
         <div class="cta-band">
-          <h2>Bring a machine online when you need it.</h2>
-          <p>Pair the computer you want your MCP client to reach. The agent connects outbound; hosted users do not need to run a server or provision a database.</p>
+          <h2>Bring a machine online only when you need it.</h2>
+          <p>Chat, memory, and continuity need no pairing. When you want your MCP client to reach a computer, pair it once and keep it online — the agent connects outbound, and hosted users never run a server or database.</p>
           <pre><span class="c">pip install invincible-ai</span>
-<span class="c">invincible connect</span>  <span class="dim" style="color:#747c88;"># sign in once; the agent comes online</span></pre>
+<span class="c">invincible harness setup</span>    <span class="dim" style="color:#747c88;"># pair once, prints MCP config</span>
+<span class="c">invincible harness connect</span>  <span class="dim" style="color:#747c88;"># keep this machine online</span></pre>
           <div class="actions">
             <a class="btn" href="/register">Create your account</a>
             <a class="btn ghost" href="/login">Sign in</a>
@@ -439,8 +449,9 @@
   <footer>
     <div class="wrap">
       <div><span class="live-dot"></span>Invincible — remote-first AI continuity gateway · Lexical memory today · No shared provider keys</div>
-      <div><a href="/login">Sign in</a> · <a href="/register">Create account</a> · <a href="/health">Service health</a></div>
+      <div><a href="#architecture">Security</a> · <a href="#wire">Models</a> · <a href="#faq">FAQ</a> · <a href="/login">Sign in</a> · <a href="/register">Create account</a> · <a href="/health">Service health</a></div>
     </div>
   </footer>
+  <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Do I need to run a server or a database?", "acceptedAnswer": {"@type": "Answer", "text": "No. The hosted service holds providers, sessions, memory, and task state server-side. Pair a machine only for remote tools."}}, {"@type": "Question", "name": "What happens when a provider rate-limits me?", "acceptedAnswer": {"@type": "Answer", "text": "Rate limits and server errors cool down that credential and fail over to your next credential; when all are exhausted the gateway answers 503."}}, {"@type": "Question", "name": "Is there a shared provider pool?", "acceptedAnswer": {"@type": "Answer", "text": "No. Every request routes only through your own connected provider credentials."}}]}</script>
 </body>
 </html>

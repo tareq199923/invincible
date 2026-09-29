@@ -49,7 +49,8 @@ async def test_root_serves_landing_page_to_browsers(client):
     assert "OAuth 2.1 MCP" in body
     assert "Per-user BYOK failover" in body
     assert "OpenAI Responses (Codex)" in body
-    assert "Four steps. Pair only when you need machine tools." in body
+    assert "Three steps to chat." in body
+    assert "Pair only when you need machine tools." in body
     assert "public HTTPS base URL" in body
     assert "raw key is shown once, stored as a hash" in body
     assert "Nineteen OAuth-protected MCP tools" in body
@@ -57,7 +58,7 @@ async def test_root_serves_landing_page_to_browsers(client):
     assert "When agent routing is enabled" in body
     assert "Zero inbound ports" in body
     assert "Frequently asked questions" in body
-    assert "Bring a machine online when you need it." in body
+    assert "Bring a machine online only when you need it." in body
     assert "Every provider" not in body
     assert "pip install invincible-ai" in body
     assert "invincible harness connect" in body
