@@ -151,7 +151,10 @@ async def _persist_new_turns(
     counted the caller's own input turns as output (deep code review
     2026-09-24, finding 5).
     """
-    new_turns = to_persist + [assistant_message]
+    new_turns = [
+        message for message in to_persist
+        if message.get("role") != "system"
+    ] + [assistant_message]
     try:
         await store.append(
             session_id,

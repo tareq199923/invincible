@@ -27,9 +27,9 @@ from invincible.compat.common import (
     route_headers,
     upstream_error_detail,
 )
+from invincible.core.chat_service import _persist_new_turns
 from invincible.core.compression import compress_messages, compression_enabled
 from invincible.core.context_builder import build_context_messages
-from invincible.core.memory import MemoryStore
 from invincible.core.principal import Principal
 from invincible.core.router import (
     NO_CREDENTIALS_MESSAGE,
@@ -65,44 +65,6 @@ def _assistant_message_from_provider(provider_message: dict) -> dict:
     if tool_calls:
         message["tool_calls"] = tool_calls
     return message
-
-
-async def _persist(store, session_id, new_messages: list, assistant_message: dict,
-                   memory: MemoryStore | None,
-                   principal: Principal, *, max_turns: int | None = None):
-    """Append this request's new turns to the session under the store's lock.
-
-    ``new_messages`` is the request's own messages (system role already
-    excluded here so repeated system prompts never accumulate in history);
-    the assistant reply is appended after them. Memories are extracted from
-    the persisted turns (Phase 4) on a best-effort basis.
-
-    ``principal`` is required (multi-tenant audit Step 2): persistence must
-    land under the caller's own session, never a fallback owner.
-    ``max_turns`` (Phase 1) is the caller's per-user history cap.
-    """
-    saved = [m for m in new_messages if m.get("role") != "system"]
-    new_turns = saved + [assistant_message]
-    try:
-        await store.append(
-            session_id,
-            new_turns,
-            user_id=principal.user_id,
-            project_id=principal.project_id,
-            max_turns=max_turns,
-        )
-    except Exception:
-        logger.exception("Failed to persist session history for %s", session_id)
-    if memory is None:
-        return
-    try:
-        await memory.record_memories(
-            user_id=principal.user_id,
-            client_session_id=session_id,
-            messages_list=new_turns,
-        )
-    except Exception:
-        logger.exception("Failed to record memories for %s", session_id)
 
 
 @router.post("/v1/messages")
@@ -231,8 +193,8 @@ async def anthropic_messages(
             # Opt-in capture: the assembled assistant turn (text +
             # tool_calls) joins the raw-chunk dump for this request id.
             record_stream_items(request_id, accumulated)
-            await _persist(
-                store, session_id, internal_messages, accumulated, memory,
+            await _persist_new_turns(
+                internal_messages, accumulated, store, session_id, memory,
                 principal, max_turns=max_turns,
             )
             if runs_store is not None:
@@ -285,11 +247,11 @@ async def anthropic_messages(
 
     choices = result.get("choices") or []
     if choices and "message" in choices[0]:
-        await _persist(
-            store,
-            session_id,
+        await _persist_new_turns(
             internal_messages,
             _assistant_message_from_provider(choices[0]["message"]),
+            store,
+            session_id,
             memory,
             principal,
             max_turns=max_turns,

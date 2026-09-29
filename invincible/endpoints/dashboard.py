@@ -152,7 +152,8 @@ async def overview_page(
     sessions_store = _state(request, "sessions")
     engine = _engine(request)
     email = await _email(engine, principal)
-    projects = await ProjectService(engine).list(principal.user_id)
+    projects = await ProjectService(engine).list(
+        principal.user_id, include_archived=True)
     keys = await ApiKeyStore(engine).list(principal.user_id)
     recent_sessions = await sessions_store.list_for_user(
         principal.user_id, limit=10)
@@ -187,7 +188,7 @@ async def overview_page(
         "dashboard.html", request,
         user_email=email,
         counts={
-            "projects": len(projects),
+            "projects": sum(p["archived_at"] is None for p in projects),
             "sessions":
                 await sessions_store.count_for_user(principal.user_id),
             "api_keys": active_keys,
@@ -197,7 +198,7 @@ async def overview_page(
         },
         needs_setup=not (has_provider and active_keys > 0),
         recent_sessions=recent_sessions,
-        project_names=await _project_names(engine, principal.user_id),
+        project_names={p["id"]: p["name"] for p in projects},
         sparkline=sparkline,
     )
 

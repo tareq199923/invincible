@@ -78,8 +78,9 @@ Decisions recorded for the platform work:
 - **Accounts**: email + password (argon2id); API keys for programmatic
   clients (hashed at rest, shown once, revocable).
 - **Local mode is preserved indefinitely** as a developer/self-hosted mode.
-- **Providers v1**: platform-managed pool; per-user/project BYOK is
-  designed (a config-source seam) but deliberately not built.
+- **Provider routing**: per-user BYOK is implemented (Phase 9); the
+  packaged provider YAML remains for tests and direct `Router` construction,
+  not as a shared live-traffic pool.
 - **Session identity** migrates to relational ownership
   (`user_id`/`project_id`/`client_session_id`); string namespacing is a
   transitional technique only.
