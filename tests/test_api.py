@@ -45,7 +45,17 @@ async def test_root_serves_landing_page_to_browsers(client):
     assert "One gateway." in body
     assert "Your providers." in body
     assert "Your continuity." in body
-    assert "https://invincible-ai.me/v1" in body
+    # Snippets render the REQUEST host (self-hosts show their own domain,
+    # never the production one baked in).
+    assert "http://test/v1" in body
+    assert "http://test/mcp" in body
+    assert "invincible-ai.me" not in body
+    # Head metadata: canonical/OG/Twitter + favicon (no og:image - there
+    # is no raster share asset, and a broken image URL is worse).
+    assert 'rel="canonical" href="http://test/"' in body
+    assert 'property="og:url" content="http://test/"' in body
+    assert 'name="twitter:card" content="summary"' in body
+    assert "/static/favicon.svg" in body
     assert "OAuth 2.1 MCP" in body
     assert "Per-user BYOK failover" in body
     assert "OpenAI Responses (Codex)" in body

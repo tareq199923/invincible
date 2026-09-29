@@ -8,6 +8,13 @@
   <meta property="og:title" content="Invincible — One gateway. Your providers. Your continuity.">
   <meta property="og:description" content="One stable endpoint for OpenAI, Anthropic, and Codex clients through your own provider keys. No machine needed to start; pair one only for remote file and shell tools.">
   <meta property="og:type" content="website">
+  <meta property="og:url" content="{{ canonical_url }}">
+  <meta property="og:site_name" content="Invincible">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Invincible — One gateway. Your providers. Your continuity.">
+  <meta name="twitter:description" content="One stable endpoint for OpenAI, Anthropic, and Codex clients through your own provider keys. No machine needed to start; pair one only for remote file and shell tools.">
+  <link rel="canonical" href="{{ canonical_url }}">
+  <link rel="icon" href="/static/favicon.svg?v={{ asset_rev('favicon.svg') }}" type="image/svg+xml">
   <meta name="theme-color" content="#0a0d13">
   <style>
     :root {
@@ -62,7 +69,7 @@
     .logo__name em { color: var(--accent); font-style: normal; font-weight: 800; }
     .topnav { display: flex; gap: 4px; align-items: center; }
     .topnav a { padding: 8px 11px; color: #b8bec7; border: 1px solid transparent; border-radius: 6px; font-size: 0.76rem; font-weight: 730; text-decoration: none; transition: color .15s ease, background .15s ease, transform .15s ease; }
-    .topnav a:hover { color: #fff; background: var(--surface-2, #1c212a); transform: translateY(-1px); }
+    .topnav a:hover { color: #fff; background: #1c212a; transform: translateY(-1px); }
     .topnav a.cta { color: var(--night); background: var(--accent); border-color: var(--accent); }
     .topnav a.cta:hover { color: var(--night); background: #aeb4ff; }
 
@@ -200,7 +207,7 @@
     .cta-band .actions { display: flex; gap: 9px; flex-wrap: wrap; }
 
     footer { padding: 28px 0 38px; color: var(--muted); font-size: 0.7rem; }
-    footer .wrap { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); }
+    footer .wrap { display: flex; align-items: center; justify-content: space-between; padding-top: 18px; border-top: 1px solid var(--line); }
     .live-dot { display: inline-block; width: 7px; height: 7px; margin-right: 7px; background: var(--accent); border-radius: 50%; }
 
     :focus-visible { outline: 3px solid rgba(139,147,255,.72); outline-offset: 3px; }
@@ -275,10 +282,10 @@
 <span class="dim">$</span> <span class="cmd">invincible harness setup</span> <span class="dim"># pair once, prints MCP config</span>
 <span class="dim">$</span> <span class="cmd">invincible harness connect</span> <span class="dim"># this machine goes online</span>
 <span class="ok">✓ Paired — machine tools appear once connected</span>
-<span class="dim">base</span>  <span class="cmd">https://invincible-ai.me/v1</span>
+<span class="dim">base</span>  <span class="cmd">{{ base_url }}/v1</span>
 <span class="dim">key</span>   <span class="cmd">inv_…</span> <span class="ok">✓ shown once · revocable</span>
 <span class="dim">chat</span>  OpenAI Chat · Anthropic Messages · Responses (Codex)
-<span class="dim">tools</span> <span class="cmd">https://invincible-ai.me/mcp</span> <span class="ok">✓ OAuth</span></pre>
+<span class="dim">tools</span> <span class="cmd">{{ base_url }}/mcp</span> <span class="ok">✓ OAuth</span></pre>
         </div>
       </div>
       <div class="wrap">
@@ -373,21 +380,21 @@
           <p>Connect an OpenAI-compatible Chat Completions provider with a public HTTPS URL. Its credentials stay encrypted on the service and never need to be sent to your AI client.</p>
         </div>
         <div class="wire-grid">
-          <article class="wire-card"><header>Chat — any OpenAI client</header><pre><span class="c">curl https://invincible-ai.me/v1/chat/completions</span> \
+          <article class="wire-card"><header>Chat — any OpenAI client</header><pre><span class="c">curl {{ base_url }}/v1/chat/completions</span> \
   -H <span class="k">"Authorization: Bearer inv_…"</span> \
   -H <span class="k">"X-Session-Id: my-conversation"</span> \
   -d <span class="k">'{"messages": [{"role": "user",
     "content": "Hello!"}]}'</span></pre><p>History under the session id is prepended upstream; the reply is persisted back. A 429 cools down and fails over — the client sees one stable endpoint.</p></article>
           <article class="wire-card"><header>Claude Code + Codex</header><pre><span class="dim" style="color:#747c88;"># Claude Code — Anthropic Messages</span>
-<span class="c">ANTHROPIC_BASE_URL=https://invincible-ai.me</span>
+<span class="c">ANTHROPIC_BASE_URL={{ base_url }}</span>
 <span class="dim" style="color:#747c88;"># Codex — OpenAI Responses endpoint</span>
-<span class="c">https://invincible-ai.me/v1/responses</span>
+<span class="c">{{ base_url }}/v1/responses</span>
 <span class="dim" style="color:#747c88;"># authenticate with your inv_ API key</span>
 <span class="dim" style="color:#747c88;"># and use your account's connected providers</span></pre><p>OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses are separate client protocols backed by your connected OpenAI-compatible provider credentials.</p></article>
           <article class="wire-card"><header>Tools — OAuth-enabled MCP client</header><pre>{
   <span class="c">"mcpServers"</span>: {
     <span class="c">"invincible"</span>: {
-      <span class="c">"url"</span>: <span class="k">"https://invincible-ai.me/mcp"</span>
+      <span class="c">"url"</span>: <span class="k">"{{ base_url }}/mcp"</span>
     }
   }
 }</pre><p>Approve the connector in the browser — OAuth 2.1 + PKCE mints the bearer token. Destructive calls return a confirmation token first; nothing runs until you approve it.</p></article>
@@ -453,6 +460,6 @@
       <div><a href="/docs">Docs</a> · <a href="#architecture">Security</a> · <a href="#wire">Models</a> · <a href="#faq">FAQ</a> · <a href="/login">Sign in</a> · <a href="/register">Create account</a> · <a href="/health">Service health</a></div>
     </div>
   </footer>
-  <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Do I need to run a server or a database?", "acceptedAnswer": {"@type": "Answer", "text": "No. The hosted service holds providers, sessions, memory, and task state server-side. Pair a machine only for remote tools."}}, {"@type": "Question", "name": "What happens when a provider rate-limits me?", "acceptedAnswer": {"@type": "Answer", "text": "Rate limits and server errors cool down that credential and fail over to your next credential; when all are exhausted the gateway answers 503."}}, {"@type": "Question", "name": "Is there a shared provider pool?", "acceptedAnswer": {"@type": "Answer", "text": "No. Every request routes only through your own connected provider credentials."}}]}</script>
+  <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Do I need to run a server or a database?", "acceptedAnswer": {"@type": "Answer", "text": "No. The hosted service holds providers, sessions, memory, and task state server-side. Pair a machine only for remote tools."}}, {"@type": "Question", "name": "What happens when a provider rate-limits me?", "acceptedAnswer": {"@type": "Answer", "text": "Rate limits and server errors cool down that credential and fail over to your next credential; when all are exhausted the gateway answers 503."}}, {"@type": "Question", "name": "Where do approved tool calls actually execute?", "acceptedAnswer": {"@type": "Answer", "text": "On a hosted deployment, on your paired machine; on a single-user self-host without agent routing, on the server host itself."}}, {"@type": "Question", "name": "What does memory remember?", "acceptedAnswer": {"@type": "Answer", "text": "Scoped lexical memories in PostgreSQL, ranked by full-text relevance, recency, kind, and confidence. Say 'remember this' to save explicitly."}}, {"@type": "Question", "name": "Which clients work with Invincible?", "acceptedAnswer": {"@type": "Answer", "text": "Any OpenAI-compatible chat client, Claude Code via ANTHROPIC_BASE_URL, Codex via the Responses endpoint, and any MCP-compatible client."}}, {"@type": "Question", "name": "Is there a shared provider pool I can fall back to?", "acceptedAnswer": {"@type": "Answer", "text": "No. Every request routes only through your own connected provider credentials."}}, {"@type": "Question", "name": "Can one account see another account's data?", "acceptedAnswer": {"@type": "Answer", "text": "No. Projects, credentials, sessions, runs, memories, continuity state, and MCP grants are all owner-scoped per account."}}]}</script>
 </body>
 </html>

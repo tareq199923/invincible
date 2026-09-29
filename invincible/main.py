@@ -257,8 +257,14 @@ async def root(request: Request):
     matches the 401 redirect handler's: real browsers always list
     text/html first in Accept."""
     if "text/html" in request.headers.get("accept", ""):
+        # Request-derived host (same _base_url convention as the OAuth
+        # metadata): a self-hosted copy must show ITS OWN snippets, never
+        # the production domain baked into the template.
+        base = str(request.base_url).rstrip("/")
         return templates.TemplateResponse(
-            request, "landing.html", {})
+            request, "landing.html",
+            {"base_url": base, "canonical_url": f"{base}/"},
+        )
     return {"status": "healthy"}
 
 @app.head("/")
