@@ -387,7 +387,13 @@ turns = Table(
         nullable=False,
     ),
     Column("seq", Integer, nullable=False),
-    UniqueConstraint("session_id", "seq", name="uq_turns_session_seq"),
+    # DEFERRABLE INITIALLY DEFERRED: SessionStore._enforce_retention
+    # re-sequences turns in one UPDATE; a non-deferred check fires per row
+    # mid-statement and collides. Schema half in migration 0014.
+    UniqueConstraint(
+        "session_id", "seq", name="uq_turns_session_seq",
+        deferrable=True, initially="DEFERRED",
+    ),
 )
 
 messages = Table(
