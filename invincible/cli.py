@@ -1823,7 +1823,7 @@ def _load_client_config(path: str | None = None) -> dict:
 
 @click.group("harness")
 def harness():
-    """Machine harness (flexx-style remote hands): pair this PC, keep it
+    """Machine harness (remote hands): pair this PC, keep it
     connected, inspect it, and install it as an always-on service.
     """
 

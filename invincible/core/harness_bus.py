@@ -1,6 +1,5 @@
 # invincible/core/harness_bus.py
-"""Harness event bus (H0 in-memory, H5 durable) — port of Hendrixer
-`harness/bus.ts`.
+"""Harness event bus (H0 in-memory, H5 durable).
 
 Two jobs:
   1. broadcast every event live to subscribers (WS inspector, dashboard)

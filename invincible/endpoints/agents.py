@@ -12,7 +12,7 @@ realms meet here, and they never mix:
   ``require_agent_auth`` - a deliberately narrow dependency, NOT
   endpoints/auth.py's require_auth. A key resolves to exactly one user,
   and registry queues/sockets are keyed by that user - routing is the
-  isolation. WS is outbound-only from the agent (flexx-style relay);
+   isolation. WS is outbound-only from the agent (relay);
   WS-first with long-poll fallback.
 - Read-only companions in that same inv_-key realm: ``GET
   /agent/machines`` (machine inventory) and ``GET /agent/whoami`` (which
@@ -212,7 +212,7 @@ async def agent_status(request: Request) -> dict:
 
 @router.websocket("/agent/ws")
 async def agent_ws(websocket: WebSocket) -> None:
-    """Outbound-only relay socket for the paired agent (H1, flexx-style).
+    """Outbound-only relay socket for the paired agent (H1).
 
     The agent connects here (authenticating with its inv_ key) and the
     server pushes ``{"type": "job", "job": {...}}`` messages; the agent
@@ -280,7 +280,7 @@ async def agent_ws(websocket: WebSocket) -> None:
 
 @router.websocket("/harness/events")
 async def harness_events_ws(websocket: WebSocket) -> None:
-    """Read-only inspector stream (H1, Hendrixer inspector parity).
+    """Read-only inspector stream (H1).
 
     Session-cookie realm. Replays the bounded bus history, then streams
     new events by polling `history(since_ts)` — no cross-thread listener

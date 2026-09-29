@@ -96,7 +96,7 @@ invincible/
     ├── tool_executor.py        MCP tool execution + denylists + approval
     ├── agent_registry.py       Per-user agent queues/futures (in-memory; long-poll
     │                           + WS relay transports since harness H1)
-    ├── harness_events.py       Harness event contract (H0; Hendrixer events.ts parity)
+    ├── harness_events.py       Harness event contract (H0)
     ├── harness_bus.py          In-memory harness event bus: emit/subscribe/history (H0)
     ├── harness_policy.py       Unified pre-execution policy gate (H2; no new patterns)
     ├── harness_runtime.py      Durable agent-loop spine: policy → emit → execute (H2)

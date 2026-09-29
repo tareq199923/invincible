@@ -1,6 +1,6 @@
 """Harness H5: durable workflow event log.
 
-Additive table for the harness event bus (Hendrixer bus.ts parity):
+Additive table for the harness event bus:
 
 - ``workflow_events`` - append-only timeline per workflow (id identity
   sequence, workflow_id, type, JSONB payload, epoch created_at) plus an

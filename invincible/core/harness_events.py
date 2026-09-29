@@ -1,11 +1,11 @@
 # invincible/core/harness_events.py
-"""Harness event contract (H0) — port of Hendrixer `shared/events.ts`.
+"""Harness event contract (H0).
 
 Every step the harness takes becomes an event on the bus. The Inspector UI
 (and later the dashboard Workflows page) only ever renders this stream — it
 never talks to the model or tools directly.
 
-Event names match Hendrixer 1:1 so lesson notes map directly. Payloads are
+Event names are the stable contract asserted in tests. Payloads are
 METADATA ONLY (tool names, ids, statuses) — never commands, paths, file
 contents, or secrets (see docs/SECURITY.md secrets discipline).
 """
@@ -18,7 +18,7 @@ from typing import Any, TypedDict
 
 
 class HarnessEventType(str, Enum):
-    """Every event the harness can emit (Hendrixer `EventType` parity)."""
+    """Every event the harness can emit."""
 
     WORKFLOW_STARTED = "workflow.started"
     WORKFLOW_COMPLETED = "workflow.completed"

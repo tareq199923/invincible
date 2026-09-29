@@ -86,7 +86,7 @@ def ws_url_for(base_url: str) -> str:
 
 def hello_frame() -> dict:
     """H1 hello (+H6c machine_id): machine identity + capability
-    advertisement (flexx-style auto-discovery, cheap probes only)."""
+    advertisement (auto-discovery, cheap probes only)."""
     return {
         "type": "hello",
         "machine_id": machine_id(),
@@ -106,7 +106,7 @@ async def run_agent_ws(
     *,
     stop: asyncio.Event | None = None,
 ) -> None:
-    """WS relay loop (H1, flexx-style): outbound-only connection, server
+    """WS relay loop (H1): outbound-only connection, server
     pushes jobs, agent replies with results. Raises on disconnect so the
     caller falls back to polling.
 

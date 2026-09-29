@@ -204,7 +204,7 @@ def test_login_command_reports_failure(monkeypatch):
 
 
 def test_login_defaults_to_hosted_service(monkeypatch, tmp_path):
-    """Phase 11: the flexx-style default - plain `invincible login`
+    """Phase 11: plain `invincible login`
     pairs with the hosted service, no URL, no questions. Self-hosters
     opt out with --server (pinned separately by every other test).
     --config stays on tmp_path so the suite never overwrites the real

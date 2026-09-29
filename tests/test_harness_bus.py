@@ -51,7 +51,7 @@ def test_history_bounded_and_since_ts_filter():
     assert [e["message"] for e in since] == ["m3", "m4"]
 
 
-def test_event_names_match_hendrixer_contract():
+def test_event_names_match_contract():
     assert HarnessEventType.WORKFLOW_STARTED == "workflow.started"
     assert HarnessEventType.TOOL_REQUESTED == "tool.requested"
     assert HarnessEventType.TOOL_COMPLETED == "tool.completed"

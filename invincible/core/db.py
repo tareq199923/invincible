@@ -726,7 +726,7 @@ device_codes = Table(
 
 
 # ---------------------------------------------------------------------------
-# Harness H5: durable workflow event log (Hendrixer bus.ts parity).
+# Harness H5: durable workflow event log.
 #
 # Append-only timeline per workflow: every harness step (started,
 # tool requested/completed/failed, handoffs, plans, approvals) lands here

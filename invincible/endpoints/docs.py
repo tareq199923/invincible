@@ -1,5 +1,5 @@
 # invincible/endpoints/docs.py
-"""Public documentation site (flexx.dev/docs-style).
+"""Public documentation site.
 
 Curated, standalone pages served by the app itself: ``GET /docs`` renders
 the introduction, ``GET /docs/{slug}`` renders one allowlisted guide.

@@ -1,5 +1,5 @@
 # tests/test_docs.py
-"""Public docs site (/docs): curated flexx-style guides, allowlist only.
+"""Public docs site (/docs): curated guides, allowlist only.
 
 Hermetic by design: the docs routes touch no stores and need no auth,
 so these tests drive the real app over ASGI without the Postgres-backed
@@ -70,7 +70,7 @@ async def test_docs_honesty_markers(docs_client):
 
 
 async def test_docs_unknown_and_internal_404(docs_client):
-    for slug in ("nope", "multi-tenant-audit", "invincible-vs-flexx",
+    for slug in ("nope", "multi-tenant-audit",
                  "workqueue", "railway-account-transfer", "testing",
                  "releasing"):
         resp = await docs_client.get(f"/docs/{slug}")

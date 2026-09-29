@@ -1,6 +1,5 @@
 # invincible/core/harness_supervisor.py
-"""Hierarchical supervision (H4) — port of Hendrixer
-`harness/supervisor.ts`.
+"""Hierarchical supervision (H4).
 
 Unlike a handoff (lateral, supervisor-less), the supervisor keeps control
 the whole time: PLAN → dispatch sub-agents in parallel → fan in →

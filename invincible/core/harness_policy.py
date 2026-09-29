@@ -1,6 +1,5 @@
 # invincible/core/harness_policy.py
-"""Unified pre-execution policy gate (H2) — port of Hendrixer's
-`policy.check(step)` / `ToolPolicy.beforeToolCall`.
+"""Unified pre-execution policy gate (H2).
 
 This module adds NO new block patterns. It orchestrates the checks that
 already exist, in one place, so every machine-plane entry point (MCP

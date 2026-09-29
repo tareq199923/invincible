@@ -215,7 +215,7 @@ app.include_router(accounts_router)
 app.include_router(agents_router)
 # Phase 5 dashboard pages: cookie-realm only (require_user_session inside).
 app.include_router(dashboard_router)
-# Public docs site (flexx.dev/docs-style): no auth, allowlisted slugs only.
+# Public docs site: no auth, allowlisted slugs only.
 app.include_router(docs_router)
 # Dashboard webchat (text-only BYOK chat with SSE streaming): same
 # cookie realm as the dashboard pages.

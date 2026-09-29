@@ -1,4 +1,4 @@
-# Harness Plan — flexx.dev behavior + Hendrixer structure (additive, non-breaking)
+# Harness Plan — outbound-only harness behavior (additive, non-breaking)
 
 > Status 2026-09-25: H0 (events/bus), H1 (WS relay), H2 (policy+spine),
 > H3 (hydration), H4 (router/supervisor), H5 (durable approvals, revs
@@ -7,8 +7,8 @@
 
 ## 1. Goal
 
-Build a **flexx.dev-like harness** (outbound-only machine agent, relay, MCP
-tools, screenshots/tunneling, auto-discovery, memory) with **Hendrixer
+Build an **outbound-only harness** (outbound-only machine agent, relay, MCP
+tools, screenshots/tunneling, auto-discovery, memory) with **event/bus
 `harness-engineering` code structure** (`events` + `bus.emit()`, WebSocket
 streams, `tools / policy / memory / router / supervisor / approvals`,
 `runtime.runWorkflow` spine) **without breaking** Invincible's existing
@@ -61,9 +61,9 @@ structure, auth realms, wire protocols, or conventions.
 | Settings | `core/settings.py` | `AGENT_ONLINE_TTL=60`, `POLL_HOLD=25`, `JOB_GRACE=10`, all toggles live-read |
 | Deps | `pyproject.toml` | `fastapi, uvicorn, httpx, sqlalchemy[asyncio], asyncpg, alembic, argon2-cffi, cryptography, jinja2, click, PyYAML, python-dotenv`. No `websockets`, no `langchain`. Python 3.10–3.14 |
 
-## 3. Target mapping (Hendrixer → Invincible, new files only)
+## 3. Target mapping (new files only)
 
-| Hendrixer (`harness-engineering/main`) | Invincible new module | Notes |
+| Source pattern | Invincible new module | Notes |
 |---|---|---|
 | `shared/events.ts` (`EventType` enum + `AgentEvent`) | `invincible/core/harness_events.py` | `HarnessEventType(str, Enum)` + TypedDicts. Same 15 event names. No DB |
 | `harness/bus.ts` (`emit`, `subscribe`, `history`) | `invincible/core/harness_bus.py` | in-memory first (H0), Postgres append added H5. Also forwards `approval.*`/`tool.*` metadata to existing `AuditLog` |
@@ -195,7 +195,7 @@ structure, auth realms, wire protocols, or conventions.
 - Tests: crash-resume (kill mid-tool, resume no-duplicate), suspend days +
   resume, idempotency keys. `docs/SECURITY.md` + `docs/DEPLOYMENT.md` same PR.
 
-### H6a — flexx parity tools, safe set
+### H6a — parity tools, safe set
 
 - `code_search` (rg → walk fallback, respects `check_agent_read`),
   `process_list` (stdlib `ps`/`tasklist`, read-only no-confirm), `screenshot`

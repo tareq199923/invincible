@@ -1,7 +1,6 @@
 """Harness H5: durable-approval columns on pending_actions.
 
-Two additive nullable columns for the slow-path ApprovalStore
-(Hendrixer approvals.ts parity):
+Two additive nullable columns for the slow-path ApprovalStore:
 
 - ``suspended_workflow_id`` - the workflow parked awaiting this human
   decision (NULL = fast-path confirm_action token, unchanged behavior).

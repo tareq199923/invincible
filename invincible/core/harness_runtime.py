@@ -1,6 +1,5 @@
 # invincible/core/harness_runtime.py
-"""Durable agent loop spine (H2) + context hydration (H3) — port of
-Hendrixer `harness/runtime.ts` + `harness/memory.ts`.
+"""Durable agent loop spine (H2) + context hydration (H3).
 
 The spine of the whole harness program:
 
@@ -21,16 +20,16 @@ Deliberately dependency-injected: this module never imports the provider
 but stays decoupled). H4 (router/supervisor) and the compat endpoints
 supply the callables; unit tests supply fakes.
 
-Semantics (Hendrixer parity):
+Semantics:
 - ``agent_next(context)`` returns ``{"text": str, "tool_calls": [...]}``.
   Empty ``tool_calls`` means done → ``workflow.completed``.
 - Policy denials (``ToolBlocked``) become structured ``tool.failed``
   results the agent can self-correct from — the loop continues, it never
-  crashes the workflow (their L3 "structured errors" lesson).
+   crashes the workflow (structured errors).
 - Unexpected executor exceptions also become ``tool.failed`` results.
-- ``max_steps`` overflow → ``workflow.failed`` (their ``MAX_STEPS``).
+- ``max_steps`` overflow → ``workflow.failed``.
 
-H3 adds the memory half of their `memory.ts`:
+H3 adds the memory half:
 - ``hydrate_context`` assembles what the model sees THIS turn (system
   prompt + pinned task + running summary + injection blocks from
   ``context_builder.assemble`` + recent turns verbatim). History (the
@@ -198,8 +197,7 @@ def hydrate_context(
     system_prompt: str = "",
     injections: list | None = None,
 ) -> list[dict]:
-    """Assemble what the model sees THIS turn (Hendrixer `buildContext`
-    parity), over the internal message model:
+    """Assemble what the model sees THIS turn, over the internal message model:
 
     system prompt → pinned task → summary → injection blocks (the output
     of ``context_builder.assemble``: continuity brief first, memories

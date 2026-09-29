@@ -1,6 +1,5 @@
 # invincible/core/harness_approvals.py
-"""Durable human-in-the-loop approvals (H5) — port of Hendrixer
-`harness/approvals.ts` (`ApprovalStore` + `suspend`/`resume`).
+"""Durable human-in-the-loop approvals (H5).
 
 Two approval paths, deliberately separate:
 

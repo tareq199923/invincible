@@ -10,7 +10,7 @@ and carries the result back to the holding /mcp request.
 
 Two transports, one dispatch table (H1):
 - long-poll ``POST /agent/poll`` (https, httpx, no new packages)
-- WebSocket ``WS /agent/ws`` (outbound-only from the agent, flexx-style
+- WebSocket ``WS /agent/ws`` (outbound-only from the agent,
   relay; WS-first with long-poll fallback)
 
 Each poll AND each WS attach/message is a heartbeat, so "online" means

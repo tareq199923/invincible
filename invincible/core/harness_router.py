@@ -1,6 +1,5 @@
 # invincible/core/harness_router.py
-"""Agent routing + typed handoffs (H4) — port of Hendrixer
-`harness/agents.ts` + the handoff interception in `harness/runtime.ts`.
+"""Agent routing + typed handoffs (H4).
 
 An agent is data, not machinery: a name, a system prompt, and the subset
 of tools it may use. The runtime (``harness_runtime.run_workflow``) runs
