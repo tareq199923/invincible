@@ -47,6 +47,26 @@ async def test_dashboard_home_redirects_to_chat(client):
     assert 'id="side-history"' in page.text
 
 
+async def test_sidebar_has_no_section_headings_but_keeps_every_link(client):
+    """The sidebar groups by whitespace only (2026-09-30): the Workspace /
+    Monitor / Account headings are gone, but not a single nav link is."""
+    await register_account(client, "chrome@example.com")
+    page = (await client.get("/dashboard/chat")).text
+    assert page.count('class="side-section-label"') == 1  # only Chats remains
+    for label in ("Workspace", "Monitor"):
+        assert label not in page, label
+    assert '>Account</a>' in page                          # the link stays
+    for link in ("/dashboard/setup", "/dashboard/providers", "/dashboard/mcp",
+                 "/dashboard/machines", "/dashboard/memory",
+                 "/dashboard/tasks", "/dashboard/sessions",
+                 "/dashboard/usage", "/dashboard/settings", "/account"):
+        assert f'href="{link}"' in page, link
+    # The per-chat ⋮ menu ships with the shell (empty list renders the
+    # empty state instead, so the hooks are asserted on a seeded page).
+    assert 'placeholder="Search chats…"' in page
+    assert "/static/sidebar.js" in page
+
+
 async def test_dashboard_renders_empty_state(client):
     made, _ = await register_account(client, "empty@example.com")
     assert made.status_code == 201

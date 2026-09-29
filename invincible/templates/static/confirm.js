@@ -15,7 +15,11 @@
 // Covered surfaces (all share this file, no per-page JS):
 //   /account API keys Revoke, /dashboard/mcp token Revoke (Option A: the
 //   row stays, the token count flips to 0), /dashboard/providers Remove,
-//   /dashboard/memory Delete.
+//   /dashboard/memory Delete, /dashboard chat sidebar Delete (the ⋮ menu
+//   built by static/sidebar.js; there the row is an <li>, not a <tr>).
+//
+// The stack is exposed as window.invToast(message, kind) so other scripts
+// (sidebar.js) reuse it instead of growing a second toast implementation.
 (function () {
   'use strict';
 
@@ -145,6 +149,19 @@
       btn.textContent = 'Revoked';
       btn.removeAttribute('hx-delete');
       btn.removeAttribute('data-confirm-title');
+    } else if (mode === 'sidebar') {
+      // Chat sidebar: the row is an <li>, and deleting the last chat must
+      // restore the same empty state the server renders.
+      var chatRow = btn.closest('li.chat-row');
+      var ul = btn.closest('ul');
+      if (chatRow && chatRow.isConnected) chatRow.remove();
+      if (ul && !ul.querySelector('li.chat-row')) {
+        var empty = document.createElement('li');
+        empty.className = 'empty';
+        empty.id = 'side-history-empty';
+        empty.textContent = 'No conversations yet.';
+        ul.appendChild(empty);
+      }
     } else {
       var liveRow = btn.closest('tr');
       var tbody = btn.closest('tbody');
@@ -156,13 +173,18 @@
       }
     }
     toast(btn.getAttribute('data-toast') || 'Done.');
+    // Let feature scripts react (sidebar.js: the deleted chat may be the
+    // one currently open in the pane).
+    if (typeof window.CustomEvent === 'function') {
+      document.dispatchEvent(new CustomEvent('inv:deleted', {detail: {elt: btn}}));
+    }
   }
 
   function fetchDelete(elt) {
-    // No-htmx fallback (vendored htmx failed to load): the hx-delete
-    // buttons would otherwise do nothing. DELETE by fetch, then run the
-    // same in-place update.
-    var url = elt.getAttribute('hx-delete');
+    // The non-htmx path for every confirmed action that did not declare an
+    // htmx request: the sidebar's ⋮ Delete (data-delete-url) and, when the
+    // vendored htmx failed to load, the hx-delete buttons too.
+    var url = elt.getAttribute('hx-delete') || elt.getAttribute('data-delete-url');
     if (!url) return;
     fetch(url, {
       method: 'DELETE',
@@ -177,6 +199,15 @@
     }).catch(function () {
       toast('Something went wrong. Please try again.', 'error');
     });
+  }
+
+  function htmxOwns(elt) {
+    // Buttons that declared an htmx request keep the htmx path above
+    // (htmx:confirm opens this same modal); everything else is confirmed
+    // and fetched by the click handler below.
+    return !!window.htmx && (elt.hasAttribute('hx-delete') ||
+      elt.hasAttribute('hx-post') || elt.hasAttribute('hx-put') ||
+      elt.hasAttribute('hx-patch') || elt.hasAttribute('hx-get'));
   }
 
   function confirmTarget(evt) {
@@ -244,22 +275,29 @@
       }
     });
 
-    if (!window.htmx) {
-      document.body.addEventListener('click', function (evt) {
-        var elt = evt.target && evt.target.closest ?
-          evt.target.closest('[data-confirm-title]') : null;
-        if (!elt || elt.disabled) return;
-        evt.preventDefault();
-        openModal({
-          title: elt.getAttribute('data-confirm-title'),
-          body: elt.getAttribute('data-confirm-body') || 'Are you sure?',
-          ok: elt.getAttribute('data-confirm-ok') || 'Delete',
-          trigger: elt,
-          onOk: function () { fetchDelete(elt); },
-        });
+    // Every confirmed action NOT declared through htmx goes through this
+    // handler: the sidebar's ⋮ Delete (data-delete-url) always, and the
+    // hx-delete buttons only when the vendored htmx failed to load (with
+    // htmx present the htmx:confirm path above owns them, so they are
+    // skipped here to avoid two modals for one click).
+    document.body.addEventListener('click', function (evt) {
+      var elt = evt.target && evt.target.closest ?
+        evt.target.closest('[data-confirm-title]') : null;
+      if (!elt || elt.disabled || htmxOwns(elt)) return;
+      evt.preventDefault();
+      openModal({
+        title: elt.getAttribute('data-confirm-title'),
+        body: elt.getAttribute('data-confirm-body') || 'Are you sure?',
+        ok: elt.getAttribute('data-confirm-ok') || 'Delete',
+        trigger: elt,
+        onOk: function () { fetchDelete(elt); },
       });
-    }
+    });
   }
+
+  // Shared with static/sidebar.js (rename/pin toasts) - one stack, one
+  // look, no duplicate toast implementation.
+  window.invToast = toast;
 
   ready(bind);
 })();

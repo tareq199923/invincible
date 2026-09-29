@@ -28,8 +28,11 @@ from sqlalchemy import Text, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from invincible.core.db import (
+    checkpoints,
     messages,
+    runs,
     sessions,
+    task_states,
     turns,
 )
 from invincible.core.settings import settings
@@ -217,6 +220,13 @@ class SessionStore:
         ordering are identical to :meth:`list_for_user`; the snippet is raw
         (untruncated-as-JSON, untrimmed) - the caller collapses/elides it
         exactly as ``_session_title`` used to.
+
+        Each row also carries the surrogate ``id`` (the sidebar's
+        rename/pin/delete handle), the stored custom ``title`` (NULL =
+        derive from the snippet) and ``pinned``. Pinned rows sort first
+        (PostgreSQL orders booleans true-first under ``DESC``), then the
+        usual newest-updated-first; the pinned block therefore survives the
+        ``limit`` cut no matter how busy the account is.
         """
         first_user_content = (
             # payload is JSONB: ->> 'content' extracts the text; PG has no
@@ -234,9 +244,16 @@ class SessionStore:
             .scalar_subquery()
         )
         query = (
-            select(sessions.c.client_session_id, first_user_content)
+            select(
+                sessions.c.id,
+                sessions.c.client_session_id,
+                sessions.c.title,
+                sessions.c.pinned,
+                first_user_content,
+            )
             .where(sessions.c.user_id == user_id)
-            .order_by(sessions.c.updated_at.desc())
+            .order_by(sessions.c.pinned.desc(),
+                      sessions.c.updated_at.desc())
             .limit(limit)
         )
         if project_id is not None:
@@ -249,8 +266,14 @@ class SessionStore:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(query)).all()
         return [
-            {"client_session_id": client_id, "first_user_content": snippet}
-            for client_id, snippet in rows
+            {
+                "id": int(row.id),
+                "client_session_id": row.client_session_id,
+                "title": row.title,
+                "pinned": bool(row.pinned),
+                "first_user_content": row[4],
+            }
+            for row in rows
         ]
 
     async def count_for_user(
@@ -288,6 +311,91 @@ class SessionStore:
         if row is None:
             return None
         return str(row[0]), (int(row[1]), int(row[2]))
+
+    # ------------------------------------------------------------------
+    # Sidebar management (dashboard rename / pin / delete)
+    #
+    # All three are ownership-predicated on the SAME triple the rest of
+    # this store uses, and report a foreign pk exactly like an unknown one
+    # (the dashboard's anti-enumeration convention): callers cannot tell
+    # "not yours" from "does not exist".
+
+    async def rename_session(
+        self, session_pk: int, *, user_id: int, project_id: int,
+        title: str | None,
+    ) -> bool:
+        """Set - or with ``title=None`` clear - this owner's custom name.
+
+        Clearing restores the derived first-user-message label, i.e. the
+        pre-rename behaviour. Callers pass an already-normalized string
+        (the endpoint collapses whitespace and bounds the length). True iff
+        a row was updated."""
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(sessions)
+                .where(
+                    sessions.c.id == session_pk,
+                    sessions.c.user_id == user_id,
+                    sessions.c.project_id == project_id,
+                )
+                .values(title=title)
+            )
+        return bool(result.rowcount)
+
+    async def set_pinned(
+        self, session_pk: int, *, user_id: int, project_id: int,
+        pinned: bool,
+    ) -> bool | None:
+        """Pin/unpin this owner's session; returns the STORED value, or
+        None when the pk is unknown or foreign."""
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(
+                update(sessions)
+                .where(
+                    sessions.c.id == session_pk,
+                    sessions.c.user_id == user_id,
+                    sessions.c.project_id == project_id,
+                )
+                .values(pinned=pinned)
+                .returning(sessions.c.pinned)
+            )).first()
+        return bool(row[0]) if row else None
+
+    async def delete_session(
+        self, session_pk: int, *, user_id: int, project_id: int,
+    ) -> bool:
+        """Hard-delete this owner's conversation and everything under it.
+
+        One transaction: the ownership predicate (with ``FOR UPDATE``)
+        first, then the dependent rows in FK order - messages -> turns ->
+        checkpoints -> task_states -> runs -> the ``sessions`` row. ``runs``
+        are deleted rather than orphaned on purpose: a run carries no user
+        column, so ``session_pk`` is the only thing tying an attempt to its
+        owner, and the usage view joins through it - deleting the
+        conversation therefore also drops its token counts from
+        /dashboard/usage. False = unknown or foreign pk (nothing deleted).
+        """
+        async with self.engine.begin() as conn:
+            owned = (await conn.execute(
+                select(sessions.c.id)
+                .where(
+                    sessions.c.id == session_pk,
+                    sessions.c.user_id == user_id,
+                    sessions.c.project_id == project_id,
+                )
+                .with_for_update()
+            )).first()
+            if owned is None:
+                return False
+            await self._delete_turn_rows(conn, session_pk)
+            for table in (checkpoints, task_states, runs):
+                await conn.execute(
+                    delete(table).where(table.c.session_pk == session_pk)
+                )
+            await conn.execute(
+                delete(sessions).where(sessions.c.id == session_pk)
+            )
+        return True
 
     async def turn_overview(self, session_id: str, *,
                             user_id: int, project_id: int) -> list[dict]:

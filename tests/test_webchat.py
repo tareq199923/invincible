@@ -15,6 +15,7 @@ calls arrive complete), while the browser still receives live SSE.
 import json
 
 import httpx
+from sqlalchemy import text
 
 from invincible.core.accounts import SESSION_COOKIE
 from invincible.core.credential_store import ByokCredentialStore
@@ -413,4 +414,289 @@ async def test_sidebar_rows_title_extraction(client, byok_env):
     assert by_id["web-sqltitle"] == "   fix   the\n\nflaky   test  "
     page = await client.get("/dashboard/chat")
     assert "fix the flaky test" in page.text
+
+
+# ---------------------------------------------------------------------------
+# Sidebar management: rename / pin / delete (the ⋮ menu's routes)
+# ---------------------------------------------------------------------------
+
+
+async def _session_pk(uid, pid, client_id):
+    return await app.state.sessions.lookup(
+        client_id, user_id=uid, project_id=pid)
+
+
+async def _row_counts(session_pk):
+    """(sessions, turns, messages, runs) rows for one session pk."""
+    async with app.state.engine.connect() as conn:
+        out = []
+        for sql in (
+            "SELECT count(*) FROM sessions WHERE id = :pk",
+            "SELECT count(*) FROM turns WHERE session_id = :pk",
+            "SELECT count(*) FROM messages WHERE turn_id IN "
+            "(SELECT id FROM turns WHERE session_id = :pk)",
+            "SELECT count(*) FROM runs WHERE session_pk = :pk",
+        ):
+            out.append(int((await conn.execute(
+                text(sql), {"pk": session_pk})).scalar_one()))
+    return tuple(out)
+
+
+async def test_chat_session_manage_requires_session(client):
+    """Rename/pin/delete live on the cookie realm only (no key realm)."""
+    assert (await client.patch(
+        "/dashboard/chat/sessions/1", json={"title": "x"})).status_code == 401
+    assert (await client.delete(
+        "/dashboard/chat/sessions/1")).status_code == 401
+
+
+async def test_chat_session_manage_rejects_inv_keys(client, byok_env):
+    uid, pid = await webchat_user(client, "manage-keyed@example.com",
+                                  credential_count=0)
+    await app.state.sessions.append(
+        "web-keyed", [{"role": "user", "content": "hi"}],
+        user_id=uid, project_id=pid)
+    pk = await _session_pk(uid, pid, "web-keyed")
+    raw = (await ApiKeyStore(app.state.engine).create(uid, label="t"))["raw"]
+    client.cookies.delete(SESSION_COOKIE)
+    headers = {"Authorization": f"Bearer {raw}"}
+    assert (await client.patch(
+        f"/dashboard/chat/sessions/{pk}", json={"title": "nope"},
+        headers=headers)).status_code == 401
+    assert (await client.delete(
+        f"/dashboard/chat/sessions/{pk}", headers=headers)).status_code == 401
+
+
+async def test_rename_and_clear_chat_title(client, byok_env):
+    uid, pid = await webchat_user(client, "rename@example.com",
+                                  credential_count=0)
+    await app.state.sessions.append(
+        "web-rename", [{"role": "user", "content": "plan the migration"}],
+        user_id=uid, project_id=pid)
+    pk = await _session_pk(uid, pid, "web-rename")
+
+    renamed = await client.patch(
+        f"/dashboard/chat/sessions/{pk}", json={"title": "  Release  plan "})
+    assert renamed.status_code == 200, renamed.text
+    # Whitespace collapsed on the way in.
+    assert renamed.json() == {"id": pk, "title": "Release plan"}
+
+    page = (await client.get("/dashboard/chat")).text
+    assert ">Release plan<" in page
+    # The label shown is the custom one (the derived text is only kept in
+    # the data-derived-title attribute asserted below).
+    assert '<span class="sess-title">plan the migration' not in page
+    # The derived label survives next to the custom one, so clearing a name
+    # needs no extra round trip (the template renders data-derived-title).
+    assert 'data-derived-title="plan the migration"' in page
+
+    # Blank clears the custom name: the first-message label comes back.
+    cleared = await client.patch(
+        f"/dashboard/chat/sessions/{pk}", json={"title": "   "})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json() == {"id": pk, "title": None}
+    page = (await client.get("/dashboard/chat")).text
+    assert "plan the migration" in page
+
+
+async def test_rename_validation(client, byok_env):
+    uid, pid = await webchat_user(client, "rename-bad@example.com",
+                                  credential_count=0)
+    await app.state.sessions.append(
+        "web-rename-bad", [{"role": "user", "content": "x"}],
+        user_id=uid, project_id=pid)
+    pk = await _session_pk(uid, pid, "web-rename-bad")
+    for body in ({}, {"title": 5}, {"title": "x" * 101},
+                 {"pinned": "yes"}):
+        resp = await client.patch(
+            f"/dashboard/chat/sessions/{pk}", json=body)
+        assert resp.status_code == 400, body
+    assert (await client.patch(
+        f"/dashboard/chat/sessions/{pk}", content=b"not json")).status_code == 400
+    # Nothing was written by the rejected requests.
+    rows = await app.state.sessions.sidebar_rows(
+        uid, project_id=pid, client_session_id_prefix="web-")
+    assert rows[0]["title"] is None and rows[0]["pinned"] is False
+
+
+async def test_pin_sorts_first_and_reports_state(client, byok_env):
+    uid, pid = await webchat_user(client, "pin@example.com",
+                                  credential_count=0)
+    store = app.state.sessions
+    await store.append("web-old", [{"role": "user", "content": "older chat"}],
+                       user_id=uid, project_id=pid)
+    await store.append("web-new", [{"role": "user", "content": "newer chat"}],
+                       user_id=uid, project_id=pid)
+    old_pk = await _session_pk(uid, pid, "web-old")
+
+    # Newest-first to begin with.
+    page = (await client.get("/dashboard/chat")).text
+    assert page.index("newer chat") < page.index("older chat")
+
+    pinned = await client.patch(
+        f"/dashboard/chat/sessions/{old_pk}", json={"pinned": True})
+    assert pinned.status_code == 200, pinned.text
+    assert pinned.json() == {"id": old_pk, "pinned": True}
+
+    page = (await client.get("/dashboard/chat")).text
+    assert page.index("older chat") < page.index("newer chat")
+    assert 'data-pinned="1"' in page
+    assert "Unpin" in page
+
+    listed = (await client.get("/dashboard/chat/list")).json()["sessions"]
+    assert [s["client_session_id"] for s in listed] == ["web-old", "web-new"]
+    assert listed[0]["pinned"] is True and listed[1]["pinned"] is False
+
+    unpinned = await client.patch(
+        f"/dashboard/chat/sessions/{old_pk}", json={"pinned": False})
+    assert unpinned.json() == {"id": old_pk, "pinned": False}
+    page = (await client.get("/dashboard/chat")).text
+    assert page.index("newer chat") < page.index("older chat")
+
+
+async def test_sidebar_html_fragment_is_the_same_markup(client, byok_env):
+    """The lazy loader asks for HTML and gets the SAME partial the chat
+    page rendered - one row definition, ⋮ menu included."""
+    uid, pid = await webchat_user(client, "fragment@example.com",
+                                  credential_count=0)
+    await app.state.sessions.append(
+        "web-frag", [{"role": "user", "content": "fragment chat"}],
+        user_id=uid, project_id=pid)
+    pk = await _session_pk(uid, pid, "web-frag")
+
+    frag = await client.get("/dashboard/chat/list",
+                            headers={"Accept": "text/html"})
+    assert frag.status_code == 200, frag.text
+    assert "text/html" in frag.headers["content-type"]
+    assert 'class="chat-row' in frag.text
+    assert 'class="chat-menu-btn"' in frag.text
+    assert f'data-session-url="/dashboard/chat/sessions/{pk}"' in frag.text
+    assert 'data-chat-action="rename"' in frag.text
+    assert 'data-chat-action="pin"' in frag.text
+    assert 'data-chat-action="delete"' in frag.text
+    assert 'data-delete-mode="sidebar"' in frag.text
+    assert "fragment chat" in frag.text
+    # Not a page: it is injected into <ul id="side-history"> as-is.
+    assert "<html" not in frag.text
+    assert f'data-session-pk="{pk}"' in (await client.get(
+        "/dashboard/chat")).text
+
+    # The empty state belongs to the same fragment.
+    await client.delete(f"/dashboard/chat/sessions/{pk}")
+    frag = await client.get("/dashboard/chat/list",
+                            headers={"Accept": "text/html"})
+    assert 'id="side-history-empty"' in frag.text
+
+
+async def test_delete_chat_cascades_and_is_one_shot(client, byok_env,
+                                                    router_setter):
+    router_setter(stream_handlers())
+    await webchat_user(client, "delete@example.com")
+    streamed = await client.post("/dashboard/chat/stream", json={
+        "session_id": "web-del", "message": "delete me"})
+    assert streamed.status_code == 200, streamed.text
+
+    listed = (await client.get("/dashboard/chat/list")).json()["sessions"]
+    assert [s["client_session_id"] for s in listed] == ["web-del"]
+    pk = listed[0]["id"]
+    # History + the run row it produced.
+    assert await _row_counts(pk) == (1, 1, 2, 1)
+
+    deleted = await client.delete(f"/dashboard/chat/sessions/{pk}")
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json() == {"deleted": True}
+    assert await _row_counts(pk) == (0, 0, 0, 0)
+    assert (await client.get("/dashboard/chat/list")).json()["sessions"] == []
+    assert "delete me" not in (await client.get("/dashboard/chat")).text
+    # Gone means gone: a second delete is a 404, not a silent success.
+    again = await client.delete(f"/dashboard/chat/sessions/{pk}")
+    assert again.status_code == 404
+
+
+async def test_delete_chat_htmx_returns_empty_204(client, byok_env):
+    uid, pid = await webchat_user(client, "hx-delete@example.com",
+                                  credential_count=0)
+    await app.state.sessions.append(
+        "web-hx", [{"role": "user", "content": "hx"}],
+        user_id=uid, project_id=pid)
+    pk = await _session_pk(uid, pid, "web-hx")
+    resp = await client.delete(
+        f"/dashboard/chat/sessions/{pk}", headers={"HX-Request": "true"})
+    assert resp.status_code == 204
+    assert resp.content == b""
+
+
+async def test_foreign_chat_actions_are_indistinguishable_from_unknown(
+    client, byok_env
+):
+    """Anti-enumeration: another user's chat behaves exactly like a chat
+    that does not exist, and nothing is mutated by the attempt."""
+    victim_uid, victim_pid = await webchat_user(client, "victim@example.com",
+                                                credential_count=0)
+    await app.state.sessions.append(
+        "web-victim", [{"role": "user", "content": "private"}],
+        user_id=victim_uid, project_id=victim_pid)
+    victim_pk = await _session_pk(victim_uid, victim_pid, "web-victim")
+    await app.state.sessions.rename_session(
+        victim_pk, user_id=victim_uid, project_id=victim_pid, title="mine")
+
+    # A second account (registering swaps the session cookie).
+    attacker_uid, attacker_pid = await webchat_user(client,
+                                                   "attacker@example.com",
+                                                   credential_count=0)
+    await app.state.sessions.append(
+        "web-attacker", [{"role": "user", "content": "own chat"}],
+        user_id=attacker_uid, project_id=attacker_pid)
+    attacker_pk = await _session_pk(attacker_uid, attacker_pid, "web-attacker")
+    unknown_pk = max(victim_pk, attacker_pk) + 1000
+
+    for pk in (victim_pk, unknown_pk):
+        assert (await client.patch(
+            f"/dashboard/chat/sessions/{pk}",
+            json={"title": "stolen"})).status_code == 404
+        assert (await client.patch(
+            f"/dashboard/chat/sessions/{pk}",
+            json={"pinned": True})).status_code == 404
+        assert (await client.delete(
+            f"/dashboard/chat/sessions/{pk}")).status_code == 404
+
+    # The victim's row is untouched, and the attacker still owns theirs.
+    rows = await app.state.sessions.sidebar_rows(victim_uid,
+                                                 project_id=victim_pid)
+    assert [(r["client_session_id"], r["title"], r["pinned"])
+            for r in rows] == [("web-victim", "mine", False)]
+    own = await app.state.sessions.sidebar_rows(attacker_uid,
+                                                project_id=attacker_pid)
+    assert [r["client_session_id"] for r in own] == ["web-attacker"]
+
+
+async def test_store_management_requires_the_owner_triple(client, byok_env):
+    """The store's own contract: a foreign pk reports False/None, so a call
+    site that forgets the predicate fails loudly instead of silently
+    reading or deleting someone else's conversation."""
+    uid, pid = await webchat_user(client, "store-scope@example.com",
+                                  credential_count=0)
+    await app.state.sessions.append(
+        "web-scope", [{"role": "user", "content": "scoped"}],
+        user_id=uid, project_id=pid)
+    pk = await _session_pk(uid, pid, "web-scope")
+    store = app.state.sessions
+
+    assert await store.rename_session(
+        pk, user_id=uid + 999, project_id=pid, title="x") is False
+    assert await store.set_pinned(
+        pk, user_id=uid, project_id=pid + 999, pinned=True) is None
+    assert await store.delete_session(
+        pk, user_id=uid + 999, project_id=pid) is False
+    assert await store.rename_session(
+        pk, user_id=uid, project_id=pid, title="kept") is True
+    assert await store.set_pinned(
+        pk, user_id=uid, project_id=pid, pinned=True) is True
+    assert await store.delete_session(
+        pk, user_id=uid, project_id=pid) is True
+    assert await store.delete_session(
+        pk, user_id=uid, project_id=pid) is False
+
+
+
 

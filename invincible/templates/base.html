@@ -40,14 +40,12 @@
     <nav class="nav-list" aria-label="Primary">
       <a class="nav-link{% if path.startswith('/dashboard/setup') %} active{% endif %}"
          href="/dashboard/setup">Get started</a>
-      <span class="side-section-label" aria-hidden="true">Workspace</span>
       <a class="nav-link{% if path.startswith('/dashboard/providers') %} active{% endif %}"
          href="/dashboard/providers">Providers</a>
       <a class="nav-link{% if path.startswith('/dashboard/mcp') %} active{% endif %}"
          href="/dashboard/mcp">MCP</a>
       <a class="nav-link{% if path.startswith('/dashboard/machines') %} active{% endif %}"
          href="/dashboard/machines">Machines</a>
-      <span class="side-section-label" aria-hidden="true">Monitor</span>
       <a class="nav-link{% if path.startswith('/dashboard/memory') %} active{% endif %}"
          href="/dashboard/memory">Memories</a>
       <a class="nav-link{% if path.startswith('/dashboard/tasks') %} active{% endif %}"
@@ -56,7 +54,6 @@
          href="/dashboard/sessions">Sessions</a>
       <a class="nav-link{% if path.startswith('/dashboard/usage') %} active{% endif %}"
          href="/dashboard/usage">Usage</a>
-      <span class="side-section-label" aria-hidden="true">Account</span>
       <a class="nav-link{% if path.startswith('/dashboard/settings') %} active{% endif %}"
          href="/dashboard/settings">Settings</a>
       <a class="nav-link{% if path == '/account' %} active{% endif %}"
@@ -66,15 +63,9 @@
     <input type="search" class="side-search" id="side-search"
            placeholder="Search chats…" aria-label="Search chats">
     <ul class="side-history" id="side-history"{% if not side_history %} data-lazy="1"{% endif %}>
-    {% if side_history %}
-      {% for s in side_history %}
-      <li><a class="sess{% if s.client_session_id == active_session %} active{% endif %}"
-             href="/dashboard/chat?session={{ s.client_session_id }}"
-             title="{{ s.client_session_id }}">{{ s.title }}</a></li>
-      {% endfor %}
-    {% else %}
-      <li class="empty" id="side-history-empty">No conversations yet.</li>
-    {% endif %}
+      {# One row definition for the whole app (_chat_rows.html), shared with
+         the lazy fragment from GET /dashboard/chat/list. #}
+      {% with rows = side_history %}{% include "_chat_rows.html" %}{% endwith %}
     </ul>
     <div class="side-foot">
       <span class="side-user" title="{{ user_email }}">{{ user_email }}</span>
@@ -97,6 +88,9 @@
     // Sidebar history: server-rendered on chat pages; lazy-loaded
     // everywhere else from GET /dashboard/chat/list (same cookie realm).
     // Plus client-side search filter and mobile-drawer auto-close.
+    // The row markup itself - including the ⋮ menu that sidebar.js drives -
+    // comes from the _chat_rows.html partial in BOTH cases, so there is one
+    // definition to keep in sync.
     (function () {
       var box = document.getElementById('nav-drawer');
       if (box) {
@@ -112,36 +106,33 @@
         var q = search.value.trim().toLowerCase();
         list.querySelectorAll('li').forEach(function (li) {
           if (li.id === 'side-history-empty') return;
-          var a = li.querySelector('a');
-          li.style.display = (!q || (a && a.textContent.toLowerCase().indexOf(q) !== -1))
-            ? '' : 'none';
+          var label = li.querySelector('a .sess-title') || li.querySelector('a');
+          li.style.display = (!q || (label &&
+            label.textContent.toLowerCase().indexOf(q) !== -1)) ? '' : 'none';
         });
       }
       if (search) search.addEventListener('input', applyFilter);
+      // sidebar.js re-runs the filter after a rename by dispatching 'input'.
+      window.invSidebarFilter = applyFilter;
       if (list && list.getAttribute('data-lazy')) {
-        fetch('/dashboard/chat/list', {credentials: 'same-origin'})
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (j) {
-            if (!j || !Array.isArray(j.sessions) || !j.sessions.length) return;
+        fetch('/dashboard/chat/list', {
+          credentials: 'same-origin',
+          headers: {'Accept': 'text/html'},
+        })
+          .then(function (r) { return r.ok ? r.text() : null; })
+          .then(function (html) {
+            if (html === null) return;
             list.removeAttribute('data-lazy');
-            var empty = document.getElementById('side-history-empty');
-            if (empty) empty.remove();
-            j.sessions.forEach(function (s) {
-              var li = document.createElement('li');
-              var a = document.createElement('a');
-              a.className = 'sess';
-              a.href = '/dashboard/chat?session=' + encodeURIComponent(s.client_session_id);
-              a.title = s.client_session_id;
-              a.textContent = s.title || s.client_session_id;
-              li.appendChild(a);
-              list.appendChild(li);
-            });
+            // The fragment IS the <ul>'s content (rows, or the same empty
+            // state this page already renders).
+            list.innerHTML = html;
             applyFilter();
           })
           .catch(function () { /* sidebar stays in empty state */ });
       }
     })();
   </script>
+  <script src="/static/sidebar.js?v={{ asset_rev('sidebar.js') }}" defer></script>
   {% endif %}
 
   {# Shared destructive-action confirmation + toast stack (confirm.js).

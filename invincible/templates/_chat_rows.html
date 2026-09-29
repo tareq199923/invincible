@@ -1,0 +1,50 @@
+{# invincible/templates/_chat_rows.html
+   THE definition of a sidebar chat row - shared by both renderers so they
+   can never drift: the chat page loop in base.html and the lazy fragment
+   served by GET /dashboard/chat/list (Accept: text/html) on every other
+   page. Expects ``rows`` (id / client_session_id / title / pinned, from
+   endpoints/chat.py::_sidebar) and ``active_session``.
+
+   The data-* hooks are the contract with the static scripts:
+   - static/sidebar.js  : .chat-menu-btn, .chat-menu, [data-chat-action],
+                          [data-session-pk], [data-pinned], .sess-title
+   - static/confirm.js  : [data-confirm-*], [data-delete-url],
+                          data-delete-mode="sidebar" (row removal in place)
+#}
+{% if rows %}
+  {% for s in rows %}
+  <li class="chat-row{% if s.pinned %} pinned{% endif %}"
+      data-session-pk="{{ s.id }}"
+      data-session-id="{{ s.client_session_id }}"
+      data-session-url="/dashboard/chat/sessions/{{ s.id }}"
+      data-pinned="{{ '1' if s.pinned else '0' }}"
+      data-title="{{ s.title }}"
+      data-derived-title="{{ s.derived }}">
+    <a class="sess{% if s.client_session_id == active_session %} active{% endif %}"
+       href="/dashboard/chat?session={{ s.client_session_id | urlencode }}"
+       title="{{ s.title }}"
+       ><span class="sess-title">{{ s.title }}</span>{% if s.pinned
+       %}<span class="sess-pin" title="Pinned" aria-label="Pinned">&#128204;</span>{%
+       endif %}</a>
+    <button type="button" class="chat-menu-btn" aria-haspopup="menu"
+            aria-expanded="false" aria-label="Options for {{ s.title }}"
+            title="Options">&#8942;</button>
+    <div class="chat-menu" role="menu" hidden>
+      <button type="button" role="menuitem"
+              data-chat-action="rename">Rename</button>
+      <button type="button" role="menuitem"
+              data-chat-action="pin">{{ 'Unpin' if s.pinned else 'Pin' }}</button>
+      <button type="button" role="menuitem" class="danger"
+              data-chat-action="delete"
+              data-confirm-title="Delete chat"
+              data-confirm-body="Delete this chat and its stored messages? This cannot be undone."
+              data-confirm-ok="Delete"
+              data-delete-url="/dashboard/chat/sessions/{{ s.id }}"
+              data-delete-mode="sidebar"
+              data-toast="Chat deleted.">Delete</button>
+    </div>
+  </li>
+  {% endfor %}
+{% else %}
+  <li class="empty" id="side-history-empty">No conversations yet.</li>
+{% endif %}

@@ -366,6 +366,15 @@ sessions = Table(
     Column("user_id", BigInteger, ForeignKey("users.id"), nullable=False),
     Column("project_id", BigInteger, ForeignKey("projects.id"), nullable=False),
     Column("client_session_id", String, nullable=False),
+    # User-set sidebar name (dashboard rename). NULL = no custom title:
+    # callers derive the label from the first user message instead, which
+    # is exactly the pre-rename behaviour. Never empty - clearing the
+    # custom name writes NULL back.
+    Column("title", Text),
+    # Sidebar pin (dashboard). Pinned conversations sort above the rest
+    # and are never displaced by the ``_SIDEBAR_LIMIT`` cut for a busy
+    # account. Schema half in migration 0015.
+    Column("pinned", Boolean, nullable=False, server_default="false"),
     Column("created_at", Float, nullable=False),
     Column("updated_at", Float, nullable=False),
     UniqueConstraint(

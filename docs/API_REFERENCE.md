@@ -20,7 +20,8 @@ provider behind either request is chosen by the Router, never by the client.
 | `GET` | `/api/v1/sessions/{id}/graph` | `Bearer inv_…` or session (owner-scoped) | Continuity-graph projection: runs chain, task states, checkpoints as nodes/edges/timeline |
 | `POST` | `/auth/register`, `/auth/login`, `/auth/logout`, `/auth/password` · `GET` `/auth/me` | session cookie realm | Account auth + password set/change (Phases 3/5) — see §10 |
 | Mixed | `/projects`, `/api-keys`, `/sessions`, `/auth/device/*`, GitHub login, `/providers/mine[...]` | cookie (own `inv_` key accepted on some) | Account management, BYOK provider connections, pairing (Phase 3) — see §10 |
-| `GET` | `/dashboard`, `/dashboard/sessions[/{pk}]`, `/dashboard/tasks`, `/dashboard/memory`, `/dashboard/usage`, `/dashboard/settings` | session cookie realm | Full-dashboard pages (Phase 5) — see §10 |
+| `GET` | `/dashboard`, `/dashboard/chat[/list]`, `/dashboard/sessions[/{pk}]`, `/dashboard/tasks`, `/dashboard/memory`, `/dashboard/usage`, `/dashboard/settings` | session cookie realm | Full-dashboard pages (Phase 5) — see §10 |
+| Mixed | `PATCH`/`DELETE` `/dashboard/chat/sessions/{pk}` | session cookie realm | Sidebar rename/pin/delete for one owned conversation — see §10 |
 
 Auth details (inv_-only since Phase 2):
 
@@ -430,6 +431,7 @@ Server-rendered Jinja2 + HTMX pages on the same cookie realm:
 | `/dashboard/memory` | Browse/filter/paginate/search owned memories, explicit create, audited delete buttons |
 | `/dashboard/usage?days=N` | Day bars + per-provider totals; buckets pinned to UTC, window clamped to 1–90 days |
 | `/dashboard/settings` | System flags, read-only provider/routing panel, password forms |
+| `/dashboard/chat` | Chat-first home: streaming webchat (`core/chat_service.py` pipeline) + the left sidebar (new chat, feature links, search, chat history, user footer) |
 
 HTMX interactions drive three JSON siblings on the same realm:
 `GET /memories`, `POST /memories` (explicit layer, confidence 1.0,
@@ -439,3 +441,32 @@ though browse/delete stay available so the toggle never traps data),
 empty 204 so `hx-swap="delete"` drops the row), and `GET /usage?days=`.
 Foreign ids are indistinguishable from unknown ones on every dashboard
 surface — identical 404 bodies/pages, no existence leak.
+
+### Chat sidebar management (rename / pin / delete)
+
+The chat-first shell lists dashboard-created conversations (`web-` client
+session ids) in the left sidebar. Hovering a row reveals a ⋮ menu
+(`static/sidebar.js`) with three owner-scoped actions; Rename edits the
+label in place (Enter saves, Esc reverts, blank restores the derived
+title), Pin moves the row into a pinned block above the rest.
+
+| Route | Contract |
+|---|---|
+| `GET /dashboard/chat/list` | Sidebar rows: `{"sessions": [{id, client_session_id, title, derived, pinned}]}` by default; `Accept: text/html` returns the rendered `_chat_rows.html` fragment the sidebar injects (`list.innerHTML`), so the row markup — ⋮ menu included — has exactly one definition. Authorization is the same cookie realm and the same ownership predicate as the pages |
+| `PATCH /dashboard/chat/sessions/{pk}` | Rename and/or pin: `{"title": str\|null, "pinned": bool}`, both fields optional, at least one required (400 otherwise). Titles are whitespace-collapsed and capped at 100 chars; `""`/`null` clears the custom name so the label falls back to the first user message. Returns `{"id", "title"?, "pinned"?}` |
+| `DELETE /dashboard/chat/sessions/{pk}` | Hard delete in ONE transaction: the session's messages → turns → checkpoints → task states → runs → the session row. HTMX requests (`HX-Request: true`) get an empty `204` so `confirm.js` removes the sidebar row in place; JSON callers get `{"deleted": true}` |
+
+Pinned conversations sort first (`pinned DESC, updated_at DESC`), so they
+survive the sidebar's 30-row cap. Because `runs` is deleted with the
+conversation — and `/dashboard/usage` attributes tokens through
+`runs.session_pk` — a deleted chat also leaves the usage view; that is the
+deliberate reading of "delete this chat". Every action is audit-written
+(`session.renamed`, `session.pinned`, `session.deleted`), and a foreign pk
+is a byte-identical 404 to an unknown one with no side effect.
+
+Schema: `sessions.title` (TEXT NULL) and `sessions.pinned` (BOOLEAN NOT
+NULL DEFAULT false), migration `0015`. Note for existing databases built
+by `create_all` (test/dev scaffolding): `create_all` never adds columns to
+an existing table, so those need `invincible db upgrade` (or a
+drop/recreate) before the sidebar management queries work.
+

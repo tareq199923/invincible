@@ -27,7 +27,7 @@ import html
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
 from invincible.compat.common import upstream_error_detail
@@ -52,7 +52,7 @@ from invincible.endpoints.accounts import (
     require_user_session,
 )
 from invincible.endpoints.byok import byok_attempt_source
-from invincible.endpoints.dashboard import _email, _state
+from invincible.endpoints.dashboard import _email, _state, templates
 
 logger = logging.getLogger("invincible.webchat")
 
@@ -63,6 +63,10 @@ router = APIRouter()
 # not a load() per listed session.
 _SIDEBAR_LIMIT = 30
 _TITLE_CHARS = 60
+# Custom (renamed) sidebar names are the user's own label, so they get more
+# room than the derived first-message snippet - still bounded, because the
+# value round-trips through the sidebar on every page render.
+_RENAME_CHARS = 100
 _MAX_ID_CHARS = 200
 _MAX_MODEL_CHARS = 200
 # Marker distinguishing dashboard-created conversations from API-client
@@ -127,6 +131,10 @@ async def _sidebar(request: Request, principal: Principal) -> list[dict]:
     user message's ``content`` (bounded substring) so no full payload leaves
     Postgres - the old shape issued one ``load()`` per listed session.
 
+    A custom (renamed) title wins over the derived one; ``pinned`` rows
+    arrive first (the store orders them that way). ``id`` is the surrogate
+    pk the sidebar's rename/pin/delete actions address.
+
     Direct ``?session=`` links to owned API sessions still resolve (see
     ``chat_page``) - the store itself stays shared."""
     store = _state(request, "sessions")
@@ -137,10 +145,21 @@ async def _sidebar(request: Request, principal: Principal) -> list[dict]:
     sidebar = []
     for row in rows:
         client_id = row["client_session_id"]
+        custom = row.get("title")
         snippet = row["first_user_content"]
-        title = (client_id if not isinstance(snippet, str)
-                 or not snippet.strip() else _bound_title(snippet))
-        sidebar.append({"client_session_id": client_id, "title": title})
+        # The label without any custom name: the first user message (or the
+        # client id when the conversation has no text yet). Kept alongside
+        # the effective title so clearing a rename needs no round trip.
+        derived = (client_id if not isinstance(snippet, str)
+                   or not snippet.strip() else _bound_title(snippet))
+        sidebar.append({
+            "id": row["id"],
+            "client_session_id": client_id,
+            "title": custom if isinstance(custom, str) and custom.strip()
+                     else derived,
+            "derived": derived,
+            "pinned": bool(row.get("pinned")),
+        })
     return sidebar
 
 
@@ -217,9 +236,114 @@ async def chat_list(
     request: Request,
     principal: Principal = Depends(require_user_session),
 ):
-    """Sidebar history for non-chat pages: the global sidebar lazy-loads
-    this (same cookie realm, ownership-predicated via _sidebar)."""
-    return {"sessions": await _sidebar(request, principal)}
+    """Sidebar history for non-chat pages.
+
+    ``{"sessions": [...]}`` by default. The sidebar's lazy loader asks for
+    ``Accept: text/html`` and receives the rendered ``_chat_rows`` fragment
+    instead, which keeps the row markup defined exactly once (in the Jinja
+    partial) while both shapes read the same ``_sidebar`` rows.
+    """
+    rows = await _sidebar(request, principal)
+    if "text/html" in request.headers.get("accept", ""):
+        # Not a full page: a bare fragment for `list.innerHTML = ...`.
+        return templates.TemplateResponse(
+            request, "_chat_rows.html",
+            {"rows": rows, "active_session": ""},
+        )
+    return {"sessions": rows}
+
+
+def _no_such_chat() -> HTTPException:
+    """Foreign and unknown session pks are indistinguishable (the dashboard's
+    anti-enumeration convention: identical 404 body either way)."""
+    return HTTPException(
+        status_code=404,
+        detail={"error": {"message": "No such chat.",
+                          "type": "not_found_error"}},
+    )
+
+
+@router.patch("/dashboard/chat/sessions/{session_pk}")
+async def update_chat_session(
+    session_pk: int,
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    """Sidebar management for ONE owned conversation: rename and/or pin.
+
+    Both fields are optional and independent, so the sidebar menu's Rename
+    and Pin actions share this route. ``{"title": ""}`` clears a custom
+    name (the label falls back to the first user message). Ownership is
+    predicated in the store, so a foreign pk is a 404 with no side effect.
+    """
+    try:
+        raw = await request.json()
+    except Exception:
+        raw = None
+    if not isinstance(raw, dict):
+        return _bad_request("Request body must be JSON.")
+    fields = {k: raw.get(k) for k in ("title", "pinned") if k in raw}
+    if not fields:
+        return _bad_request("Send title and/or pinned.")
+    store = _state(request, "sessions")
+    applied: dict = {}
+    if "title" in fields:
+        value = fields["title"]
+        if value is not None and not isinstance(value, str):
+            return _bad_request("title must be a string.")
+        clean = " ".join((value or "").split())
+        if len(clean) > _RENAME_CHARS:
+            return _bad_request(f"title must be at most {_RENAME_CHARS} "
+                                f"characters.")
+        stored = clean or None
+        if not await store.rename_session(
+            session_pk, user_id=principal.user_id,
+            project_id=principal.project_id, title=stored,
+        ):
+            raise _no_such_chat()
+        await _audit(request, "session.renamed",
+                     actor_user_id=principal.user_id,
+                     resource_type="session", resource_id=str(session_pk),
+                     meta={"cleared": stored is None,
+                           "chars": len(clean)})
+        applied["title"] = stored
+    if "pinned" in fields:
+        if not isinstance(fields["pinned"], bool):
+            return _bad_request("pinned must be a boolean.")
+        stored_pin = await store.set_pinned(
+            session_pk, user_id=principal.user_id,
+            project_id=principal.project_id, pinned=fields["pinned"])
+        if stored_pin is None:
+            raise _no_such_chat()
+        await _audit(request, "session.pinned",
+                     actor_user_id=principal.user_id,
+                     resource_type="session", resource_id=str(session_pk),
+                     meta={"pinned": stored_pin})
+        applied["pinned"] = stored_pin
+    return {"id": session_pk, **applied}
+
+
+@router.delete("/dashboard/chat/sessions/{session_pk}")
+async def delete_chat_session(
+    session_pk: int,
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    """Delete ONE owned conversation (turns, messages, checkpoints, task
+    states and runs - see ``SessionStore.delete_session`` for the cascade).
+    Foreign/unknown pks raise before anything is touched."""
+    deleted = await _state(request, "sessions").delete_session(
+        session_pk, user_id=principal.user_id,
+        project_id=principal.project_id)
+    if not deleted:
+        raise _no_such_chat()
+    await _audit(request, "session.deleted", actor_user_id=principal.user_id,
+                 resource_type="session", resource_id=str(session_pk))
+    if request.headers.get("HX-Request") == "true":
+        # Empty 204: htmx never swaps 204s, so confirm.js drops the sidebar
+        # row in place (modal + toast + empty state included).
+        return Response(status_code=204)
+    return {"deleted": True}
 
 
 @router.post("/dashboard/chat/stream")

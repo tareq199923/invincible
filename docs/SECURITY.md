@@ -193,7 +193,7 @@ Properties of this realm:
 
 | Property | Value |
 |---|---|
-| Surface | `/dashboard/chat` (HTML), `/dashboard/chat/new`, `/dashboard/chat/models`, `/dashboard/chat/stream` (SSE), `/dashboard/chat/approve` (JSON) |
+| Surface | `/dashboard/chat` (HTML), `/dashboard/chat/new`, `/dashboard/chat/models`, `/dashboard/chat/list` (JSON or HTML fragment), `/dashboard/chat/sessions/{pk}` (`PATCH`/`DELETE`), `/dashboard/chat/stream` (SSE), `/dashboard/chat/approve` (JSON) |
 | Auth | `invincible_session` cookie ONLY — `inv_*` API keys are rejected (401), same as the providers surface |
 | Modes | `plan` (read-only tools only), `manual` (approvals per mutating action, the default), `auto` (acts without asking). Per stream request; no system-prompt field, no uploads |
 
@@ -204,6 +204,20 @@ Properties of this realm:
 - `?session=` ids unknown to the caller render exactly like foreign ones
   (empty thread — no enumeration); sidebar titles are derived server-side
   from each session's first user message and bounded.
+- **Sidebar rename / pin / delete** (`PATCH`/`DELETE
+  /dashboard/chat/sessions/{pk}`) is addressed by the surrogate session id
+  and carries the same mandatory ownership triple as every other dashboard
+  read: `rename_session`/`set_pinned`/`delete_session` report a foreign pk
+  exactly like an unknown one (byte-identical 404, no side effect — the
+  store returns False/None rather than a distinguishable error), and
+  custom titles are whitespace-collapsed and length-bounded before they
+  are stored or rendered. All three are audit-written
+  (`session.renamed`/`session.pinned`/`session.deleted`). Delete is a hard
+  delete inside one transaction (messages → turns → checkpoints → task
+  states → runs → the session row), i.e. it can only ever destroy rows the
+  caller owns; it needs no confirmation beyond the browser-side modal
+  because there is no shared or operator-owned data in reach.
+
 - Stream events carry text only: `token` deltas are inserted as text, the
   `done` bubble HTML is escaped server-side (`html.escape`) before the
   single `innerHTML` insertion, and `error` carries the API-semantics
