@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Invincible — AI gateway and continuity platform</title>
-  <meta name="description" content="A remote-first, multi-user AI continuity gateway with per-user BYOK routing, PostgreSQL-backed memory and task state, and OAuth-protected MCP tools.">
+  <meta name="description" content="A remote-first AI continuity platform. Bring your provider keys, use OpenAI, Anthropic, or Codex clients, keep scoped memory and task checkpoints, and optionally pair a machine for confirmed tools.">
   <style>
     :root {
       color-scheme: dark;
@@ -252,9 +252,9 @@
     <section class="hero">
       <div class="hero__content wrap">
         <div class="hero__copy">
-          <p class="eyebrow">Remote-first · Per-user BYOK · Owner-scoped state</p>
+          <p class="eyebrow">Remote-first · Your provider keys · Account-scoped continuity</p>
           <h1><span>One gateway.</span><span>Your providers.</span><em>Your continuity.</em></h1>
-          <p class="sub">Connect your own provider credentials, route AI clients through one stable endpoint, and keep sessions, memories, task state, and checkpoints scoped to your account. Add OAuth-protected MCP tools and route confirmed commands to your paired machine when you need them.</p>
+          <p class="sub">Connect your own provider credentials and use one stable gateway from OpenAI, Anthropic, and Codex clients. Conversations, lexical memories, and versioned task state stay scoped to your account. Pair a machine only when you want confirmed tools to reach your files and shell.</p>
           <div class="actions">
             <a class="btn" href="/register">Create your account</a>
             <a class="btn ghost" href="#setup">See the hosted setup</a>
@@ -274,7 +274,7 @@
       <div class="wrap">
         <div class="trust-chips" aria-label="Deployment guarantees">
           <span><i aria-hidden="true"></i>Zero inbound ports</span>
-          <span><i aria-hidden="true"></i>MCP-native</span>
+          <span><i aria-hidden="true"></i>OAuth 2.1 MCP</span>
           <span><i aria-hidden="true"></i>Per-user BYOK — no shared pool</span>
           <span><i aria-hidden="true"></i>macOS · Linux · Windows agent</span>
         </div>
@@ -283,7 +283,7 @@
         <dl class="hero-stats">
           <div><dt>1</dt><dd>stable client base URL</dd></div>
           <div><dt>3</dt><dd>chat API surfaces</dd></div>
-          <div><dt>10</dt><dd>MCP tools</dd></div>
+          <div><dt>19</dt><dd>MCP tools</dd></div>
           <div><dt>0</dt><dd>shared provider keys</dd></div>
         </dl>
         <div class="capability-tabs" aria-label="Client and tool protocol surfaces">
@@ -298,14 +298,14 @@
     <section id="setup" class="content-section">
       <div class="wrap">
         <div class="section-heading">
-          <div><p class="eyebrow">Get started</p><h2>Three steps. Start wherever you are.</h2></div>
-          <p>Each step unlocks a different part of Invincible. You do not need all three to begin — chat works before any machine is paired. Hosted at invincible-ai.me: no local database, environment file, or server process.</p>
+          <div><p class="eyebrow">Get started</p><h2>Four steps. Pair only when you need machine tools.</h2></div>
+          <p>Start with an account and your own provider key. Pairing is optional: connect a machine only when you want remote tools to work with its files and shell. No local database or server process is needed for the hosted service.</p>
         </div>
         <div class="steps">
-          <article class="step"><span class="num">01</span><h3>Create an account</h3><p>Register with email and password, or sign in with GitHub when your deployment enables it. Your account owns its keys, providers, sessions, and state.</p><p class="unlocks">Unlocks chat + dashboard + memory</p><code class="block">/register</code></article>
-          <article class="step"><span class="num">02</span><h3>Connect providers</h3><p>Choose a provider from the catalog or add any OpenAI-compatible Chat Completions endpoint. Each key is encrypted at rest and used only for your account's requests.</p><p class="unlocks">Unlocks every model route</p><code class="block">dashboard → providers</code></article>
-          <article class="step"><span class="num">03</span><h3>Create an API key</h3><p>Generate a per-user <code>inv_</code> key from Account. The raw value is shown once, stored as a hash, and can be revoked immediately.</p><p class="unlocks">Unlocks /v1 chat from any client</p><code class="block">dashboard → account → API keys</code></article>
-          <article class="step"><span class="num">04</span><h3>Pair your machine</h3><p>Point any OpenAI-compatible client or Codex at <code>https://invincible-ai.me/v1</code>, or Claude Code via <code>ANTHROPIC_BASE_URL=https://invincible-ai.me</code>. Then pair the agent so approved tool calls run on your PC.</p><p class="unlocks">Unlocks hands on your machine</p><code class="block">pip install invincible-ai · invincible harness connect</code></article>
+          <article class="step"><span class="num">01</span><h3>Create an account</h3><p>Register with email and password, or use GitHub when enabled. Your account owns its projects, API keys, provider credentials, conversations, and continuity state.</p><p class="unlocks">Unlocks your dashboard and personal workspace</p><code class="block">/register</code></article>
+          <article class="step"><span class="num">02</span><h3>Connect a provider</h3><p>Add a name, public HTTPS base URL, default model, and your key. Upstream providers must support OpenAI-compatible Chat Completions. Provider credentials are encrypted at rest.</p><p class="unlocks">Unlocks models available through your credentials</p><code class="block">dashboard → providers</code></article>
+          <article class="step"><span class="num">03</span><h3>Choose how to connect</h3><p>Use the web chat, or create an <code>inv_</code> API key for your own client. The raw key is shown once, stored as a hash, and can be revoked from your account.</p><p class="unlocks">OpenAI Chat · Anthropic Messages · OpenAI Responses</p><code class="block">dashboard → account → API keys</code></article>
+          <article class="step"><span class="num">04</span><h3>Pair a machine (optional)</h3><p>Install the CLI and connect the computer you want to reach. The agent connects outbound; confirmed machine actions run in its home-relative sandbox. Hosted deployments must enable agent routing.</p><p class="unlocks">Unlocks remote file, shell, and inspection tools</p><code class="block">pip install invincible-ai · invincible connect</code></article>
         </div>
       </div>
     </section>
@@ -314,13 +314,13 @@
       <div class="wrap">
         <div class="section-heading">
           <div><p class="eyebrow">Four pieces, one system</p><h2>Use them together, or one at a time</h2></div>
-          <p>Every piece stands on its own for the clients you already use. Together, they keep one stable endpoint, one memory, and one task history across every model you route through.</p>
+          <p>Use the gateway, memory, and continuity from the clients you already have. Add the paired agent only when you need actions on a machine. Your provider credentials and saved state remain attached to your account.</p>
         </div>
         <div class="products">
-          <article class="product"><h3>Gateway</h3><p>One stable endpoint for every model. Per-user BYOK failover across <code>auto</code>, <code>pinned</code>, or <code>chain</code> routing — a 429 or 5xx cools down and moves to your next credential instead of killing the run.</p><p class="needs"><strong>Needs:</strong> your own provider keys — there is no shared pool.</p></article>
-          <article class="product"><h3>Memory</h3><p>Agents that remember across tools and sessions. Scoped lexical retrieval over PostgreSQL blends full-text relevance, recency, kind, and confidence under one bounded budget. Say "remember this" and it is saved.</p><p class="needs"><strong>Needs:</strong> nothing extra — memories accrue as you chat.</p></article>
-          <article class="product"><h3>Continuity</h3><p>Task state that survives provider switches. Versioned states with optimistic checks, immutable checkpoints, and one pre-failover snapshot per request when task state exists.</p><p class="needs"><strong>Needs:</strong> any chat client — state versions itself as you work.</p></article>
-          <article class="product"><h3>Tools + Agent</h3><p>OAuth-protected MCP tools with real hands on your machine. Nineteen tools across files, shell, search, directory/git inspection, screenshots, task state, memory, and projects — destructive verbs stage behind a single-use confirmation token, then run on your paired agent inside a home-relative sandbox.</p><p class="needs"><strong>Needs:</strong> <code>invincible harness connect</code> running on the machine you want to reach.</p></article>
+          <article class="product"><h3>Gateway</h3><p>OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses client APIs route through your own OpenAI-compatible provider credentials. Choose <code>auto</code>, <code>pinned</code>, or <code>chain</code> routing; eligible rate limits, server errors, and network failures can move to your next credential.</p><p class="needs"><strong>Needs:</strong> your provider key. There is no shared provider pool.</p></article>
+          <article class="product"><h3>Memory</h3><p>Account- and project-scoped memories are stored in PostgreSQL. Retrieval is lexical, combining full-text relevance, recency, kind, and confidence within a bounded context budget. Ask the assistant to remember something to save it explicitly.</p><p class="needs"><strong>Needs:</strong> an account. Semantic/vector search is not implemented.</p></article>
+          <article class="product"><h3>Continuity</h3><p>Keep task state distinct from memory. Versioned updates use optimistic checks; immutable checkpoints preserve important states, and tracked work can receive a snapshot before provider failover.</p><p class="needs"><strong>Needs:</strong> a chat client. State belongs to your account.</p></article>
+          <article class="product"><h3>Tools + Agent</h3><p>Nineteen OAuth-protected MCP tools cover files, shell, search, directory and Git inspection, screenshots, memory, projects, and task continuity. Shell and file writes require single-use confirmation; machine jobs run on the paired agent when routing is enabled.</p><p class="needs"><strong>Needs:</strong> an MCP client. Pair a machine for machine-side tools.</p></article>
         </div>
       </div>
     </section>
@@ -329,12 +329,12 @@
       <div class="wrap">
         <div class="section-heading">
           <div><p class="eyebrow">Ways to use Invincible</p><h2>Start with what you have today</h2></div>
-          <p>No machine needed for chat and memory. Pair a machine when you want a remote AI to act on your files. Open the dashboard when you want to see how every run moved.</p>
+          <p>Chat, memory, and continuity do not require a paired computer. Add one when you want an AI client to inspect or act on that machine through MCP.</p>
         </div>
         <div class="journeys">
-          <article class="journey"><span class="kicker">No machine needed</span><h3>Chat + memory only</h3><p>Mint an <code>inv_</code> key and point any OpenAI-compatible client at <code>https://invincible-ai.me/v1</code>. Sessions, memories, and continuity accrue immediately — no install, no pairing.</p><div class="actions"><a href="/register">Create a free account →</a></div></article>
-          <article class="journey"><span class="kicker">After pairing the agent</span><h3>Chat with hands</h3><p>Run <code>invincible harness connect</code> on the machine you want to reach, then connect any MCP client to <code>https://invincible-ai.me/mcp</code>. Confirmed commands and writes execute on your PC — zero inbound ports.</p><div class="actions"><a href="#wire">See the wiring →</a></div></article>
-          <article class="journey"><span class="kicker">After adding your keys</span><h3>The full system</h3><p>Connect provider credentials and every route, failover, checkpoint, and token count shows up in the dashboard — sessions, task board, memory graph, and per-day usage by provider.</p><div class="actions"><a href="/login">Open the dashboard →</a></div></article>
+          <article class="journey"><span class="kicker">No machine needed</span><h3>Chat + continuity</h3><p>Connect your provider credentials, then use the dashboard chat or create an <code>inv_</code> key for an OpenAI, Anthropic, or Responses client. Sessions and account-scoped state stay on the service.</p><div class="actions"><a href="/register">Create an account →</a></div></article>
+          <article class="journey"><span class="kicker">When you need machine access</span><h3>Connect an MCP client</h3><p>Authorize an MCP client with OAuth 2.1 + PKCE. Pair your computer with <code>invincible connect</code> to enable machine tools; the agent connects outbound, with no inbound ports to open.</p><div class="actions"><a href="#wire">See the connection →</a></div></article>
+          <article class="journey"><span class="kicker">Across every client</span><h3>One account, shared context</h3><p>Use compatible clients with your connected models. Review sessions, versioned task state, memory, provider attempts, and usage from the dashboard.</p><div class="actions"><a href="/login">Open the dashboard →</a></div></article>
         </div>
       </div>
     </section>
@@ -360,7 +360,7 @@
       <div class="wrap">
         <div class="section-heading">
           <div><p class="eyebrow">Your keys. Your models. One endpoint.</p><h2>Wire it up in minutes</h2></div>
-          <p>Add a provider key on the dashboard and every model it can reach shows up in one place. Provider keys stay server-side — they never touch your client.</p>
+          <p>Connect an OpenAI-compatible Chat Completions provider with a public HTTPS URL. Its credentials stay encrypted on the service and never need to be sent to your AI client.</p>
         </div>
         <div class="wire-grid">
           <article class="wire-card"><header>Chat — any OpenAI client</header><pre><span class="c">curl https://invincible-ai.me/v1/chat/completions</span> \
@@ -370,11 +370,11 @@
     "content": "Hello!"}]}'</span></pre><p>History under the session id is prepended upstream; the reply is persisted back. A 429 cools down and fails over — the client sees one stable endpoint.</p></article>
           <article class="wire-card"><header>Claude Code + Codex</header><pre><span class="dim" style="color:#747c88;"># Claude Code — Anthropic Messages</span>
 <span class="c">ANTHROPIC_BASE_URL=https://invincible-ai.me</span>
-<span class="dim" style="color:#747c88;"># Codex — OpenAI Responses</span>
+<span class="dim" style="color:#747c88;"># Codex — OpenAI Responses endpoint</span>
 <span class="c">https://invincible-ai.me/v1/responses</span>
-<span class="dim" style="color:#747c88;"># model is a soft hint; the response</span>
-<span class="dim" style="color:#747c88;"># names the credential that served it</span></pre><p>Both protocols translate into one internal message model, so an OpenAI client and Claude Code on the same session id see the same conversation.</p></article>
-          <article class="wire-card"><header>Tools — any MCP client</header><pre>{
+<span class="dim" style="color:#747c88;"># authenticate with your inv_ API key</span>
+<span class="dim" style="color:#747c88;"># and use your account's connected providers</span></pre><p>OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses are separate client protocols backed by your connected OpenAI-compatible provider credentials.</p></article>
+          <article class="wire-card"><header>Tools — OAuth-enabled MCP client</header><pre>{
   <span class="c">"mcpServers"</span>: {
     <span class="c">"invincible"</span>: {
       <span class="c">"url"</span>: <span class="k">"https://invincible-ai.me/mcp"</span>
@@ -392,11 +392,11 @@
           <p>Provider choice stays replaceable. Your account, projects, credentials, memory, and continuity state remain attached to Invincible.</p>
         </div>
         <div class="features">
-          <article class="feature"><h3>Per-user BYOK failover</h3><p>Choose <code>auto</code>, <code>pinned</code>, or <code>chain</code> routing. Invincible tries the next available credential after rate limits, server errors, network failures, or disabled authentication — without claiming to optimize for price.</p></article>
+          <article class="feature"><h3>Per-user BYOK failover</h3><p>Choose <code>auto</code>, <code>pinned</code>, or <code>chain</code> routing. Eligible rate limits, server errors, and network failures can move to another of your credentials. Provider keys are encrypted at rest; account API keys are shown once and stored as hashes.</p></article>
           <article class="feature"><h3>Versioned continuity</h3><p>Task state is versioned with optimistic checks, immutable checkpoints pin important states, and one pre-failover snapshot captures the provider failure before routing continues — only when task state exists.</p></article>
-          <article class="feature"><h3>Scoped lexical memory</h3><p>PostgreSQL stores memories with layer, confidence, provenance, and project scope. Lexical retrieval combines full-text relevance, recency, kind, confidence, and a bounded top-N result set. Say "remember this" to save explicitly.</p></article>
-          <article class="feature"><h3>OAuth-protected MCP tools</h3><p>Twelve tools cover file reads, approved shell execution, approved writes, task state, checkpoints, memory, and projects. <code>execute_bash</code> and <code>write_file</code> require a single-use confirmation token.</p></article>
-          <article class="feature"><h3>Paired machine execution</h3><p>When the hosted deployment routes tool jobs to your paired agent, confirmed commands and writes execute on your machine inside a home-relative sandbox. Reads and data-plane tools do not use that second approval.</p></article>
+          <article class="feature"><h3>Scoped lexical memory</h3><p>PostgreSQL stores memories with layer, confidence, provenance, and project scope. Retrieval uses full-text matching, recency, kind, and confidence under a bounded context budget. Semantic/vector search is not implemented; say "remember this" to save explicitly.</p></article>
+          <article class="feature"><h3>Nineteen OAuth-protected MCP tools</h3><p>Use file and shell operations, search, directory and Git inspection, screenshots, task state, checkpoints, memory, and projects. Shell execution and file writes require a single-use confirmation token.</p></article>
+          <article class="feature"><h3>Paired machine execution</h3><p>When agent routing is enabled, machine jobs run on your paired computer over its outbound connection, with a long-poll fallback. File and shell access stays inside a home-relative sandbox; confirmed actions retain their approval gate.</p></article>
           <article class="feature"><h3>Usage and run history</h3><p>The dashboard aggregates attempts, failovers, and input/output token counts by day and provider/model. Provider-attempt history and continuity projections show how tracked work moved forward.</p></article>
         </div>
       </div>
@@ -423,10 +423,10 @@
     <section class="content-section">
       <div class="wrap">
         <div class="cta-band">
-          <h2>Pair once. Route everything.</h2>
-          <p>Run this on the machine you want to reach. macOS, Linux, and Windows — one package, no server to operate, no database to provision.</p>
+          <h2>Bring a machine online when you need it.</h2>
+          <p>Pair the computer you want your MCP client to reach. The agent connects outbound; hosted users do not need to run a server or provision a database.</p>
           <pre><span class="c">pip install invincible-ai</span>
-<span class="c">invincible harness connect</span>  <span class="dim" style="color:#747c88;"># browser opens → sign in → Approve</span></pre>
+<span class="c">invincible connect</span>  <span class="dim" style="color:#747c88;"># sign in once; the agent comes online</span></pre>
           <div class="actions">
             <a class="btn" href="/register">Create your account</a>
             <a class="btn ghost" href="/login">Sign in</a>
