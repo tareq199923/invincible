@@ -37,6 +37,7 @@ from invincible.endpoints.auth import require_auth
 from invincible.endpoints.byok import router as byok_router
 from invincible.endpoints.chat import router as chat_router
 from invincible.endpoints.dashboard import router as dashboard_router
+from invincible.endpoints.docs import router as docs_router
 from invincible.endpoints.graph import router as graph_router
 from invincible.endpoints.mcp import require_mcp_auth
 from invincible.endpoints.mcp import router as mcp_router
@@ -159,7 +160,8 @@ async def lifespan(app: FastAPI):
     await app.state.harness_bus.flush_persisted()
     await engine.dispose()
 
-app = FastAPI(title="Invincible", lifespan=lifespan)
+app = FastAPI(title="Invincible", lifespan=lifespan,
+              docs_url=None, redoc_url=None)
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -213,6 +215,8 @@ app.include_router(accounts_router)
 app.include_router(agents_router)
 # Phase 5 dashboard pages: cookie-realm only (require_user_session inside).
 app.include_router(dashboard_router)
+# Public docs site (flexx.dev/docs-style): no auth, allowlisted slugs only.
+app.include_router(docs_router)
 # Dashboard webchat (text-only BYOK chat with SSE streaming): same
 # cookie realm as the dashboard pages.
 app.include_router(chat_router)

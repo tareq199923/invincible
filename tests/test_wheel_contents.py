@@ -36,7 +36,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXPECTED_TEMPLATES = {
     "account.html", "base.html", "chat.html", "dashboard.html",
     "device.html",
-    "device_result.html", "landing.html", "login.html", "mcp.html",
+    "device_result.html", "docs.html", "landing.html", "login.html",
+    "mcp.html",
     "machines.html",
     "memory.html", "providers.html", "register.html", "sessions.html",
     "session_detail.html", "settings.html", "setup.html", "tasks.html",
@@ -147,7 +148,19 @@ def test_wheel_is_complete_and_installable(tmp_path: Path):
         "- a revision file is missing from the package data"
     )
 
-    # 6. Entry points work from the bare install: no DB, no .env needed.
+    # 6. The ASGI app imports from the bare install. `invincible.main` is
+    #    reached lazily (uvicorn's "invincible.main:app" string, cli.py's
+    #    `from invincible.main import app`), so neither the entry-point
+    #    probes below nor a `--version` call ever exercises it: a runtime
+    #    import that isn't a declared dependency (e.g. markdown-it-py for
+    #    the /docs site) would pass every other check here and still crash
+    #    the server on boot in a clean environment.
+    subprocess.run(
+        [str(py), "-c", "import invincible.main"],
+        check=True, capture_output=True, text=True,
+    )
+
+    # 7. Entry points work from the bare install: no DB, no .env needed.
     invincible_exe = py.with_name(
         "invincible.exe" if os.name == "nt" else "invincible")
     for argv in (["--version"], ["harness", "connect", "--help"]):
