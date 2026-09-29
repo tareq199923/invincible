@@ -98,7 +98,11 @@
     var status = document.getElementById("chat-status");
     var picker = document.getElementById("chat-model");
     var modePicker = document.getElementById("chat-mode");
-    var toolLines = {};
+    // Per-turn tool-activity group. One group accumulates every tool call in
+    // the turn (across agent-loop iterations); each tool is tracked by
+    // call_id so parallel/interleaved results land on the right entry.
+    var toolGroup = null;
+    var toolGroupSeq = 0;
     if (!form || !input || !log) return;
     var MODE_HINTS = {
       plan: "plan \u2014 reads only, changes nothing.",
@@ -182,6 +186,117 @@
       card.scrollIntoView({block: "nearest"});
     }
 
+    // --- Tool-activity group (collapsed by default) -----------------------
+    // Structure: .tool-group > button.tool-group-head[aria-expanded] +
+    //            .tool-group-body > .tool-item* (each with its own head +
+    //            hidden detail). Everything is built with textContent only.
+    function toolCount(n) { return n + (n === 1 ? " tool" : " tools"); }
+
+    function buildToolGroup() {
+      var group = document.createElement("div");
+      group.className = "tool-group running";
+
+      var head = document.createElement("button");
+      head.type = "button";
+      head.className = "tool-group-head";
+      head.setAttribute("aria-expanded", "false");
+      var bodyId = "tool-group-body-" + (toolGroupSeq++);
+      head.setAttribute("aria-controls", bodyId);
+
+      var caret = document.createElement("span");
+      caret.className = "caret";
+      caret.setAttribute("aria-hidden", "true");
+      caret.textContent = "\u25B8"; // ▸
+      var label = document.createElement("span");
+      label.className = "label";
+      var count = document.createElement("span");
+      count.className = "count";
+      head.appendChild(caret);
+      head.appendChild(label);
+      head.appendChild(count);
+
+      var body = document.createElement("div");
+      body.className = "tool-group-body";
+      body.id = bodyId;
+      body.hidden = true;
+
+      head.addEventListener("click", function () {
+        var open = head.getAttribute("aria-expanded") === "true";
+        head.setAttribute("aria-expanded", open ? "false" : "true");
+        body.hidden = open;
+      });
+
+      group.appendChild(head);
+      group.appendChild(body);
+      log.appendChild(group);
+      group.scrollIntoView({block: "nearest"});
+      return {
+        el: group, head: head, label: label, count: count,
+        body: body, total: 0, failed: 0, items: {}
+      };
+    }
+
+    // Collapsed summary text for a group: running -> "⟳ Working · N tools",
+    // settled -> "✓ Used N tools" / "⚠ Used N tools (M failed)".
+    function renderToolGroup(g) {
+      if (!g) return;
+      if (g.running) {
+        g.el.classList.add("running");
+        g.label.textContent = "\u27F3 Working"; // ⟳
+        g.count.textContent = "\u00B7 " + toolCount(g.total); // ·
+        g.count.className = "count";
+        return;
+      }
+      g.el.classList.remove("running");
+      var ok = g.failed === 0;
+      g.label.textContent = (ok ? "\u2713 Used " : "\u26A0 Used ") +
+        toolCount(g.total); // ✓ / ⚠
+      g.count.textContent = g.failed ? "(" + g.failed + " failed)" : "";
+      g.count.className = "count " + (ok ? "badge-ok" : "badge-warn");
+    }
+
+    // One tool row: a button head (name + state) over a hidden detail with
+    // the summary (arguments side) and, once it arrives, the result output.
+    function addToolItem(g, callId, name, summary) {
+      var item = document.createElement("div");
+      item.className = "tool-item";
+
+      var head = document.createElement("button");
+      head.type = "button";
+      head.className = "tool-item-head";
+      head.setAttribute("aria-expanded", "false");
+      var detail = document.createElement("div");
+      detail.className = "tool-item-detail";
+      detail.hidden = true;
+      var id = "tool-item-detail-" + (toolGroupSeq++);
+      head.setAttribute("aria-controls", id);
+      detail.id = id;
+
+      var state = document.createElement("span");
+      state.className = "state";
+      state.textContent = "\u22EF "; // ⋯ pending
+      head.appendChild(state);
+      head.appendChild(document.createTextNode(name || "tool"));
+      head.addEventListener("click", function () {
+        var open = head.getAttribute("aria-expanded") === "true";
+        head.setAttribute("aria-expanded", open ? "false" : "true");
+        detail.hidden = open;
+      });
+
+      if (summary) {
+        var sum = document.createElement("div");
+        sum.className = "in";
+        sum.textContent = summary;
+        detail.appendChild(sum);
+      }
+
+      item.appendChild(head);
+      item.appendChild(detail);
+      g.body.appendChild(item);
+      g.items[callId] = {head: head, state: state, detail: detail, name: name};
+      return g.items[callId];
+    }
+
     input.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -196,6 +311,7 @@
       bubble("user", text);
       input.value = "";
       send.disabled = true;
+      toolGroup = null;
       var pending = bubble("assistant", "…");
       pending.classList.add("pending");
       if (status) status.textContent = "streaming…";
@@ -263,31 +379,42 @@
                 pending.scrollIntoView({block: "nearest"});
               } else if (name === "tool_call" && payload) {
                 if (status) status.textContent = "working…";
-                var line = document.createElement("div");
-                line.className = "tool-line";
-                line.textContent = "⚙ " + (payload.summary || payload.name || "tool") + "…";
-                log.appendChild(line);
-                line.scrollIntoView({block: "nearest"});
-                if (payload.call_id) toolLines[payload.call_id] = line;
+                if (!toolGroup) toolGroup = buildToolGroup();
+                toolGroup.total += 1;
+                toolGroup.running = true;
+                var callId = payload.call_id || ("call_" + toolGroup.total);
+                if (!toolGroup.items[callId]) {
+                  addToolItem(toolGroup, callId, payload.name,
+                              payload.summary || payload.name || "tool");
+                }
+                renderToolGroup(toolGroup);
+                toolGroup.el.scrollIntoView({block: "nearest"});
               } else if (name === "approval" && payload) {
                 if (status) status.textContent = "waiting for your approval…";
                 renderApprovalCard(payload);
               } else if (name === "tool_result" && payload) {
-                var target = payload.call_id ? toolLines[payload.call_id] : null;
-                var resultText = (payload.ok ? "✓ " : "✗ ") +
-                  (payload.preview || payload.name || "done");
-                if (target) {
-                  target.textContent = target.textContent.replace(/…$/, "") + " — " + resultText;
-                  target.classList.add(payload.ok ? "ok" : "failed");
-                } else {
-                  var rline = document.createElement("div");
-                  rline.className = "tool-line " + (payload.ok ? "ok" : "failed");
-                  rline.textContent = resultText;
-                  log.appendChild(rline);
+                var item = toolGroup && payload.call_id
+                  ? toolGroup.items[payload.call_id] : null;
+                if (item) {
+                  var tick = payload.ok ? "\u2713 " : "\u26A0 "; // ✓ / ⚠
+                  item.state.textContent = tick;
+                  item.head.classList.add(payload.ok ? "ok" : "failed");
+                  var out = document.createElement("span");
+                  out.className = "out";
+                  out.textContent = payload.preview || payload.name || "done";
+                  item.detail.appendChild(out);
+                  if (!payload.ok) toolGroup.failed += 1;
+                  renderToolGroup(toolGroup);
                 }
                 if (status) status.textContent = "working…";
               } else if (name === "done" && payload) {
                 pending.classList.remove("pending");
+                if (toolGroup) {
+                  if (payload.tools_used) toolGroup.total = payload.tools_used;
+                  toolGroup.running = false;
+                  renderToolGroup(toolGroup);
+                  toolGroup = null;
+                }
                 if (payload.bubble_html) {
                   pending.innerHTML = payload.bubble_html;
                 }
@@ -297,10 +424,6 @@
                     (payload.model || "?"));
                 }
                 if (payload.mode) metaParts.push(payload.mode);
-                if (payload.tools_used) {
-                  metaParts.push(payload.tools_used + " tool" +
-                    (payload.tools_used === 1 ? "" : "s"));
-                }
                 if (payload.execution) metaParts.push(payload.execution);
                 if (metaParts.length) {
                   var meta = document.createElement("span");
@@ -311,6 +434,12 @@
                 send.disabled = false;
                 if (status) status.textContent = "";
               } else if (name === "error" && payload) {
+                if (toolGroup) {
+                  toolGroup.running = false;
+                  if (toolGroup.total && !toolGroup.failed) toolGroup.failed = 1;
+                  renderToolGroup(toolGroup);
+                  toolGroup = null;
+                }
                 pending.textContent = "error: " + (payload.message || "failed");
                 pending.classList.remove("pending");
                 pending.classList.add("error");

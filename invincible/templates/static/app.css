@@ -358,6 +358,83 @@ main.bare .panel { background: var(--surface); border: 1px solid var(--border); 
 .tool-line { font-size: 0.82rem; color: var(--muted); }
 .tool-line.ok { color: var(--faint); }
 .tool-line.failed { color: var(--err); }
+/* Collapsible tool-activity group (Claude/Grok style): one summary row per
+   assistant turn, expandable to the individual tools, each of which is itself
+   expandable. Native <button aria-expanded> head -> keyboard accessible. */
+.tool-group { font-size: 0.82rem; }
+.tool-group-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.15rem 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+.tool-group-head:hover { color: var(--ink); background: var(--raise); }
+.tool-group-head .caret {
+  display: inline-block;
+  font-size: 0.7rem;
+  color: var(--faint);
+  transition: transform 0.12s ease;
+}
+.tool-group-head[aria-expanded="true"] .caret { transform: rotate(90deg); }
+.tool-group-head .count { color: var(--faint); font-variant-numeric: tabular-nums; }
+.tool-group-head .badge-ok { color: var(--ok); }
+.tool-group-head .badge-warn { color: var(--warn); }
+.tool-group.running .caret { color: var(--accent); animation: tool-spin 0.9s linear infinite; }
+@keyframes tool-spin { to { transform: rotate(360deg); } }
+.tool-group-body[hidden] { display: none; }
+.tool-group-body {
+  margin: 0.3rem 0 0.1rem 0.35rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.tool-item { display: flex; flex-direction: column; gap: 0.15rem; }
+.tool-item-head {
+  margin: 0;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+.tool-item-head:hover { color: var(--ink); }
+.tool-item-head.ok { color: var(--faint); }
+.tool-item-head.failed { color: var(--err); }
+.tool-item-head .state { font-weight: 600; }
+.tool-item-detail[hidden] { display: none; }
+.tool-item-detail {
+  margin: 0.1rem 0 0.15rem 1.35rem;
+  font-size: 0.78rem;
+  color: var(--faint);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tool-item-detail .out {
+  display: block;
+  margin-top: 0.2rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--ink);
+  max-height: 14rem;
+  overflow: auto;
+}
 .approval-card { border: 1px solid var(--warn-border); background: var(--warn-bg); border-radius: 10px; padding: 0.7rem 0.9rem; font-size: 0.87rem; }
 .approval-card pre { white-space: pre-wrap; word-break: break-word; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.65rem; font-size: 0.78rem; font-family: var(--mono); max-height: 12rem; overflow-y: auto; }
 .approval-card .row { display: flex; gap: 0.6rem; margin-top: 0.55rem; }
