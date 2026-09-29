@@ -27,15 +27,15 @@ def tool(content, call_id="call_1"):
     return {"role": "tool", "tool_call_id": call_id, "content": content}
 
 
-def test_compression_enabled_by_default(monkeypatch):
+def test_compression_disabled_by_default(monkeypatch):
     monkeypatch.delenv("INVINCIBLE_COMPRESSION", raising=False)
-    assert compression_enabled()
-
-
-@pytest.mark.parametrize("value", ["0", "false", "off", "OFF", " False "])
-def test_compression_disabled_by_env(monkeypatch, value):
-    monkeypatch.setenv("INVINCIBLE_COMPRESSION", value)
     assert not compression_enabled()
+
+
+@pytest.mark.parametrize("value", ["1", "true", "on", "ON", " True ", "yes"])
+def test_compression_enabled_by_env(monkeypatch, value):
+    monkeypatch.setenv("INVINCIBLE_COMPRESSION", value)
+    assert compression_enabled()
 
 
 def test_short_messages_pass_through_untouched():
@@ -113,8 +113,8 @@ def test_compression_lets_trim_keep_more_turns():
 
 
 @pytest.mark.asyncio
-async def test_router_sends_compressed_payload_by_default(make_router, monkeypatch):
-    monkeypatch.delenv("INVINCIBLE_COMPRESSION", raising=False)
+async def test_router_sends_compressed_payload_when_enabled(make_router, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_COMPRESSION", "1")
     received = {}
 
     def handler(request: httpx.Request):
@@ -147,8 +147,8 @@ async def test_router_sends_compressed_payload_by_default(make_router, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_router_sends_verbatim_payload_when_disabled(make_router, monkeypatch):
-    monkeypatch.setenv("INVINCIBLE_COMPRESSION", "0")
+async def test_router_sends_verbatim_payload_by_default(make_router, monkeypatch):
+    monkeypatch.delenv("INVINCIBLE_COMPRESSION", raising=False)
     received = {}
 
     def handler(request: httpx.Request):

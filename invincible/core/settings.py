@@ -176,8 +176,13 @@ class Settings:
         )
 
     def compression_enabled(self) -> bool:
-        """Send-time request compression (default on)."""
-        return _env_flag("INVINCIBLE_COMPRESSION")
+        """Send-time request compression. DEFAULT OFF (unlike the opt-out
+        ``INVINCIBLE_*`` toggles): truncating long tool results costs task
+        accuracy, and that matters more here than the tokens it saves.
+        Opt in with ``INVINCIBLE_COMPRESSION=1`` (or a per-user override)."""
+        return os.getenv("INVINCIBLE_COMPRESSION", "").strip().lower() in (
+            "1", "true", "on", "yes",
+        )
 
     def tool_compression_enabled(self) -> bool:
         """Send-time tool-schema compression (default on)."""

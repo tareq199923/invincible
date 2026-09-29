@@ -20,9 +20,11 @@ Hard guarantees:
 - **Structure-preserving.** Roles, ``tool_calls``, ``tool_call_id`` and
   message order are untouched, so ``group_into_turns``' tool-turn
   atomicity is unaffected. Input messages are never mutated.
-- **Toggleable.** On by default; set ``INVINCIBLE_COMPRESSION=0`` (or
-  ``false``/``off``) to disable. Read per call so tests and restarts can
-  flip it without rebuilding the Router.
+- **Toggleable.** Off by default — truncating long tool results costs task
+  accuracy, which outweighs the token savings; opt in with
+  ``INVINCIBLE_COMPRESSION=1`` (``true``/``on``/``yes`` also work), or a
+  per-user settings override. Read per call so tests and restarts can flip
+  it without rebuilding the Router.
 """
 import re
 
@@ -40,12 +42,12 @@ TRUNCATION_MARKER = "\n…[middle {dropped} chars compressed away]…\n"
 
 
 def compression_enabled() -> bool:
-    """Whether send-time compression is active (default on).
+    """Whether send-time compression is active (default off).
 
-    ``INVINCIBLE_COMPRESSION`` values ``0``/``false``/``off`` (any case)
-    disable it; anything else (including unset) enables it. The env read is
-    live (via Settings) so tests and restarts can flip it without rebuilding
-    the Router.
+    Only ``INVINCIBLE_COMPRESSION`` values ``1``/``true``/``on``/``yes``
+    (any case) enable it; unset or anything else disables it. The env read
+    is live (via Settings) so tests and restarts can flip it without
+    rebuilding the Router.
     """
     return settings.compression_enabled()
 

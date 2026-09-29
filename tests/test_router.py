@@ -1145,6 +1145,8 @@ async def test_relay_digest_in_sent_payload_caller_messages_verbatim(
 async def test_compression_stage_failure_still_sends(make_router, monkeypatch):
     import invincible.core.router as router_module
 
+    monkeypatch.setenv("INVINCIBLE_COMPRESSION", "1")
+
     def boom(messages):
         raise RuntimeError("compression exploded")
 
