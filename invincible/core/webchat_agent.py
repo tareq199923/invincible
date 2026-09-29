@@ -128,7 +128,9 @@ def _tool(name: str, description: str, properties: dict,
 WEBCHAT_TOOL_SCHEMAS = [
     _tool("read_file", "Read a file's contents on the machine that "
           "executes tools (your paired PC when an agent is connected, "
-          "else the server host). Secret/state files are rejected.",
+          "else the server host). Secret/state files are rejected. "
+          "Results are capped at 65536 characters and include a "
+          "truncated flag.",
           {"path": {"type": "string"}}, ["path"]),
     _tool("list_dir", "List a directory's entries (names, kinds, sizes) "
           "on the executing machine. Hidden files skipped unless asked.",

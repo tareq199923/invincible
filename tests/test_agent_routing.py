@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+from invincible.agent.runner import execute_job
 from invincible.main import app
 from tests.conftest import obtain_access_token
 
@@ -139,6 +140,21 @@ async def test_routing_on_read_file_offline_agent_is_error(client,
     body = response.json()
     assert body["result"]["isError"] is True
     assert "agent" in body["result"]["content"][0]["text"].lower()
+
+
+async def test_agent_read_file_uses_shared_content_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_AGENT_ROOT", str(tmp_path))
+    target = tmp_path / "large.txt"
+    target.write_text("x" * (64 * 1024 + 10))
+
+    result = await execute_job({
+        "type": "read_file",
+        "args": {"path": str(target)},
+    })
+
+    assert result["status"] == "read"
+    assert len(result["content"]) == 64 * 1024
+    assert result["truncated"] is True
 
 
 async def test_blocked_command_never_reaches_an_agent(client, monkeypatch):

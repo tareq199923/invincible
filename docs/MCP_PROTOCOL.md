@@ -463,14 +463,15 @@ Phase 15b continuity tools, the memory tools, and the project tools):
 "arguments": {"path": "C:\\Users\\me\\project\\notes.txt"}
 ```
 
-No confirmation. Result (success):
+No confirmation. The content is limited to 65536 characters; `truncated`
+is `true` when more content was available. Result (success):
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 3,
   "result": {
-    "content": [{"type": "text", "text": "{\"status\": \"read\", \"path\": \"C:\\\\Users\\\\me\\\\project\\\\notes.txt\", \"content\": \"...\"}"}],
+    "content": [{"type": "text", "text": "{\"status\": \"read\", \"path\": \"C:\\\\Users\\\\me\\\\project\\\\notes.txt\", \"content\": \"...\", \"truncated\": false}"}],
     "isError": false
   }
 }

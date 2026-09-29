@@ -623,6 +623,30 @@ async def confirm_action(
     }
 
 
+READ_FILE_CONTENT_CHAR_CAP = 64 * 1024
+
+
+async def _read_file(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            content = f.read(READ_FILE_CONTENT_CHAR_CAP + 1)
+        truncated = len(content) > READ_FILE_CONTENT_CHAR_CAP
+        return {
+            "status": "read",
+            "path": path,
+            "content": content[:READ_FILE_CONTENT_CHAR_CAP],
+            "truncated": truncated,
+        }
+    except FileNotFoundError:
+        return {"status": "error", "error": f"File not found: {path}"}
+    except IsADirectoryError:
+        return {"status": "error",
+                "error": f"Path is a directory, not a file: {path}"}
+    except Exception as e:
+        logger.error(f"read_file failed: {e}")
+        return {"status": "error", "error": str(e)}
+
+
 async def read_file(path: str) -> dict:
     """No approval step - reading isn't destructive, so the friction
     wouldn't buy anything. The sandbox is the gate instead: reads are only
@@ -633,17 +657,7 @@ async def read_file(path: str) -> dict:
     code is the entire point of this tool."""
     check_read_denylist(path)  # raises ToolBlocked; caller maps it to a response
 
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            content = f.read()
-        return {"status": "read", "path": path, "content": content}
-    except FileNotFoundError:
-        return {"status": "error", "error": f"File not found: {path}"}
-    except IsADirectoryError:
-        return {"status": "error", "error": f"Path is a directory, not a file: {path}"}
-    except Exception as e:
-        logger.error(f"read_file failed: {e}")
-        return {"status": "error", "error": str(e)}
+    return await _read_file(path)
 
 
 # --- Harness H6a: read-only machine tools ------------------------------------

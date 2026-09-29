@@ -80,8 +80,9 @@ TOOLS = [
             "sandboxed to the server's working directory and repo root "
             "(extend with INVINCIBLE_READ_ROOTS); files holding secrets or "
             "sensitive state (.env, sessions.db, .git/) are rejected "
-            "outright wherever they sit. No confirmation is required for "
-            "other files since reading is non-destructive."
+            "outright wherever they sit. Results are capped at 65536 "
+            "characters and include a truncated flag. No confirmation is "
+            "required for other files since reading is non-destructive."
         ),
         "inputSchema": {
             "type": "object",

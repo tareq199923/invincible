@@ -431,6 +431,19 @@ async def test_read_file_returns_content(tmp_path, monkeypatch):
 
     assert result["status"] == "read"
     assert result["content"] == "hello world"
+    assert result["truncated"] is False
+
+
+async def test_read_file_caps_large_content(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    target = tmp_path / "large.txt"
+    target.write_text("x" * (tool_executor.READ_FILE_CONTENT_CHAR_CAP + 10))
+
+    result = await tool_executor.read_file(str(target))
+
+    assert result["status"] == "read"
+    assert len(result["content"]) == tool_executor.READ_FILE_CONTENT_CHAR_CAP
+    assert result["truncated"] is True
 
 
 async def test_read_file_missing_returns_error(tmp_path, monkeypatch):

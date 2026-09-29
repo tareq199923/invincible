@@ -21,7 +21,8 @@ Execution policy on this side, in order:
   server can audit it.
 - Then execute with the EXACT functions the server uses today
   (tool_executor._run_command with its timeout + kill-on-timeout
-  logic, tool_executor._write_file), so behavior is byte-identical
+  logic, tool_executor._write_file, tool_executor._read_file with its
+  content cap), so behavior is byte-identical
   wherever the work happens - same JSON result shapes, same failure
   dicts, no protocol changes anywhere.
 - The process runs as the logged-in user, with exactly their
@@ -228,17 +229,7 @@ async def _read_local(path: str) -> dict:
     """Same read result shapes tool_executor.read_file produces, with
     the agent sandbox as the gate instead of the server's read
     roots."""
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            content = f.read()
-        return {"status": "read", "path": path, "content": content}
-    except FileNotFoundError:
-        return {"status": "error", "error": f"File not found: {path}"}
-    except IsADirectoryError:
-        return {"status": "error",
-                "error": f"Path is a directory, not a file: {path}"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    return await tool_executor._read_file(path)
 
 
 async def run_agent(base_url: str, api_key: str,
