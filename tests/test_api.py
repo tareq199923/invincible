@@ -44,14 +44,19 @@ async def test_root_serves_landing_page_to_browsers(client):
     body = response.text
     # Failover hero: the old three-line product claim was replaced, and the
     # share titles track the new headline.
-    assert "<span>Hit a rate limit?</span><em>Your session keeps going.</em>" in body
+    assert "<span>Rate limits shouldn't</span><em>end your session.</em>" in body
+    assert "Failover · Memory · Machine access" in body
     assert (
-        'property="og:title" content="Invincible — Hit a rate limit? '
-        'Your session keeps going."' in body
+        "Point Claude Code, Codex, or any OpenAI-compatible client at one "
+        "address." in body
     )
     assert (
-        'name="twitter:title" content="Invincible — Hit a rate limit? '
-        'Your session keeps going."' in body
+        'property="og:title" content="Invincible — Rate limits shouldn\'t '
+        'end your session."' in body
+    )
+    assert (
+        'name="twitter:title" content="Invincible — Rate limits shouldn\'t '
+        'end your session."' in body
     )
     # Copy-paste Claude Code + Codex cards: both Claude env vars, the older
     # ANTHROPIC_API_KEY fallback, and a filled-in Codex config block.
