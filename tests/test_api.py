@@ -42,9 +42,29 @@ async def test_root_serves_landing_page_to_browsers(client):
     assert "text/html" in response.headers["content-type"]
     # Hero + CTA anchors render from the template, not a blank shell.
     body = response.text
-    assert "One gateway." in body
-    assert "Your providers." in body
-    assert "Your continuity." in body
+    # Failover hero: the old three-line product claim was replaced, and the
+    # share titles track the new headline.
+    assert "<span>Hit a rate limit?</span><em>Your session keeps going.</em>" in body
+    assert (
+        'property="og:title" content="Invincible — Hit a rate limit? '
+        'Your session keeps going."' in body
+    )
+    assert (
+        'name="twitter:title" content="Invincible — Hit a rate limit? '
+        'Your session keeps going."' in body
+    )
+    # Copy-paste Claude Code + Codex cards: both Claude env vars, the older
+    # ANTHROPIC_API_KEY fallback, and a filled-in Codex config block.
+    assert "export ANTHROPIC_BASE_URL" in body
+    assert "export ANTHROPIC_AUTH_TOKEN" in body
+    assert "ANTHROPIC_API_KEY" in body
+    assert 'model_provider = "invincible"' in body
+    assert 'base_url = "http://test/v1"' in body
+    assert 'env_key = "INVINCIBLE_API_KEY"' in body
+    assert 'wire_api = "responses"' in body
+    # Every wire card plus the CTA band ships one script-driven copy button.
+    assert body.count('<button class="copy-btn"') == 5
+    assert "navigator.clipboard.writeText" in body
     # Snippets render the REQUEST host (self-hosts show their own domain,
     # never the production one baked in).
     assert "http://test/v1" in body
