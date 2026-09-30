@@ -63,10 +63,10 @@ It serves three roles in one process:
 
 | Feature | What it gives you |
 |---|---|
-| **Remote-first, multi-user** | One deployment serves many accounts over HTTPS: browser accounts (email+password or GitHub), per-user projects/API keys/provider credentials, a dashboard, and strict per-user ownership — one account can never read another's data (audited; see [docs/MULTI-TENANT-AUDIT.md](docs/MULTI-TENANT-AUDIT.md)). The same core self-hosts on a laptop, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers running it on a host. |
+| **Remote-first, multi-user** | One deployment serves many accounts over HTTPS: browser accounts (email+password or GitHub), per-user projects/API keys/provider credentials, a dashboard, and strict per-user ownership — one account can never read another's data (see [docs/SECURITY.md](docs/SECURITY.md)). The same core self-hosts on a laptop, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers running it on a host. |
 | **BYOK routing** | Every user connects their own provider credentials (dashboard → Providers) and routes only through them: `auto`/`pinned`/`chain` routing per user, 429/5xx → cooldown + next credential, 401/403 → skip, network errors → next. No credentials connected → HTTP 400. All credentials exhausted → HTTP 503. |
 | **Exponential cooldown** | 30s → 60s → 120s → 240s → capped at 300s; a success resets the counter (in-memory, process-scoped). |
-| **Conversation memory** | PostgreSQL-backed (Phase 16), keyed by the `X-Session-Id` header (default `default`). History is merged into every request and the assistant reply is persisted back. |
+| **Conversation memory** | PostgreSQL-backed, keyed by the `X-Session-Id` header (default `default`). History is merged into every request and the assistant reply is persisted back. |
 | **Context trimming** | Per-credential `max_context`; system messages always kept; everything else dropped as atomic *turns* (an assistant `tool_calls` is never separated from its tool results); the most recent turn is always sent. |
 | **Per-provider timeouts** | Split connect/read/write/pool with sane defaults and per-provider overrides. |
 | **MCP tool server** | `read_file` (no approval), `execute_bash` and `write_file` (staged, then approved via a token round-trip through the `confirm_action` tool), guarded by denylists and an **OAuth 2.1 + PKCE bearer-token** auth layer (account login + per-client consent, tokens don't survive on requests like a shared header does). With `INVINCIBLE_AGENT_ROUTING` on, confirmed actions execute on the **user's own PC** via the paired harness agent (server keeps every security decision; see [§ Run tools on your own PC](#run-tools-on-your-own-pc-the-local-agent)). |
@@ -237,7 +237,8 @@ server administration:
 | `invincible harness connect` | Keep this machine online (WS-first relay, long-poll fallback): executes confirmed tool jobs on **this machine** with your own user privileges — denylist re-checked locally, reads/writes sandboxed to your home. Ctrl+C to stop. First run pairs automatically (device flow); `invincible login` is the explicit pairing/repair tool. |
 | `invincible harness status` | Show this account's agent liveness + machine inventory from the terminal. |
 | `invincible harness service install` | Write an always-on service definition (systemd/launchd/schtasks) so the machine stays online across reboots. |
-| `invincible setup` | Create/update `.env`: generates missing secrets (`token_urlsafe(32)`, never echoed), prompts for provider keys, preserves existing comments/values; a stale `MCP_SHARED_SECRET` line is left alone (rename it to `INVINCIBLE_OWNER_SECRET` yourself). `--force` re-prompts existing values. |
+| `invincible update` | Install the latest `invincible-ai` release from PyPI (`--check` for a dry run). |
+| `invincible setup` | Create/update `.env` (non-interactive, scriptable): generates missing secrets (`token_urlsafe(32)`, never echoed), generates the BYOK credential master key, preserves existing comments/values; provider keys are connected later on the dashboard's Providers page. `--db-url` supplies the DSN on first run (never prompted); `--force` regenerates secrets (the credential master key is never rotated). A stale `MCP_SHARED_SECRET` line is left alone (rename it to `INVINCIBLE_OWNER_SECRET` yourself). |
 | `invincible secret rotate` | Generate a brand-new `INVINCIBLE_OWNER_SECRET` and rewrite it in place — no manual `.env` editing, never echoes the value (unless `--show`). Preserves every other line. Does **not** revoke already-issued OAuth grants (that's `invincible oauth revoke`). |
 | `invincible start` | Start the server. `--host` (default `127.0.0.1`; pass `0.0.0.0` to be reachable from other machines), `--port` (default `8000`), `--reload`, `--log-level`, `--env-file`, `--config` (custom providers.yaml), `--tunnel/--no-tunnel` (local convenience: starts a Cloudflare tunnel named `invincible` by default so a laptop can be reached from the internet), `--tunnel-name` (or `INVINCIBLE_TUNNEL_NAME`). The tunnel is shut down with the server (Ctrl+C or a crash); a dead tunnel is reported as soon as it exits. There is no database flag — `INVINCIBLE_DB_URL` comes from the env/.env. **Hosted platforms do not use this command**: the container command in `Dockerfile`/`railway.json`/`Procfile` binds `0.0.0.0:$PORT` with proxy headers — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). |
 | `invincible doctor` | Environment/config diagnostics: providers.yaml, secrets, and PostgreSQL connectivity + schema revision (DSN always password-masked); loud FAIL on a stale/unmanaged schema. |
@@ -636,30 +637,33 @@ More MCP protocol details: [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md).
 ```
                          ┌──────────────────────────────────┐
   OpenAI-compatible      │  invincible/main.py              │
-  agent  ─── /v1/chat ─► │  (FastAPI)                        │
-         Claude Code     │                        compat/    │
+  agent ─── /v1/chat ──► │  (FastAPI)                        │
+         Claude Code     │              compat/              │
   (Anthropic) ─ /v1/msg ►│  openai_compat ──────► anthropic │
-                         │  │ mcp routers │                 │
-  Cloud AI      ─── /mcp ─►  │ core/router.py               │
-  (via tunnel)           │  │ core/tool_executor (denylist) │
+         Codex ─ /v1/resp►│  responses_compat                │
+                         │  │ mcp │ dashboard │ agent │     │
+  Cloud AI     ─── /mcp ─►│  │ core/chat_service.py          │
+  (via tunnel)           │  │ core/router.py (BYOK failover)│
+                         │  │ core/tool_executor (denylist) │
                          └──────┬──────────────┬────────────┘
                                 │              │
                   ┌─────────────▼──┐   ┌───────▼────────────┐
                   │ core/router.py │   │ core/tool_executor │
                   │ tiered failover│   │ (denylist + approval)│
-                  │ + ctx trimming │   └─────────────────────┘
-                  └───────┬────────┘
-                          │
-            ┌──────────────────────────┐
-            │ core/provider_health.py  │
-            │ core/session_store.py    │
-            │ (PostgreSQL stores)      │
-            └──────────────────────────┘
+                  │ + ctx trimming │   └─────────┬──────────┘
+                  └───────┬────────┘             │ confirmed jobs
+                          │          ┌───────────▼────────────┐
+                          │          │ user's paired machine  │
+            ┌─────────────▼──────────▼──────────►│ (agent/runner.py)    │
+            │ PostgreSQL stores                  └────────────────────┘
+            │ (sessions/memory/continuity/BYOK)  │
+            └────────────────────────────────────┘
 ```
 
-The compatibility layers (OpenAI and Anthropic) only translate; both
-produce the same internal message model, which is what the Router, session
-store, and trimming logic consume.
+The compatibility layers (OpenAI, Anthropic, Responses) only translate;
+all three produce the same internal message model, which is what the
+shared chat pipeline (`core/chat_service.py`), the Router, the session
+store, and the trimming logic consume.
 
 ### Package layout
 
@@ -668,6 +672,12 @@ store, and trimming logic consume.
 | `invincible/main.py` | FastAPI app, lifespan, auth dependencies, router wiring, `HEAD /` and `/health`. |
 | `invincible/endpoints/openai_compat.py` | `POST /v1/chat/completions` (JSON + SSE streaming, session merge + upstream call); `GET /v1/models`. |
 | `invincible/endpoints/anthropic_compat.py` | `POST /v1/messages`; translates Anthropic ↔ internal model, calls the same Router. |
+| `invincible/endpoints/responses_compat.py` | `POST /v1/responses` (OpenAI Responses protocol for Codex CLI). |
+| `invincible/endpoints/dashboard.py` | Jinja2 + HTMX dashboard (overview, sessions, tasks, memory, usage, settings) — session-cookie realm only. |
+| `invincible/endpoints/accounts.py` | `/auth/*`, `/projects`, `/api-keys`, device pairing, GitHub login (session realm). |
+| `invincible/endpoints/byok.py` | Per-user provider-credential management (connect, test, order, routing config). |
+| `invincible/endpoints/agents.py` | Agent transport: `/agent/poll` + `/agent/result`, WS relay, machine inventory. |
+| `invincible/endpoints/docs.py` | Public docs site (`/docs`). |
 | `invincible/models/anthropic.py` | Pydantic request model: only real fields declared; everything else ignored. |
 | `invincible/compat/common.py` | Protocol-neutral internal-message/usage helpers shared by compat layers. |
 | `invincible/compat/anthropic.py` | Pure Anthropic translators: flattening, finish-reason map, error map, Anthropic SSE streaming. |
@@ -678,8 +688,9 @@ store, and trimming logic consume.
 | `invincible/migrations/` | Packaged Alembic environment (`invincible db upgrade`). |
 | `invincible/core/session_store.py` | Conversation memory on PostgreSQL, partitioned by session id. |
 | `invincible/core/tool_executor.py` | Denylists, pending-action approval (`confirm_action`), tool execution. |
-| `invincible/endpoints/byok.py` | Per-user provider-credential management (connect, test, order, routing config). |
-| `invincible/cli.py` | Click CLI: `setup`, `start`, `doctor`, `api-key`, `users`, `oauth`, `db`, `login`, `agent`. |
+| `invincible/core/chat_service.py` | Shared chat pipeline (history, memory, continuity, routing) used by `/v1/chat/completions` and the dashboard webchat, so API and web sessions share history. |
+| `invincible/agent/runner.py` | The local agent on the **user's** machine: pairing config + poll/WS loop + home-confined sandbox. |
+| `invincible/cli.py` | Click CLI: `setup`/`start`(+tunnel)/`login`/`connect`/`harness`/`update`/`doctor`/`dev-db`/`db`/`secret`/`oauth`/`api-key`/`users`. |
 | `invincible/providers.yaml` | Static provider fixture (tests/direct construction; live traffic is BYOK-only). |
 
 ---
@@ -696,6 +707,7 @@ store, and trimming logic consume.
 | [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md) | Client-facing `/mcp` spec: JSON-RPC shape, tools, notifications, hosted URL vs. self-host tunnel. |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, auth realms, denylist inventory, approval flow, known limits. |
 | [docs/TESTING.md](docs/TESTING.md) | How tests work, fixtures, per-file coverage map. |
+| [docs/RELEASING.md](docs/RELEASING.md) | Cutting a release: versioning, the build gate, the tag-triggered PyPI workflow. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Current platform direction, a verified snapshot of what is implemented, and the phased plan (identity, isolation, accounts, memory/context intelligence, dashboard, deployment). |
 
 ---

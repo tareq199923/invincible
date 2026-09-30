@@ -4,8 +4,8 @@ Where the project is, where it is going, and the status of every piece of
 work. This document supersedes the previous phase-numbered plan; that
 history is preserved in compressed form at the bottom.
 
-The single ordered list of actionable work (open findings, fix plans,
-decision queue, completed log) lives in [WORKQUEUE.md](WORKQUEUE.md).
+Open work is tracked in the issue tracker; this document records
+direction, the status of every piece of work, and the history behind it.
 
 Status labels used throughout:
 

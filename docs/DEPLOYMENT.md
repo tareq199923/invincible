@@ -222,6 +222,4 @@ this is the operational version.
   CLI reference.
 - [MCP_PROTOCOL.md](MCP_PROTOCOL.md) — connecting MCP clients to the
   deployed URL.
-- [RAILWAY-ACCOUNT-TRANSFER.md](RAILWAY-ACCOUNT-TRANSFER.md) — the pending
-  Railway ownership-transfer checklist for `invincible-ai.me`.
 
