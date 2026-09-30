@@ -43,7 +43,7 @@ EXPECTED_TEMPLATES = {
     "session_detail.html", "settings.html", "setup.html", "tasks.html",
     "usage.html", "_chat_rows.html", "_memory_table.html",
     "_provider_row.html",
-    "_provider_rows.html",
+    "_provider_rows.html", "_icons.html",
 }
 EXPECTED_STATIC = {"docs.js", "graph.js", "htmx.min.js", "sidebar.js"}
 

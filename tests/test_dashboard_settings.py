@@ -182,4 +182,9 @@ async def test_system_panel_renders_readonly_flags(client):
     # ui overhaul 2026-09: flags render as on/off badges now.
     assert ">on<" in page.text
     # Sidebar nav renders the settings link once (chat-first shell).
-    assert page.text.count('href="/dashboard/settings">Settings</a>') == 1
+    # The icon pass put an svg between the href and the label, so the two
+    # halves are counted apart: still exactly one settings link, and it is
+    # still the one labeled Settings.
+    assert page.text.count('href="/dashboard/settings">') == 1
+    assert page.text.count(
+        '<span class="nav-label">Settings</span>') == 1

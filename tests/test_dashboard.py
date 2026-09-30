@@ -19,6 +19,21 @@ def card_count(html: str, name: str) -> int:
     return int(match.group(1))
 
 
+def nav_inner(html: str, href: str) -> str:
+    """The inside of one sidebar nav link.
+
+    The 2026-09-30 icon pass put an inline svg before each label and
+    wrapped the label in a span, so assertions that care about a link's
+    content slice it out here. The href is part of the match: the link
+    target stays the contract.
+    """
+    match = re.search(
+        rf'<a class="nav-link[^"]*"\s+href="{re.escape(href)}">(.*?)</a>',
+        html, re.DOTALL)
+    assert match is not None, f"nav link for {href} missing from sidebar"
+    return match.group(1)
+
+
 async def test_dashboard_requires_session(client):
     anon = await client.get("/dashboard")
     assert anon.status_code == 401
@@ -43,7 +58,10 @@ async def test_dashboard_home_redirects_to_chat(client):
     page = await client.get("/dashboard/chat")
     assert page.status_code == 200
     assert "/static/app.css" in page.text
-    assert "+ New chat" in page.text
+    # The + is an inline icon now (2026-09-30 sidebar icons): the icon
+    # and the words both have to be there for the button to read alike.
+    assert "icon-plus" in page.text
+    assert '<span class="nav-label">New chat</span>' in page.text
     assert 'id="side-history"' in page.text
 
 
@@ -55,7 +73,10 @@ async def test_sidebar_has_no_section_headings_but_keeps_every_link(client):
     assert page.count('class="side-section-label"') == 1  # only Chats remains
     for label in ("Workspace", "Monitor"):
         assert label not in page, label
-    assert '>Account</a>' in page                          # the link stays
+    # the link stays - only the label's home moved (it is a span now,
+    # sitting after the link's icon).
+    assert nav_inner(page, "/account").endswith(
+        '<span class="nav-label">Account</span>')
     for link in ("/dashboard/setup", "/dashboard/providers", "/dashboard/mcp",
                  "/dashboard/machines", "/dashboard/memory",
                  "/dashboard/tasks", "/dashboard/sessions",
@@ -65,6 +86,62 @@ async def test_sidebar_has_no_section_headings_but_keeps_every_link(client):
     # empty state instead, so the hooks are asserted on a seeded page).
     assert 'placeholder="Search chats…"' in page
     assert "/static/sidebar.js" in page
+
+
+SIDEBAR_ICONS = [
+    ("/dashboard/setup", "Get started", "play-circle"),
+    ("/dashboard/providers", "Providers", "plug"),
+    ("/dashboard/mcp", "MCP", "wrench"),
+    ("/dashboard/machines", "Machines", "monitor"),
+    ("/dashboard/memory", "Memories", "database"),
+    ("/dashboard/tasks", "Tasks", "square-check"),
+    ("/dashboard/sessions", "Sessions", "message-square"),
+    ("/dashboard/usage", "Usage", "bar-chart"),
+    ("/dashboard/settings", "Settings", "settings"),
+    ("/account", "Account", "user"),
+]
+
+
+async def test_sidebar_renders_an_icon_for_every_nav_item(client):
+    """Claude-style sidebar: a thin line icon to the left of every label.
+
+    Pins what matters about the icons: each is one inline svg INSIDE the
+    link, decorative and theme-blind (currentColor, aria-hidden, not
+    focusable, 24x24 drawn at 18px), and never reused; the labels read
+    exactly as before; and every href survived the icon pass.
+    """
+    await register_account(client, "iconnav@example.com")
+    page = (await client.get("/dashboard/chat")).text
+    names = [name for _, _, name in SIDEBAR_ICONS]
+    assert len(set(names)) == len(names), "no icon may be used twice"
+    for href, label, name in SIDEBAR_ICONS:
+        inner = nav_inner(page, href)
+        assert inner.count("<svg") == 1, href
+        assert f'class="icon icon-{name}"' in inner, name
+        for attr in ('viewBox="0 0 24 24"', 'width="18"', 'height="18"',
+                     'fill="none"', 'stroke="currentColor"',
+                     'stroke-width="1.75"', 'aria-hidden="true"',
+                     'focusable="false"'):
+            assert attr in inner, (name, attr)
+        assert inner.endswith(f'<span class="nav-label">{label}</span>'), label
+
+
+async def test_new_chat_button_has_a_plus_icon_and_keeps_its_label(client):
+    """The literal '+' character became a plus icon; the words and the form
+    target are untouched, and no stray '+' glyph is left behind."""
+    await register_account(client, "plusnav@example.com")
+    page = (await client.get("/dashboard/chat")).text
+    match = re.search(
+        r'<button[^>]*class="new-chat-btn"[^>]*>(.*?)</button>',
+        page, re.DOTALL)
+    assert match is not None, "New chat button missing from the sidebar"
+    inner = match.group(1)
+    assert inner.count("<svg") == 1
+    assert 'class="icon icon-plus"' in inner
+    assert 'aria-hidden="true"' in inner
+    assert '<span class="nav-label">New chat</span>' in inner
+    assert "+ New chat" not in page               # the old text glyph is gone
+    assert 'action="/dashboard/chat/new"' in page  # still posts to new chat
 
 
 async def test_dashboard_renders_empty_state(client):

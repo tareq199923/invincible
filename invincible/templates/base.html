@@ -1,3 +1,4 @@
+{% from "_icons.html" import icon -%}
 <!doctype html>
 <html lang="en">
 <head>
@@ -35,29 +36,29 @@
   <aside class="sidebar">
     <a class="brand" href="/dashboard/chat"><span class="brand-mark">I/</span>Invincible</a>
     <form method="post" action="/dashboard/chat/new" style="margin:0">
-      <button type="submit" class="new-chat-btn">+ New chat</button>
+      <button type="submit" class="new-chat-btn">{{ icon('plus') }}<span class="nav-label">New chat</span></button>
     </form>
     <nav class="nav-list" aria-label="Primary">
       <a class="nav-link{% if path.startswith('/dashboard/setup') %} active{% endif %}"
-         href="/dashboard/setup">Get started</a>
+         href="/dashboard/setup">{{ icon('play-circle') }}<span class="nav-label">Get started</span></a>
       <a class="nav-link{% if path.startswith('/dashboard/providers') %} active{% endif %}"
-         href="/dashboard/providers">Providers</a>
+         href="/dashboard/providers">{{ icon('plug') }}<span class="nav-label">Providers</span></a>
       <a class="nav-link{% if path.startswith('/dashboard/mcp') %} active{% endif %}"
-         href="/dashboard/mcp">MCP</a>
+         href="/dashboard/mcp">{{ icon('wrench') }}<span class="nav-label">MCP</span></a>
       <a class="nav-link{% if path.startswith('/dashboard/machines') %} active{% endif %}"
-         href="/dashboard/machines">Machines</a>
+         href="/dashboard/machines">{{ icon('monitor') }}<span class="nav-label">Machines</span></a>
       <a class="nav-link{% if path.startswith('/dashboard/memory') %} active{% endif %}"
-         href="/dashboard/memory">Memories</a>
+         href="/dashboard/memory">{{ icon('database') }}<span class="nav-label">Memories</span></a>
       <a class="nav-link{% if path.startswith('/dashboard/tasks') %} active{% endif %}"
-         href="/dashboard/tasks">Tasks</a>
+         href="/dashboard/tasks">{{ icon('square-check') }}<span class="nav-label">Tasks</span></a>
       <a class="nav-link{% if path.startswith('/dashboard/sessions') %} active{% endif %}"
-         href="/dashboard/sessions">Sessions</a>
+         href="/dashboard/sessions">{{ icon('message-square') }}<span class="nav-label">Sessions</span></a>
       <a class="nav-link{% if path.startswith('/dashboard/usage') %} active{% endif %}"
-         href="/dashboard/usage">Usage</a>
+         href="/dashboard/usage">{{ icon('bar-chart') }}<span class="nav-label">Usage</span></a>
       <a class="nav-link{% if path.startswith('/dashboard/settings') %} active{% endif %}"
-         href="/dashboard/settings">Settings</a>
+         href="/dashboard/settings">{{ icon('settings') }}<span class="nav-label">Settings</span></a>
       <a class="nav-link{% if path == '/account' %} active{% endif %}"
-         href="/account">Account</a>
+         href="/account">{{ icon('user') }}<span class="nav-label">Account</span></a>
     </nav>
     <span class="side-section-label">Chats</span>
     <input type="search" class="side-search" id="side-search"

@@ -161,7 +161,10 @@ body.shell-body .brand-mark { border-radius: 5px; background: var(--accent); col
 html[data-theme="dark"] body.shell-body .brand-mark { color: #251b17; }
 
 .new-chat-btn {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
   width: 100%;
   margin: 0 0 0.75rem;
   padding: 0.55rem 0.8rem;
@@ -186,7 +189,7 @@ html[data-theme="dark"] .new-chat-btn:hover { color: #251b17; }
   position: relative;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.75rem;
   padding: 0.42rem 0.65rem;
   border-radius: 5px;
   color: var(--muted);
@@ -198,6 +201,15 @@ html[data-theme="dark"] .new-chat-btn:hover { color: #251b17; }
 }
 .nav-link:hover { color: var(--ink); background: var(--raise); text-decoration: none; }
 .nav-link.active { color: var(--accent-ink); background: var(--accent-dim); border-left-color: var(--accent); font-weight: 650; }
+/* Inline line icons (templates/_icons.html): a fixed 18px box that never
+   shrinks, painted with currentColor so an icon rides the link text color
+   through muted -> hover -> active without any rule of its own. */
+.nav-link svg, .new-chat-btn svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  color: inherit;
+}
 
 .side-section-label {
   display: block;

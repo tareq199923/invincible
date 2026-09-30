@@ -1,0 +1,45 @@
+{# invincible/templates/_icons.html
+   Inline line icons for the dashboard shell, in one place. Import once and
+   call with a name:
+
+       {% from "_icons.html" import icon %}   ...  {{ icon('plug') }}
+
+   Every icon is a 24x24 viewBox drawn at 18px, stroke="currentColor" and
+   fill="none", so an icon always matches the color of the text beside it:
+   muted by default, brighter on hover, the accent color on the active nav
+   item - no per-theme rules needed. Each one is aria-hidden and
+   focusable="false": the visible label carries the meaning, the icon is
+   decoration. Names are the contract with base.html and the sidebar test;
+   add a branch here rather than pasting a new <svg> into a template.
+
+   Paths come from Lucide (https://lucide.dev, ISC) and Feather
+   (https://feathericons.com, Apache-2.0) - both permissive open-source
+   icon sets - lightly simplified where a shape needs to survive 18px.
+#}
+{% macro icon(name) -%}
+<svg class="icon icon-{{ name }}" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+  {%- if name == "play-circle" -%}
+    <circle cx="12" cy="12" r="10" /><path d="m10 8 6 4-6 4z" />
+  {%- elif name == "plug" -%}
+    <path d="M12 22v-5" /><path d="M9 8V2" /><path d="M15 8V2" /><path d="M18 8v5a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4V8Z" />
+  {%- elif name == "wrench" -%}
+    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z" />
+  {%- elif name == "monitor" -%}
+    <rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8" /><path d="M12 17v4" />
+  {%- elif name == "database" -%}
+    <ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14a9 3 0 0 0 18 0V5" /><path d="M3 12a9 3 0 0 0 18 0" />
+  {%- elif name == "square-check" -%}
+    <path d="M9 11l3 3 7-7" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+  {%- elif name == "message-square" -%}
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+  {%- elif name == "bar-chart" -%}
+    <path d="M3 3v18h18" /><path d="M8 17v-3" /><path d="M13 17V5" /><path d="M18 17V9" />
+  {%- elif name == "settings" -%}
+    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" />
+  {%- elif name == "user" -%}
+    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+  {%- elif name == "plus" -%}
+    <path d="M5 12h14" /><path d="M12 5v14" />
+  {%- endif -%}
+</svg>
+{%- endmacro %}
