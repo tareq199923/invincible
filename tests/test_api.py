@@ -67,8 +67,9 @@ async def test_root_serves_landing_page_to_browsers(client):
     assert 'base_url = "http://test/v1"' in body
     assert 'env_key = "INVINCIBLE_API_KEY"' in body
     assert 'wire_api = "responses"' in body
-    # Every wire card plus the CTA band ships one script-driven copy button.
-    assert body.count('<button class="copy-btn"') == 5
+    # Every wire card plus the CTA band ships one script-driven copy button,
+    # and the failover demo reuses the style for its Replay button.
+    assert body.count('<button class="copy-btn"') == 6
     assert "navigator.clipboard.writeText" in body
     # Snippets render the REQUEST host (self-hosts show their own domain,
     # never the production one baked in).
@@ -94,6 +95,11 @@ async def test_root_serves_landing_page_to_browsers(client):
     assert "Zero inbound ports" in body
     assert "Frequently asked questions" in body
     assert "Bring a machine online only when you need it." in body
+    # Failover demo: heading + honesty caption render server-side (no-JS
+    # fallback shows the final transcript as plain text).
+    assert "See a rate limit not stop you" in body
+    assert "Simulated example. Real failover happens per request" in body
+    assert 'id="failover-demo"' in body
     assert "Every provider" not in body
     assert "pip install invincible-ai" in body
     assert "invincible harness connect" in body

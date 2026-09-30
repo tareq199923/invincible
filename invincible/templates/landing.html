@@ -214,6 +214,18 @@
     footer { padding: 28px 0 38px; color: var(--muted); font-size: 0.7rem; }
     footer .wrap { display: flex; align-items: center; justify-content: space-between; padding-top: 18px; border-top: 1px solid var(--line); }
     .live-dot { display: inline-block; width: 7px; height: 7px; margin-right: 7px; background: var(--accent); border-radius: 50%; }
+    .demo-log { min-height: 11em; }
+    .demo-log .warn { color: var(--warn); }
+    .demo-status { display: flex; gap: 8px; padding: 0 24px 12px; flex-wrap: wrap; font-size: 0.68rem; }
+    .demo-pill { display: inline-flex; gap: 7px; padding: 5px 11px; align-items: center; color: var(--muted); background: var(--night-raised); border: 1px solid var(--line); border-radius: 999px; font-weight: 700; }
+    .demo-pill i { width: 7px; height: 7px; background: var(--muted); border-radius: 50%; }
+    .demo-pill.is-ok i { background: var(--ok); }
+    .demo-pill.is-ok { color: var(--ink); }
+    .demo-pill.is-warn i { background: var(--warn); }
+    .demo-pill.is-warn { color: var(--warn); }
+    .demo-row { display: flex; gap: 12px; padding: 0 24px 18px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+    .demo-caption { margin: 0; color: var(--muted); font-family: var(--sans); font-size: 0.7rem; line-height: 1.5; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
     :focus-visible { outline: 3px solid rgba(139,147,255,.72); outline-offset: 3px; }
     @media (max-width: 1000px) {
@@ -313,6 +325,33 @@
           <span class="capability-tab"><i aria-hidden="true"></i>Anthropic Messages (Claude Code)</span>
           <span class="capability-tab"><i aria-hidden="true"></i>OpenAI Responses (Codex)</span>
           <span class="capability-tab"><i aria-hidden="true"></i>MCP Tools</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="failover-demo" class="content-section" aria-label="Failover demonstration">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><p class="eyebrow">Failover</p><h2>See a rate limit not stop you</h2></div>
+          <p>One stable endpoint. When one of your provider credentials hits its limit, Invincible cools it down and retries the next — the session keeps going.</p>
+        </div>
+        <div class="terminal" id="failover-panel">
+          <div class="bar"><i></i><i></i><i></i><strong>invincible / failover-demo</strong></div>
+          <pre class="demo-log" id="failover-log" aria-hidden="true"><span class="dim">$ agent → POST /v1/chat/completions</span>
+<span class="warn">Provider A → 429 rate limited</span>
+<span class="dim">invincible: cooldown 30s, trying next provider</span>
+<span class="ok">Provider B → 200 ok · streaming reply</span>
+<span class="dim">x-invincible-provider: provider-b · x-invincible-attempts: 2</span>
+<span class="ok">Session continued. You didn't notice.</span></pre>
+          <p class="sr-only">Example: a coding agent's request hits a rate limit on Provider A. Invincible cools that credential down and retries Provider B, which answers. The session continues with no action from the user.</p>
+          <div class="demo-status" aria-hidden="true">
+            <span class="demo-pill" id="pill-a"><i></i>Provider A · serving</span>
+            <span class="demo-pill" id="pill-b"><i></i>Provider B · idle</span>
+          </div>
+          <div class="demo-row">
+            <p class="demo-caption">Simulated example. Real failover happens per request through your own provider keys.</p>
+            <button class="copy-btn" id="failover-replay" type="button">Replay</button>
+          </div>
         </div>
       </div>
     </section>
@@ -494,6 +533,59 @@
           } catch (err) { /* clipboard unavailable — fail quietly */ }
         });
       });
+      var log = document.getElementById("failover-log");
+      var panel = document.getElementById("failover-panel");
+      var replay = document.getElementById("failover-replay");
+      var pillA = document.getElementById("pill-a");
+      var pillB = document.getElementById("pill-b");
+      if (log && panel) {
+        var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        var finalHTML = log.innerHTML;
+        var lines = [
+          { h: '<span class="dim">$ agent → POST /v1/chat/completions</span>', a: "A", b: "idle" },
+          { h: '<span class="warn">Provider A → 429 rate limited</span>', a: "limited", b: "idle" },
+          { h: '<span class="dim">invincible: cooldown 30s, trying next provider</span>', a: "limited", b: "idle" },
+          { h: '<span class="ok">Provider B → 200 ok · streaming reply</span>', a: "limited", b: "serving" },
+          { h: '<span class="dim">x-invincible-provider: provider-b · x-invincible-attempts: 2</span>', a: "limited", b: "serving" },
+          { h: '<span class="ok">Session continued. You didn\'t notice.</span>', a: "limited", b: "serving" }
+        ];
+        function setPills(a, b) {
+          if (pillA) {
+            pillA.className = "demo-pill" + (a === "limited" ? " is-warn" : " is-ok");
+            pillA.innerHTML = "<i></i>Provider A · " + (a === "limited" ? "limited" : a === "ok" ? "ok" : "serving");
+          }
+          if (pillB) {
+            pillB.className = "demo-pill" + (b === "serving" ? " is-ok" : "");
+            pillB.innerHTML = "<i></i>Provider B · " + b;
+          }
+        }
+        if (!reduce && window.IntersectionObserver) {
+          var i = 0, timer = null, started = false, visible = false;
+          function show(n) {
+            log.innerHTML = lines.slice(0, n).map(function (l) { return l.h; }).join("\n");
+            var cur = lines[Math.min(n, lines.length) - 1] || { a: "ok", b: "idle" };
+            setPills(n === 0 ? "ok" : cur.a, cur.b);
+          }
+          function tick() {
+            if (!visible) return;
+            if (i <= lines.length) { show(i); i++; timer = setTimeout(tick, i === 1 ? 900 : i > lines.length ? 2600 : 1400); }
+            else { i = 0; timer = setTimeout(tick, 600); }
+          }
+          function start() { if (started) return; started = true; i = 0; log.innerHTML = ""; setPills("ok", "idle"); tick(); }
+          new IntersectionObserver(function (entries) {
+            visible = entries[0].isIntersecting;
+            if (visible) { start(); if (!timer) tick(); }
+            else if (timer) { clearTimeout(timer); timer = null; }
+          }, { threshold: 0.3 }).observe(panel);
+          if (replay) replay.addEventListener("click", function () {
+            i = 0; if (timer) clearTimeout(timer); timer = null;
+            if (!visible) { log.innerHTML = finalHTML; setPills("limited", "serving"); return; }
+            tick();
+          });
+        } else {
+          setPills("limited", "serving");
+        }
+      }
     })();
   </script>
 </body>
