@@ -45,7 +45,7 @@ EXPECTED_TEMPLATES = {
     "_provider_row.html",
     "_provider_rows.html",
 }
-EXPECTED_STATIC = {"graph.js", "htmx.min.js", "sidebar.js"}
+EXPECTED_STATIC = {"docs.js", "graph.js", "htmx.min.js", "sidebar.js"}
 
 
 def _source_version() -> str:

@@ -12,7 +12,7 @@ invincible/
 ├── main.py                     FastAPI app, lifespan, auth wiring, /health, HEAD /
 ├── cli.py                      Click CLI (setup / start / login / doctor / dev-db / db / oauth / secret / api-key / users)
 ├── providers.yaml              Static provider config (packaged test fixture)
-├── templates/                  Jinja2 UI (login/register/account/device pages + dashboard)
+├── templates/                  Jinja2 UI (public landing + docs site, login/register/account/device pages + dashboard)
 ├── migrations/                 Packaged Alembic environment (0001 baseline … 0015 session_title_pin)
 ├── endpoints/
 │   ├── auth.py                 require_auth: per-user inv_ API-key Principal resolution for /v1/* (fail closed)
@@ -41,7 +41,12 @@ invincible/
 │   ├── agents.py               Phase 10 agent surface: POST /agent/poll + /agent/result
 │   │                           (inv_ key realm), GET /agent/machines + /agent/whoami
 │   │                           (inv_ key realm, read-only), GET /agent/status (session realm)
-│   └── graph.py                GET /api/v1/sessions/{id}/graph (continuity projection, owner-scoped)
+│   ├── graph.py                GET /api/v1/sessions/{id}/graph (continuity projection, owner-scoped)
+│   └── docs.py                 Public docs site: GET /docs + /docs/{slug}
+│                               (allowlisted curated guides, live MCP tool
+│                               tables, request-derived host snippets,
+│                               server-injected heading anchors + the
+│                               search-index payload behind ⌘K)
 ├── models/
 │   ├── anthropic.py            Pydantic request model (ignores unknown fields)
 │   └── responses.py            OpenAI Responses request model

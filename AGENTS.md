@@ -72,6 +72,7 @@ Fixture semantics (`tests/conftest.py`):
 | `endpoints/byok.py` | Per-user provider-credential management (connect, test, order, routing config, per-user overrides) |
 | `endpoints/graph.py` | `GET /api/v1/sessions/{id}/graph` continuity projection (owner-scoped) |
 | `endpoints/dashboard.py` | Phase 5 Jinja2 + HTMX dashboard (overview, sessions, tasks, memory, usage, settings) — session-cookie realm only |
+| `endpoints/docs.py` | Public docs site (`GET /docs`, `/docs/{slug}`): allowlisted curated guides, live MCP tool tables split by plane, request-derived host snippets, server-injected heading anchors + the `⌘K` search-index payload |
 | `endpoints/agents.py` | Phase 10 agent transport: `POST /agent/poll` + `/agent/result` (inv_ key realm), `GET /agent/machines` + `GET /agent/whoami` (inv_ key realm, read-only), `GET /agent/status` (session realm) |
 | `agent/runner.py`, `agent/sandbox.py` | The local agent that runs on the **user's** machine: pairing config + long-poll loop + home-confined sandbox |
 | `core/router.py` | THE single tiered-failover loop (`_iter_attempts`); run recording |

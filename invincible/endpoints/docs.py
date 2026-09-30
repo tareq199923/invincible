@@ -11,6 +11,12 @@ mirror ``cli.py`` (``harness setup`` / ``harness connect``), the MCP tool
 table is generated from the live ``TOOLS`` list in ``endpoints/mcp.py``,
 and every behavior claim (BYOK-only, lexical memory, failover codes) matches
 the tested semantics. No secrets are rendered.
+
+Two presentation invariants are test-pinned: page bodies never hardcode a
+host (``{{BASE_URL}}`` is the request's own base URL, so a self-host
+documents its own domain), and heading anchors are injected server-side
+from the same ``_slugify`` the sidebar TOC and the ``⌘K`` search index use,
+so the three can never disagree.
 """
 import re
 from pathlib import Path
@@ -51,14 +57,28 @@ def _toc(markdown: str) -> list:
     return items
 
 
-def _mcp_tools() -> list:
-    """Live tool names + first-sentence descriptions (no drift)."""
+# Plane split for the docs tool tables. Data-plane tools read/write the
+# caller's own rows (memory, task state, projects) and need no machine
+# online; every other tool executes on a paired machine. Membership
+# mirrors the dispatch branches in endpoints/mcp.py, and
+# tests/test_docs.py pins it against the live TOOLS list so a rename
+# fails loudly instead of silently misfiling a tool in the docs.
+_DATA_PLANE_TOOLS = frozenset({
+    "memory_save", "memory_search", "memory_list",
+    "task_state_set", "task_state_get", "checkpoint_create",
+    "project_create", "project_list",
+})
+
+
+def _mcp_tool_rows() -> dict:
+    """Live tool names + first-sentence descriptions, split by plane."""
     from invincible.endpoints.mcp import TOOLS
-    rows = []
+    groups: dict = {"data": [], "machine": []}
     for t in TOOLS:
         desc = (t.get("description") or "").split(".")[0].strip() + "."
-        rows.append({"name": t["name"], "desc": desc})
-    return rows
+        plane = "data" if t["name"] in _DATA_PLANE_TOOLS else "machine"
+        groups[plane].append({"name": t["name"], "desc": desc})
+    return groups
 
 
 # ---------------------------------------------------------------------------
@@ -190,27 +210,48 @@ Hosted deployments must enable agent routing.
 _CLI = """\
 # CLI reference
 
-## Pairing and connection
+Two names, identical entry points: `invincible` and `inv`. The tables
+below omit the `invincible` prefix, and every row is verified against
+`--help` on the shipped package.
+
+## Pair and connect
 
 | Command | What it does |
 |---------|--------------|
-| `invincible harness setup` | Pair this machine once, print MCP config (idempotent) |
-| `invincible harness connect` | Keep this machine online |
-| `invincible connect` | Short spelling of `harness connect` |
-| `invincible harness status` | Show pairing and machine state |
-| `invincible harness service install` | Install the always-on background service |
+| `harness setup` | Pair once, print the MCP connector config |
+| `harness connect` | Keep this machine online (Ctrl+C to stop) |
+| `connect` | Short spelling of `harness connect` |
+| `harness status` | Account, agent liveness, machine inventory |
+| `harness service install` | Write the always-on service (`--dry-run` prints) |
+| `login` | Device-flow pairing; `--server` for a self-host |
 
-## Useful management commands
+## Server administration (self-host)
 
 | Command | What it does |
 |---------|--------------|
-| `invincible login` | Device-flow browser login |
-| `invincible doctor` | Check server health, schema, and config |
-| `invincible db upgrade` | Run packaged Alembic migrations (never auto-run) |
-| `invincible secret credential-key` | Generate `INVINCIBLE_CREDENTIAL_KEY` |
+| `setup` | Create or update `.env` (secrets never echoed) |
+| `start` | Start the gateway: `--host`, `--port`, `--tunnel` |
+| `doctor` | Environment and config diagnostics; schema check |
+| `db upgrade` | Run the packaged migrations to head (never auto) |
+| `secret rotate` | New `INVINCIBLE_OWNER_SECRET`, written in place |
+| `secret credential-key` | Generate the BYOK Fernet key |
+| `dev-db` | Local development Postgres; prints the DSN |
+| `update` | Install the latest `invincible-ai` from PyPI |
 
-Run any command with `--help` for exact flags. First-time pairing lives
-under `harness setup`; `connect` never re-pairs silently.
+## Accounts, keys, and grants
+
+| Command | What it does |
+|---------|--------------|
+| `users list` | List dashboard accounts (host tool) |
+| `users reset-password` | Password reset — host recovery path |
+| `api-key create` | Mint an `inv_` key (raw value shown once) |
+| `api-key list` | List keys by label and prefix |
+| `api-key revoke` | Revoke a key by id or visible prefix |
+| `oauth list` | OAuth clients and their active MCP grants |
+| `oauth revoke` | Revoke every token issued to one client |
+
+Run any command with `--help` for the exact flags. First-time pairing
+lives under `harness setup`; `connect` never re-pairs silently.
 """
 
 _MCP = """\
@@ -225,19 +266,35 @@ custom client) at one endpoint for memory and machine tools.
 {
   "mcpServers": {
     "invincible": {
-      "url": "https://invincible-ai.me/mcp"
+      "url": "{{BASE_URL}}/mcp"
     }
   }
 }
 ```
 
-Replace the host with your own deployment when self-hosting.
+The host above is derived from the request you are reading this on — a
+self-hosted deployment documents its own domain, never someone else's.
+Paste it into your client exactly as written.
+
+## Supported AI tools
+
+Any MCP-compatible client works: the endpoint is standard Model Context
+Protocol with OAuth. These are the paths that have been exercised.
+
+| Client | Where the server goes |
+|--------|-----------------------|
+| Cursor | Settings - MCP: add the URL above |
+| Claude Desktop | `mcpServers` in `claude_desktop_config.json` |
+| ChatGPT | add the MCP endpoint as a connector |
+| OpenAI Codex | standard MCP config with the URL above |
+| Any MCP client | the JSON above; `url` is required |
 
 ## Which tools you get
 
-**Memory tools** are available as soon as you connect — no machine
-required. **Machine tools** (files, shell, inspection) appear once a
-paired machine is online (`invincible harness connect`).
+**Memory, continuity, and project tools** work as soon as you connect.
+**Machine tools** appear once a paired machine is online
+(`invincible harness connect`) — the two tables at the end of this page
+list exactly which is which.
 
 ## Authentication
 
@@ -267,8 +324,15 @@ continuity brief.
 
 ## Saving
 
-Say "remember this" (or "save this") to store explicitly. Manage,
-search, and delete everything from Dashboard - Memories.
+Say "remember this" (or "save this") to store explicitly. A deterministic
+extractor also records durable preferences and decisions from your own
+turns — never from assistant replies or tool results, so a fetched page
+or a provider reply can never mint one.
+
+The MCP tools `memory_save`, `memory_search`, and `memory_list` write and
+read the same rows (confidence 0.9, provenance `mcp:<client>`). They are
+data-plane tools: no confirmation gate, because they only ever touch the
+caller's own memory — and there is no MCP delete.
 
 ## Recalling
 
@@ -276,11 +340,26 @@ Retrieval is lexical (Postgres FTS x recency half-life x kind weight x
 confidence), AND-then-OR fallback, floor + top-N. Semantic/vector
 search is not implemented — a designed but deferred seam.
 
+## Browsing
+
+Dashboard - Memory at `/dashboard/memory` renders the graph view: nodes
+for memories and their sources, edges to the project they belong to.
+Search, filter by kind, and delete from the same page. The surface is
+session-only: it 401s without a cookie, and an `inv_` key can never
+reach it.
+
 ## Scope
 
 Memories belong to your account (and optionally one project). One
 account can never read another's — a foreign id reads exactly like an
 unknown one.
+
+## Memory is not continuity
+
+Memory is durable context. Continuity is versioned task state
+(`task_state_set`, `task_state_get`, `checkpoint_create`) with immutable
+checkpoints and one pre-failover snapshot. They share a single bounded
+context budget and nothing else.
 """
 
 _MODELS = """\
@@ -353,6 +432,8 @@ _SERVICE = """\
 
 Keep the machine online across reboots without an open terminal.
 
+## Install
+
 ```bash
 invincible harness service install
 ```
@@ -361,9 +442,10 @@ The installer prints exactly what it will register before writing
 anything (systemd unit, launchd plist, or Windows service per OS).
 Use your platform's service manager to start, stop, or remove it.
 
-Single-instance rule still applies to the server, not the agent:
-run one server per database; run one agent per machine you want
-reachable.
+## One server, many agents
+
+The single-instance rule applies to the server, not the agent: run one
+server per database, and one agent per machine you want reachable.
 """
 
 _SELFHOST = """\
@@ -503,13 +585,45 @@ ORDER = ["introduction", "installation", "setup", "cli", "mcp", "memory",
 GROUPS = ["Getting Started", "Remote", "Memory, Models & Agent", "Advanced"]
 
 
-def _render_body(body: str) -> str:
+_HEADING_RE = re.compile(r"<(h[23])>(.*?)</\1>", re.S)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _with_heading_ids(html: str) -> str:
+    """Give rendered h2/h3 elements the ids the sidebar TOC and the search
+    palette link to (``_slugify`` of the heading text). Doing it here
+    keeps one source of anchor truth: inline markup (``code``, ``em``)
+    disappears the same way in both places, so no client-side rewrite can
+    drift from the table of contents."""
+    def repl(match: re.Match) -> str:
+        tag, inner = match.group(1), match.group(2)
+        text = _TAG_RE.sub("", inner)
+        return f'<{tag} id="{_slugify(text)}">{inner}</{tag}>'
+    return _HEADING_RE.sub(repl, html)
+
+
+def _tool_table(rows: list) -> list:
+    lines = ["| Tool | What it does |", "|------|----------------|"]
+    for t in rows:
+        lines.append(f"| `{t['name']}` | {t['desc']} |")
+    return lines
+
+
+def _render_body(body: str, base_url: str = "") -> str:
     if "{{MCP_TOOLS}}" in body:
-        lines = ["| Tool | What it does |", "|------|----------------|"]
-        for t in _mcp_tools():
-            lines.append(f"| `{t['name']}` | {t['desc']} |")
+        groups = _mcp_tool_rows()
+        lines = ["**Available with no machine online** — your own rows:",
+                 ""]
+        lines += _tool_table(groups["data"])
+        lines += ["", "**Machine tools** — once a paired machine is online:",
+                  ""]
+        lines += _tool_table(groups["machine"])
         body = body.replace("{{MCP_TOOLS}}", "\n".join(lines))
-    return _md().render(body)
+    if "{{BASE_URL}}" in body:
+        # Request-derived host, same rule as the landing page: a
+        # self-hosted copy must never print the production domain.
+        body = body.replace("{{BASE_URL}}", base_url or "")
+    return _with_heading_ids(_md().render(body))
 
 
 def _sidebar() -> list:
@@ -521,18 +635,49 @@ def _sidebar() -> list:
     return groups
 
 
-def _page_context(slug: str) -> dict:
+def _search_index() -> list:
+    """Every page with its h2/h3 anchors, for the client-side palette.
+
+    Built from ``_toc`` (a regex pass over the curated markdown), so the
+    index costs no markdown rendering and cannot disagree with the
+    injected heading ids.
+    """
+    index = []
+    for slug in ORDER:
+        headings = [{"title": h["title"], "anchor": h["anchor"]}
+                    for h in _toc(PAGES[slug]["body"])]
+        index.append({
+            "slug": slug,
+            "title": PAGES[slug]["title"],
+            "desc": PAGES[slug]["desc"],
+            "headings": headings,
+        })
+    return index
+
+
+def _base_url(request: Request) -> str:
+    """The host this request arrived on — same convention as the landing
+    page and the OAuth metadata."""
+    return str(request.base_url).rstrip("/")
+
+
+def _page_context(slug: str, base_url: str = "") -> dict:
     idx = ORDER.index(slug)
     prev_slug = ORDER[idx - 1] if idx > 0 else None
     next_slug = ORDER[idx + 1] if idx + 1 < len(ORDER) else None
     body = PAGES[slug]["body"]
+    canonical = (f"{base_url}/docs" if slug == "introduction"
+                 else f"{base_url}/docs/{slug}")
     return {
         "slug": slug,
         "title": PAGES[slug]["title"],
         "desc": PAGES[slug]["desc"],
-        "content_html": _render_body(body),
+        "content_html": _render_body(body, base_url),
         "toc": _toc(body),
         "sidebar": _sidebar(),
+        "search_index": _search_index(),
+        "base_url": base_url,
+        "canonical_url": canonical,
         "prev": ({"slug": prev_slug, "title": PAGES[prev_slug]["title"]}
                  if prev_slug else None),
         "next": ({"slug": next_slug, "title": PAGES[next_slug]["title"]}
@@ -542,7 +687,7 @@ def _page_context(slug: str) -> dict:
 
 @router.get("/docs", include_in_schema=False)
 async def docs_index(request: Request):
-    ctx = _page_context("introduction")
+    ctx = _page_context("introduction", _base_url(request))
     ctx["is_index"] = True
     return templates.TemplateResponse(request, "docs.html", ctx)
 
@@ -552,6 +697,7 @@ async def docs_page(request: Request, slug: str):
     if slug not in PAGES:
         from fastapi.responses import JSONResponse
         return JSONResponse({"detail": "Unknown docs page"}, status_code=404)
-    ctx = _page_context(slug)
+    ctx = _page_context(slug, _base_url(request))
     ctx["is_index"] = slug == "introduction"
     return templates.TemplateResponse(request, "docs.html", ctx)
+

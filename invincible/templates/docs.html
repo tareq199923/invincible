@@ -8,6 +8,13 @@
   <meta property="og:title" content="{{ title }} — Invincible docs">
   <meta property="og:description" content="{{ desc }}">
   <meta property="og:type" content="website">
+  <meta property="og:url" content="{{ canonical_url }}">
+  <meta property="og:site_name" content="Invincible">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="{{ title }} — Invincible docs">
+  <meta name="twitter:description" content="{{ desc }}">
+  <link rel="canonical" href="{{ canonical_url }}">
+  <link rel="icon" href="/static/favicon.svg?v={{ asset_rev('favicon.svg') }}" type="image/svg+xml">
   <meta name="theme-color" content="#0a0d13">
   <style>
     :root {
@@ -69,6 +76,28 @@
     .pager small { display: block; color: var(--muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; }
     .pager strong { color: #fff; font-size: .88rem; }
     .pager .next { text-align: right; }
+    .search-btn { display: inline-flex; gap: 6px; padding: 7px 10px; align-items: center; color: #b8bec7; background: var(--night-raised); border: 1px solid var(--line-strong); border-radius: 6px; font-family: var(--sans); font-size: .75rem; font-weight: 700; cursor: pointer; }
+    .search-btn:hover { color: #fff; background: #1c212a; }
+    .search-btn kbd { padding: 1px 5px; color: var(--muted); background: var(--night); border: 1px solid var(--line-strong); border-radius: 4px; font-family: var(--mono); font-size: .68rem; }
+    .docs-filter-label { display: block; margin: 0 0 4px; color: var(--muted); font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; }
+    .codewrap { position: relative; }
+    .copy-btn { position: absolute; top: 7px; right: 7px; padding: 4px 8px; color: #a6adb7; background: rgba(14,18,26,.94); border: 1px solid var(--line-strong); border-radius: 5px; font-family: var(--sans); font-size: .66rem; font-weight: 700; cursor: pointer; opacity: 0; transition: opacity .12s ease; }
+    .codewrap:hover .copy-btn, .copy-btn:focus-visible, .copy-btn.copied { opacity: 1; }
+    .copy-btn.copied { color: var(--ok); border-color: var(--ok); }
+    .palette { position: fixed; z-index: 60; inset: 0; display: grid; place-items: start center; padding: 12vh 16px 16px; background: rgba(6,8,12,.72); backdrop-filter: blur(6px); }
+    .palette[hidden] { display: none; }
+    .palette__box { width: min(680px, 100%); overflow: hidden; background: var(--paper); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+    .palette__box input { width: 100%; padding: 15px 16px; color: #fff; background: var(--night-raised); border: 0; border-bottom: 1px solid var(--line); font-family: var(--sans); font-size: .95rem; }
+    .palette__box input:focus { outline: none; }
+    .palette__list { max-height: min(52vh, 460px); margin: 0; padding: 6px; overflow-y: auto; list-style: none; }
+    .palette__list a { display: block; padding: 9px 11px; border-radius: 7px; text-decoration: none; }
+    .palette__list a small { display: block; color: var(--muted); font-size: .68rem; }
+    .palette__list a strong { color: #fff; font-size: .84rem; font-weight: 700; }
+    .palette__list li[aria-selected="true"] a, .palette__list a:hover { background: #232a38; }
+    .palette__empty { margin: 0; padding: 14px 16px; color: var(--muted); font-size: .8rem; }
+    .palette__hint { margin: 0; padding: 9px 14px; color: var(--muted); border-top: 1px solid var(--line); font-size: .68rem; }
+    .palette__hint kbd { padding: 1px 5px; color: #b8bec7; background: var(--night); border: 1px solid var(--line-strong); border-radius: 4px; font-family: var(--mono); font-size: .66rem; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     :focus-visible { outline: 3px solid rgba(139,147,255,.72); outline-offset: 3px; }
     @media (max-width: 1100px) { .shell { grid-template-columns: 240px minmax(0,1fr); } .toc { display: none; } }
     @media (max-width: 760px) {
@@ -85,8 +114,9 @@
     <div class="top__inner">
       <a class="brand" href="/"><span class="brand__mark">I/</span>Invincible · docs</a>
       <nav aria-label="Docs top navigation">
+        <button class="search-btn" type="button" id="palette-open" aria-haspopup="dialog" aria-expanded="false" aria-controls="docs-palette">Search <kbd>⌘K</kbd></button>
         <a href="/">Home</a>
-        <a href="/docs">Docs</a>
+        <a href="/dashboard">Dashboard</a>
         <a href="/login">Sign in</a>
         <a class="cta" href="/register">Create account</a>
       </nav>
@@ -94,7 +124,8 @@
   </header>
   <div class="shell">
     <aside class="side" aria-label="Docs navigation">
-      <input id="docs-filter" type="search" placeholder="Filter pages…" aria-label="Filter docs pages">
+      <p class="docs-filter-label" id="docs-filter-label">Filter pages</p>
+      <input id="docs-filter" type="search" placeholder="Filter pages…" aria-labelledby="docs-filter-label">
       <div id="docs-nav">
       {% for group in sidebar %}
         <h4>{{ group.name }}</h4>
@@ -118,32 +149,16 @@
       {% endfor %}
     </aside>
   </div>
-  <script>
-    (function () {
-      var box = document.getElementById('docs-filter');
-      var nav = document.getElementById('docs-nav');
-      if (!box || !nav) return;
-      // Add heading anchors so the TOC links work (server renders HTML).
-      document.querySelectorAll('.doc h2, .doc h3').forEach(function (h) {
-        if (!h.id) {
-          h.id = h.textContent.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-        }
-      });
-      box.addEventListener('input', function () {
-        var q = box.value.trim().toLowerCase();
-        nav.querySelectorAll('a').forEach(function (a) {
-          a.style.display = (!q || (a.getAttribute('data-title') || '').indexOf(q) !== -1) ? '' : 'none';
-        });
-        nav.querySelectorAll('h4').forEach(function (h) {
-          var vis = false, el = h.nextElementSibling;
-          while (el && el.tagName !== 'H4') {
-            if (el.tagName === 'A' && el.style.display !== 'none') { vis = true; break; }
-            el = el.nextElementSibling;
-          }
-          h.style.display = vis || !q ? '' : 'none';
-        });
-      });
-    })();
-  </script>
+  <div class="palette" id="docs-palette" hidden>
+    <div class="palette__box" role="dialog" aria-modal="true" aria-label="Search the documentation">
+      <input id="palette-input" type="search" role="combobox" aria-expanded="false" aria-controls="palette-results" aria-autocomplete="list" placeholder="Search pages and sections…" autocomplete="off">
+      <ul class="palette__list" id="palette-results" role="listbox" aria-label="Search results"></ul>
+      <p class="palette__empty" id="palette-empty" hidden>Nothing matched.</p>
+      <p class="palette__hint"><kbd>↑</kbd> <kbd>↓</kbd> to move · <kbd>Enter</kbd> to open · <kbd>Esc</kbd> to close</p>
+    </div>
+  </div>
+  <p class="sr-only" id="copy-status" role="status" aria-live="polite"></p>
+  <script type="application/json" id="docs-search-index">{{ search_index | tojson }}</script>
+  <script src="/static/docs.js?v={{ asset_rev('docs.js') }}" defer></script>
 </body>
 </html>
