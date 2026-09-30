@@ -266,26 +266,17 @@ account, default project, visible key prefix) above the machine list, so a
 hosted user can confirm login + agent state without touching the server.
 
 ### Phase 7 — Deployment
-**Status: Deployed 2026-09-02 — production operational; Railway ownership
-transfer pending.** Neon PostgreSQL (ap-southeast-1, autosuspend + pooled
-DSN, role split per the acceptance criteria below, all verified by direct
-probe) + the app containerized on Railway
-(`invincible-gateway-production.up.railway.app`, `railway.json` start
-command + `/health` healthcheck). Fresh-start database: no dev data migrated
-(the live dataset was ~2 accounts of rehearsal traffic); first registration
-bootstrapped the operator. Full acceptance journey smoke-tested live:
-health, register→operator, login, dashboard, Providers page, and a real
-chat round-trip through the provider pool. Neon has a two-year term, and
-there is no current Azure or AWS migration planned. The current operational
-task is to transfer Railway project ownership to a different Railway account
-while keeping the application, database, and domain in place. Domain
-`invincible-ai.me` is live: Cloudflare CNAME → the Railway host (DNS-only
-mode; Railway serves a Let's Encrypt cert from its Singapore edge), verified
-end-to-end including a chat round-trip. Historical note: the docs carried
-the typo `invinseble-ai.me` for weeks — that domain was never registered;
-the real domain is `invincible-ai.me`. Dockerfile note: its default CMD runs
-migrations with the app DSN — on Railway the `?sslmode=require` URL param
-must stay out of the asyncpg DSN (migrations no-op at head anyway).
+**Status: Live since 2026-09-02 — production operational at
+`https://invincible-ai.me`; hosting ownership transfer completed
+(same application, database, and domain retained; verified via
+`GET /health`).** Managed PostgreSQL (role split per the acceptance
+criteria below, all verified by direct probe) + the containerized app
+(platform start command with `$PORT` and proxy headers, `/health`
+healthcheck). Fresh-start database: no dev data migrated. Full
+acceptance journey smoke-tested live: health, register, login,
+dashboard, Providers page, and a real chat round-trip through a
+connected provider. Domain `invincible-ai.me` is live with valid TLS,
+verified end-to-end including a chat round-trip.
 
 Deployment acceptance criteria (explicit; permission model detailed in
 [SECURITY.md](SECURITY.md) §8; operational version and go-live checklist in
@@ -414,7 +405,7 @@ stands.
 | 15a/b/c Canonical sessions · ContinuityEngine · Graph API | Done | Landed work previously unrecorded here; recorded now |
 | 15 Observability (/metrics etc.) | Not started | Folded into platform backlog (candidate around P5/P7) |
 | 16 PostgreSQL storage migration | Done | Slips honored elsewhere: audit_log → Platform P2; provider-health persistence → backlog; TIMESTAMPTZ deferred |
-| 2 Zero-clone distribution (PyPI) | In progress | Packaging/metadata/CI landed 2026-09-21 (`docs/RELEASING.md`); only the actual pypi.org upload remains |
+| 2 Zero-clone distribution (PyPI) | Done | First upload 0.3.0 on 2026-09-23, current 0.5.0; see `docs/RELEASING.md` §PyPI release status |
 | 3 Documentation site | Deferred | Revisit post-platform |
 | 4 Multi-user system | Superseded | Realized as Platform Phases 1–3 |
 | 5 Dashboard | Superseded | Realized as Platform Phase 5 |

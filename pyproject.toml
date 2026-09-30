@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "invincible-ai"
 dynamic = ["version"]
-description = "Multi-provider AI gateway with session memory and MCP tool execution"
+description = "Remote-first, multi-user AI continuity platform with BYOK failover, memory, and MCP tool execution"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
