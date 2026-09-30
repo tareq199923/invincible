@@ -36,3 +36,4 @@ pytest_out*.log
 .zcode/
 .deploy/
 .claude/
+.kilo/
