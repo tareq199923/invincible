@@ -54,6 +54,7 @@ import datetime
 import re
 from dataclasses import dataclass, field
 
+from invincible.core import harness_tools
 from invincible.core.harness_bus import HarnessBus
 from invincible.core.harness_events import HarnessEventType
 
@@ -208,26 +209,13 @@ class Agent:
 TRIAGE_AGENT = Agent(
     name="triage",
     system_prompt=f"{BASE_PROMPT} {_TRIAGE_ROLE} {READ_OVERLAY}",
-    tools=(
-        "read_file",
-        "task_state_get",
-        "memory_search",
-        "memory_list",
-        HANDOFF_TOOL,
-    ),
+    tools=harness_tools.router_tools("triage"),
 )
 
 OPERATOR_AGENT = Agent(
     name="operator",
     system_prompt=f"{BASE_PROMPT} {_OPERATOR_ROLE} {DO_OVERLAY}",
-    tools=(
-        "read_file",
-        "execute_bash",
-        "write_file",
-        "task_state_set",
-        "task_state_get",
-        "checkpoint_create",
-    ),
+    tools=harness_tools.router_tools("operator"),
 )
 
 AGENTS: dict[str, Agent] = {
