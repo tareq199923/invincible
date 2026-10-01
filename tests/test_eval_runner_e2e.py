@@ -169,8 +169,8 @@ async def test_preflight_failures_are_loud():
             await eval_runner.login(client, "http://x", "e", "p", None)
 
 
+# Live shape is plain strings; objects tolerated for forward compat.
 def test_model_ids_accepts_strings_and_objects():
-    # Live shape is plain strings; objects tolerated for forward compat.
     assert eval_runner.model_ids_from_payload(
         {"models": ["a", "b"]}) == ["a", "b"]
     assert eval_runner.model_ids_from_payload(
@@ -179,3 +179,35 @@ def test_model_ids_accepts_strings_and_objects():
         {"models": ["a", 1, None, " ", {"id": ""}]}) == ["a"]
     assert eval_runner.model_ids_from_payload({}) == []
     assert eval_runner.model_ids_from_payload(None) == []
+
+
+def test_cli_run_delay_defaults():
+    from tools.eval.run_eval import build_parser
+
+    args = build_parser().parse_args(["run", "--label", "x", "--model", "m"])
+    assert args.delay_seconds == 0.0
+    assert args.repeat == 3
+    assert args.concurrency == 1
+    paced = build_parser().parse_args(
+        ["run", "--label", "x", "--model", "m", "--delay-seconds", "20"])
+    assert paced.delay_seconds == 20.0
+
+
+async def test_run_all_delay_paces_runs():
+    import time
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def factory():
+        async with httpx.AsyncClient(transport=_transport({})) as client:
+            yield client
+
+    start = time.monotonic()
+    runs = await eval_runner.run_all(
+        "http://test", "fake-model", [_fake_task()], repeat=2,
+        delay_seconds=0.2, client_factory=factory,
+    )
+    elapsed = time.monotonic() - start
+    assert len(runs) == 2
+    assert all(r["passed"] for r in runs)
+    assert elapsed >= 0.2

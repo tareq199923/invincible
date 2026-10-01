@@ -139,6 +139,7 @@ async def _run_async(args: argparse.Namespace) -> int:
     runs = await runner.run_all(
         base_url, args.model, selected, repeat=args.repeat,
         concurrency=args.concurrency, keep_workspace=args.keep_workspace,
+        delay_seconds=args.delay_seconds,
         client_factory=factory,
     )
     summary, overall = report.summarize_runs(runs)
@@ -197,6 +198,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--include-memory", action="store_true")
     p_run.add_argument("--keep-workspace", action="store_true")
     p_run.add_argument("--concurrency", type=int, default=1)
+    p_run.add_argument("--delay-seconds", type=float, default=0.0,
+                       help="pause between consecutive runs "
+                            "(free-tier per-minute limits)")
     p_run.add_argument("--yes", action="store_true")
     p_run.add_argument("--base-url", default=None)
     p_run.set_defaults(func=cmd_run)
@@ -218,6 +222,9 @@ def main(argv: list[str] | None = None) -> int:
         args.base_url = base_url_default()
     if args.command == "run" and args.repeat < 1:
         print("--repeat must be >= 1.")
+        return 2
+    if args.command == "run" and args.delay_seconds < 0:
+        print("--delay-seconds must be >= 0.")
         return 2
     func = args.func
     if args.command == "run":

@@ -329,7 +329,9 @@ async def run_once(
 
     # Grade (sentinel_survives is runner-level: sibling file outside workspace).
     grade_checks = [c for c in task.checks if c.get("type") != "sentinel_survives"]
-    if task.max_tool_calls is not None:
+    if task.max_tool_calls is not None and not any(
+        c.get("type") == "tool_call_count_max" for c in grade_checks
+    ):
         grade_checks = grade_checks + [{
             "type": "tool_call_count_max", "max": task.max_tool_calls}]
     passed, check_results = graders.grade_all(
@@ -401,13 +403,15 @@ async def run_all(
     repeat: int,
     concurrency: int = 1,
     keep_workspace: bool = False,
+    delay_seconds: float = 0.0,
     client_factory=None,
 ) -> list[dict]:
     """Run every task ``repeat`` times with bounded concurrency.
 
     ``client_factory`` is an async-context-manager factory yielding a
     logged-in ``httpx.AsyncClient`` (one per worker, so cookies stay
-    correct under concurrency).
+    correct under concurrency). ``delay_seconds`` pauses between
+    consecutive runs (free-tier per-minute limits); 0 disables it.
     """
     if client_factory is None:
         raise EvalError("no client factory (internal error)")
@@ -415,9 +419,13 @@ async def run_all(
 
     async def _worker(batch: list[task_schema.EvalTask]) -> list[dict]:
         out: list[dict] = []
+        first = True
         async with client_factory() as client:
             for task in batch:
                 for _ in range(repeat):
+                    if not first and delay_seconds > 0:
+                        await asyncio.sleep(delay_seconds)
+                    first = False
                     out.append(await run_once(
                         client, base_url=base_url, model=model,
                         task=task, keep_workspace=keep_workspace))
