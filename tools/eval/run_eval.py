@@ -1,4 +1,4 @@
-"""Eval launcher: ``run`` / ``compare`` / ``list``.
+"""Eval launcher: ``run`` / ``compare`` / ``merge`` / ``list``.
 
 Reads ``os.environ`` for EVAL_* like ``tools/replay_payload.py`` does.
 Never prints passwords or cookies.
@@ -170,6 +170,85 @@ async def _run_async(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_merge(args: argparse.Namespace) -> int:
+    """Combine result files into one, dropping infra-failed runs.
+
+    Guards: every input must be the same model (a cross-model baseline
+    is meaningless), and every task must keep >=1 genuine run.
+    """
+    payloads = []
+    for path in args.files:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                payloads.append((path, json.load(fh)))
+        except (OSError, ValueError) as e:
+            print(f"merge failed: cannot read {path}: {e}")
+            return 2
+    models = {p.get("meta", {}).get("model") for _, p in payloads}
+    if len(models) != 1 or None in models:
+        found = sorted(m for m in models if m)
+        print(f"merge refused: files disagree on model: {found}")
+        return 2
+    model = models.pop()
+
+    kept: list[dict] = []
+    dropped = 0
+    for _, payload in payloads:
+        for run in payload.get("runs", []):
+            if run.get("error"):
+                dropped += 1
+            else:
+                kept.append(run)
+    if not kept:
+        print("merge refused: every run is an infra failure.")
+        return 2
+
+    by_task: dict[str, int] = {}
+    for run in kept:
+        by_task[run["task_id"]] = by_task.get(run["task_id"], 0) + 1
+    empty = sorted({
+        run["task_id"] for _, payload in payloads
+        for run in payload.get("runs", [])
+    } - set(by_task))
+    if empty:
+        print("merge refused: zero genuine runs remain for: "
+              + ", ".join(empty))
+        return 2
+    uneven = {t: n for t, n in sorted(by_task.items())
+              if n != max(by_task.values())}
+    if uneven:
+        note = ", ".join(f"{t}={n}" for t, n in uneven.items())
+        print(f"note: uneven coverage (top-up incomplete?): {note}")
+
+    summary, overall = report.summarize_runs(kept)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out_path = runner.RESULTS_DIR / f"{stamp}-{args.label}.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "meta": {
+            "label": args.label,
+            "model": model,
+            "merged_from": [path for path, _ in payloads],
+            "git": runner.git_meta(),
+        },
+        "summary": summary,
+        "overall": overall,
+        "runs": kept,
+    }
+    try:
+        runner.check_no_secrets(payload)
+    except runner.EvalError as e:
+        print(str(e))
+        return 2
+    with open(out_path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+    print(report.render_table(summary, overall))
+    print(f"\nmerged {len(kept)} runs "
+          f"({dropped} infra failures dropped) from {len(payloads)} files")
+    print(f"saved {out_path}")
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     try:
         return asyncio.run(_run_async(args))
@@ -209,6 +288,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_cmp.add_argument("a")
     p_cmp.add_argument("b")
     p_cmp.set_defaults(func=cmd_compare)
+
+    p_mrg = sub.add_parser(
+        "merge",
+        help="combine result files (drops infra-failed runs; "
+             "same model only)")
+    p_mrg.add_argument("--label", required=True)
+    p_mrg.add_argument("files", nargs="+")
+    p_mrg.set_defaults(func=cmd_merge)
 
     p_list = sub.add_parser("list", help="list tasks (no server needed)")
     p_list.set_defaults(func=cmd_list)

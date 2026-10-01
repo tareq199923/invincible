@@ -48,6 +48,19 @@ free-tier models to stay under per-minute limits), `--repeat N`
 `GET /dashboard/chat/models` (a wrong default would silently eval the
 wrong model after a key change).
 
+If some runs died as infra failures (instant 503/cooldown, `error` set
+on the run), re-run just the affected tasks with `--task ID` and stitch
+the files into one clean result:
+
+```powershell
+python tools/eval/run_eval.py merge --label baseline eval_results/<base>.json eval_results/<topup>.json
+```
+
+`merge` drops every infra-failed run, recomputes the summary, refuses
+mixed models (a cross-model baseline is meaningless), and refuses to
+save if any task ends with zero genuine runs. A coverage note prints
+when tasks end up with uneven run counts.
+
 Each run uses a fresh session `web-eval-<hex>` and a fresh workspace
 `.eval_workspace/<run_id>/` built from the task's fixture files, deleted
 afterwards. Mode is `manual`: the runner auto-approves only
