@@ -207,3 +207,76 @@ def test_snapshot_none_outside_repo(tmp_path: Path):
     if not HAS_GIT:
         pytest.skip("git not installed")
     assert eval_runner.snapshot_git_status(plain) is None
+
+
+# --- unanchored mutating verbs + redirection ----------------------------------
+
+
+def test_policy_unanchored_extensionless_verbs_denied(tmp_path: Path):
+    for cmd in ["del LICENSE", "del Dockerfile", "mkdir stuff",
+                "echo hi > out", "rd docs", "move Procfile x"]:
+        ok, reason = approval_policy.decide(
+            "execute_bash", {"command": cmd}, tmp_path)
+        assert ok is False, cmd
+        assert reason
+
+
+def test_policy_unanchored_all_verbs_denied_with_relative(tmp_path: Path):
+    for verb in ["del", "erase", "rm", "rmdir", "rd", "mkdir", "md", "mv",
+                 "move", "ren", "rename", "copy", "cp", "xcopy", "robocopy",
+                 "touch", "tee", "attrib", "icacls"]:
+        ok, _ = approval_policy.decide(
+            "execute_bash", {"command": f"{verb} target"}, tmp_path)
+        assert ok is False, verb
+
+
+def test_policy_unanchored_verbs_approved_anchored(tmp_path: Path):
+    for cmd in ["del LICENSE", "del Dockerfile", "mkdir stuff",
+                "echo hi > out", "rd docs", "move Procfile x"]:
+        ok, reason = approval_policy.decide(
+            "execute_bash", {"command": _anchor(tmp_path) + cmd}, tmp_path)
+        assert ok is True, (cmd, reason)
+
+
+def test_policy_unanchored_verbs_absolute_inside_approved(tmp_path: Path):
+    ws = str(tmp_path)
+    for cmd in [f"del {ws}/LICENSE", f"mkdir {ws}/stuff",
+                f"rd {ws}/docs", f"move {ws}/Procfile {ws}/x",
+                f"copy {ws}/a {ws}/b", "del /q " + f"{ws}/gone"]:
+        ok, reason = approval_policy.decide(
+            "execute_bash", {"command": cmd}, tmp_path)
+        assert ok is True, (cmd, reason)
+
+
+def test_policy_unanchored_redirection_always_denied(tmp_path: Path):
+    # Even an absolute target does not save an unanchored redirect.
+    ok, _ = approval_policy.decide(
+        "execute_bash",
+        {"command": f"echo hi > {tmp_path}/out"}, tmp_path)
+    assert ok is False
+    ok, _ = approval_policy.decide(
+        "execute_bash",
+        {"command": f"echo hi >> {tmp_path}/out"}, tmp_path)
+    assert ok is False
+
+
+def test_policy_verb_edge_cases(tmp_path: Path):
+    # Bare verb proves nothing about its target: deny.
+    ok, _ = approval_policy.decide(
+        "execute_bash", {"command": "del"}, tmp_path)
+    assert ok is False
+    # Verb outside command position cannot be parsed reliably: deny.
+    ok, _ = approval_policy.decide(
+        "execute_bash", {"command": "echo del"}, tmp_path)
+    assert ok is False
+    # Mixed: one bad operand spoils the verb.
+    ok, _ = approval_policy.decide(
+        "execute_bash",
+        {"command": f"move {tmp_path}/a b"}, tmp_path)
+    assert ok is False
+    # Absolute target outside the workspace: deny.
+    outside = tmp_path.parent / "elsewhere.txt"
+    ok, _ = approval_policy.decide(
+        "execute_bash",
+        {"command": f"del {outside}"}, tmp_path)
+    assert ok is False

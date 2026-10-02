@@ -17,9 +17,13 @@ The runner calls it on every ``approval`` SSE event; denied tools get
      applies (risky patterns, ``..``, absolute-path-outside, and no
      re-anchoring via a later ``cd``/``pushd``/``popd``/``chdir``/bare
      drive switch).
-  b) NOT ANCHORED: every path-like token must be an absolute path
-     inside the workspace. Bare relative operands, bare filenames with
-     an extension, relative paths with slashes, and wildcards (``*``,
+  b) NOT ANCHORED: the shell runs in the server's cwd (repo root), so
+     redirection (``>``/``>>``) is denied outright, and any mutating
+     verb (``del``/``mkdir``/``move``/...) is denied unless EVERY
+     operand after it is an absolute path inside the workspace. On top
+     of that, every path-like token must be an absolute path inside
+     the workspace: bare relative operands, bare filenames with an
+     extension, relative paths with slashes, and wildcards (``*``,
      ``?``) are denied. When in doubt, deny.
 
 LIMIT (defense in depth, not a sandbox): an approved anchored command
@@ -68,6 +72,19 @@ _ANCHOR_RE = re.compile(
 # Generic filename-with-extension (covers probe.py, README.md, data.json,
 # and any other bare relative operand the old .py/.txt/.json list missed).
 _EXTENSION_RE = re.compile(r"\.[A-Za-z0-9]{1,6}$")
+
+# Mutating verbs: unanchored, each is denied unless EVERY operand after
+# it is an absolute path inside the workspace. Extensionless operands
+# (LICENSE, docs, Procfile) slip past the path-like token check, so the
+# verb rule is what catches `del LICENSE` / `mkdir stuff` / `rd docs`.
+_MUTATING_VERBS = frozenset({
+    "del", "erase", "rm", "rmdir", "rd", "mkdir", "md", "mv", "move",
+    "ren", "rename", "copy", "cp", "xcopy", "robocopy", "touch", "tee",
+    "attrib", "icacls",
+})
+
+# Option tokens skipped when collecting a verb's operands (`-f`, `/q`).
+_VERB_FLAG_RE = re.compile(r"^(-[A-Za-z0-9]+|/[A-Za-z?]+)$")
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -162,6 +179,53 @@ def _bash_tokens(command: str) -> list[str]:
     return tokens
 
 
+def _bash_chunks(command: str) -> list[list[str]]:
+    """Split a command into per-``&&``-segment word lists.
+
+    Words are quote/comma/paren-stripped; empty segments are dropped.
+    A mutating verb is only recognized as the FIRST word of a segment,
+    so ``echo del`` is not a delete — but a verb anywhere else in the
+    segment is still denied (its operands cannot be parsed reliably).
+    """
+    chunks: list[list[str]] = []
+    for chunk in re.split(r"[&|;`\n$]+", command):
+        words = [
+            piece.strip("\"',()")
+            for piece in re.split(r"\s+", chunk.strip())
+        ]
+        words = [word for word in words if word]
+        if words:
+            chunks.append(words)
+    return chunks
+
+
+def _check_verb_operands(
+    words: list[str], workspace: Path
+) -> tuple[bool, str] | None:
+    """Enforce the mutating-verb rule for one ``<verb> operands...`` segment.
+
+    Returns ``(False, reason)`` on violation, else None (all operands are
+    absolute paths inside the workspace). A verb with no path operand at
+    all is denied: it proves nothing about where it would act.
+    """
+    operands = [w for w in words[1:] if not _VERB_FLAG_RE.match(w)]
+    if not operands:
+        return False, (
+            "execute_bash mutating verb with no workspace path: "
+            f"{words[0][:40]}"
+        )
+    for op in operands:
+        if "*" in op or "?" in op:
+            return False, f"execute_bash wildcard denied: {op[:120]}"
+        target = _resolve_target(op, workspace)
+        if target is None or not _inside(target, workspace):
+            return False, (
+                "execute_bash mutating verb target outside workspace: "
+                f"{op[:120]}"
+            )
+    return None
+
+
 def _looks_like_path(token: str) -> bool:
     if "/" in token or "\\" in token:
         return True
@@ -228,25 +292,46 @@ def decide_execute_bash(args: dict, workspace: Path) -> tuple[bool, str]:
             return violation
         return True, "execute_bash anchored to workspace"
 
-    # NOT ANCHORED: the shell runs in the server's cwd (repo root), so
-    # every path-like token must be an absolute path inside the
-    # workspace. Bare relative operands, bare filenames with an
-    # extension, relative paths with slashes, and wildcards are denied.
+    # NOT ANCHORED: the shell runs in the server's cwd (repo root).
+    # Redirection would write there, so it is denied outright. A
+    # mutating verb is denied unless EVERY operand after it is an
+    # absolute path inside the workspace (this catches extensionless
+    # operands like LICENSE or docs that are not path-like). On top of
+    # that, every path-like token must be an absolute path inside the
+    # workspace. When in doubt, deny.
     if re.match(r"^\s*cd\b", command, re.I):
         return False, (
             "execute_bash cd prefix is not the exact anchored workspace "
             '(need cd /d "<workspace>" && or cd "<workspace>" &&)'
         )
-    for token in _bash_tokens(command):
-        if "*" in token or "?" in token:
-            return False, f"execute_bash wildcard denied: {token[:120]}"
-        if not _looks_like_path(token):
+    if ">" in command:
+        return False, (
+            "execute_bash redirection denied unanchored "
+            "(anchor to the workspace first)"
+        )
+    for words in _bash_chunks(command):
+        if words[0].lower() in _MUTATING_VERBS:
+            verdict = _check_verb_operands(words, workspace)
+            if verdict is not None:
+                return verdict
             continue
-        if not _is_absolute(token):
-            return False, f"execute_bash relative path denied: {token[:120]}"
-        target = _resolve_target(token, workspace)
-        if target is None or not _inside(target, workspace):
-            return False, f"execute_bash absolute path outside: {token[:120]}"
+        if any(w.lower() in _MUTATING_VERBS for w in words[1:]):
+            return False, (
+                "execute_bash mutating verb outside command position "
+                "(when unsure, deny)"
+            )
+        for token in words:
+            if "*" in token or "?" in token:
+                return False, f"execute_bash wildcard denied: {token[:120]}"
+            if not _looks_like_path(token):
+                continue
+            if not _is_absolute(token):
+                return False, (
+                    f"execute_bash relative path denied: {token[:120]}")
+            target = _resolve_target(token, workspace)
+            if target is None or not _inside(target, workspace):
+                return False, (
+                    f"execute_bash absolute path outside: {token[:120]}")
     return True, "execute_bash looks workspace-local"
 
 
