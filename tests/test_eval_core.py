@@ -259,8 +259,15 @@ def test_grade_all_aggregates(tmp_path: Path):
 
 
 def test_approval_write_inside(tmp_path: Path):
-    ok, _ = approval_policy.decide(
+    # Relative paths resolve against the SERVER's cwd (repo root), never
+    # the workspace, so they are always denied (approval-policy escape
+    # fix). Only absolute in-workspace paths are approved.
+    ok, reason = approval_policy.decide(
         "write_file", {"path": "out.txt"}, tmp_path)
+    assert ok is False
+    assert "relative" in reason
+    ok, _ = approval_policy.decide(
+        "write_file", {"path": str(tmp_path / "out.txt")}, tmp_path)
     assert ok is True
 
 
@@ -274,8 +281,20 @@ def test_approval_write_escapes_denied(tmp_path: Path):
 
 
 def test_approval_bash_safe(tmp_path: Path):
+    # Unanchored bare-relative operands run in the server's cwd, so they
+    # are denied (approval-policy escape fix); the same command under the
+    # exact anchored cd prefix is approved.
     ok, _ = approval_policy.decide(
         "execute_bash", {"command": "python test_calc.py"}, tmp_path)
+    assert ok is False
+    ok, _ = approval_policy.decide(
+        "execute_bash",
+        {"command": f'cd /d "{tmp_path}" && python test_calc.py'},
+        tmp_path,
+    )
+    assert ok is True
+    ok, _ = approval_policy.decide(
+        "execute_bash", {"command": "echo hi"}, tmp_path)
     assert ok is True
 
 

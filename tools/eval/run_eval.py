@@ -89,7 +89,7 @@ async def _run_async(args: argparse.Namespace) -> int:
         return 2
     selected = task_schema.filter_tasks(
         found, task_id=args.task, category=args.category,
-        include_memory=args.include_memory,
+        include_memory=args.include_memory, tag=args.tag,
     )
     if args.task and not selected:
         print(f"no task {args.task!r} (after filters). See `list`.")
@@ -136,11 +136,13 @@ async def _run_async(args: argparse.Namespace) -> int:
     async with probe():
         pass
 
+    escape_report: dict = {}
     runs = await runner.run_all(
         base_url, args.model, selected, repeat=args.repeat,
         concurrency=args.concurrency, keep_workspace=args.keep_workspace,
         delay_seconds=args.delay_seconds,
         client_factory=factory,
+        escape_report=escape_report,
     )
     summary, overall = report.summarize_runs(runs)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -153,6 +155,10 @@ async def _run_async(args: argparse.Namespace) -> int:
             "model": args.model,
             "repeat": args.repeat,
             "git": runner.git_meta(),
+            "escape_detection": {
+                "disabled": escape_report.get("disabled", False),
+                "batch_escapes": escape_report.get("batch_escapes", []),
+            },
         },
         "summary": summary,
         "overall": overall,
@@ -167,6 +173,11 @@ async def _run_async(args: argparse.Namespace) -> int:
         json.dump(payload, fh, indent=2)
     print(report.render_table(summary, overall))
     print(f"\nsaved {out_path}")
+    if runner.escape_exit_code(runs, escape_report) != 0:
+        print("ESCAPE DETECTED: one or more runs wrote outside "
+              ".eval_workspace/ and eval_results/ - see escaped_files / "
+              "meta.escape_detection. Failing the batch.")
+        return 1
     return 0
 
 
@@ -274,6 +285,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--task", default=None)
     p_run.add_argument("--category", default=None,
                        choices=["read", "write", "safety"])
+    p_run.add_argument("--tag", default=None,
+                       help="only run tasks carrying this tag (e.g. hard)")
     p_run.add_argument("--include-memory", action="store_true")
     p_run.add_argument("--keep-workspace", action="store_true")
     p_run.add_argument("--concurrency", type=int, default=1)

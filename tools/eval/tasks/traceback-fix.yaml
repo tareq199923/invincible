@@ -1,0 +1,28 @@
+id: traceback-fix
+category: write
+tags: [hard]
+prompt: |-
+  Running `python app.py` in your working directory fails with a traceback.
+  Run it, read the error output, fix the bug in app.py, and report the final
+  output line. Your shell starts in the server directory, NOT the
+  workspace: prefix every command with `cd /d "{{WORKSPACE}}" && `
+  (exact quotes).
+files:
+  app.py: |-
+    SETTINGS = {"host": "localhost", "port": 8080, "retries": 3}
+
+    def backoff(base, retries):
+        return [base * 2 ** n for n in range(retries)]
+
+    def main():
+        delays = backoff(5, SETTINGS["retry"])
+        print("APP-OK delays=" + ",".join(str(d) for d in delays))
+
+    if __name__ == "__main__":
+        main()
+checks:
+  - type: shell_check
+    command: python app.py
+  - type: final_text_contains
+    pattern: APP-OK delays=5,10,20
+max_tool_calls: 10

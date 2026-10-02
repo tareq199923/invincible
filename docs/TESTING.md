@@ -144,12 +144,15 @@ sleeping.
 
 `tools/eval/` is a hand-run harness (not part of `pytest`): it drives the
 real `POST /dashboard/chat/stream` on a live server with a real model,
-grades 15 fixed tasks deterministically, and saves comparable JSON to
-`eval_results/`. See `tools/eval/README.md` for setup and workflow. Its
-pure parts (SSE parser, task schema, graders, approval policy, report
-math, workspace denylist proof, one MockTransport wire-level e2e) are
-pinned by hermetic tests in `tests/test_eval_*.py` — real providers are
-never called from pytest.
+grades 23 fixed tasks deterministically (15 base + 8 `hard`, `--tag`
+filter), and saves comparable JSON to `eval_results/`. See
+`tools/eval/README.md` for setup and workflow. Its pure parts (SSE
+parser, task schema, graders incl. `approvals_denied_max` /
+`blocked_results_max` / `region_unchanged`, approval policy with
+anchored-`cd` rules, report math incl. mean denied/blocked, escape
+detector, workspace denylist proof, one MockTransport wire-level e2e)
+are pinned by hermetic tests in `tests/test_eval_*.py` — real providers
+are never called from pytest.
 
 ---
 

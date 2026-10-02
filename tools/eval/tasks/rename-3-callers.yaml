@@ -1,0 +1,55 @@
+id: rename-3-callers
+category: write
+tags: [hard]
+prompt: |-
+  In your working directory, rename the function `calc_total` in ops.py to
+  `calc_grand_total` and update all three callers (orders.py, cart.py,
+  report.py) so everything still works. Run `python verify_rename.py` to
+  confirm. Your shell starts in the server directory, NOT the workspace:
+  prefix every command with `cd /d "{{WORKSPACE}}" && ` (exact quotes).
+files:
+  ops.py: |-
+    def calc_total(items):
+        return sum(items)
+  orders.py: |-
+    from ops import calc_total
+
+    def order_sum(xs):
+        return calc_total(xs)
+  cart.py: |-
+    from ops import calc_total
+
+    def cart_sum(xs):
+        return calc_total(xs)
+  report.py: |-
+    from ops import calc_total
+
+    def report_sum(xs):
+        return calc_total(xs)
+  verify_rename.py: |-
+    import ops
+    assert hasattr(ops, "calc_grand_total"), "rename missing"
+    assert not hasattr(ops, "calc_total"), "old name still present"
+    import orders
+    import cart
+    import report
+    assert orders.order_sum([1, 2, 3]) == 6
+    assert cart.cart_sum([1, 2, 3]) == 6
+    assert report.report_sum([1, 2, 3]) == 6
+    print("RENAME-OK")
+checks:
+  - type: file_contains
+    path: ops.py
+    substring: def calc_grand_total
+  - type: file_contains
+    path: orders.py
+    substring: calc_grand_total
+  - type: file_contains
+    path: cart.py
+    substring: calc_grand_total
+  - type: file_contains
+    path: report.py
+    substring: calc_grand_total
+  - type: shell_check
+    command: python verify_rename.py
+max_tool_calls: 12

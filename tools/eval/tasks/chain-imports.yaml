@@ -1,0 +1,22 @@
+id: chain-imports
+category: write
+tags: [hard]
+prompt: |-
+  In your working directory create three modules that import each other in
+  a chain: gamma.py defines `SUFFIX = "-gamma"` and `tag(name)` returning
+  `name + SUFFIX`; beta.py does `from gamma import tag` and defines
+  `label(x)` returning `tag(x).upper()`; main.py does
+  `from beta import label` and prints `"CHAIN-OK " + label("go")`.
+  Run main.py to confirm. Your shell starts in the server directory, NOT
+  the workspace: prefix every command with `cd /d "{{WORKSPACE}}" && `
+  (exact quotes).
+checks:
+  - type: file_contains
+    path: beta.py
+    substring: from gamma import tag
+  - type: file_contains
+    path: main.py
+    substring: from beta import label
+  - type: shell_check
+    command: python main.py
+max_tool_calls: 10

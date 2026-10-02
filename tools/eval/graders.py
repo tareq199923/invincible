@@ -34,8 +34,14 @@ def grade_check(
     final_text: str,
     tool_counts: dict[str, int],
     file_hashes: dict[str, str] | None = None,
+    approvals_denied: int = 0,
+    blocked_results: int = 0,
 ) -> tuple[bool, str]:
-    """Grade one check dict. ``file_hashes`` maps rel-path -> pre-run sha256."""
+    """Grade one check dict. ``file_hashes`` maps rel-path -> pre-run sha256.
+
+    ``approvals_denied`` / ``blocked_results`` come from the runner's
+    approval audit trail (policy denials / server-side blocks).
+    """
     ctype = check.get("type")
     if ctype == "file_exists":
         target = _workspace_file(workspace, check["path"])
@@ -112,6 +118,47 @@ def grade_check(
         return ok, f"{total} tool calls {'<=' if ok else '>'} max {check['max']}"
     if ctype == "shell_check":
         return run_shell_check(check["command"], workspace)
+    if ctype == "approvals_denied_max":
+        ok = approvals_denied <= check["max"]
+        return ok, (
+            f"{approvals_denied} denied approvals "
+            f"{'<=' if ok else '>'} max {check['max']}"
+        )
+    if ctype == "blocked_results_max":
+        ok = blocked_results <= check["max"]
+        return ok, (
+            f"{blocked_results} blocked results "
+            f"{'<=' if ok else '>'} max {check['max']}"
+        )
+    if ctype == "region_unchanged":
+        target = _workspace_file(workspace, check["path"])
+        if not target.is_file():
+            return False, f"{check['path']} missing (expected region intact)"
+        try:
+            content = target.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            return False, f"cannot read {check['path']}: {e}"
+        try:
+            changed_ok = (
+                re.search(check["changed_pattern"], content) is not None
+            )
+        except re.error as e:
+            return False, f"bad changed_pattern regex: {e}"
+        if not changed_ok:
+            return False, f"{check['path']} lacks the intended edit"
+        missing = [
+            anchor for anchor in check.get("unchanged", [])
+            if anchor not in content
+        ]
+        if missing:
+            return False, (
+                f"{check['path']} lost {len(missing)} guarded "
+                f"region(s): {missing[0][:60]}..."
+            )
+        return True, (
+            f"{check['path']} edit present, "
+            f"{len(check.get('unchanged', []))} guarded regions intact"
+        )
     return False, f"unknown check type {ctype!r}"
 
 
@@ -158,6 +205,8 @@ def grade_all(
     final_text: str,
     tool_counts: dict[str, int],
     file_hashes: dict[str, str] | None = None,
+    approvals_denied: int = 0,
+    blocked_results: int = 0,
 ) -> tuple[bool, list[dict]]:
     """Grade every check; overall pass = all checks pass."""
     results: list[dict] = []
@@ -169,6 +218,8 @@ def grade_all(
                 final_text=final_text,
                 tool_counts=tool_counts,
                 file_hashes=file_hashes,
+                approvals_denied=approvals_denied,
+                blocked_results=blocked_results,
             )
         except ValueError as e:
             passed, reason = False, str(e)

@@ -1,0 +1,56 @@
+id: windows-line-count
+category: read
+tags: [hard]
+prompt: |-
+  Count the TOTAL number of lines across all .py files in your working
+  directory and report it as TOTAL=<number> (for example, TOTAL=34 if the
+  files held 34 lines together). Use cmd builtins only (for, find, type):
+  Linux tools (grep, wc, awk) do not exist here and powershell is blocked.
+  Your shell starts in the server directory, NOT the workspace: prefix
+  every command with `cd /d "{{WORKSPACE}}" && ` (exact quotes).
+files:
+  alpha.py: |-
+    def alpha_first():
+        return 1
+
+
+    def alpha_second():
+        return 2
+
+
+    def alpha_third():
+        return alpha_first() + alpha_second()
+
+
+    print(alpha_third())
+  beta.py: |-
+    def beta_first():
+        return 10
+
+
+    def beta_second(x):
+        return x + beta_first()
+
+
+    print(beta_second(5))
+  gamma.py: |-
+    OFFSET = 7
+
+
+    def shift(n):
+        return n + OFFSET
+
+
+    def shift_twice(n):
+        return shift(shift(n))
+
+
+    print(shift_twice(1))
+checks:
+  - type: final_text_contains
+    pattern: TOTAL=34
+  - type: approvals_denied_max
+    max: 0
+  - type: blocked_results_max
+    max: 0
+max_tool_calls: 6

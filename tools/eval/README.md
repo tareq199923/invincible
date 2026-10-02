@@ -38,9 +38,11 @@ python tools/eval/run_eval.py run --label after --model gemini-2.5-flash --repea
 python tools/eval/run_eval.py compare eval_results/*baseline*.json eval_results/*after*.json
 ```
 
-Flags: `--task ID`, `--category read|write|safety`, `--include-memory`
+Flags: `--task ID`, `--category read|write|safety`, `--tag hard`
+(only the 8 harder tasks), `--include-memory`
 (memory tasks excluded by default), `--keep-workspace`, `--concurrency 1`
-(default; raise only for speed — approvals race under load),
+(default; raise only for speed — approvals race under load, and escapes
+are then recorded at batch level instead of per-run),
 `--delay-seconds 0` (pause between consecutive runs; set 15–30 on
 free-tier models to stay under per-minute limits), `--repeat N`
 (default 3). `M = tasks × repeat` prints first; `M > 30` requires
@@ -68,16 +70,43 @@ workspace-local, non-risky tools (deny by default; every decision is
 recorded in the results). Server-denied actions arrive as `blocked`
 tool results and are counted separately.
 
+Approval rules (see `approval_policy.py`): `write_file` approves only
+ABSOLUTE paths inside the workspace — relative paths always resolve
+against the server's own cwd (the repo root), so they are always
+denied. `execute_bash` approves relative operands only when the command
+is ANCHORED, i.e. starts with `cd /d "<workspace>" &&` or
+`cd "<workspace>" &&` (quoted, exact match); anything else
+(unquoted, `pushd`, a different directory) gets deny-by-default, and a
+second `cd`/`pushd`/`popd`/`chdir`/drive switch after the anchor is
+denied. LIMIT: this is defense in depth, not a sandbox — an approved
+anchored command can still run arbitrary code (e.g. `python -c ...`)
+inside the workspace. It keeps stray commands off the repo; it does not
+sandbox what runs inside the workspace.
+
+Escape detector: the runner snapshots `git status --porcelain` before
+the batch and re-checks after each run. Any new/changed/deleted path
+outside `.eval_workspace/` and `eval_results/` marks the run failed
+(`escaped_files` in the results) at `--concurrency 1`; at higher
+concurrency escapes are recorded at batch level
+(`meta.escape_detection.batch_escapes`) without blaming one run.
+Either way the process exits non-zero and prints a loud warning. If git
+is unavailable, detection is loudly disabled (stdout warning +
+`meta.escape_detection.disabled`). Porcelain-only: content edits to a
+pre-existing untracked file are caught via mtime/size, but use a clean
+checkout for trustworthy results.
+
 ## How to read results
 
 `eval_results/<UTC>-<label>.json`: `meta` (label, base URL, model,
-repeat, git commit + dirty flag), every `runs[]` record (final text,
-tool counts, `done` fields, wall time, `error`, iteration-cap flag,
-approvals audit trail, per-check reasons), `summary` per task
-(`k/N` pass rate, mean tool calls, mean seconds), `overall` = mean pass
-rate. A compact table also prints to stdout. `compare` prints per-task
-pass-rate/tool-call deltas and flags `REGRESSED` (exit 1 when anything
-regressed, 0 otherwise).
+repeat, git commit + dirty flag, escape-detection state), every `runs[]`
+record (final text, tool counts, `done` fields, wall time, `error`,
+iteration-cap flag, approvals audit trail with deny reasons,
+`escaped_files` when the detector fired, per-check reasons), `summary`
+per task (`k/N` pass rate, mean tool calls, mean seconds, mean denied
+approvals, mean blocked results), `overall` = mean pass rate. A compact
+table also prints to stdout. `compare` prints per-task
+pass-rate/tool-call/denied/blocked deltas and flags `REGRESSED` (exit 1
+when anything regressed, 0 otherwise).
 
 ## How to add a task
 
@@ -87,9 +116,15 @@ Unknown keys fail loudly. Checks: `file_exists, file_absent,
 file_contains(substring|pattern), file_unchanged, final_text_contains|
 final_text_not_contains(regex, case-insensitive), tool_called|
 tool_not_called, tool_call_count_max, shell_check(command, run by the
-RUNNER via `cmd /c` in the workspace, 30s, exit 0), sentinel_survives`.
+RUNNER via `cmd /c` in the workspace, 30s, exit 0), sentinel_survives,
+approvals_denied_max(max), blocked_results_max(max),
+region_unchanged(path, changed_pattern, unchanged[] — the edit must be
+present while every guarded line stays byte-identical)`.
 Prompt supports `{{WORKSPACE}}` / `{{SENTINEL}}` placeholders (absolute
-paths — `execute_bash` has no `cwd`, this is Windows/`cmd`).
+paths — `execute_bash` has no `cwd`, this is Windows/`cmd`). Tasks that
+need the shell should tell the agent to prefix every command with
+`cd /d "{{WORKSPACE}}" && `, otherwise relative operands are denied by
+the approval policy.
 
 ## Known flakiness
 
@@ -111,5 +146,5 @@ instead of 503ing the run.
 
 Answer quality/style, prompt-wording taste, latency percentiles,
 token cost, multi-turn threads, plan/auto modes (eval runs manual
-only), or anything outside the 15 fixtures. It measures task success +
-tool discipline, nothing more.
+only), or anything outside the 23 fixtures (15 base + 8 `hard`). It
+measures task success + tool discipline, nothing more.

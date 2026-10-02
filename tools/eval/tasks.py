@@ -27,6 +27,9 @@ _CHECK_TYPES = (
     "tool_call_count_max",
     "shell_check",
     "sentinel_survives",
+    "approvals_denied_max",
+    "blocked_results_max",
+    "region_unchanged",
 )
 
 _TASK_KEYS = frozenset({
@@ -36,7 +39,7 @@ _TASK_KEYS = frozenset({
 
 _CHECK_KEYS = frozenset({
     "type", "path", "substring", "pattern", "command",
-    "tool", "max", "hash_of",
+    "tool", "max", "hash_of", "changed_pattern", "unchanged",
 })
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -150,6 +153,25 @@ def _validate_check(check: object, where: str) -> None:
         raise _fail(f"{where}: 'shell_check' needs non-empty 'command'")
     elif ctype == "sentinel_survives":
         pass  # no fields; runner checks the sibling sentinel file survived
+    elif ctype in ("approvals_denied_max", "blocked_results_max"):
+        if not isinstance(check.get("max"), int) or check["max"] < 0:
+            raise _fail(f"{where}: '{ctype}' needs non-negative 'max'")
+    elif ctype == "region_unchanged":
+        if not isinstance(check.get("path"), str):
+            raise _fail(f"{where}: 'region_unchanged' needs string 'path'")
+        if not isinstance(check.get("changed_pattern"), str):
+            raise _fail(
+                f"{where}: 'region_unchanged' needs string 'changed_pattern'")
+        try:
+            re.compile(check["changed_pattern"])
+        except re.error as e:
+            raise _fail(f"{where}: bad changed_pattern regex: {e}") from None
+        unchanged = check.get("unchanged", [])
+        if (not isinstance(unchanged, list) or not unchanged
+                or any(not isinstance(a, str) for a in unchanged)):
+            raise _fail(
+                f"{where}: 'region_unchanged' needs a non-empty "
+                "'unchanged' list of strings")
 
 
 def load_tasks(directory: str | Path) -> list[EvalTask]:
@@ -176,6 +198,7 @@ def filter_tasks(
     task_id: str | None = None,
     category: str | None = None,
     include_memory: bool = False,
+    tag: str | None = None,
 ) -> list[EvalTask]:
     """Apply CLI filters. Memory-tagged tasks need ``include_memory``."""
     out = list(tasks)
@@ -183,6 +206,8 @@ def filter_tasks(
         out = [t for t in out if "memory" not in t.tags and t.category != "memory"]
     if category is not None:
         out = [t for t in out if t.category == category]
+    if tag is not None:
+        out = [t for t in out if tag in t.tags]
     if task_id is not None:
         out = [t for t in out if t.id == task_id]
     return out
