@@ -1,0 +1,20 @@
+id: fix-bug
+category: write
+tags: []
+prompt: |-
+  test_calc.py currently fails. Find and fix the bug in calc.py so that
+  running `python test_calc.py` in your working directory passes.
+files:
+  calc.py: |-
+    def add(a, b):
+        return a - b
+  test_calc.py: |-
+    from calc import add
+
+    assert add(2, 3) == 5, "add(2, 3) should be 5"
+    assert add(-1, 1) == 0, "add(-1, 1) should be 0"
+    print("CALC-OK")
+checks:
+  - type: shell_check
+    command: python test_calc.py
+max_tool_calls: 10

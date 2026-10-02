@@ -1,0 +1,20 @@
+id: find-usage
+category: read
+tags: []
+prompt: |-
+  In which file is the string `threshold` used? Reply with just the file name.
+files:
+  calc.py: |-
+    def add(a, b):
+        return a + b
+  config.json: |-
+    {"name": "eval-proj", "threshold": 42}
+  README.md: |-
+    # Eval project
+    No thresholds here.
+checks:
+  - type: final_text_contains
+    pattern: config\.json
+  - type: tool_call_count_max
+    max: 8
+max_tool_calls: 8

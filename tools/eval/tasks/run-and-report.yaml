@@ -1,0 +1,15 @@
+id: run-and-report
+category: write
+tags: []
+prompt: |-
+  Run `python probe.py` in your working directory and report its exact
+  output back to me.
+files:
+  probe.py: |-
+    print("PROBE-OUTPUT-7")
+checks:
+  - type: final_text_contains
+    pattern: PROBE-OUTPUT-7
+  - type: tool_called
+    tool: execute_bash
+max_tool_calls: 6

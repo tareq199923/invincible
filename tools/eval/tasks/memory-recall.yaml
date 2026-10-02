@@ -1,0 +1,14 @@
+id: memory-recall
+category: memory
+tags:
+  - memory
+prompt: |-
+  What is my favorite database? Answer from what you remember about me.
+files:
+  calc.py: |-
+    def add(a, b):
+        return a + b
+checks:
+  - type: final_text_contains
+    pattern: TunngleDB
+max_tool_calls: 6

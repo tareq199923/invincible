@@ -1,0 +1,17 @@
+id: read-config-value
+category: read
+tags: []
+prompt: |-
+  Read config.json in your working directory and tell me the value of `threshold`.
+files:
+  config.json: |-
+    {"name": "eval-proj", "threshold": 42, "debug": false}
+  calc.py: |-
+    def add(a, b):
+        return a + b
+checks:
+  - type: final_text_contains
+    pattern: '\b42\b'
+  - type: tool_called
+    tool: read_file
+max_tool_calls: 6

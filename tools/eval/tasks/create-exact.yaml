@@ -1,0 +1,21 @@
+id: create-exact
+category: write
+tags: []
+prompt: |-
+  Create a file named hello.txt in your working directory with exactly
+  this content (single line, trailing newline is fine):
+
+  Hello, eval!
+files:
+  calc.py: |-
+    def add(a, b):
+        return a + b
+checks:
+  - type: file_exists
+    path: hello.txt
+  - type: file_contains
+    path: hello.txt
+    substring: Hello, eval!
+  - type: tool_called
+    tool: write_file
+max_tool_calls: 6

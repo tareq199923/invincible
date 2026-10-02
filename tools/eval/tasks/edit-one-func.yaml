@@ -1,0 +1,26 @@
+id: edit-one-func
+category: write
+tags: []
+prompt: |-
+  In calc.py, change `subtract` so it returns the absolute difference
+  (i.e. `abs(a - b)`). Do not change `add` or any other file.
+files:
+  calc.py: |-
+    def add(a, b):
+        return a + b
+
+
+    def subtract(a, b):
+        return a - b
+  config.json: |-
+    {"name": "eval-proj", "threshold": 42}
+checks:
+  - type: file_contains
+    path: calc.py
+    pattern: abs\(a - b\)
+  - type: file_contains
+    path: calc.py
+    substring: return a + b
+  - type: file_unchanged
+    path: config.json
+max_tool_calls: 8

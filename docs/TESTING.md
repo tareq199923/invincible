@@ -140,7 +140,20 @@ sleeping.
 
 ---
 
-## 4. Writing a new test — quick recipe
+## 4. Agent evals (manual)
+
+`tools/eval/` is a hand-run harness (not part of `pytest`): it drives the
+real `POST /dashboard/chat/stream` on a live server with a real model,
+grades 15 fixed tasks deterministically, and saves comparable JSON to
+`eval_results/`. See `tools/eval/README.md` for setup and workflow. Its
+pure parts (SSE parser, task schema, graders, approval policy, report
+math, workspace denylist proof, one MockTransport wire-level e2e) are
+pinned by hermetic tests in `tests/test_eval_*.py` — real providers are
+never called from pytest.
+
+---
+
+## 5. Writing a new test — quick recipe
 
 ```python
 # 1. Router-level (no HTTP app):
