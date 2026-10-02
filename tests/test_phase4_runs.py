@@ -9,12 +9,14 @@
   routing.
 """
 
+import time
+
 import httpx
 import pytest
 
 from invincible.core.continuity import ContinuityEngine
 from invincible.core.router import Router
-from invincible.core.run_store import RunStore
+from invincible.core.run_store import RunStore, new_run_entry
 from tests.conftest import (
     default_providers,
     make_transport,
@@ -153,6 +155,29 @@ async def test_streaming_records_input_estimate_and_attaches_output(
 async def test_attach_output_without_ok_row_is_noop(runs_store):
     assert await runs_store.attach_output(
         request_id="never-recorded", output_tokens=10) is False
+
+
+@pytest.mark.asyncio
+async def test_attach_output_survives_scalar_meta(runs_store):
+    """A scalar ``meta`` must not abort the usage UPDATE.
+
+    Seen in the wild (dashboard stream usage attach raising
+    ``cannot set path in scalar``): the output estimate still lands and
+    ``meta`` becomes a flag object instead of raising.
+    """
+    entry = new_run_entry(
+        request_id="scalar-meta", session_id="s", provider_name="p",
+        model_id="m", attempt_index=0, started_at=time.time(),
+        outcome="ok",
+    )
+    entry["meta"] = True  # wild scalar row; jsonb_set would raise on it
+    await runs_store.record(entry)
+    assert await runs_store.attach_output(
+        request_id="scalar-meta", output_tokens=48, estimated=True,
+    ) is True
+    updated = await latest_run(runs_store)
+    assert updated["output_tokens"] == 48
+    assert updated["meta"] == {"usage_estimated": True}
 
 
 # --- reactive failover checkpoints ---------------------------------------------

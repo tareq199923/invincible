@@ -67,14 +67,25 @@ class RunStore:
         wire change, so the endpoint attaches a chars/4 estimate of what it
         actually accumulated; ``meta.usage_estimated`` records provenance.
 
+        ``meta`` is only ever written as an object or NULL by current
+        code, but scalar rows exist in the wild and ``jsonb_set`` raises
+        ``cannot set path in scalar`` on them — aborting the whole UPDATE
+        (the output estimate is lost too). Non-object ``meta`` is
+        therefore replaced with a fresh flag object instead of raising.
+
         Returns True when a winning 'ok' row was found and updated.
         """
         sql = text(
             "UPDATE runs SET"
             " output_tokens = :out,"
-            " meta = jsonb_set(COALESCE(meta, '{}'::jsonb),"
-            "                  '{usage_estimated}',"
-            "                  to_jsonb(CAST(:est AS BOOLEAN)), true)"
+            " meta = CASE"
+            " WHEN jsonb_typeof(COALESCE(meta, '{}'::jsonb)) = 'object'"
+            " THEN jsonb_set(COALESCE(meta, '{}'::jsonb),"
+            "               '{usage_estimated}',"
+            "               to_jsonb(CAST(:est AS BOOLEAN)), true)"
+            " ELSE jsonb_build_object('usage_estimated',"
+            "                        CAST(:est AS BOOLEAN))"
+            " END"
             " WHERE id = (SELECT id FROM runs"
             "             WHERE request_id = :rid AND outcome = 'ok'"
             "             ORDER BY id DESC LIMIT 1)"
