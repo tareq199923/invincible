@@ -252,7 +252,10 @@ chat that can run shell commands — so every rule below is load-bearing):
   denylist blocks write `webchat.*` audit rows carrying action + mode
   only — never commands, paths, or file contents. Approval cards show
   the user their own command/content (rendered as text) because
-  informed approval is the point.
+  informed approval is the point. The endpoint `_audit` helpers default
+  (not force) `actor_kind`, so an explicit kind from a caller can never
+  raise `TypeError` and silently drop these rows (as happened to
+  `webchat.approval.*`/`webchat.tool.*` before the fix).
 - **Data-plane parity with `/mcp`:** `memory_save/search/list`,
   `project_create/list`, `task_state_set/get`, `checkpoint_create`, and
   agent-only `screenshot` share the MCP validation (ownership

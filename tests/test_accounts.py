@@ -463,3 +463,40 @@ def test_github_authorize_url_shape():
 
 def test_min_password_constant_matches_docs():
     assert MIN_PASSWORD_LEN == 8
+
+
+def _stub_audit_request():
+    """Minimal request carrying a recording stub audit log (no DB)."""
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+
+    calls: list = []
+
+    class StubLog:
+        async def record(self, action, **kw):
+            calls.append((action, kw))
+
+    app = Starlette()
+    app.state.audit_log = StubLog()
+    return Request({"type": "http", "app": app}), calls
+
+
+async def test_endpoint_audit_helpers_tolerate_explicit_actor_kind():
+    """Passing ``actor_kind`` explicitly (as chat.py does) must not kill
+    the audit write with a duplicate-keyword TypeError — the row for
+    webchat approval/tool resolutions was silently lost this way."""
+    from invincible.endpoints import accounts as accounts_ep
+    from invincible.endpoints import oauth as oauth_ep
+
+    for helper in (accounts_ep._audit, oauth_ep._audit):
+        req, calls = _stub_audit_request()
+        await helper(
+            req, "webchat.approval.granted", actor_user_id=1,
+            actor_kind="user", resource_type="webchat_approval",
+        )
+        assert calls, helper
+        assert calls[0][1]["actor_kind"] == "user"
+        # The default still applies when callers omit it.
+        req2, calls2 = _stub_audit_request()
+        await helper(req2, "auth.logged_in", actor_user_id=1)
+        assert calls2 and calls2[0][1]["actor_kind"] == "user"
