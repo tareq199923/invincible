@@ -315,3 +315,136 @@ def test_cli_rejects_nonpositive_timeout(capsys):
                "--timeout-seconds", "0"])
     assert rc == 2
     assert "--timeout-seconds must be > 0" in capsys.readouterr().out
+
+
+# --- provider-infra retries + circuit breaker ---------------------------------
+
+
+def _stub_factory():
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def factory():
+        async with httpx.AsyncClient(transport=_transport({})) as client:
+            yield client
+
+    return factory
+
+
+async def test_run_all_retries_provider_infra_records_final(monkeypatch):
+    """A provider-infra (cooldown) error is retried; ONLY the final attempt
+    is recorded, stamped with the retry count."""
+    calls = {"n": 0}
+
+    async def fake(client, *, task, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"task_id": task.id, "passed": False,
+                    "error": {"message": "All providers failed or are in "
+                                        "cooldown.", "status": 503}}
+        return {"task_id": task.id, "passed": True}
+
+    monkeypatch.setattr(eval_runner, "run_once", fake)
+    runs = await eval_runner.run_all(
+        "http://test", "m", [_fixture_task("t")], repeat=1,
+        client_factory=_stub_factory(), cooldown_wait=0.0, infra_retries=2,
+    )
+    assert calls["n"] == 2
+    assert len(runs) == 1                 # only the final attempt survives
+    assert runs[0]["passed"] is True
+    assert runs[0]["outcome"] == "pass"
+    assert runs[0]["infra_retries"] == 1
+
+
+async def test_run_all_does_not_retry_task_timeout(monkeypatch):
+    """The runner's own per-task timeout is NOT provider infra: no retry."""
+    calls = {"n": 0}
+
+    async def fake(client, *, task, **kwargs):
+        calls["n"] += 1
+        return {"task_id": task.id, "passed": False,
+                "error": {"message": "task timeout", "status": -1}}
+
+    monkeypatch.setattr(eval_runner, "run_once", fake)
+    runs = await eval_runner.run_all(
+        "http://test", "m", [_fixture_task("t")], repeat=1,
+        client_factory=_stub_factory(), cooldown_wait=0.0, infra_retries=3,
+    )
+    assert calls["n"] == 1                # never retried
+    assert runs[0]["infra_retries"] == 0
+    assert runs[0]["outcome"] == "timeout"
+
+
+async def test_run_all_breaker_stops_after_consecutive_infra(monkeypatch):
+    """After N consecutive infra failures the batch stops - the remaining
+    runs are never attempted and breaker_report records the shortfall."""
+    calls = {"n": 0}
+
+    async def fake(client, *, task, **kwargs):
+        calls["n"] += 1
+        return {"task_id": task.id, "passed": False,
+                "error": {"message": "cooldown", "status": 503}}
+
+    monkeypatch.setattr(eval_runner, "run_once", fake)
+    tasks = [_fixture_task(f"t{i}") for i in range(5)]
+    brep: dict = {}
+    runs = await eval_runner.run_all(
+        "http://test", "m", tasks, repeat=2,  # scheduled = 10
+        client_factory=_stub_factory(), cooldown_wait=0.0, infra_retries=0,
+        breaker_after=4, breaker_report=brep,
+    )
+    assert brep["tripped"] is True
+    assert brep["scheduled"] == 10
+    assert brep["attempted"] == 4         # stopped right after the 4th
+    assert brep["not_attempted"] == 6
+    assert len(runs) == 4
+    assert calls["n"] == 4
+
+
+async def test_run_all_breaker_resets_on_success(monkeypatch):
+    seq = iter(["infra", "infra", "pass", "infra", "infra"])
+
+    async def fake(client, *, task, **kwargs):
+        if next(seq) == "infra":
+            return {"task_id": task.id, "passed": False,
+                    "error": {"message": "cooldown", "status": 503}}
+        return {"task_id": task.id, "passed": True}
+
+    monkeypatch.setattr(eval_runner, "run_once", fake)
+    brep: dict = {}
+    runs = await eval_runner.run_all(
+        "http://test", "m", [_fixture_task("t")], repeat=5,
+        client_factory=_stub_factory(), cooldown_wait=0.0, infra_retries=0,
+        breaker_after=4, breaker_report=brep,
+    )
+    assert brep["tripped"] is False        # a success reset the counter
+    assert len(runs) == 5
+
+
+def test_cli_cooldown_retry_breaker_defaults():
+    from tools.eval.run_eval import build_parser
+
+    args = build_parser().parse_args(["run", "--label", "x", "--model", "m"])
+    assert args.cooldown_wait == 45.0
+    assert args.infra_retries == 2
+    assert args.breaker_after == 4
+    over = build_parser().parse_args(
+        ["run", "--label", "x", "--model", "m", "--cooldown-wait", "10",
+         "--infra-retries", "0", "--breaker-after", "9"])
+    assert over.cooldown_wait == 10.0
+    assert over.infra_retries == 0
+    assert over.breaker_after == 9
+
+
+def test_cli_rejects_bad_cooldown_retry_breaker(capsys):
+    from tools.eval.run_eval import main
+
+    assert main(["run", "--label", "x", "--model", "m",
+                 "--cooldown-wait", "-1"]) == 2
+    assert "--cooldown-wait must be >= 0" in capsys.readouterr().out
+    assert main(["run", "--label", "x", "--model", "m",
+                 "--infra-retries", "-1"]) == 2
+    assert "--infra-retries must be >= 0" in capsys.readouterr().out
+    assert main(["run", "--label", "x", "--model", "m",
+                 "--breaker-after", "0"]) == 2
+    assert "--breaker-after must be >= 1" in capsys.readouterr().out

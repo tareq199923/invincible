@@ -143,6 +143,7 @@ async def _run_async(args: argparse.Namespace) -> int:
         pass
 
     escape_report: dict = {}
+    breaker_report: dict = {}
     runs = await runner.run_all(
         base_url, args.model, selected, repeat=args.repeat,
         concurrency=args.concurrency, keep_workspace=args.keep_workspace,
@@ -150,6 +151,10 @@ async def _run_async(args: argparse.Namespace) -> int:
         client_factory=factory,
         escape_report=escape_report,
         timeout_seconds=args.timeout_seconds,
+        infra_retries=args.infra_retries,
+        cooldown_wait=args.cooldown_wait,
+        breaker_after=args.breaker_after,
+        breaker_report=breaker_report,
     )
     summary, overall = report.summarize_runs(runs)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -161,11 +166,15 @@ async def _run_async(args: argparse.Namespace) -> int:
             "base_url": base_url,
             "model": args.model,
             "repeat": args.repeat,
+            "infra_retries": args.infra_retries,
+            "cooldown_wait": args.cooldown_wait,
+            "breaker_after": args.breaker_after,
             "git": runner.git_meta(),
             "escape_detection": {
                 "disabled": escape_report.get("disabled", False),
                 "batch_escapes": escape_report.get("batch_escapes", []),
             },
+            "breaker": breaker_report,
         },
         "summary": summary,
         "overall": overall,
@@ -180,6 +189,16 @@ async def _run_async(args: argparse.Namespace) -> int:
         json.dump(payload, fh, indent=2)
     print(report.render_table(summary, overall))
     print(f"\nsaved {out_path}")
+    if breaker_report.get("tripped"):
+        missing = breaker_report.get("not_attempted", 0)
+        print(f"provider unavailable, {breaker_report.get('consecutive')} "
+              f"consecutive infra failures, {missing} run(s) not attempted. "
+              "The provider is in cooldown / failing - restart the server "
+              "(clears in-memory cooldowns), wait, and re-run the missing "
+              "tasks with --task. Partial results were saved.")
+        if runner.escape_exit_code(runs, escape_report) != 0:
+            print("ESCAPE DETECTED as well - see escaped_files.")
+        return 3
     if runner.escape_exit_code(runs, escape_report) != 0:
         print("ESCAPE DETECTED: one or more runs wrote outside "
               ".eval_workspace/ and eval_results/ - see escaped_files / "
@@ -306,6 +325,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--timeout-seconds", type=float, default=None,
                        help="override every task's timeout (seconds); "
                             "default keeps each task's own value")
+    p_run.add_argument("--cooldown-wait", type=float, default=45.0,
+                       help="seconds to wait before retrying a "
+                            "provider-infra failure (default 45)")
+    p_run.add_argument("--infra-retries", type=int, default=2,
+                       help="retries for a run that ends provider-infra "
+                            "(cooldown/429/5xx/timeout); default 2")
+    p_run.add_argument("--breaker-after", type=int, default=4,
+                       help="stop the batch after N consecutive infra "
+                            "failures (default 4)")
     p_run.add_argument("--yes", action="store_true")
     p_run.add_argument("--base-url", default=None)
     p_run.set_defaults(func=cmd_run)
@@ -343,6 +371,15 @@ def main(argv: list[str] | None = None) -> int:
         args.timeout_seconds <= 0
     ):
         print("--timeout-seconds must be > 0.")
+        return 2
+    if args.command == "run" and args.cooldown_wait < 0:
+        print("--cooldown-wait must be >= 0.")
+        return 2
+    if args.command == "run" and args.infra_retries < 0:
+        print("--infra-retries must be >= 0.")
+        return 2
+    if args.command == "run" and args.breaker_after < 1:
+        print("--breaker-after must be >= 1.")
         return 2
     func = args.func
     if args.command == "run":

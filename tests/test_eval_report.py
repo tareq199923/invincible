@@ -56,6 +56,27 @@ def test_run_outcome_classifies_every_outcome():
         {"passed": False, "escaped_files": ["x"]}) == "fail"
 
 
+def test_is_provider_infra_error_classifies_retryable():
+    # Cooldown / 503 (what the SSE error carries when the provider is out).
+    assert report.is_provider_infra_error(
+        {"message": "All providers failed or are in cooldown.",
+         "status": 503}) is True
+    # 429 rate limit, any 5xx/408, read timeout.
+    assert report.is_provider_infra_error({"status": 429}) is True
+    assert report.is_provider_infra_error({"status": 502}) is True
+    assert report.is_provider_infra_error(
+        {"message": "ReadTimeout while reading upstream"}) is True
+    assert report.is_provider_infra_error(
+        {"message": "stream HTTP 503: busy"}) is True
+    # The runner's own per-task timeout is NOT provider infra.
+    assert report.is_provider_infra_error(
+        {"message": "task timeout", "status": -1}) is False
+    # A genuine upstream 4xx is a real result, not infra.
+    assert report.is_provider_infra_error(
+        {"message": "invalid model", "status": 400}) is False
+    assert report.is_provider_infra_error(None) is False
+
+
 def test_summary_scores_completed_runs_only():
     """Timeouts are infra, not agent quality: pass_rate and means must
     ignore them (regression: a timed-out run was scored as a pass)."""
@@ -84,7 +105,10 @@ def test_summary_scores_completed_runs_only():
     assert overall == pytest.approx(0.5)
 
 
-def test_summary_all_timeouts_has_zero_rate():
+def test_summary_all_timeouts_is_na():
+    """A task with zero completed runs has NO pass rate (n/a), not 0.00:
+    a rate over zero runs is undefined (regression: it showed 0.00 and
+    dragged overall down)."""
     runs = [{"task_id": "a", "passed": True, "tool_calls_total": 1,
              "seconds": 1.0, "error": {"message": "task timeout"}},
             {"task_id": "a", "passed": False, "tool_calls_total": 1,
@@ -93,8 +117,36 @@ def test_summary_all_timeouts_has_zero_rate():
     summary, overall = report.summarize_runs(runs)
     assert summary["a"]["completed"] == 0
     assert summary["a"]["timeouts"] == 2
-    assert summary["a"]["pass_rate"] == 0.0
-    assert overall == 0.0
+    assert summary["a"]["pass_rate"] is None  # n/a, NOT 0.0
+    assert overall == 0.0                      # no tasks with data
+
+
+def test_overall_counts_only_tasks_with_data():
+    runs = [
+        {"task_id": "a", "passed": True, "tool_calls_total": 1,
+         "seconds": 1.0},
+        {"task_id": "b", "passed": False, "tool_calls_total": 1,
+         "seconds": 1.0, "error": {"message": "cooldown", "status": 503}},
+    ]
+    summary, overall = report.summarize_runs(runs)
+    assert summary["b"]["pass_rate"] is None
+    assert overall == pytest.approx(1.0)  # only "a" had data
+    table = report.render_table(summary, overall)
+    assert "n/a" in table
+    assert "overall over 1 of 2 tasks with data" in table
+
+
+def test_compare_skips_na_tasks():
+    base = {"a": {"pass_rate": 1.0, "mean_tool_calls": 2.0},
+            "b": {"pass_rate": None, "mean_tool_calls": 0.0}}
+    other = {"a": {"pass_rate": 0.5, "mean_tool_calls": 3.0},
+             "b": {"pass_rate": None, "mean_tool_calls": 0.0}}
+    rows = report.compare_summaries(base, other)
+    assert [r["task"] for r in rows] == ["a"]  # b (n/a) skipped
+    # A task present on only one side is n/a on the other -> skipped.
+    rows2 = report.compare_summaries({"a": {"pass_rate": 1.0}},
+                                     {"c": {"pass_rate": 0.0}})
+    assert rows2 == []
 
 
 def test_compare_flags_timeout_rise():

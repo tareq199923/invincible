@@ -46,11 +46,26 @@ are then recorded at batch level instead of per-run),
 `--delay-seconds 0` (pause between consecutive runs; set 15–30 on
 free-tier models to stay under per-minute limits), `--timeout-seconds N`
 (override every task's own `timeout_seconds` for this run; default keeps
-each task's value), `--repeat N`
+each task's value), `--cooldown-wait 45` (seconds to wait before
+retrying a provider-infra failure), `--infra-retries 2` (retries for a
+run that ends provider-infra: cooldown / 429 / 5xx / read timeout),
+`--breaker-after 4` (stop the batch after N consecutive infra failures),
+`--repeat N`
 (default 3). `M = tasks × repeat` prints first; `M > 30` requires
 `--yes`. `--model` is required and must be in
 `GET /dashboard/chat/models` (a wrong default would silently eval the
 wrong model after a key change).
+
+**Provider outages no longer burn the run.** A run whose SSE `error` is
+provider infra (cooldown/503, 429, 5xx, read timeout) is retried in
+place after `--cooldown-wait` seconds, up to `--infra-retries` times;
+only the final attempt is recorded (`infra_retries` counts the retries).
+The runner's own per-task `task timeout` is **not** retried. If
+`--breaker-after` runs in a row still end as infra failures, the batch
+**stops** (remaining runs are never attempted), partial results are
+saved, and the process exits non-zero with
+`provider unavailable, … N run(s) not attempted` — restart the server to
+clear in-memory cooldowns, then re-run the missing tasks with `--task`.
 
 If some runs died as infra failures (instant 503/cooldown, `error` set
 on the run, or a per-task **timeout** — `error.message == "task
@@ -109,15 +124,19 @@ approvals audit trail with deny reasons, `escaped_files` when the
 detector fired, per-check reasons), `summary`
 per task (`k/N` pass rate over completed runs, `completed` and
 `timeouts` counts, mean tool calls, mean seconds, mean denied
-approvals, mean blocked results), `overall` = mean pass rate. A run
+approvals, mean blocked results), `overall` = mean pass rate **over the
+tasks that have data**. A task with zero completed runs is `n/a` (no
+rate) and is excluded from `overall`; the footer states
+`overall over X of Y tasks with data (mean pass rate)`. A run
 carrying an `error` (per-task timeout or other infra failure) is never
 `pass` and never counts toward `pass_rate`; the per-task means exclude
 it too (its wall-time/tool counts measure provider latency, not the
 agent). A compact table also prints to stdout (`to` column = infra
 failures). `compare` prints per-task
-pass-rate/tool-call/denied/blocked/timeout deltas and flags `REGRESSED`
-(exit 1 when anything regressed) plus `TIMEOUTS+` when a task's timeout
-count rose (exit 1 as well — re-run to confirm it was latency).
+pass-rate/tool-call/denied/blocked/timeout deltas (skipping `n/a` tasks
+and flagging `REGRESSED`; exit 1 when anything regressed) plus
+`TIMEOUTS+` when a task's timeout count rose (exit 1 as well — re-run to
+confirm it was latency).
 
 ## How to add a task
 

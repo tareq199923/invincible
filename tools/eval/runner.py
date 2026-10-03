@@ -510,6 +510,10 @@ async def run_all(
     client_factory=None,
     escape_report: dict | None = None,
     timeout_seconds: float | None = None,
+    infra_retries: int = 2,
+    cooldown_wait: float = 45.0,
+    breaker_after: int = 4,
+    breaker_report: dict | None = None,
 ) -> list[dict]:
     """Run every task ``repeat`` times with bounded concurrency.
 
@@ -529,6 +533,20 @@ async def run_all(
 
     ``timeout_seconds`` (when not None) overrides every task's own
     timeout for this batch.
+
+    Provider-infra retries: a run whose SSE ``error`` is provider infra
+    (cooldown / 429 / 5xx / read timeout, see
+    :func:`report.is_provider_infra_error`) waits ``cooldown_wait`` seconds
+    and is re-run for the SAME task, up to ``infra_retries`` times. Only the
+    final attempt is recorded, stamped ``infra_retries`` (the retries
+    performed). The runner's own per-task ``task timeout`` is NOT retried.
+
+    Circuit breaker: once ``breaker_after`` CONSECUTIVE runs end as infra
+    failures (timeout or error) the batch STOPS scheduling - the remaining
+    runs are never attempted (never burn through them). ``breaker_report``
+    (when given) receives ``{tripped, consecutive, attempted, scheduled,
+    not_attempted}``; the caller should print the shortfall and exit
+    non-zero.
     """
     if client_factory is None:
         raise EvalError("no client factory (internal error)")
@@ -543,6 +561,24 @@ async def run_all(
               "Repo-root writes by the agent will NOT be caught.")
     lock = asyncio.Lock()
     state = {"baseline": baseline}
+    breaker = {"tripped": False, "consecutive": 0}
+    scheduled = len(tasks) * repeat
+    attempted = 0
+
+    def _note_outcome(run: dict) -> None:
+        """Advance the consecutive-infra counter; trip the breaker."""
+        if breaker["tripped"]:
+            return
+        if report.run_outcome(run) in report.INFRA_OUTCOMES:
+            breaker["consecutive"] += 1
+            if breaker["consecutive"] >= breaker_after:
+                breaker["tripped"] = True
+                print(f"provider unavailable, {breaker['consecutive']} "
+                      "consecutive infra failures - "
+                      f"{scheduled - attempted} run(s) not attempted; "
+                      "stopping the batch.")
+        else:
+            breaker["consecutive"] = 0
 
     async def _check_escape(run: dict | None) -> None:
         if state["baseline"] is None:
@@ -566,20 +602,57 @@ async def run_all(
                     if path not in escape_report["batch_escapes"]:
                         escape_report["batch_escapes"].append(path)
 
+    async def _run_with_retries(
+        client, task: task_schema.EvalTask,
+    ) -> tuple[dict, int]:
+        """Run once; on a PROVIDER-infra error, wait and retry the SAME
+        task up to ``infra_retries`` times. Returns ``(final_run, retries)``
+        - only the final attempt survives. A ``task timeout`` is not
+        provider infra and returns immediately."""
+        retries = 0
+        while True:
+            run = await run_once(
+                client, base_url=base_url, model=model, task=task,
+                keep_workspace=keep_workspace,
+                timeout_seconds=timeout_seconds)
+            # Normalise: real run_once stamps "outcome", but be robust to
+            # any run dict (e.g. tests that stub run_once).
+            run["outcome"] = report.run_outcome(run)
+            error = run.get("error")
+            if (report.is_provider_infra_error(error)
+                    and retries < infra_retries):
+                retries += 1
+                message = (
+                    error.get("message", "") if isinstance(error, dict)
+                    else str(error))
+                print(f"  provider infra error on {task.id} "
+                      f"({str(message)[:60]!r}); waiting "
+                      f"{cooldown_wait:.0f}s then retry "
+                      f"{retries}/{infra_retries}")
+                if cooldown_wait > 0:
+                    await asyncio.sleep(cooldown_wait)
+                continue
+            return run, retries
+
     async def _worker(batch: list[task_schema.EvalTask]) -> list[dict]:
+        nonlocal attempted
         out: list[dict] = []
         first = True
         async with client_factory() as client:
             for task in batch:
                 for _ in range(repeat):
+                    async with lock:
+                        if breaker["tripped"]:
+                            return out
+                        attempted += 1
                     if not first and delay_seconds > 0:
                         await asyncio.sleep(delay_seconds)
                     first = False
-                    run = await run_once(
-                        client, base_url=base_url, model=model,
-                        task=task, keep_workspace=keep_workspace,
-                        timeout_seconds=timeout_seconds)
+                    run, retries = await _run_with_retries(client, task)
+                    run["infra_retries"] = retries
                     await _check_escape(run)
+                    async with lock:
+                        _note_outcome(run)
                     out.append(run)
         return out
 
@@ -588,4 +661,13 @@ async def run_all(
     results = await asyncio.gather(*(_worker(c) for c in chunks))
     for part in results:
         runs.extend(part)
+    if breaker_report is not None:
+        breaker_report.clear()
+        breaker_report.update({
+            "tripped": breaker["tripped"],
+            "consecutive": breaker["consecutive"],
+            "attempted": attempted,
+            "scheduled": scheduled,
+            "not_attempted": max(0, scheduled - attempted),
+        })
     return runs
