@@ -165,3 +165,82 @@ def test_compare_cli_clean_returns_zero(tmp_path, capsys):
     rc = run_eval.main(["compare", base, base])
     assert rc == 0
     assert "MORE timeouts" not in capsys.readouterr().out
+
+
+def test_merge_drop_task_cleans_single_file(tmp_path, capsys, monkeypatch):
+    """--drop-task discards stale genuine runs (cleaning succeeds w/o task)."""
+    import tools.eval.runner as runner
+    outdir = tmp_path / "results"
+    monkeypatch.setattr(runner, "RESULTS_DIR", outdir)
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=False),
+        _run("t2", passed=True),
+    ])
+    rc = run_eval.main(
+        ["merge", "--label", "clean", "--drop-task", "t1", base])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "dropped task t1: 1 run(s) from inputs" in out
+    payload = json.loads(
+        list(outdir.glob("*-clean.json"))[0].read_text(encoding="utf-8"))
+    assert [r["task_id"] for r in payload["runs"]] == ["t2"]
+
+
+def test_merge_drop_task_repeatable(tmp_path, capsys, monkeypatch):
+    import tools.eval.runner as runner
+    outdir = tmp_path / "results"
+    monkeypatch.setattr(runner, "RESULTS_DIR", outdir)
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=False),
+        _run("t2", passed=False),
+        _run("t3", passed=True),
+    ])
+    rc = run_eval.main([
+        "merge", "--label", "clean",
+        "--drop-task", "t1", "--drop-task", "t2", base])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "dropped task t1: 1 run(s) from inputs" in out
+    assert "dropped task t2: 1 run(s) from inputs" in out
+    payload = json.loads(
+        list(outdir.glob("*-clean.json"))[0].read_text(encoding="utf-8"))
+    assert [r["task_id"] for r in payload["runs"]] == ["t3"]
+
+
+def test_merge_drop_task_refuses_ambiguous_replacement(tmp_path, capsys):
+    """Same-merge replacement would also drop the top-up: refuse."""
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=False),
+        _run("t2", passed=True),
+    ])
+    topup = _file(tmp_path, "b.json", [_run("t1", passed=True)])
+    rc = run_eval.main(
+        ["merge", "--label", "x", "--drop-task", "t1", base, topup])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "dropped task t1: 2 run(s) from inputs" in out
+    assert "zero genuine runs remain for: t1" in out
+
+
+def test_merge_drop_task_two_step_replace(tmp_path, capsys, monkeypatch):
+    """Clean with --drop-task, re-run, merge top-up WITHOUT --drop-task."""
+    import tools.eval.runner as runner
+    outdir = tmp_path / "results"
+    monkeypatch.setattr(runner, "RESULTS_DIR", outdir)
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=False),
+        _run("t2", passed=True),
+    ])
+    rc = run_eval.main(
+        ["merge", "--label", "clean", "--drop-task", "t1", base])
+    assert rc == 0
+    capsys.readouterr()
+    cleaned = str(list(outdir.glob("*-clean.json"))[0])
+    topup = _file(tmp_path, "b.json", [_run("t1", passed=True)])
+    rc = run_eval.main(["merge", "--label", "final", cleaned, topup])
+    assert rc == 0
+    payload = json.loads(
+        list(outdir.glob("*-final.json"))[0].read_text(encoding="utf-8"))
+    t1_runs = [r for r in payload["runs"] if r["task_id"] == "t1"]
+    assert len(t1_runs) == 1
+    assert t1_runs[0]["passed"] is True

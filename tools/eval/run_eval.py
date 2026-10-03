@@ -212,6 +212,13 @@ def cmd_merge(args: argparse.Namespace) -> int:
 
     Guards: every input must be the same model (a cross-model baseline
     is meaningless), and every task must keep >=1 genuine run.
+    ``--drop-task`` (repeatable) drops every run of that task from every
+    input before merging and prints per-task counts. Use it to discard
+    stale genuine runs, then re-run with ``--task ID`` and merge the
+    top-up WITHOUT ``--drop-task`` to replace. A dropped task appearing
+    in 2+ inputs in the SAME merge refuses (replacement would be dropped
+    too — do two merges). Intentional single-file removals succeed
+    without that task.
     """
     payloads = []
     for path in args.files:
@@ -228,17 +235,33 @@ def cmd_merge(args: argparse.Namespace) -> int:
         return 2
     model = models.pop()
 
+    drop_ids = set(getattr(args, "drop_tasks", None) or [])
+    all_runs: list[dict] = [
+        run for _, payload in payloads for run in payload.get("runs", [])
+    ]
+    dropped_by_task: dict[str, int] = {}
+    drop_file_count: dict[str, int] = {}
+    for tid in sorted(drop_ids):
+        n = sum(1 for run in all_runs if run.get("task_id") == tid)
+        dropped_by_task[tid] = n
+        drop_file_count[tid] = sum(
+            1 for _, payload in payloads
+            if any(r.get("task_id") == tid for r in payload.get("runs", []))
+        )
+        print(f"dropped task {tid}: {n} run(s) from inputs")
+    drop_total = sum(dropped_by_task.values())
+    remaining = [r for r in all_runs if r.get("task_id") not in drop_ids]
+
     kept: list[dict] = []
     dropped = 0
-    for _, payload in payloads:
-        for run in payload.get("runs", []):
-            # Timeouts (and other infra errors) are re-runnable infra
-            # failures, never genuine attempts: drop them so a top-up
-            # file can supply the missing runs.
-            if report.run_outcome(run) in report.INFRA_OUTCOMES:
-                dropped += 1
-            else:
-                kept.append(run)
+    for run in remaining:
+        # Timeouts (and other infra errors) are re-runnable infra
+        # failures, never genuine attempts: drop them so a top-up
+        # file can supply the missing runs.
+        if report.run_outcome(run) in report.INFRA_OUTCOMES:
+            dropped += 1
+        else:
+            kept.append(run)
     if not kept:
         print("merge refused: every run is an infra failure.")
         return 2
@@ -246,10 +269,28 @@ def cmd_merge(args: argparse.Namespace) -> int:
     by_task: dict[str, int] = {}
     for run in kept:
         by_task[run["task_id"]] = by_task.get(run["task_id"], 0) + 1
-    empty = sorted({
+    all_ids = {
         run["task_id"] for _, payload in payloads
         for run in payload.get("runs", [])
-    } - set(by_task))
+    }
+    # Intentional removals via --drop-task that appear in at most one
+    # input file are cleaning (e.g. drop stale genuine runs, then re-run
+    # and merge the top-up WITHOUT --drop-task to replace). They are
+    # exempt from the zero-runs refuse. A dropped task appearing in 2+
+    # files means a replacement in the same merge was also dropped —
+    # refuse so the re-run is not silently lost (do two merges instead).
+    # Unknown --drop-task IDs (zero files) are a no-op.
+    exempt = {
+        tid for tid in drop_ids
+        if drop_file_count.get(tid, 0) <= 1
+    }
+    empty = sorted((all_ids - set(by_task)) - exempt)
+    dropped_ambiguous = sorted(
+        tid for tid in drop_ids
+        if tid in all_ids and tid not in by_task
+        and drop_file_count.get(tid, 0) >= 2
+    )
+    empty = sorted(set(empty) | set(dropped_ambiguous))
     if empty:
         print("merge refused: zero genuine runs remain for: "
               + ", ".join(empty))
@@ -284,7 +325,9 @@ def cmd_merge(args: argparse.Namespace) -> int:
         json.dump(payload, fh, indent=2)
     print(report.render_table(summary, overall))
     print(f"\nmerged {len(kept)} runs "
-          f"({dropped} infra failures dropped) from {len(payloads)} files")
+          f"({dropped} infra failures dropped"
+          f"{f', {drop_total} run(s) dropped via --drop-task' if drop_total else ''}) "
+          f"from {len(payloads)} files")
     print(f"saved {out_path}")
     return 0
 
@@ -348,6 +391,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="combine result files (drops infra-failed runs; "
              "same model only)")
     p_mrg.add_argument("--label", required=True)
+    p_mrg.add_argument(
+        "--drop-task", action="append", default=[], dest="drop_tasks",
+        help="drop ALL runs of this task from every input before merging "
+             "(repeatable; re-run the task then merge to replace it)",
+    )
     p_mrg.add_argument("files", nargs="+")
     p_mrg.set_defaults(func=cmd_merge)
 
