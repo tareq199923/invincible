@@ -99,6 +99,31 @@ def test_merge_refuses_all_infra(tmp_path, capsys):
     assert "every run is an infra failure" in capsys.readouterr().out
 
 
+def test_merge_drops_task_timeout_as_infra(tmp_path, capsys, monkeypatch):
+    """A timed-out run is infra (never a pass): merge drops it and a
+    top-up file supplies the replacement."""
+    import tools.eval.runner as runner
+    outdir = tmp_path / "results"
+    monkeypatch.setattr(runner, "RESULTS_DIR", outdir)
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=True),
+        # Timed out but end-state checks happened to pass: bogus as a pass.
+        _run("t1", passed=True,
+             error={"message": "task timeout", "status": -1}),
+    ])
+    topup = _file(tmp_path, "b.json", [_run("t1", passed=True)])
+    rc = run_eval.main(["merge", "--label", "clean", base, topup])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "1 infra failures dropped" in out
+    payload = json.loads(
+        list(outdir.glob("*-clean.json"))[0].read_text(encoding="utf-8"))
+    assert len(payload["runs"]) == 2
+    assert payload["summary"]["t1"]["timeouts"] == 0
+    assert payload["summary"]["t1"]["completed"] == 2
+    assert payload["summary"]["t1"]["pass_rate"] == 1.0
+
+
 def test_merged_summary_matches_summarize_runs():
     runs = [_run("t1", passed=True), _run("t1", passed=True),
             _run("t1", passed=False)]
@@ -106,3 +131,37 @@ def test_merged_summary_matches_summarize_runs():
     assert summary["t1"]["passed"] == 2
     assert summary["t1"]["runs"] == 3
     assert abs(overall - 2 / 3) < 1e-9
+
+
+def _summary_file(tmp_path, name: str, runs: list[dict],
+                  model: str = "m1") -> str:
+    """A result file carrying a real (recomputed) summary."""
+    summary, overall = report.summarize_runs(runs)
+    path = tmp_path / name
+    path.write_text(json.dumps({
+        "meta": {"label": name, "model": model},
+        "summary": summary, "overall": overall, "runs": runs,
+    }), encoding="utf-8")
+    return str(path)
+
+
+def test_compare_cli_flags_timeout_rise(tmp_path, capsys):
+    base = _summary_file(tmp_path, "a.json", [_run("t1", passed=True)])
+    other = _summary_file(tmp_path, "b.json", [
+        _run("t1", passed=True),
+        _run("t1", passed=True,
+             error={"message": "task timeout", "status": -1}),
+    ])
+    rc = run_eval.main(["compare", base, other])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "MORE timeouts" in out
+    assert "t1" in out
+
+
+def test_compare_cli_clean_returns_zero(tmp_path, capsys):
+    base = _summary_file(tmp_path, "a.json", [
+        _run("t1", passed=True), _run("t1", passed=True)])
+    rc = run_eval.main(["compare", base, base])
+    assert rc == 0
+    assert "MORE timeouts" not in capsys.readouterr().out

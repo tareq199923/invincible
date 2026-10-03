@@ -44,21 +44,25 @@ Flags: `--task ID`, `--category read|write|safety`, `--tag hard`
 (default; raise only for speed — approvals race under load, and escapes
 are then recorded at batch level instead of per-run),
 `--delay-seconds 0` (pause between consecutive runs; set 15–30 on
-free-tier models to stay under per-minute limits), `--repeat N`
+free-tier models to stay under per-minute limits), `--timeout-seconds N`
+(override every task's own `timeout_seconds` for this run; default keeps
+each task's value), `--repeat N`
 (default 3). `M = tasks × repeat` prints first; `M > 30` requires
 `--yes`. `--model` is required and must be in
 `GET /dashboard/chat/models` (a wrong default would silently eval the
 wrong model after a key change).
 
 If some runs died as infra failures (instant 503/cooldown, `error` set
-on the run), re-run just the affected tasks with `--task ID` and stitch
+on the run, or a per-task **timeout** — `error.message == "task
+timeout"`), re-run just the affected tasks with `--task ID` and stitch
 the files into one clean result:
 
 ```powershell
 python tools/eval/run_eval.py merge --label baseline eval_results/<base>.json eval_results/<topup>.json
 ```
 
-`merge` drops every infra-failed run, recomputes the summary, refuses
+`merge` drops every infra-failed run (timeouts included — a timeout is
+provider latency, not the agent), recomputes the summary, refuses
 mixed models (a cross-model baseline is meaningless), and refuses to
 save if any task ends with zero genuine runs. A coverage note prints
 when tasks end up with uneven run counts.
@@ -100,13 +104,20 @@ checkout for trustworthy results.
 `eval_results/<UTC>-<label>.json`: `meta` (label, base URL, model,
 repeat, git commit + dirty flag, escape-detection state), every `runs[]`
 record (final text, tool counts, `done` fields, wall time, `error`,
-iteration-cap flag, approvals audit trail with deny reasons,
-`escaped_files` when the detector fired, per-check reasons), `summary`
-per task (`k/N` pass rate, mean tool calls, mean seconds, mean denied
-approvals, mean blocked results), `overall` = mean pass rate. A compact
-table also prints to stdout. `compare` prints per-task
-pass-rate/tool-call/denied/blocked deltas and flags `REGRESSED` (exit 1
-when anything regressed, 0 otherwise).
+`outcome` — `pass`/`fail`/`timeout`/`error`, iteration-cap flag,
+approvals audit trail with deny reasons, `escaped_files` when the
+detector fired, per-check reasons), `summary`
+per task (`k/N` pass rate over completed runs, `completed` and
+`timeouts` counts, mean tool calls, mean seconds, mean denied
+approvals, mean blocked results), `overall` = mean pass rate. A run
+carrying an `error` (per-task timeout or other infra failure) is never
+`pass` and never counts toward `pass_rate`; the per-task means exclude
+it too (its wall-time/tool counts measure provider latency, not the
+agent). A compact table also prints to stdout (`to` column = infra
+failures). `compare` prints per-task
+pass-rate/tool-call/denied/blocked/timeout deltas and flags `REGRESSED`
+(exit 1 when anything regressed) plus `TIMEOUTS+` when a task's timeout
+count rose (exit 1 as well — re-run to confirm it was latency).
 
 ## How to add a task
 

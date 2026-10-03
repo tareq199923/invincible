@@ -16,7 +16,7 @@ from pathlib import Path
 
 import httpx
 
-from tools.eval import approval_policy, graders
+from tools.eval import approval_policy, graders, report
 from tools.eval import tasks as task_schema
 from tools.eval.sse import SseParser
 
@@ -296,8 +296,17 @@ async def run_once(
     model: str,
     task: task_schema.EvalTask,
     keep_workspace: bool = False,
+    timeout_seconds: float | None = None,
 ) -> dict:
-    """Run one task once: stream in manual mode, approve, grade."""
+    """Run one task once: stream in manual mode, approve, grade.
+
+    ``timeout_seconds`` overrides the task's own ``timeout_seconds`` when
+    set (CLI ``--timeout-seconds``); otherwise the task value is used.
+    """
+    limit = (
+        timeout_seconds if timeout_seconds is not None
+        else task.timeout_seconds
+    )
     run_id = uuid.uuid4().hex[:12]
     session_id = f"web-eval-{uuid.uuid4().hex}"
     workspace = WORKSPACE_ROOT / run_id
@@ -333,7 +342,7 @@ async def run_once(
             f"{base_url}/dashboard/chat/stream",
             json={"message": prompt, "session_id": session_id,
                   "model": model, "mode": "manual"},
-            timeout=task.timeout_seconds + 60,
+            timeout=limit + 60,
         ) as resp:
             if resp.status_code != 200:
                 body = (await resp.aread())[:300].decode("utf-8", "replace")
@@ -397,7 +406,7 @@ async def run_once(
                         error_event = data
 
     try:
-        await asyncio.wait_for(_read_stream(), timeout=task.timeout_seconds)
+        await asyncio.wait_for(_read_stream(), timeout=limit)
     except asyncio.TimeoutError:
         error_event = error_event or {"message": "task timeout", "status": -1}
     finally:
@@ -435,11 +444,18 @@ async def run_once(
             })
             if not sentinel_survived:
                 passed = False
+    if error_event:
+        # A per-task timeout (or any infra error) is NEVER a pass: end-state
+        # checks that happen to pass still reflect provider latency, not
+        # agent quality, so the run is scored as infra, not a success.
+        passed = False
     run: dict = {
         "run_id": run_id,
         "task_id": task.id,
         "session_id": session_id,
         "passed": passed,
+        "outcome": report.run_outcome(
+            {"passed": passed, "error": error_event}),
         "final_text": final_text[:4000],
         "tool_names": tool_names,
         "tool_counts": tool_counts,
@@ -493,6 +509,7 @@ async def run_all(
     delay_seconds: float = 0.0,
     client_factory=None,
     escape_report: dict | None = None,
+    timeout_seconds: float | None = None,
 ) -> list[dict]:
     """Run every task ``repeat`` times with bounded concurrency.
 
@@ -509,6 +526,9 @@ async def run_all(
     Either way the caller should exit non-zero (see
     :func:`escape_exit_code`). When git is unavailable, detection is
     LOUDLY disabled (``escape_report["disabled"]`` + stdout warning).
+
+    ``timeout_seconds`` (when not None) overrides every task's own
+    timeout for this batch.
     """
     if client_factory is None:
         raise EvalError("no client factory (internal error)")
@@ -539,6 +559,7 @@ async def run_all(
                   + ", ".join(escaped))
             if workers == 1 and run is not None:
                 run["passed"] = False
+                run["outcome"] = report.run_outcome(run)
                 run["escaped_files"] = escaped
             elif escape_report is not None:
                 for path in escaped:
@@ -556,7 +577,8 @@ async def run_all(
                     first = False
                     run = await run_once(
                         client, base_url=base_url, model=model,
-                        task=task, keep_workspace=keep_workspace)
+                        task=task, keep_workspace=keep_workspace,
+                        timeout_seconds=timeout_seconds)
                     await _check_escape(run)
                     out.append(run)
         return out

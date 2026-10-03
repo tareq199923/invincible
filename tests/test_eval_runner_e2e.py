@@ -211,3 +211,107 @@ async def test_run_all_delay_paces_runs():
     assert len(runs) == 2
     assert all(r["passed"] for r in runs)
     assert elapsed >= 0.2
+
+
+# --- outcomes: timeouts/errors are infra, never a pass ------------------------
+
+
+def _fixture_task(task_id: str) -> task_schema.EvalTask:
+    """A task whose only check passes as soon as the fixture is written.
+
+    Used to prove a timed-out run is NOT scored as a pass even though its
+    end-state checks happen to pass.
+    """
+    return task_schema.validate_task_dict({
+        "id": task_id,
+        "category": "write",
+        "prompt": "touch ok.txt",
+        "files": {"ok.txt": "x"},
+        "checks": [{"type": "file_exists", "path": "ok.txt"}],
+    })
+
+
+async def test_run_once_timeout_is_never_a_pass(monkeypatch):
+    """Regression: a run that hits the per-task timeout used to be graded
+    on end-state checks alone and could be counted as PASSED."""
+    import asyncio as _asyncio
+
+    async def _timed_out(coro, timeout=None):
+        coro.close()  # never start the stream
+        raise _asyncio.TimeoutError
+
+    monkeypatch.setattr(eval_runner.asyncio, "wait_for", _timed_out)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)
+    ) as client:
+        run = await eval_runner.run_once(
+            client, base_url="http://x", model="m",
+            task=_fixture_task("e2e-timeout"),
+        )
+    assert run["error"]["message"] == "task timeout"
+    assert run["passed"] is False          # end-state check passed...
+    assert run["outcome"] == "timeout"     # ...but the run is infra
+    assert run["checks"][0]["passed"] is True
+
+
+async def test_run_once_stream_error_is_error_outcome():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/dashboard/chat/stream":
+            return httpx.Response(500, content=b"boom")
+        return httpx.Response(404, json={})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)
+    ) as client:
+        run = await eval_runner.run_once(
+            client, base_url="http://x", model="m",
+            task=_fixture_task("e2e-error"),
+        )
+    assert run["passed"] is False
+    assert run["outcome"] == "error"
+
+
+async def test_run_all_forwards_timeout_override(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    seen: dict = {}
+
+    async def fake(client, *, task, timeout_seconds=None, **kwargs):
+        seen["timeout_seconds"] = timeout_seconds
+        return {"task_id": task.id, "passed": True}
+
+    monkeypatch.setattr(eval_runner, "run_once", fake)
+
+    @asynccontextmanager
+    async def factory():
+        async with httpx.AsyncClient(transport=_transport({})) as client:
+            yield client
+
+    await eval_runner.run_all(
+        "http://test", "fake-model", [_fixture_task("e2e-fwd")], repeat=1,
+        timeout_seconds=42.0, client_factory=factory,
+    )
+    assert seen["timeout_seconds"] == 42.0
+
+
+def test_cli_timeout_seconds_default_and_override():
+    from tools.eval.run_eval import build_parser
+
+    args = build_parser().parse_args(["run", "--label", "x", "--model", "m"])
+    assert args.timeout_seconds is None       # default = each task's own
+    over = build_parser().parse_args(
+        ["run", "--label", "x", "--model", "m", "--timeout-seconds", "30"])
+    assert over.timeout_seconds == 30.0
+
+
+def test_cli_rejects_nonpositive_timeout(capsys):
+    from tools.eval.run_eval import main
+
+    rc = main(["run", "--label", "x", "--model", "m",
+               "--timeout-seconds", "0"])
+    assert rc == 2
+    assert "--timeout-seconds must be > 0" in capsys.readouterr().out

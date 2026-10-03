@@ -74,9 +74,15 @@ def cmd_compare(args: argparse.Namespace) -> int:
     print(f"base={label_a}  other={label_b}")
     print(report.render_compare(rows))
     regressed = [r for r in rows if r["status"] == "REGRESSED"]
+    timeouts_rose = [r for r in rows if r.get("timeouts_rose")]
     if regressed:
         print(f"\n{len(regressed)} regressed: "
               + ", ".join(r["task"] for r in regressed))
+    if timeouts_rose:
+        print(f"\n{len(timeouts_rose)} task(s) saw MORE timeouts "
+              "(provider latency, not agent quality; re-run to confirm): "
+              + ", ".join(r["task"] for r in timeouts_rose))
+    if regressed or timeouts_rose:
         return 1
     return 0
 
@@ -143,6 +149,7 @@ async def _run_async(args: argparse.Namespace) -> int:
         delay_seconds=args.delay_seconds,
         client_factory=factory,
         escape_report=escape_report,
+        timeout_seconds=args.timeout_seconds,
     )
     summary, overall = report.summarize_runs(runs)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -206,7 +213,10 @@ def cmd_merge(args: argparse.Namespace) -> int:
     dropped = 0
     for _, payload in payloads:
         for run in payload.get("runs", []):
-            if run.get("error"):
+            # Timeouts (and other infra errors) are re-runnable infra
+            # failures, never genuine attempts: drop them so a top-up
+            # file can supply the missing runs.
+            if report.run_outcome(run) in report.INFRA_OUTCOMES:
                 dropped += 1
             else:
                 kept.append(run)
@@ -293,6 +303,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--delay-seconds", type=float, default=0.0,
                        help="pause between consecutive runs "
                             "(free-tier per-minute limits)")
+    p_run.add_argument("--timeout-seconds", type=float, default=None,
+                       help="override every task's timeout (seconds); "
+                            "default keeps each task's own value")
     p_run.add_argument("--yes", action="store_true")
     p_run.add_argument("--base-url", default=None)
     p_run.set_defaults(func=cmd_run)
@@ -325,6 +338,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.command == "run" and args.delay_seconds < 0:
         print("--delay-seconds must be >= 0.")
+        return 2
+    if args.command == "run" and args.timeout_seconds is not None and (
+        args.timeout_seconds <= 0
+    ):
+        print("--timeout-seconds must be > 0.")
         return 2
     func = args.func
     if args.command == "run":
