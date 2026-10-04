@@ -134,7 +134,9 @@ TOOLS: tuple[HarnessTool, ...] = (
             "this call either runs immediately or pauses for the user's "
             "approval first."
         ),
-        properties={"command": _str()},
+        properties={"command": _str(
+            description="The exact shell command to run, "
+                        "not a description of it.")},
         required=("command",),
         read_only=False,
         needs_approval=True,
@@ -168,6 +170,41 @@ TOOLS: tuple[HarnessTool, ...] = (
         webchat=True,
         webchat_modes=("manual", "auto"),
         agent_job="write_file",
+        router_agents=("operator",),
+    ),
+    HarnessTool(
+        name="edit_file",
+        description_mcp=(
+            "Replace exact text in an EXISTING file on the host machine "
+            "(creating files stays write_file). old_string must match "
+            "the file exactly; when it matches more than once, add "
+            "surrounding context or set replace_all. Same denylist as "
+            "write_file, staged for approval: the call returns a token, "
+            "and the edit only applies after confirm_action is called "
+            "with that token and approve=true."
+        ),
+        description_webchat=(
+            "Replace exact text in an EXISTING file on the executing "
+            "machine (creating files stays write_file). Depending on "
+            "the chat mode this call either runs immediately or pauses "
+            "for the user's approval first."
+        ),
+        properties={
+            "path": _str(
+                description="Absolute path of the existing file to edit"),
+            "old_string": _str(
+                description="Exact text to find in the file"),
+            "new_string": _str(description="Replacement text"),
+            "replace_all": _bool(
+                description="Replace every occurrence (default false)"),
+        },
+        required=("path", "old_string", "new_string"),
+        read_only=False,
+        needs_approval=True,
+        mcp=True,
+        webchat=True,
+        webchat_modes=("manual", "auto"),
+        agent_job="edit_file",
         router_agents=("operator",),
     ),
     HarnessTool(
@@ -341,10 +378,12 @@ TOOLS: tuple[HarnessTool, ...] = (
     HarnessTool(
         name="confirm_action",
         description_mcp=(
-            "Approve or deny a pending execute_bash/write_file request. "
+            "Approve or deny a pending execute_bash/write_file/edit_file "
+            "request. "
             "Must be called with the exact token returned by that request. "
             "approve=true performs the action immediately (runs the "
-            "command / writes the file); approve=false discards it without "
+            "command / writes the file / applies the edit); "
+            "approve=false discards it without "
             "executing anything. This is how operator approval is obtained: "
             "an action is never executed until this tool confirms it."
         ),
@@ -608,6 +647,7 @@ _WEBCHAT_ORDER: tuple[str, ...] = (
     "process_list",
     "execute_bash",
     "write_file",
+    "edit_file",
     "screenshot",
     "memory_save",
     "memory_search",

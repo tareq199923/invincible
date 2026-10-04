@@ -45,11 +45,11 @@ async def test_docs_slugs_render(docs_client):
         assert resp.status_code == 200, slug
         assert "text/html" in resp.headers["content-type"]
     body = (await docs_client.get("/docs/mcp")).text
-    # MCP tool table is generated from the live TOOLS list (19 tools).
-    for tool in ("read_file", "execute_bash", "write_file",
+    # MCP tool table is generated from the live TOOLS list (20 tools).
+    for tool in ("read_file", "execute_bash", "write_file", "edit_file",
                  "confirm_action", "memory_save", "memory_search"):
         assert tool in body
-    assert body.count("<tr>") >= 19
+    assert body.count("<tr>") >= 20
     cli = (await docs_client.get("/docs/cli")).text
     assert "harness setup" in cli
     assert "harness connect" in cli

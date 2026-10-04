@@ -97,10 +97,11 @@ def test_needs_approval_tools_are_policy_gated():
     gated = {
         tool.name for tool in harness_tools.TOOLS if tool.needs_approval
     }
-    assert gated == {"execute_bash", "write_file"}
+    assert gated == {"execute_bash", "write_file", "edit_file"}
     assert _outcome("execute_bash", {"command": "rm -rf /"}) == "blocked"
     repo_env = os.path.join(tool_executor._REPO_ROOT, ".env")
     assert _outcome("write_file", {"path": repo_env}) == "blocked"
+    assert _outcome("edit_file", {"path": repo_env}) == "blocked"
     assert _outcome("execute_bash", {"command": "echo hi"}) == "pass"
 
 
@@ -109,8 +110,8 @@ def test_read_gated_set_matches_runner_reads():
         tool.agent_job
         for tool in harness_tools.TOOLS
         if tool.agent_job
-        not in (None, "execute_bash", "write_file", "process_list",
-                "screenshot")
+        not in (None, "execute_bash", "write_file", "edit_file",
+                "process_list", "screenshot")
     }
     assert runner_reads == {
         "read_file", "code_search", "list_dir",
@@ -126,7 +127,7 @@ def test_read_gated_set_matches_runner_reads():
 
 def test_policy_passthrough_set_is_exact():
     gated = {
-        "execute_bash", "write_file",
+        "execute_bash", "write_file", "edit_file",
         "read_file", "code_search", "list_dir",
         "git_status", "git_diff", "git_log",
     }
@@ -149,6 +150,7 @@ def test_policy_passthrough_set_is_exact():
 _RUNNER_SAFE_ARGS = {
     "execute_bash": {"command": "rm -rf /"},
     "write_file": {"path": _OUTSIDE},
+    "edit_file": {"path": _OUTSIDE},
     "read_file": {"path": _OUTSIDE},
     "code_search": {"path": "C:/definitely-outside-sandbox-xyz"},
     "list_dir": {"path": "C:/definitely-outside-sandbox-xyz"},
@@ -201,10 +203,11 @@ async def test_mcp_dispatch_covers_every_mcp_tool():
     dispatched = [
         tool.name for tool in harness_tools.TOOLS if tool.mcp
     ]
-    assert len(dispatched) == 19
+    assert len(dispatched) == 20
     hostile = {
         "execute_bash": {"command": "rm -rf /"},
         "write_file": {"path": _OUTSIDE},
+        "edit_file": {"path": _OUTSIDE},
         "read_file": {"path": _OUTSIDE},
         "code_search": {"pattern": "x", "path": _OUTSIDE},
         "list_dir": {"path": _OUTSIDE},

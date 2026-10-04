@@ -609,9 +609,10 @@ mcp_endpoint
   ▼
 _dispatch(method, rpc_id, params, request)
   │  initialize   → protocolVersion 2025-06-18, capabilities.tools
-  │  tools/list   → the four tool descriptors
-  │  tools/call   → read_file | execute_bash | write_file | confirm_action
-  │                 execute_bash/write_file: denylist, then stage a pending
+  │  tools/list   → the tool descriptors (registry order)
+  │  tools/call   → read_file | execute_bash | write_file | edit_file | confirm_action
+  │                 (+ read-only machine tools, continuity/memory/project tools)
+  │                 execute_bash/write_file/edit_file: denylist, then stage a pending
   │                   action on app.state.pending_actions → token
   │                 confirm_action: approve → real action result
   │                                 deny     → {isError: true, text "Declined."}

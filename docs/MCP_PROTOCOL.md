@@ -233,8 +233,8 @@ Response:
 {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
 ```
 
-Response: `result.tools` is an array of nineteen tool descriptors (the
-file/exec/approval surface, the read-only machine tools, the
+Response: `result.tools` is an array of twenty tool descriptors (the
+file/exec/edit/approval surface, the read-only machine tools, the
 Phase 15b continuity tools, the memory tools, and the project tools):
 
 ```json
@@ -271,8 +271,17 @@ Phase 15b continuity tools, the memory tools, and the project tools):
         }
       },
       {
+        "name": "edit_file",
+        "description": "Replace exact text in an EXISTING file on the host machine. ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {"path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}, "replace_all": {"type": "boolean"}},
+          "required": ["path", "old_string", "new_string"]
+        }
+      },
+      {
         "name": "confirm_action",
-        "description": "Approve or deny a pending execute_bash/write_file request. ...",
+        "description": "Approve or deny a pending execute_bash/write_file/edit_file request. ...",
         "inputSchema": {
           "type": "object",
           "properties": {"token": {"type": "string"}, "approve": {"type": "boolean"}},
@@ -596,19 +605,52 @@ Failure (e.g. permission denied, or the token was unknown/expired) →
 execution failure, or `Unknown or expired confirmation token.` /
 `Declined.` for the approval outcome.
 
+#### `edit_file`
+
+```json
+"arguments": {"path": "C:\\Users\\me\\project\\notes.txt", "old_string": "TODO", "new_string": "DONE", "replace_all": false}
+```
+
+Exact-match replace in an EXISTING file — creating files stays
+`write_file`. `old_string` must be non-empty and match the file exactly
+(newline-insensitive; the file keeps its original CRLF/LF endings and
+any BOM). Like `write_file`: denylist first (same path rules, no
+token on hit), then **staging** with a token; nothing changes until
+[`confirm_action`](#confirm_action) approves it.
+
+Match errors surface AFTER approval as error results (no partial
+write — the replace is atomic via temp file + rename):
+
+- missing file → `{"status": "error", "error": "File not found: ..."}`
+- `old_string` empty / identical to `new_string` → error
+- not found → `{"status": "error", "error": "old_string not found in ..."}`
+- N>1 matches without `replace_all` → `{"status": "error", "error": "old_string matches N times: add surrounding context or set replace_all"}`
+- file over ~1MB or binary/non-UTF-8 → error
+
+Success:
+
+```json
+{"status": "edited", "path": "...", "replacements": 1, "preview": "... ~3 lines of context ..."}
+```
+
+With agent routing on, confirmed edits run on the paired machine via
+a new `edit_file` job type (same home sandbox as `write_file`);
+older agents answer `Unknown job type: edit_file` — update the agent,
+no protocol version change was needed.
+
 #### `confirm_action`
 
 ```json
 "arguments": {"token": "bXfQ...9aZt", "approve": true}
 ```
 
-Resolves a pending `execute_bash`/`write_file` request. `token` must be
+Resolves a pending `execute_bash`/`write_file`/`edit_file` request. `token` must be
 the exact token from that request; `approve` must be a real JSON boolean
 (a string like `"true"` is treated as deny).
 
 | Outcome | Result |
 |---|---|
-| Approved (`approve: true`) | The real action result (`stdout`/`stderr`/`returncode` for bash; `status`/`path`/`bytes` for write), `isError: false`. |
+| Approved (`approve: true`) | The real action result (`stdout`/`stderr`/`returncode` for bash; `status`/`path`/`bytes` for write; `status`/`path`/`replacements`/`preview` for edit), `isError: false`. |
 | Declined (`approve: false`) | `isError: true`, text `Declined.` — entry discarded, nothing runs. |
 | Unknown / expired / already-used token | `isError: true`, text `Unknown or expired confirmation token.` — nothing runs. |
 | Agent offline (agent routing only) | `isError: true`, text `No invincible agent is connected for this account. Start one on your machine with: invincible harness connect` — answered immediately, nothing waits. |
@@ -911,8 +953,8 @@ Security notes for this setup:
 - The tunnel URL alone is useless — no valid token, no access.
 - Access tokens expire in an hour and can be revoked immediately with
   `invincible oauth revoke <client_id>`.
-- `read_file` needs no confirmation. `execute_bash`/`write_file` return a
-  token; the command/file only materializes after a second
+- `read_file` needs no confirmation. `execute_bash`/`write_file`/`edit_file` return a
+  token; the command/file/edit only materializes after a second
   `confirm_action` call with that token and `approve: true`. Whoever holds
   a valid bearer token is the approver — there is no terminal prompt to
   gate it.

@@ -280,3 +280,27 @@ def test_policy_verb_edge_cases(tmp_path: Path):
         "execute_bash",
         {"command": f"del {outside}"}, tmp_path)
     assert ok is False
+
+
+def test_policy_edit_file_matches_write_file(tmp_path: Path):
+    from tools.eval import approval_policy
+
+    ok, _ = approval_policy.decide(
+        "edit_file", {"path": str(tmp_path / "sub" / "x.txt")}, tmp_path)
+    assert ok is True
+    for evil in ["out.txt", "../evil.txt", "/etc/passwd",
+                 str(tmp_path.parent / "elsewhere.txt")]:
+        ok, reason = approval_policy.decide(
+            "edit_file", {"path": evil}, tmp_path)
+        assert ok is False, evil
+        assert reason
+
+
+def test_eval_approval_args_edit_file_path_shape():
+    from tools.eval.runner import _approval_args
+
+    args = _approval_args(
+        "edit_file",
+        {"summary": "Edit x", "detail": "C:/ws/notes.txt\n---\n-old\n+new"},
+    )
+    assert args == {"path": "C:/ws/notes.txt"}

@@ -9,6 +9,8 @@ dispatch today, supervisor fan-out in H4) enforces the same order:
   re-runs it locally as Wall 2 in ``agent/runner.py``).
 - ``write_file`` → ``tool_executor.check_write_denylist`` (server
   repo-root-relative; the agent's home sandbox re-gates locally).
+- ``edit_file`` → ``tool_executor.check_edit_denylist`` (given path AND
+  resolved symlink target; same patterns as writes).
 - ``read_file`` → ``tool_executor.check_read_denylist`` — server roots
   only when executing locally. When agent-routed, the server skips its
   own roots check (meaningless for another machine's home) and the
@@ -38,6 +40,10 @@ def before_tool_call(
         return
     if tool_name == "write_file":
         tool_executor.check_write_denylist(str(argv.get("path", "")))
+        return
+    if tool_name == "edit_file":
+        # Dual check: given path AND resolved symlink target.
+        tool_executor.check_edit_denylist(str(argv.get("path", "")))
         return
     if tool_name == "read_file":
         if agent_routed:

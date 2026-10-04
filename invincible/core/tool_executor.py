@@ -1,5 +1,5 @@
 # invincible/core/tool_executor.py
-"""Execution layer for MCP tools (execute_bash, write_file).
+"""Execution layer for MCP tools (execute_bash, write_file, edit_file).
 
 Security model - decided explicitly up front, not bolted on after the fact:
 
@@ -154,6 +154,12 @@ DENYLIST_PATTERNS = [
 # relpath() below report ".." for every legitimate path whenever the
 # checkout is itself reached through a symlink.
 _REPO_ROOT = os.path.realpath(os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+))
+# Unresolved twin of _REPO_ROOT for the given-path side of the
+# edit_file dual check (resolving one side only would mis-relativize
+# every path whenever the checkout is reached through a symlink).
+_REPO_ROOT_UNRESOLVED = os.path.abspath(os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ))
 
@@ -394,16 +400,25 @@ def check_denylist(command: str) -> None:
             raise ToolBlocked(reason)
 
 
-def _check_protected_path(path: str, patterns: list, verb: str) -> None:
+def _check_protected_path(
+    path: str, patterns: list, verb: str, *, resolve: bool = True
+) -> None:
     # Resolve symlinks FIRST (deep code review 2026-09-24, finding 3):
     # abspath only collapses "..", so a link inside the repo named
     # innocently could point at .env and match no pattern, while a link
     # out of the repo could carry an "invincible/..." name that matches
     # one it does not actually target. Matching the resolved path against
     # the resolved repo root keeps this relative-path match honest.
-    abs_path = os.path.realpath(os.path.abspath(path))
+    # With resolve=False the UNRESOLVED given path is matched instead
+    # (edit_file's dual check runs both sides).
+    if resolve:
+        abs_path = os.path.realpath(os.path.abspath(path))
+        root = _REPO_ROOT
+    else:
+        abs_path = os.path.abspath(path)
+        root = _REPO_ROOT_UNRESOLVED
     try:
-        rel = os.path.relpath(abs_path, _REPO_ROOT)
+        rel = os.path.relpath(abs_path, root)
     except ValueError:
         return  # different drive on Windows - can't be inside the repo root
     if rel.startswith(".."):
@@ -465,6 +480,17 @@ def check_write_denylist(path: str) -> None:
     _check_protected_path(path, WRITE_DENYLIST_PATTERNS, "write")
 
 
+def check_edit_denylist(path: str) -> None:
+    """Dual denylist for edit_file: BOTH the path the caller gave and the
+    resolved symlink target must pass. The resolved side alone misses a
+    link NAMED inside a protected dir (e.g. ``invincible/evil-link`` ->
+    ``/tmp/out.txt``); the given side alone misses a link named
+    innocently pointing AT a protected file. Same patterns as writes."""
+    _check_protected_path(path, WRITE_DENYLIST_PATTERNS, "edit")
+    _check_protected_path(
+        path, WRITE_DENYLIST_PATTERNS, "edit", resolve=False)
+
+
 async def _run_command(command: str, timeout: float) -> dict:
     """Actually run a shell command. Only reached after approval."""
     try:
@@ -506,6 +532,134 @@ async def _write_file(path: str, content: str) -> dict:
     except Exception as e:
         logger.error(f"write_file failed: {e}")
         return {"status": "error", "error": str(e)}
+
+
+EDIT_FILE_BYTES_CAP = 1024 * 1024
+
+
+def _edit_preview(new_norm: str, match_at: int) -> str:
+    """~3 lines of context around the first replacement (bounded)."""
+    lines = new_norm.split("\n")
+    pos = 0
+    idx = 0
+    for i, line in enumerate(lines):
+        pos += len(line) + 1
+        if pos > match_at:
+            idx = i
+            break
+    start = max(0, idx - 1)
+    snippet = "\n".join(lines[start:start + 3])
+    if len(snippet) > 500:
+        snippet = snippet[:500] + "…"
+    return snippet
+
+
+async def _edit_file(
+    path: str, old_string: str, new_string: str, replace_all: bool = False
+) -> dict:
+    """Exact-match replace in an EXISTING file. Only reached after approval.
+
+    Windows-safe: matches newline-insensitively, writes back with the
+    file's ORIGINAL line endings, keeps any BOM, atomic replace.
+    A symlink edits its TARGET (the link itself is never replaced) and
+    permission bits are preserved via copymode. Errors are actionable
+    strings the model can react to (no exceptions except ToolBlocked,
+    which is raised by the caller before staging).
+    """
+    if not isinstance(old_string, str) or not old_string:
+        return {"status": "error",
+                "error": "old_string must be a non-empty string"}
+    if not isinstance(path, str) or not path.strip():
+        return {"status": "error", "error": f"File not found: {path}"}
+    if old_string == new_string:
+        return {"status": "error",
+                "error": "old_string and new_string are identical"}
+    try:
+        if os.path.isdir(path):
+            return {"status": "error",
+                    "error": f"Path is a directory, not a file: {path}"}
+        size = os.path.getsize(path)
+    except FileNotFoundError:
+        return {"status": "error", "error": f"File not found: {path}"}
+    except OSError as e:
+        return {"status": "error", "error": str(e)}
+    if size > EDIT_FILE_BYTES_CAP:
+        return {"status": "error",
+                "error": f"file too large ({size} bytes, "
+                         f"cap {EDIT_FILE_BYTES_CAP})"}
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(EDIT_FILE_BYTES_CAP + 1)
+    except FileNotFoundError:
+        return {"status": "error", "error": f"File not found: {path}"}
+    except OSError as e:
+        return {"status": "error", "error": str(e)}
+    if b"\x00" in raw[:8192]:
+        return {"status": "error",
+                "error": "binary file: edit_file is for text files only"}
+    had_bom = raw.startswith(b"\xef\xbb\xbf")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return {"status": "error",
+                "error": "cannot decode file as UTF-8"}
+    crlf = raw.count(b"\r\n")
+    lf = raw.count(b"\n") - crlf
+    ending = "\r\n" if crlf > 0 and crlf >= lf else "\n"
+    norm_text = text.replace("\r\n", "\n").replace("\r", "\n")
+    norm_old = old_string.replace("\r\n", "\n").replace("\r", "\n")
+    norm_new = (new_string if isinstance(new_string, str) else "")
+    norm_new = norm_new.replace("\r\n", "\n").replace("\r", "\n")
+    if not norm_old:
+        return {"status": "error",
+                "error": "old_string must be a non-empty string"}
+    if norm_old == norm_new:
+        return {"status": "error",
+                "error": "old_string and new_string are identical"}
+    count = norm_text.count(norm_old)
+    if count == 0:
+        return {"status": "error",
+                "error": f"old_string not found in {path}"}
+    if count > 1 and not replace_all:
+        return {"status": "error",
+                "error": f"old_string matches {count} times: add "
+                         "surrounding context or set replace_all"}
+    if replace_all:
+        new_norm = norm_text.replace(norm_old, norm_new)
+        n = count
+    else:
+        new_norm = norm_text.replace(norm_old, norm_new, 1)
+        n = 1
+    out_text = new_norm.replace("\n", ending) if ending == "\r\n" else new_norm
+    out_bytes = (b"\xef\xbb\xbf" + out_text.encode("utf-8")
+                 if had_bom else out_text.encode("utf-8"))
+    match_at = new_norm.find(norm_new[:60]) if norm_new else 0
+    if match_at < 0:
+        match_at = 0
+    preview = _edit_preview(new_norm, match_at)
+    tmp = None
+    try:
+        # Edit the TARGET when path is a symlink: replacing `path`
+        # directly would swap the link for a regular file.
+        real = os.path.realpath(os.path.abspath(path))
+        parent = os.path.dirname(real) or "."
+        with tempfile.NamedTemporaryFile(
+            dir=parent, delete=False
+        ) as handle:
+            tmp = handle.name
+            handle.write(out_bytes)
+        shutil.copymode(real, tmp)
+        os.replace(tmp, real)
+        tmp = None
+        return {"status": "edited", "path": path, "replacements": n,
+                "preview": preview}
+    except Exception as e:
+        logger.error(f"edit_file failed: {e}")
+        return {"status": "error", "error": str(e)}
+    finally:
+        if tmp:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
 
 
 def execute_bash(
@@ -575,6 +729,42 @@ def write_file(
     }
 
 
+def edit_file(
+    path: str,
+    old_string: str,
+    new_string: str,
+    store: PendingActionStore,
+    replace_all: bool = False,
+    owner_subject: int | None = None,
+) -> dict:
+    """Stage an exact-match file edit for approval.
+
+    Creating files stays ``write_file``; this only edits EXISTING files
+    (missing-file and match errors surface after approval, as the
+    action result). Same denylist + approval + routing as ``write_file``
+    (both the given path and the resolved symlink target are checked).
+    """
+    check_edit_denylist(path)  # raises ToolBlocked; caller maps it to a response
+
+    token = store.put(
+        "edit_file",
+        {"path": path, "old_string": old_string,
+         "new_string": new_string, "replace_all": bool(replace_all)},
+        owner_subject=owner_subject,
+    )
+    print(f"[MCP] Pending {token}: edit_file {path}")
+    return {
+        "status": "pending_confirmation",
+        "token": token,
+        "action": "edit_file",
+        "path": path,
+        "message": (
+            "Call confirm_action with this token "
+            "(approve=true/false) to proceed."
+        ),
+    }
+
+
 async def confirm_action(
     store: PendingActionStore,
     token: str,
@@ -607,7 +797,8 @@ async def confirm_action(
         return {"status": "not_found"}
     if not approve:
         return {"status": "declined"}
-    if record["type"] in ("execute_bash", "write_file") and executor is not None:
+    if (record["type"] in ("execute_bash", "write_file", "edit_file")
+            and executor is not None):
         return await executor(record["type"], record["args"])
     if record["type"] == "execute_bash":
         args = record["args"]
@@ -617,6 +808,12 @@ async def confirm_action(
     if record["type"] == "write_file":
         args = record["args"]
         return await _write_file(args.get("path", ""), args.get("content", ""))
+    if record["type"] == "edit_file":
+        args = record["args"]
+        return await _edit_file(
+            args.get("path", ""), args.get("old_string", ""),
+            args.get("new_string", ""), bool(args.get("replace_all", False)),
+        )
     return {
         "status": "error",
         "error": f"Unknown pending action type: {record['type']}",

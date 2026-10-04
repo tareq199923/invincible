@@ -44,6 +44,10 @@ GOLDEN_MCP_TOOLS = [
             'properties': {
                 'command': {
                     'type': 'string',
+                    'description': (
+                    'The exact shell command to run, '
+                    'not a description of it.'
+                    ),
                 },
             },
             'required': [
@@ -74,6 +78,44 @@ GOLDEN_MCP_TOOLS = [
             'required': [
                 'path',
                 'content',
+            ],
+        },
+    },
+    {
+        'name': 'edit_file',
+        'description': (
+        'Replace exact text in an EXISTING file on the host machine '
+        '(creating files stays write_file). old_string must match '
+        'the file exactly; when it matches more than once, add '
+        'surrounding context or set replace_all. Same denylist as '
+        'write_file, staged for approval: the call returns a token, '
+        'and the edit only applies after confirm_action is called '
+        'with that token and approve=true.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'path': {
+                    'type': 'string',
+                    'description': 'Absolute path of the existing file to edit',
+                },
+                'old_string': {
+                    'type': 'string',
+                    'description': 'Exact text to find in the file',
+                },
+                'new_string': {
+                    'type': 'string',
+                    'description': 'Replacement text',
+                },
+                'replace_all': {
+                    'type': 'boolean',
+                    'description': 'Replace every occurrence (default false)',
+                },
+            },
+            'required': [
+                'path',
+                'old_string',
+                'new_string',
             ],
         },
     },
@@ -243,10 +285,12 @@ GOLDEN_MCP_TOOLS = [
     {
         'name': 'confirm_action',
         'description': (
-        'Approve or deny a pending execute_bash/write_file request. '
+        'Approve or deny a pending execute_bash/write_file/edit_file '
+        'request. '
         'Must be called with the exact token returned by that request.'
         ' approve=true performs the action immediately (runs the '
-        'command / writes the file); approve=false discards it without'
+        'command / writes the file / applies the edit); '
+        'approve=false discards it without'
         ' executing anything. This is how operator approval is '
         'obtained: an action is never executed until this tool '
         'confirms it.'
@@ -506,6 +550,7 @@ GOLDEN_MCP_TOOL_NAMES = [
     'read_file',
     'execute_bash',
     'write_file',
+    'edit_file',
     'code_search',
     'list_dir',
     'git_status',
@@ -733,9 +778,43 @@ GOLDEN_WEBCHAT_SCHEMAS = [
                         'type': 'string',
                     },
                 },
+            'required': [
+                'path',
+                'content',
+            ],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'edit_file',
+            'description': (
+            'Replace exact text in an EXISTING file on the executing '
+            'machine (creating files stays write_file). Depending on '
+            'the chat mode this call either runs immediately or pauses'
+            " for the user's approval first."
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'path': {
+                        'type': 'string',
+                    },
+                    'old_string': {
+                        'type': 'string',
+                    },
+                    'new_string': {
+                        'type': 'string',
+                    },
+                    'replace_all': {
+                        'type': 'boolean',
+                    },
+                },
                 'required': [
                     'path',
-                    'content',
+                    'old_string',
+                    'new_string',
                 ],
             },
         },
@@ -999,6 +1078,7 @@ GOLDEN_WEBCHAT_TOOL_NAMES = [
     'process_list',
     'execute_bash',
     'write_file',
+    'edit_file',
     'screenshot',
     'memory_save',
     'memory_search',
@@ -1035,6 +1115,7 @@ GOLDEN_MANUAL_TOOLS = [
     'process_list',
     'execute_bash',
     'write_file',
+    'edit_file',
     'screenshot',
     'memory_save',
     'memory_search',
@@ -1056,6 +1137,7 @@ GOLDEN_AUTO_TOOLS = [
     'process_list',
     'execute_bash',
     'write_file',
+    'edit_file',
     'screenshot',
     'memory_save',
     'memory_search',
@@ -1103,6 +1185,7 @@ GOLDEN_OPERATOR_TOOLS = (
     'read_file',
     'execute_bash',
     'write_file',
+    'edit_file',
     'task_state_set',
     'task_state_get',
     'checkpoint_create',
@@ -1158,7 +1241,8 @@ def test_webchat_mode_subsets():
 def test_approval_required_set():
     from invincible.core import webchat_agent
 
-    assert set(webchat_agent.MUTATING_TOOLS) == {"execute_bash", "write_file"}
+    assert set(webchat_agent.MUTATING_TOOLS) == {
+        "execute_bash", "write_file", "edit_file"}
     # Manual mode stages exactly the mutating tools; plan mode offers
     # only reads (+agent-only screenshot); auto offers everything.
     plan = {s["function"]["name"]
@@ -1203,6 +1287,7 @@ POLICY_PROBES = {
     "read_file": ({"path": "pyproject.toml"}, "pass"),
     "execute_bash": ({"command": "echo hi"}, "pass"),
     "write_file": ({"path": "C:/Temp/golden_probe_xyz.txt"}, "pass"),
+    "edit_file": ({"path": "C:/Temp/golden_probe_xyz.txt"}, "pass"),
     "code_search": ({"path": "."}, "pass"),
     "list_dir": ({"path": "."}, "pass"),
     "git_status": ({"path": "."}, "pass"),
@@ -1283,6 +1368,7 @@ RUNNER_SAFE_ARGS = {
     # error results prove the job type is HANDLED (vs "Unknown job type").
     "execute_bash": {"command": "rm -rf /"},
     "write_file": {"path": "C:/definitely-outside-sandbox-xyz/probe.txt"},
+    "edit_file": {"path": "C:/definitely-outside-sandbox-xyz/probe.txt"},
     "read_file": {"path": "C:/definitely-outside-sandbox-xyz/x.txt"},
     "code_search": {"path": "C:/definitely-outside-sandbox-xyz"},
     "list_dir": {"path": "C:/definitely-outside-sandbox-xyz"},

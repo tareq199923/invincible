@@ -155,6 +155,13 @@ async def execute_job(job: dict) -> dict:
             return await tool_executor._write_file(
                 args.get("path", ""), args.get("content", "")
             )
+        if job_type == "edit_file":
+            sandbox.check_agent_write(args.get("path", ""))
+            return await tool_executor._edit_file(
+                args.get("path", ""), args.get("old_string", ""),
+                args.get("new_string", ""),
+                bool(args.get("replace_all", False)),
+            )
         if job_type == "read_file":
             sandbox.check_agent_read(args.get("path", ""))
             return await _read_local(args.get("path", ""))

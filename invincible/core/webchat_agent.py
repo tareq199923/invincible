@@ -9,7 +9,7 @@ module adds the three agent modes on top of the SAME pipeline
 - ``plan``   - read-only inspection tools only, offered by construction
   (the model cannot take a mutating action: the tools are absent from
   the request, not merely forbidden by prompt). Ends with a plan.
-- ``manual`` - all tools; every ``execute_bash``/``write_file`` pauses
+- ``manual`` - all tools; every ``execute_bash``/``write_file``/``edit_file`` pauses
   for the user's explicit browser approval before running. Reads run
   immediately (same posture as ``POST /mcp``).
 - ``auto``   - all tools run immediately, no approvals. Denylists still
@@ -31,6 +31,8 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
+import platform
 
 from invincible.compat.common import upstream_error_detail
 from invincible.core import harness_tools, tool_executor
@@ -122,10 +124,10 @@ MODE_SYSTEM_PROMPTS = {
     ),
     "manual": (
         "You help operate the user's own machine. You have inspection "
-        "tools plus execute_bash and write_file, plus memory/project/"
+        "tools plus execute_bash, write_file, and edit_file, plus memory/project/"
         "continuity tools (memory_save/search/list, project_create/list, "
         "task_state_set/get, checkpoint_create) and screenshot. Reads run "
-        "immediately; each execute_bash/write_file call pauses for the "
+        "immediately; each execute_bash/write_file/edit_file call pauses for the "
         "user's explicit approval before running - call the tool, briefly "
         "say what will happen, and wait for the result to come back. If "
         "the user declines (or approval times out), respect it and offer "
@@ -134,13 +136,84 @@ MODE_SYSTEM_PROMPTS = {
     ),
     "auto": (
         "You help operate the user's own machine autonomously. You have "
-        "inspection tools plus execute_bash and write_file, plus "
+        "inspection tools plus execute_bash, write_file, and edit_file, plus "
         "memory/project/continuity tools and screenshot, which run "
         "immediately without further confirmation. Act carefully and "
         "least-privilege: inspect before mutating, verify afterwards, "
         "and stop when done. Never exfiltrate data off the machine."
     ),
 }
+
+
+def _local_os_shell() -> tuple[str, str]:
+    """OS + shell of THIS machine (local tool execution). No guessing:
+    cmd.exe on Windows, sh elsewhere."""
+    if os.name == "nt":
+        return "Windows", "cmd.exe"
+    try:
+        return platform.system() or "unknown", "sh"
+    except Exception:
+        return "unknown", "sh"
+
+
+def environment_note(
+    execution: str, *, agent_platform: str | None = None,
+    mode: str = "manual",
+) -> str:
+    """OS/shell + tool-discipline note, appended AFTER the static prompt
+    (prompt-cache friendly: the static prefix is identical every turn).
+
+    ``execution`` is ``"local"`` (tools run here) or ``"agent"`` (tools
+    run on the paired machine). Routed OS comes from the agent's
+    reported platform when the protocol carries it (WS hello); otherwise
+    a neutral unknown-shell line. ``render_env_block`` was not reused:
+    it renders model/cwd/date for the harness router, a different axis.
+
+    Plan mode omits the mutating-tool guidance (edit_file/write_file
+    are not offered there); OS/shell facts and the read-tool
+    preference stay.
+    """
+    read_guidance = (
+        "Prefer code_search/read_file/list_dir over shell reads."
+    )
+    if mode == "plan":
+        guidance = read_guidance
+    else:
+        guidance = (
+            "Prefer edit_file for changing existing files; write_file "
+            "only for new files or full rewrites. "
+            f"{read_guidance} "
+            "Never use inline `python -c` to edit files. If a tool call "
+            "is declined or blocked, do not retry another way, tell "
+            "the user."
+        )
+    if execution == "agent":
+        reported = str(agent_platform or "").strip()
+        if reported:
+            return (
+                f"Tools run on your paired machine ({reported}). "
+                f"Chain commands with `&&`. {guidance}"
+            )
+        return (
+            "Tools run on your paired machine (shell/OS unknown: check "
+            f"before using OS-specific commands). {guidance}"
+        )
+    os_name, shell = _local_os_shell()
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        cwd = "unknown"
+    if os_name == "Windows":
+        return (
+            f"Tools run locally on Windows, shell cmd.exe, working "
+            f"directory {cwd}. Chain commands with `&&`. Avoid tools "
+            f"missing on Windows (sed, awk, grep, printf, head/tail). "
+            f"{guidance}"
+        )
+    return (
+        f"Tools run locally on {os_name}, shell {shell}, working "
+        f"directory {cwd}. Chain commands with `&&`. {guidance}"
+    )
 
 
 class ApprovalWaiter:
@@ -235,6 +308,8 @@ def summarize_call(name: str, args: dict) -> str:
     if name == "write_file":
         return f"Write {args.get('path', '')} " \
             f"({len(str(args.get('content', '')))} bytes)"
+    if name == "edit_file":
+        return f"Edit {args.get('path', '')}"
     if name == "read_file":
         return f"Read {args.get('path', '')}"
     if name == "list_dir":
@@ -276,6 +351,14 @@ def approval_detail(name: str, args: dict) -> str:
         preview = content[:_PREVIEW_CHARS]
         if len(content) > _PREVIEW_CHARS:
             preview += f"\n… ({len(content)} bytes total)"
+        return f"{args.get('path', '')}\n---\n{preview}"
+    if name == "edit_file":
+        old = str(args.get("old_string", ""))
+        new = str(args.get("new_string", ""))
+        preview = (f"-{old[:200]}\n+{new[:200]}"
+                   if old or new else "")
+        if len(old) + len(new) > _PREVIEW_CHARS:
+            preview += f"\n… ({len(old) + len(new)} chars total)"
         return f"{args.get('path', '')}\n---\n{preview}"
     return json.dumps(args)[:_PREVIEW_CHARS]
 
@@ -355,6 +438,17 @@ def _stage_mutating(store, name: str, args: dict,
         return tool_executor.write_file(
             str(args.get("path", "")), str(args.get("content", "")),
             store, owner_subject=owner_subject)
+    if name == "edit_file":
+        # JSON null is not the string "None": a null new_string deletes
+        # text, a null/missing old_string errors like an empty one.
+        old_raw = args.get("old_string")
+        new_raw = args.get("new_string")
+        return tool_executor.edit_file(
+            str(args.get("path", "")),
+            "" if old_raw is None else str(old_raw),
+            "" if new_raw is None else str(new_raw),
+            store, replace_all=args.get("replace_all", False) is True,
+            owner_subject=owner_subject)
     raise tool_executor.ToolBlocked(f"Unknown mutating tool: {name}")
 
 
@@ -660,6 +754,7 @@ async def run_agent_turn(
     retrieval=None,
     continuity=None,
     engine=None,
+    agent_platform: str | None = None,
 ):
     """Run one agentic turn, yielding ``(event, data)`` pairs.
 
@@ -672,13 +767,19 @@ async def run_agent_turn(
     in shape to API-path turns.
     """
     tools = _TOOLS_BY_MODE[mode]
+    agent_routed = executor is not None
+    note = environment_note(
+        "agent" if agent_routed else "local",
+        agent_platform=agent_platform,
+        mode=mode,
+    )
     full = prepared.full_messages + [
-        {"role": "system", "content": MODE_SYSTEM_PROMPTS[mode]}
+        {"role": "system",
+         "content": f"{MODE_SYSTEM_PROMPTS[mode]}\n\n{note}"}
     ]
     turn = list(prepared.to_persist)
     tools_used = 0
     full_text = ""
-    agent_routed = executor is not None
     # True once this turn has been appended to history, by either the happy
     # path or _persist_partial. Guarantees at most one append per turn, so a
     # disconnect racing the final commit cannot double-write.

@@ -10,7 +10,7 @@ Modes (per stream request, default ``manual``):
 
 - ``plan``   - read-only inspection tools only (offered by construction,
   so the model cannot mutate anything); ends with a plan.
-- ``manual`` - all tools; every ``execute_bash``/``write_file`` pauses
+- ``manual`` - all tools; every ``execute_bash``/``write_file``/``edit_file`` pauses
   for browser approval (``POST /dashboard/chat/approve``) before running.
 - ``auto``   - all tools run immediately, no approvals. Denylists still
   enforced.
@@ -392,6 +392,18 @@ async def chat_stream(
     routing_on = settings.agent_routing()
     executor = build_agent_executor(
         registry, principal.user_id, routing_on)
+    # Routed OS: newest machine's reported platform (WS hello carries it;
+    # poll-only agents report nothing -> neutral unknown-shell line).
+    agent_platform = None
+    if executor is not None and registry is not None:
+        try:
+            for machine in registry.machines_for(principal.user_id):
+                reported = str(machine.get("platform", "")).strip()
+                if reported:
+                    agent_platform = reported
+                    break
+        except Exception:
+            agent_platform = None
 
     async def _audit_tool(action: str, meta: dict | None = None):
         # Metadata only (action + mode) - never commands/paths/contents,
@@ -431,7 +443,7 @@ async def chat_stream(
                 pending_store=pending_store, executor=executor,
                 waiter=waiter, audit=_audit_tool,
                 retrieval=retrieval, continuity=continuity,
-                engine=engine,
+                engine=engine, agent_platform=agent_platform,
             ):
                 if ev_name == "approval":
                     waited.append(ev_data["token"])

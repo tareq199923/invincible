@@ -132,6 +132,7 @@ async def test_plan_mode_offers_read_only_tools(
     events = parse_web_events(resp.text)
     assert "execute_bash" not in offered_tool_names(bodies)
     assert "write_file" not in offered_tool_names(bodies)
+    assert "edit_file" not in offered_tool_names(bodies)
     assert "read_file" in offered_tool_names(bodies)
     assert reads == ["a.txt"]
     done = [d for n, d in events if n == "done"]
@@ -536,3 +537,86 @@ async def test_read_only_tool_calls_run_concurrently(
     assert [message.get("role") for message in history] == [
         "user", "assistant", "tool", "tool", "assistant",
     ]
+
+
+# --- environment_note: OS/shell guidance after the static prompt -----------
+
+
+def test_environment_note_local_has_os_shell_and_guidance():
+    from invincible.core.webchat_agent import environment_note
+
+    note = environment_note("local")
+    assert "Tools run locally on" in note
+    assert "Chain commands with `&&`" in note
+    assert "Prefer edit_file for changing existing files" in note
+    assert "write_file only for new files" in note
+    assert "Never use inline `python -c` to edit files" in note
+    assert "do not retry another way, tell the user" in note
+    assert "powershell" not in note
+
+
+def test_environment_note_routed_reports_platform_or_unknown():
+    from invincible.core.webchat_agent import environment_note
+
+    known = environment_note("agent", agent_platform="Windows-11-x64")
+    assert "paired machine" in known
+    assert "Windows-11-x64" in known
+    unknown = environment_note("agent", agent_platform=None)
+    assert "shell/OS unknown" in unknown
+    assert "check before using OS-specific commands" in unknown
+
+
+def test_environment_note_static_prompt_first():
+    from invincible.core.webchat_agent import (
+        MODE_SYSTEM_PROMPTS,
+        environment_note,
+    )
+
+    for mode in ("plan", "manual", "auto"):
+        composed = f"{MODE_SYSTEM_PROMPTS[mode]}\n\n{environment_note('local')}"
+        assert composed.startswith(MODE_SYSTEM_PROMPTS[mode])
+    assert "edit_file" in MODE_SYSTEM_PROMPTS["manual"]
+    assert "edit_file" in MODE_SYSTEM_PROMPTS["auto"]
+
+
+def test_environment_note_plan_omits_mutating_guidance():
+    from invincible.core.webchat_agent import environment_note
+
+    note = environment_note("local", mode="plan")
+    assert "Tools run locally on" in note
+    assert "Chain commands with `&&`" in note
+    assert "Prefer code_search/read_file/list_dir over shell reads." in note
+    assert "edit_file" not in note
+    assert "write_file" not in note
+    assert "python -c" not in note
+    assert "do not retry another way" not in note
+    routed = environment_note("agent", mode="plan")
+    assert "paired machine" in routed
+    assert "edit_file" not in routed
+
+
+def test_environment_note_manual_and_auto_keep_mutating_guidance():
+    from invincible.core.webchat_agent import environment_note
+
+    for mode in ("manual", "auto"):
+        note = environment_note("local", mode=mode)
+        assert "Prefer edit_file for changing existing files" in note
+        assert "Never use inline `python -c` to edit files" in note
+        assert "do not retry another way, tell the user" in note
+
+
+def test_stage_mutating_edit_file_null_safety(tmp_path):
+    from invincible.core import tool_executor
+    from invincible.core.webchat_agent import _stage_mutating
+
+    store = tool_executor.PendingActionStore()
+    staged = _stage_mutating(
+        store, "edit_file",
+        {"path": str(tmp_path / "x.txt"),
+         "old_string": None, "new_string": None},
+        1,
+    )
+    assert staged["action"] == "edit_file"
+    record = store.take(staged["token"], requester_subject=1)
+    assert record["args"]["old_string"] == ""
+    assert record["args"]["new_string"] == ""

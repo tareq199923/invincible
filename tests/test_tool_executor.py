@@ -726,3 +726,200 @@ def test_read_denylist_file_symlink_out_of_roots_blocked(tmp_path, monkeypatch):
 
     with pytest.raises(tool_executor.ToolBlocked):
         tool_executor.check_read_denylist(str(link))
+
+
+# --- edit_file: exact-match replace in existing files ------------------------
+
+
+async def test_edit_file_happy_path(tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("line one\nTODO fix this\nline three\n")
+    out = await tool_executor._edit_file(
+        str(target), "TODO fix this", "DONE fixed")
+    assert out["status"] == "edited"
+    assert out["replacements"] == 1
+    assert "DONE fixed" in out["preview"]
+    assert target.read_text() == "line one\nDONE fixed\nline three\n"
+
+
+async def test_edit_file_crlf_preserved(tmp_path):
+    target = tmp_path / "win.txt"
+    target.write_bytes(b"a\r\nTODO\r\nb\r\n")
+    out = await tool_executor._edit_file(str(target), "TODO", "DONE")
+    assert out["status"] == "edited"
+    assert target.read_bytes() == b"a\r\nDONE\r\nb\r\n"
+
+
+async def test_edit_file_bom_preserved(tmp_path):
+    target = tmp_path / "bom.txt"
+    target.write_bytes(b"\xef\xbb\xbfTODO here\n")
+    out = await tool_executor._edit_file(str(target), "TODO", "DONE")
+    assert out["status"] == "edited"
+    assert target.read_bytes() == b"\xef\xbb\xbfDONE here\n"
+
+
+async def test_edit_file_not_found(tmp_path):
+    out = await tool_executor._edit_file(
+        str(tmp_path / "missing.txt"), "x", "y")
+    assert out["status"] == "error"
+    assert "not found" in out["error"]
+
+
+async def test_edit_file_empty_and_identical_rejected(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("hello\n")
+    out = await tool_executor._edit_file(str(target), "", "y")
+    assert out["status"] == "error"
+    out = await tool_executor._edit_file(str(target), "hello", "hello")
+    assert out["status"] == "error"
+    assert target.read_text() == "hello\n"  # untouched
+
+
+async def test_edit_file_ambiguous_needs_context(tmp_path):
+    target = tmp_path / "dup.txt"
+    target.write_text("v = 1\nv = 1\n")
+    out = await tool_executor._edit_file(str(target), "v = 1", "v = 2")
+    assert out["status"] == "error"
+    assert "matches 2 times" in out["error"]
+    assert "replace_all" in out["error"]
+    assert target.read_text() == "v = 1\nv = 1\n"  # atomic: untouched
+
+
+async def test_edit_file_replace_all(tmp_path):
+    target = tmp_path / "dup.txt"
+    target.write_text("v = 1\nv = 1\n")
+    out = await tool_executor._edit_file(
+        str(target), "v = 1", "v = 2", replace_all=True)
+    assert out["status"] == "edited"
+    assert out["replacements"] == 2
+    assert target.read_text() == "v = 2\nv = 2\n"
+
+
+async def test_edit_file_binary_and_too_large(tmp_path, monkeypatch):
+    binary = tmp_path / "img.bin"
+    binary.write_bytes(b"\x00\x01\x02TODO")
+    out = await tool_executor._edit_file(str(binary), "TODO", "DONE")
+    assert out["status"] == "error"
+    assert "binary" in out["error"]
+    big = tmp_path / "big.txt"
+    big.write_text("x" * 100)
+    monkeypatch.setattr(tool_executor, "EDIT_FILE_BYTES_CAP", 10)
+    out = await tool_executor._edit_file(str(big), "x", "y")
+    assert out["status"] == "error"
+    assert "too large" in out["error"]
+
+
+async def test_edit_file_directory_rejected(tmp_path):
+    out = await tool_executor._edit_file(str(tmp_path), "x", "y")
+    assert out["status"] == "error"
+
+
+async def test_edit_file_staging_and_confirm(tmp_path):
+    store = make_store()
+    target = tmp_path / " staged.txt".strip()
+    target.write_text("alpha\n")
+    staged = tool_executor.edit_file(
+        str(target), "alpha", "beta", store)
+    assert staged["status"] == "pending_confirmation"
+    assert target.read_text() == "alpha\n"  # nothing until confirmed
+    result = await tool_executor.confirm_action(
+        store, staged["token"], True)
+    assert result["status"] == "edited"
+    assert target.read_text() == "beta\n"
+
+
+async def test_edit_file_denylist_no_token():
+    store = make_store()
+    blocked = os.path.join(tool_executor._REPO_ROOT, ".env")
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.edit_file(blocked, "x", "y", store)
+    assert len(store) == 0
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX permission bits (+x) only",
+)
+async def test_edit_file_preserves_permission_bits(tmp_path):
+    target = tmp_path / "run.sh"
+    target.write_text("#!/bin/sh\necho TODO\n")
+    os.chmod(str(target), 0o755)
+    out = await tool_executor._edit_file(str(target), "TODO", "DONE")
+    assert out["status"] == "edited"
+    assert target.read_text() == "#!/bin/sh\necho DONE\n"
+    assert os.stat(str(target)).st_mode & 0o777 == 0o755
+
+
+@requires_file_symlinks
+async def test_edit_file_edits_symlink_target(tmp_path):
+    target = tmp_path / "real.txt"
+    target.write_text("TODO here\n")
+    link = tmp_path / "link.txt"
+    os.symlink(str(target), str(link))
+    out = await tool_executor._edit_file(str(link), "TODO", "DONE")
+    assert out["status"] == "edited"
+    assert target.read_text() == "DONE here\n"
+    assert os.path.islink(str(link))  # link kept, not replaced
+
+
+@requires_file_symlinks
+def test_edit_denylist_catches_link_named_in_protected_dir(
+    tmp_path, monkeypatch
+):
+    """Link NAMED inside a protected dir pointing outside: the resolved
+    side sees an outside file (allowed), the given side sees
+    ``invincible/evil-link`` (blocked)."""
+    fake_repo = tmp_path / "fakerepo"
+    (fake_repo / "invincible").mkdir(parents=True)
+    monkeypatch.setattr(tool_executor, "_REPO_ROOT", str(fake_repo))
+    monkeypatch.setattr(
+        tool_executor, "_REPO_ROOT_UNRESOLVED", str(fake_repo))
+    outside = tmp_path / "outside.txt"
+    outside.write_text("x")
+    link = fake_repo / "invincible" / "evil-link"
+    os.symlink(str(outside), str(link))
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.check_edit_denylist(str(link))
+    # write_file (resolved-only) still allows it: unchanged behavior.
+    tool_executor.check_write_denylist(str(link))  # no raise
+
+
+@requires_file_symlinks
+def test_edit_denylist_catches_link_pointing_at_protected_file(
+    tmp_path, monkeypatch
+):
+    """Link named innocently pointing AT a protected file: the resolved
+    side blocks."""
+    fake_repo = tmp_path / "fakerepo"
+    fake_repo.mkdir(parents=True)
+    (fake_repo / ".env").write_text("SECRET=x")
+    monkeypatch.setattr(tool_executor, "_REPO_ROOT", str(fake_repo))
+    monkeypatch.setattr(
+        tool_executor, "_REPO_ROOT_UNRESOLVED", str(fake_repo))
+    link = tmp_path / "innocent.txt"
+    os.symlink(str(fake_repo / ".env"), str(link))
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.check_edit_denylist(str(link))
+
+
+async def test_edit_file_null_old_string_errors_like_empty(tmp_path):
+    store = make_store()
+    target = tmp_path / "n.txt"
+    target.write_text("hello\n")
+    staged = tool_executor.edit_file(str(target), None, "y", store)
+    assert staged["status"] == "pending_confirmation"
+    result = await tool_executor.confirm_action(
+        store, staged["token"], True)
+    assert result["status"] == "error"
+    assert "non-empty" in result["error"]
+    assert target.read_text() == "hello\n"  # untouched
+
+
+async def test_edit_file_null_new_string_deletes(tmp_path):
+    store = make_store()
+    target = tmp_path / "d.txt"
+    target.write_text("TODO\n")
+    staged = tool_executor.edit_file(str(target), "TODO\n", None, store)
+    result = await tool_executor.confirm_action(
+        store, staged["token"], True)
+    assert result["status"] == "edited"
+    assert target.read_text() == ""

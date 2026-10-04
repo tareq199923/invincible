@@ -3,7 +3,7 @@
 Invincible exposes three attack-relevant surfaces: a chat proxy that calls
 upstream AI providers, a browser dashboard managing accounts and provider
 credentials, and an MCP tool server that can **run shell commands
-and write files on the host machine**. This document describes exactly what
+and write or edit files on the host machine**. This document describes exactly what
 guards what, where the boundaries are, and — explicitly — where they are not.
 
 ---
@@ -302,7 +302,7 @@ invincible_session cookie          a single-use               revocable, hash-st
         └─────────────── OAuth 2.1 + PKCE ───────────────────────────┘
 ```
 
-For `execute_bash` and `write_file`, two further gates run after auth:
+For `execute_bash`, `write_file`, and `edit_file`, two further gates run after auth:
 
 ```
 authenticated caller (valid bearer access token)
@@ -472,9 +472,9 @@ target (`rd /s C:\build`, `rm -rf ./build`, `rm -rf /home/user`) deliberately
 does **not** match — that is the Windows/Unix equivalent of a local cleanup
 and is left to the approval flow, same as any other command.
 
-### 2.2 `write_file` path denylist — full inventory
+### 2.2 `write_file` / `edit_file` path denylist — full inventory
 
-Blocks writes outright (approval never reached — no token is issued) to
+Blocks writes AND edits outright (approval never reached — no token is issued) to
 paths that resolve **inside the repo root** and match:
 
 | Pattern (relative, case-insensitive) | Reason |
@@ -493,6 +493,14 @@ paths that resolve **inside the repo root** and match:
 > stored **SHA-256 hashed**, so a leaked database dump still yields no
 > usable bearer tokens. The `sessions.db` denylist entries remain so
 > leftover pre-Phase-16 files can never be read or written by the tools.
+
+`edit_file` shares this denylist exactly (same `check_write_denylist`,
+same approval, same routing, absent from plan mode). Its extra failure
+modes are post-approval results, never blocks: missing file, empty or
+identical strings, no match, ambiguous match without `replace_all`,
+files over ~1MB, binary/non-UTF-8. The replace is atomic (temp file +
+rename) with the file's original line endings and BOM preserved, so a
+failed edit never leaves a half-written file.
 
 ### 2.3 `read_file` denylist — full inventory
 
@@ -534,13 +542,14 @@ Everything else — including `invincible/`, `tests/`, and `providers.yaml` —
 
 ## 3. The approval flow (`confirm_action`)
 
-Every `execute_bash` and `write_file` call that survives the denylist is
+Every `execute_bash`, `write_file`, and `edit_file` call that survives the denylist is
 **staged, not run**. The server prints an informational line to its own
 stdout and returns a token to the caller:
 
 ```
 [MCP] Pending 3fKq...Wx9: execute_bash "rm -rf ./build"
 [MCP] Pending 9aZt...Qw2: write_file C:\Users\me\project\scratch\notes.txt (12345 bytes)
+[MCP] Pending 7hJk...Lm4: edit_file C:\Users\me\project\scratch\notes.txt
 ```
 
 The caller must then make a second `/mcp` call, `confirm_action`, with the
@@ -548,7 +557,7 @@ exact token:
 
 | `approve` | What happens | Response |
 |---|---|---|
-| `true` | Action performs for real (30s timeout for commands; on timeout the process is killed, `returncode: -1`, timeout message in `stderr`). | The real result — same shape `execute_bash`/`write_file` returned synchronously before (`stdout`/`stderr`/`returncode`, or `status`/`path`/`bytes`). |
+| `true` | Action performs for real (30s timeout for commands; on timeout the process is killed, `returncode: -1`, timeout message in `stderr`). | The real result — same shape `execute_bash`/`write_file`/`edit_file` returned synchronously before (`stdout`/`stderr`/`returncode`, `status`/`path`/`bytes`, or `status`/`path`/`replacements`/`preview`). |
 | `false` | Pending entry discarded. Nothing runs or writes. | `isError: true`, text `Declined.` |
 | token unknown, expired (10 min TTL), or already used | Nothing runs or writes. The entry (if any) is purged. | `isError: true`, text `Unknown or expired confirmation token.` |
 

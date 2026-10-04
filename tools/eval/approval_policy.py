@@ -4,10 +4,11 @@ Pure function ``decide(tool, args, workspace) -> (approved, reason)``.
 The runner calls it on every ``approval`` SSE event; denied tools get
 ``approve: false`` so the model sees a decline and must work around it.
 
-* ``write_file``: approve only if the path is ABSOLUTE and resolves
-  inside the run workspace. Relative paths are ALWAYS denied: the
-  server executes ``write_file`` with its own cwd (the repo root, not
-  the workspace), so a relative path would land outside the sandbox.
+* ``write_file`` / ``edit_file``: approve only if the path is ABSOLUTE
+  and resolves inside the run workspace. Relative paths are ALWAYS
+  denied: the server executes file writes with its own cwd (the repo
+  root, not the workspace), so a relative path would land outside
+  the sandbox.
 * ``execute_bash``: two cases.
 
   a) ANCHORED: the command starts with ``cd /d "<workspace>" &&`` or
@@ -150,22 +151,24 @@ def _has_dotdot(text: str) -> bool:
     )
 
 
-def decide_write_file(args: dict, workspace: Path) -> tuple[bool, str]:
+def decide_write_file(
+    args: dict, workspace: Path, *, tool: str = "write_file"
+) -> tuple[bool, str]:
     raw = str(args.get("path", ""))
     if not raw.strip():
-        return False, "write_file with empty path"
+        return False, f"{tool} with empty path"
     if _has_dotdot(raw):
-        return False, f"write_file escapes workspace (..): {raw[:120]}"
+        return False, f"{tool} escapes workspace (..): {raw[:120]}"
     text = raw.strip().strip("\"'")
     if not _is_absolute(text):
         return False, (
-            "write_file denied: relative path resolves against the "
+            f"{tool} denied: relative path resolves against the "
             f"server's cwd, outside the workspace: {raw[:120]}"
         )
     target = _resolve_target(raw, workspace)
     if target is None or not _inside(target, workspace):
-        return False, f"write_file outside workspace: {raw[:120]}"
-    return True, f"write_file inside workspace: {target.name}"
+        return False, f"{tool} outside workspace: {raw[:120]}"
+    return True, f"{tool} inside workspace: {target.name}"
 
 
 def _bash_tokens(command: str) -> list[str]:
@@ -342,6 +345,10 @@ def decide(tool: str, args: dict, workspace: str | Path) -> tuple[bool, str]:
         return False, f"{tool}: non-object args"
     if tool == "write_file":
         return decide_write_file(args, root)
+    if tool == "edit_file":
+        # Same confinement as write_file: absolute path inside the
+        # workspace, no ".." (match errors surface after approval).
+        return decide_write_file(args, root, tool="edit_file")
     if tool == "execute_bash":
         return decide_execute_bash(args, root)
     return False, f"{tool}: unknown mutating tool (deny default)"

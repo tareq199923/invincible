@@ -377,7 +377,8 @@ async def run_once(
                             # args; re-derive the decision inputs when needed.
                             args = {"summary": summary}
                         approved, reason = approval_policy.decide(
-                            action if action in ("write_file", "execute_bash")
+                            action if action in (
+                                "write_file", "execute_bash", "edit_file")
                             else action,
                             _approval_args(action, data),
                             workspace.resolve(),
@@ -484,11 +485,13 @@ def _approval_args(action: str, data: dict) -> dict:
     """Rebuild policy inputs from the approval event payload."""
     summary = str(data.get("summary", ""))
     detail = str(data.get("detail", ""))
-    if action == "write_file":
-        # detail shape: "<path>\\n---\\n<preview>"; first line is the path.
+    if action in ("write_file", "edit_file"):
+        # detail shape: "<path>\n---\n<preview>"; first line is the path.
         path = detail.split("\n")[0].strip() if detail else summary
         if path.lower().startswith("write "):
             path = path[6:].split(" (")[0]
+        if path.lower().startswith("edit "):
+            path = path[5:].split(" (")[0]
         return {"path": path}
     if action == "execute_bash":
         command = detail or summary

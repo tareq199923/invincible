@@ -333,6 +333,26 @@ async def _dispatch(method, rpc_id, params, request,
                 )
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
+            if name == "edit_file":
+                # Same posture as write_file: path denylist gate, then
+                # staging; match/file errors surface after approval.
+                # JSON null is not the string "None": null new_string
+                # deletes text, null/missing old_string errors like an
+                # empty one.
+                before_tool_call(
+                    "edit_file", {"path": args.get("path", "")})
+                old_raw = args.get("old_string")
+                new_raw = args.get("new_string")
+                result = tool_executor.edit_file(
+                    args.get("path", ""),
+                    "" if old_raw is None else str(old_raw),
+                    "" if new_raw is None else str(new_raw),
+                    pending_actions,
+                    replace_all=args.get("replace_all", False) is True,
+                    owner_subject=owner_subject,
+                )
+                return _result(rpc_id, _tool_content(json.dumps(result)))
+
             if name == "code_search":
                 # H6a: read-only like read_file — sandbox gate, no
                 # confirm step. Routed reads run on the caller's machine
