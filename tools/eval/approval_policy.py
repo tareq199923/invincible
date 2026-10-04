@@ -11,8 +11,8 @@ The runner calls it on every ``approval`` SSE event; denied tools get
   the sandbox.
 * ``execute_bash``: two cases.
 
-  a) ANCHORED: the command starts with ``cd /d "<workspace>" &&`` or
-     ``cd "<workspace>" &&`` (case-insensitive, quoted, workspace must
+  a) ANCHORED: the command starts with ``cd [/d] [<workspace>] &&``
+     (case-insensitive, quotes optional but matched, workspace must
      match exactly). Relative operands are then allowed because the
      shell cwd is confined to the workspace. Every other check still
      applies (risky patterns, ``..``, absolute-path-outside, and no
@@ -64,10 +64,13 @@ _RISKY_PATTERNS: list[tuple[re.Pattern, str]] = [
 _REANCHOR_WORDS = re.compile(r"\b(cd|chdir|pushd|popd)\b", re.I)
 _BARE_DRIVE_SWITCH = re.compile(r"(?:^|\s)[A-Za-z]:(?:\s|$)")
 
-# Strict anchor: ONLY these two quoted forms count. Unquoted, ;-chained,
-# or pushd prefixes are NOT anchored and get deny-by-default rules.
+# Anchor: `cd [/d] [quote]<exact workspace path>[quote] &&`.
+# Quotes and /d are both optional (the model omits them); the
+# backreference forces matched quotes, so an unterminated or mismatched
+# quote never anchors. `cd` without `&&`, ;-chained, or pushd prefixes
+# are NOT anchored and get deny-by-default rules.
 _ANCHOR_RE = re.compile(
-    r'^\s*cd\s+(?:/d\s+)?"([^"]+)"\s*&&\s*(.*)$', re.I | re.S
+    r'^\s*cd\s+(?:/d\s+)?("?)([^"&]+?)\1\s*&&\s*(.*)$', re.I | re.S
 )
 
 # Generic filename-with-extension (covers probe.py, README.md, data.json,
@@ -240,15 +243,20 @@ def _looks_like_path(token: str) -> bool:
 def _strip_anchor(command: str, workspace: Path) -> str | None:
     """Return the command remainder if ANCHORED, else None.
 
-    Anchored = starts with ``cd /d "<workspace>" &&`` or
-    ``cd "<workspace>" &&`` (case-insensitive, quoted, exact workspace
-    match after normalization). Anything else (unquoted, ;-chained,
-    pushd, different directory) is NOT anchored.
+    Anchored = starts with ``cd [/d] [<workspace>] &&``
+    (case-insensitive, quotes optional but matched, exact workspace
+    match after normalization). Anything else (unmatched quote,
+    ;-chained, pushd, different directory, ``cd`` without ``&&``) is
+    NOT anchored.
     """
     match = _ANCHOR_RE.match(command)
     if not match:
         return None
-    claimed, rest = match.group(1), match.group(2)
+    claimed, rest = match.group(2), match.group(3)
+    # cmd.exe has no single-quote quoting: a literal ' in the operand
+    # means the cd targets a different directory than the workspace.
+    if "'" in claimed:
+        return None
     if _norm_ws(claimed) != _norm_ws(str(workspace)):
         return None
     if not rest.strip():
@@ -305,7 +313,7 @@ def decide_execute_bash(args: dict, workspace: Path) -> tuple[bool, str]:
     if re.match(r"^\s*cd\b", command, re.I):
         return False, (
             "execute_bash cd prefix is not the exact anchored workspace "
-            '(need cd /d "<workspace>" && or cd "<workspace>" &&)'
+            "(need cd [/d] [<workspace>] && with matched quotes)"
         )
     if ">" in command:
         return False, (

@@ -18,9 +18,10 @@ from tools.eval import runner as eval_runner
 HAS_GIT = shutil.which("git") is not None
 
 
-def _anchor(ws: Path, slash_d: bool = True) -> str:
+def _anchor(ws: Path, slash_d: bool = True, quoted: bool = True) -> str:
     flag = "/d " if slash_d else ""
-    return f'cd {flag}"{ws}" && '
+    path = f'"{ws}"' if quoted else str(ws)
+    return f"cd {flag}{path} && "
 
 
 # --- write_file: relative always denied --------------------------------------
@@ -109,11 +110,17 @@ def test_policy_different_cd_prefix_denied(tmp_path: Path):
     assert reason
 
 
-def test_policy_unquoted_cd_not_anchored(tmp_path: Path):
-    ok, _ = approval_policy.decide(
-        "execute_bash",
-        {"command": f"cd /d {tmp_path} && python probe.py"}, tmp_path)
-    assert ok is False
+def test_policy_unquoted_cd_anchored(tmp_path: Path):
+    # The model omits quotes (and sometimes /d): still anchored when the
+    # path matches the workspace exactly (denying this was the bug that
+    # failed run-and-report 3/3).
+    for prefix in (_anchor(tmp_path, quoted=False),
+                   _anchor(tmp_path, slash_d=False, quoted=False)):
+        ok, reason = approval_policy.decide(
+            "execute_bash", {"command": prefix + "python probe.py"},
+            tmp_path,
+        )
+        assert ok is True, (prefix, reason)
 
 
 def test_policy_pushd_prefix_not_anchored(tmp_path: Path):
@@ -141,6 +148,48 @@ def test_policy_mixed_slashes_and_drive_case(tmp_path: Path):
         tmp_path,
     )
     assert ok is True, reason
+
+
+def test_policy_unquoted_mixed_slashes_and_drive_case(tmp_path: Path):
+    alt = str(tmp_path).replace("\\", "/")
+    if len(alt) > 1 and alt[1] == ":":
+        alt = alt[0].swapcase() + alt[1:]
+    for prefix in (f"cd /d {alt} && ", f"cd {alt} && "):
+        ok, reason = approval_policy.decide(
+            "execute_bash", {"command": prefix + "python probe.py"},
+            tmp_path,
+        )
+        assert ok is True, (prefix, reason)
+
+
+def test_policy_unquoted_wrong_directory_denied(tmp_path: Path):
+    other = tmp_path.parent / "other"
+    other.mkdir(exist_ok=True)
+    for cmd in [
+        f"cd /d {other} && python probe.py",  # wrong directory
+        f"cd {tmp_path.parent} && python probe.py",  # parent
+        f"cd {tmp_path / 'sub'} && python probe.py",  # subdirectory
+        # extra cd after an (unquoted) anchor re-anchors: deny.
+        f"cd {tmp_path} && cd sub && python probe.py",
+    ]:
+        ok, reason = approval_policy.decide(
+            "execute_bash", {"command": cmd}, tmp_path)
+        assert ok is False, cmd
+        assert reason
+
+
+def test_policy_unbalanced_quotes_denied(tmp_path: Path):
+    for cmd in [
+        f'cd "{tmp_path} && python probe.py',  # unterminated
+        f"cd {tmp_path}\" && python probe.py",  # trailing quote
+        f'cd "{tmp_path}\' && python probe.py',  # mismatched
+        # cmd.exe has no single-quote quoting: the cd would miss.
+        f"cd '{tmp_path}' && python probe.py",
+    ]:
+        ok, reason = approval_policy.decide(
+            "execute_bash", {"command": cmd}, tmp_path)
+        assert ok is False, cmd
+        assert reason
 
 
 # --- escape detector ----------------------------------------------------------
