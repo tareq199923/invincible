@@ -37,7 +37,7 @@ dependencies = [
     "python-dotenv",
     "click",
     "packaging",
-    "sqlalchemy[asyncio]>=2",
+    "sqlalchemy[asyncio]>=2.0.54",
     "asyncpg",
     "greenlet",
     "alembic>=1.13",
