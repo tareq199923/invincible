@@ -180,7 +180,7 @@ def test_merge_drop_task_cleans_single_file(tmp_path, capsys, monkeypatch):
         ["merge", "--label", "clean", "--drop-task", "t1", base])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "dropped task t1: 1 run(s) from inputs" in out
+    assert "dropped task t1: 1 run(s) from base file" in out
     payload = json.loads(
         list(outdir.glob("*-clean.json"))[0].read_text(encoding="utf-8"))
     assert [r["task_id"] for r in payload["runs"]] == ["t2"]
@@ -200,15 +200,20 @@ def test_merge_drop_task_repeatable(tmp_path, capsys, monkeypatch):
         "--drop-task", "t1", "--drop-task", "t2", base])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "dropped task t1: 1 run(s) from inputs" in out
-    assert "dropped task t2: 1 run(s) from inputs" in out
+    assert "dropped task t1: 1 run(s) from base file" in out
+    assert "dropped task t2: 1 run(s) from base file" in out
     payload = json.loads(
         list(outdir.glob("*-clean.json"))[0].read_text(encoding="utf-8"))
     assert [r["task_id"] for r in payload["runs"]] == ["t3"]
 
 
-def test_merge_drop_task_refuses_ambiguous_replacement(tmp_path, capsys):
-    """Same-merge replacement would also drop the top-up: refuse."""
+def test_merge_drop_task_applies_to_base_only(tmp_path, capsys, monkeypatch):
+    """--drop-task drops the base's stale runs; the top-up's replacement
+    runs in the SAME merge are kept (old behavior dropped them too and
+    refused with zero genuine runs)."""
+    import tools.eval.runner as runner
+    outdir = tmp_path / "results"
+    monkeypatch.setattr(runner, "RESULTS_DIR", outdir)
     base = _file(tmp_path, "a.json", [
         _run("t1", passed=False),
         _run("t2", passed=True),
@@ -217,8 +222,32 @@ def test_merge_drop_task_refuses_ambiguous_replacement(tmp_path, capsys):
     rc = run_eval.main(
         ["merge", "--label", "x", "--drop-task", "t1", base, topup])
     out = capsys.readouterr().out
+    assert rc == 0
+    assert "dropped task t1: 1 run(s) from base file" in out
+    payload = json.loads(
+        list(outdir.glob("*-x.json"))[0].read_text(encoding="utf-8"))
+    t1_runs = [r for r in payload["runs"] if r["task_id"] == "t1"]
+    assert len(t1_runs) == 1
+    assert t1_runs[0]["passed"] is True
+
+
+def test_merge_drop_task_refuses_when_topup_has_no_genuine_runs(
+    tmp_path, capsys,
+):
+    """Dropped from the base, replacement only infra in the top-up:
+    still refuses instead of silently losing the task."""
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=False),
+        _run("t2", passed=True),
+    ])
+    topup = _file(tmp_path, "b.json", [
+        _run("t1", passed=False,
+             error={"message": "All providers failed", "status": 503}),
+    ])
+    rc = run_eval.main(
+        ["merge", "--label", "x", "--drop-task", "t1", base, topup])
+    out = capsys.readouterr().out
     assert rc == 2
-    assert "dropped task t1: 2 run(s) from inputs" in out
     assert "zero genuine runs remain for: t1" in out
 
 

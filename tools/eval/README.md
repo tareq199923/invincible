@@ -81,13 +81,12 @@ provider latency, not the agent), recomputes the summary, refuses
 mixed models (a cross-model baseline is meaningless), and refuses to
 save if any task ends with zero genuine runs. A coverage note prints
 when tasks end up with uneven run counts. Repeatable `--drop-task ID`
-drops ALL runs of that task from every input (prints per-task counts)
-to discard stale genuine runs — then re-run with `--task ID` and merge
-the top-up WITHOUT `--drop-task` to replace:
-`merge --label clean --drop-task fix-bug base.json` then
-`merge --label final clean.json topup.json`. A dropped task in 2+
-inputs in the SAME merge refuses (the replacement would be dropped
-too).
+drops ALL runs of that task from the FIRST input (the base) only —
+never from later files (prints per-task counts) — to discard stale
+genuine runs, then merge the top-up in the SAME command to replace
+them: `merge --label final --drop-task fix-bug base.json topup.json`.
+A dropped task that keeps no genuine run anywhere else still refuses,
+so a failed replacement is never silently lost.
 
 Each run uses a fresh session `web-eval-<hex>` and a fresh workspace
 `.eval_workspace/<run_id>/` built from the task's fixture files, deleted
@@ -100,11 +99,11 @@ Approval rules (see `approval_policy.py`): `write_file` approves only
 ABSOLUTE paths inside the workspace — relative paths always resolve
 against the server's own cwd (the repo root), so they are always
 denied. `execute_bash` approves relative operands only when the command
-is ANCHORED, i.e. starts with `cd /d "<workspace>" &&` or
-`cd "<workspace>" &&` (quoted, exact match); anything else
-(unquoted, `pushd`, a different directory) gets deny-by-default, and a
-second `cd`/`pushd`/`popd`/`chdir`/drive switch after the anchor is
-denied. LIMIT: this is defense in depth, not a sandbox — an approved
+is ANCHORED, i.e. starts with `cd [/d] [<workspace>] &&` (quotes
+optional but matched, exact match after slash/case normalization);
+anything else (`pushd`, a different directory, `cd` without `&&`) gets
+deny-by-default, and a second `cd`/`pushd`/`popd`/`chdir`/drive switch
+after the anchor is denied. LIMIT: this is defense in depth, not a sandbox — an approved
 anchored command can still run arbitrary code (e.g. `python -c ...`)
 inside the workspace. It keeps stray commands off the repo; it does not
 sandbox what runs inside the workspace.

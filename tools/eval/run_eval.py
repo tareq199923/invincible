@@ -212,12 +212,12 @@ def cmd_merge(args: argparse.Namespace) -> int:
 
     Guards: every input must be the same model (a cross-model baseline
     is meaningless), and every task must keep >=1 genuine run.
-    ``--drop-task`` (repeatable) drops every run of that task from every
-    input before merging and prints per-task counts. Use it to discard
-    stale genuine runs, then re-run with ``--task ID`` and merge the
-    top-up WITHOUT ``--drop-task`` to replace. A dropped task appearing
-    in 2+ inputs in the SAME merge refuses (replacement would be dropped
-    too — do two merges). Intentional single-file removals succeed
+    ``--drop-task`` (repeatable) drops every run of that task from the
+    FIRST input (the base) only — never from later files — and prints
+    per-task counts. Use it to discard stale genuine runs and merge the
+    top-up in the SAME command to replace them. A dropped task that
+    keeps no genuine run anywhere else still refuses (the replacement
+    failed — nothing is silently lost). Intentional removals succeed
     without that task.
     """
     payloads = []
@@ -236,21 +236,24 @@ def cmd_merge(args: argparse.Namespace) -> int:
     model = models.pop()
 
     drop_ids = set(getattr(args, "drop_tasks", None) or [])
-    all_runs: list[dict] = [
-        run for _, payload in payloads for run in payload.get("runs", [])
-    ]
+    base_runs = payloads[0][1].get("runs", [])
+    later_ids: set[str] = {
+        run.get("task_id")
+        for _, payload in payloads[1:]
+        for run in payload.get("runs", [])
+    }
     dropped_by_task: dict[str, int] = {}
-    drop_file_count: dict[str, int] = {}
     for tid in sorted(drop_ids):
-        n = sum(1 for run in all_runs if run.get("task_id") == tid)
+        n = sum(1 for run in base_runs if run.get("task_id") == tid)
         dropped_by_task[tid] = n
-        drop_file_count[tid] = sum(
-            1 for _, payload in payloads
-            if any(r.get("task_id") == tid for r in payload.get("runs", []))
-        )
-        print(f"dropped task {tid}: {n} run(s) from inputs")
+        print(f"dropped task {tid}: {n} run(s) from base file")
     drop_total = sum(dropped_by_task.values())
-    remaining = [r for r in all_runs if r.get("task_id") not in drop_ids]
+    remaining = [
+        run
+        for i, (_, payload) in enumerate(payloads)
+        for run in payload.get("runs", [])
+        if i > 0 or run.get("task_id") not in drop_ids
+    ]
 
     kept: list[dict] = []
     dropped = 0
@@ -273,24 +276,19 @@ def cmd_merge(args: argparse.Namespace) -> int:
         run["task_id"] for _, payload in payloads
         for run in payload.get("runs", [])
     }
-    # Intentional removals via --drop-task that appear in at most one
-    # input file are cleaning (e.g. drop stale genuine runs, then re-run
-    # and merge the top-up WITHOUT --drop-task to replace). They are
-    # exempt from the zero-runs refuse. A dropped task appearing in 2+
-    # files means a replacement in the same merge was also dropped —
-    # refuse so the re-run is not silently lost (do two merges instead).
-    # Unknown --drop-task IDs (zero files) are a no-op.
+    # Intentional removals via --drop-task are cleaning when the task
+    # appears in no LATER file (e.g. drop stale genuine runs from the
+    # base, then merge the top-up in the SAME command to replace). They
+    # are exempt from the zero-runs refuse. A dropped task that survives
+    # in a later file but keeps no genuine run there (e.g. the top-up
+    # only has infra failures) still refuses, so a failed replacement
+    # is never silently lost. Unknown --drop-task IDs (zero files) are
+    # a no-op.
     exempt = {
         tid for tid in drop_ids
-        if drop_file_count.get(tid, 0) <= 1
+        if tid not in later_ids
     }
     empty = sorted((all_ids - set(by_task)) - exempt)
-    dropped_ambiguous = sorted(
-        tid for tid in drop_ids
-        if tid in all_ids and tid not in by_task
-        and drop_file_count.get(tid, 0) >= 2
-    )
-    empty = sorted(set(empty) | set(dropped_ambiguous))
     if empty:
         print("merge refused: zero genuine runs remain for: "
               + ", ".join(empty))
@@ -393,8 +391,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_mrg.add_argument("--label", required=True)
     p_mrg.add_argument(
         "--drop-task", action="append", default=[], dest="drop_tasks",
-        help="drop ALL runs of this task from every input before merging "
-             "(repeatable; re-run the task then merge to replace it)",
+        help="drop ALL runs of this task from the FIRST input (the base) "
+             "before merging (repeatable; merge the top-up in the same "
+             "command to replace them)",
     )
     p_mrg.add_argument("files", nargs="+")
     p_mrg.set_defaults(func=cmd_merge)
