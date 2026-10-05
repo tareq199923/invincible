@@ -41,3 +41,4 @@ pytest_out*.log
 # Agent eval harness (tools/eval): run outputs + throwaway workspaces
 eval_results/
 .eval_workspace/
+.tmptest/
