@@ -433,6 +433,48 @@ async def _dispatch(method, rpc_id, params, request,
                     ))
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
+            if name == "find_files":
+                # Read-only like list_dir — sandbox gate, no
+                # confirm step. Routed reads run on the caller's machine
+                # (home sandbox there); local reads under server roots.
+                try:
+                    find_limit = int(
+                        args.get("max_results")
+                        or tool_executor.FIND_DEFAULT_MAX_RESULTS
+                    )
+                except (TypeError, ValueError):
+                    find_limit = tool_executor.FIND_DEFAULT_MAX_RESULTS
+                agent_executor = await _agent_executor(request, owner_subject)
+                if agent_executor is not None:
+                    before_tool_call(
+                        "find_files", {"path": args.get("path", "")},
+                        agent_routed=True,
+                    )
+                    result = await agent_executor(
+                        "find_files", {
+                            "pattern": args.get("pattern", ""),
+                            "path": args.get("path", ""),
+                            "max_results": find_limit,
+                            "show_hidden": args.get("show_hidden", False),
+                        },
+                    )
+                else:
+                    before_tool_call(
+                        "find_files", {"path": args.get("path", "")})
+                    result = await tool_executor.find_files(
+                        args.get("pattern", ""), args.get("path", ""),
+                        find_limit,
+                        bool(args.get("show_hidden", False)),
+                    )
+                status = result.get("status")
+                if status in ("agent_offline", "agent_timeout"):
+                    await _audit_action(request, name, status,
+                                        subject=owner_subject)
+                    return _result(rpc_id, _tool_content(
+                        result.get("message", status), is_error=True
+                    ))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
+
             if name == "git_status":
                 # Read-only git inspection — same sandbox posture as
                 # code_search; a non-repo path is an error result.

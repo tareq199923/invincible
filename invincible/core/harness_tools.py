@@ -264,6 +264,35 @@ TOOLS: tuple[HarnessTool, ...] = (
         agent_job="list_dir",
     ),
     HarnessTool(
+        name="find_files",
+        description_mcp=(
+            "Find files by basename glob under a directory, "
+            "recursively: fnmatch case-sensitive basename match at "
+            "any depth. Same sandbox as read_file (server read "
+            "roots, or the agent's home when routed); hidden files "
+            "are skipped unless show_hidden is true, results are "
+            "capped. No confirmation is required since searching is "
+            "non-destructive."
+        ),
+        description_webchat=(
+            "Find files by basename glob under a directory, "
+            "recursively (case-sensitive, capped results)."
+        ),
+        properties={
+            "pattern": _str(),
+            "path": _str(),
+            "max_results": _int(),
+            "show_hidden": _bool(),
+        },
+        required=("pattern", "path"),
+        read_only=True,
+        needs_approval=False,
+        mcp=True,
+        webchat=True,
+        webchat_modes=("plan", "manual", "auto"),
+        agent_job="find_files",
+    ),
+    HarnessTool(
         name="git_status",
         description_mcp=(
             "Show the git working-tree status (branch, changed files) "
@@ -640,6 +669,7 @@ _BY_NAME: dict[str, HarnessTool] = {tool.name: tool for tool in TOOLS}
 _WEBCHAT_ORDER: tuple[str, ...] = (
     "read_file",
     "list_dir",
+    "find_files",
     "code_search",
     "git_status",
     "git_diff",

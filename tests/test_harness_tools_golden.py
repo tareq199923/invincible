@@ -178,6 +178,38 @@ GOLDEN_MCP_TOOLS = [
         },
     },
     {
+        'name': 'find_files',
+        'description': (
+        'Find files by basename glob under a directory, recursively: '
+        'fnmatch case-sensitive basename match at any depth. Same '
+        "sandbox as read_file (server read roots, or the agent's home "
+        'when routed); hidden files are skipped unless show_hidden is '
+        'true, results are capped. No confirmation is required since '
+        'searching is non-destructive.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'pattern': {
+                    'type': 'string',
+                },
+                'path': {
+                    'type': 'string',
+                },
+                'max_results': {
+                    'type': 'integer',
+                },
+                'show_hidden': {
+                    'type': 'boolean',
+                },
+            },
+            'required': [
+                'pattern',
+                'path',
+            ],
+        },
+    },
+    {
         'name': 'git_status',
         'description': (
         'Show the git working-tree status (branch, changed files) for '
@@ -553,6 +585,7 @@ GOLDEN_MCP_TOOL_NAMES = [
     'edit_file',
     'code_search',
     'list_dir',
+    'find_files',
     'git_status',
     'git_diff',
     'git_log',
@@ -616,6 +649,37 @@ GOLDEN_WEBCHAT_SCHEMAS = [
                     },
                 },
                 'required': [
+                    'path',
+                ],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'find_files',
+            'description': (
+            'Find files by basename glob under a directory, '
+            'recursively (case-sensitive, capped results).'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'pattern': {
+                        'type': 'string',
+                    },
+                    'path': {
+                        'type': 'string',
+                    },
+                    'max_results': {
+                        'type': 'integer',
+                    },
+                    'show_hidden': {
+                        'type': 'boolean',
+                    },
+                },
+                'required': [
+                    'pattern',
                     'path',
                 ],
             },
@@ -1071,6 +1135,7 @@ GOLDEN_WEBCHAT_SCHEMAS = [
 GOLDEN_WEBCHAT_TOOL_NAMES = [
     'read_file',
     'list_dir',
+    'find_files',
     'code_search',
     'git_status',
     'git_diff',
@@ -1093,6 +1158,7 @@ GOLDEN_WEBCHAT_TOOL_NAMES = [
 GOLDEN_PLAN_TOOLS = [
     'read_file',
     'list_dir',
+    'find_files',
     'code_search',
     'git_status',
     'git_diff',
@@ -1108,6 +1174,7 @@ GOLDEN_PLAN_TOOLS = [
 GOLDEN_MANUAL_TOOLS = [
     'read_file',
     'list_dir',
+    'find_files',
     'code_search',
     'git_status',
     'git_diff',
@@ -1130,6 +1197,7 @@ GOLDEN_MANUAL_TOOLS = [
 GOLDEN_AUTO_TOOLS = [
     'read_file',
     'list_dir',
+    'find_files',
     'code_search',
     'git_status',
     'git_diff',
@@ -1152,6 +1220,7 @@ GOLDEN_AUTO_TOOLS = [
 GOLDEN_READ_ONLY_TOOLS = (
     'read_file',
     'list_dir',
+    'find_files',
     'code_search',
     'git_status',
     'git_diff',
@@ -1290,6 +1359,7 @@ POLICY_PROBES = {
     "edit_file": ({"path": "C:/Temp/golden_probe_xyz.txt"}, "pass"),
     "code_search": ({"path": "."}, "pass"),
     "list_dir": ({"path": "."}, "pass"),
+    "find_files": ({"path": "."}, "pass"),
     "git_status": ({"path": "."}, "pass"),
     "git_diff": ({"path": "."}, "pass"),
     "git_log": ({"path": "."}, "pass"),
@@ -1320,6 +1390,7 @@ def test_policy_classification_all_tools():
         {"path": os.path.join(repo, "pyproject.toml")}, "pass")
     probes["code_search"] = ({"path": repo}, "pass")
     probes["list_dir"] = ({"path": repo}, "pass")
+    probes["find_files"] = ({"path": repo}, "pass")
     probes["git_status"] = ({"path": repo}, "pass")
     probes["git_diff"] = ({"path": repo}, "pass")
     probes["git_log"] = ({"path": repo}, "pass")
@@ -1359,6 +1430,8 @@ def test_policy_agent_routed_skips_server_roots():
         "read_file", {"path": "/etc/passwd"}, agent_routed=True) is None
     assert before_tool_call(
         "code_search", {"path": "/etc"}, agent_routed=True) is None
+    assert before_tool_call(
+        "find_files", {"path": "/etc"}, agent_routed=True) is None
 
 
 # --- runner job types (behavioral golden) ------------------------------------
@@ -1372,6 +1445,7 @@ RUNNER_SAFE_ARGS = {
     "read_file": {"path": "C:/definitely-outside-sandbox-xyz/x.txt"},
     "code_search": {"path": "C:/definitely-outside-sandbox-xyz"},
     "list_dir": {"path": "C:/definitely-outside-sandbox-xyz"},
+    "find_files": {"path": "C:/definitely-outside-sandbox-xyz"},
     "git_status": {"path": "C:/definitely-outside-sandbox-xyz"},
     "git_diff": {"path": "C:/definitely-outside-sandbox-xyz"},
     "git_log": {"path": "C:/definitely-outside-sandbox-xyz"},

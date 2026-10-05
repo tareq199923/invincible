@@ -585,7 +585,7 @@ def test_environment_note_plan_omits_mutating_guidance():
     note = environment_note("local", mode="plan")
     assert "Tools run locally on" in note
     assert "Chain commands with `&&`" in note
-    assert "Prefer code_search/read_file/list_dir over shell reads." in note
+    assert "Prefer find_files/code_search/read_file/list_dir over shell reads." in note
     assert "edit_file" not in note
     assert "write_file" not in note
     assert "python -c" not in note

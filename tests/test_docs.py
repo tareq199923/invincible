@@ -45,7 +45,7 @@ async def test_docs_slugs_render(docs_client):
         assert resp.status_code == 200, slug
         assert "text/html" in resp.headers["content-type"]
     body = (await docs_client.get("/docs/mcp")).text
-    # MCP tool table is generated from the live TOOLS list (20 tools).
+    # MCP tool table is generated from the live TOOLS list (21 tools).
     for tool in ("read_file", "execute_bash", "write_file", "edit_file",
                  "confirm_action", "memory_save", "memory_search"):
         assert tool in body
@@ -184,7 +184,8 @@ async def test_docs_mcp_tool_planes(docs_client):
         assert f"<code>{name}</code>" in first, name
         assert f"<code>{name}</code>" not in second, name
     for name in ("read_file", "execute_bash", "write_file", "code_search",
-                 "list_dir", "git_status", "process_list", "screenshot"):
+                 "list_dir", "find_files", "git_status", "process_list",
+                 "screenshot"):
         assert f"<code>{name}</code>" in second, name
     for tool in TOOLS:
         assert body.count(f"<code>{tool['name']}</code>") == 1, tool["name"]

@@ -103,7 +103,7 @@ async def test_mcp_tools_list(client, bearer_headers):
         "read_file", "execute_bash", "write_file", "edit_file",
         "confirm_action",
         "code_search", "process_list", "screenshot",
-        "list_dir", "git_status", "git_diff", "git_log",
+        "list_dir", "find_files", "git_status", "git_diff", "git_log",
         "task_state_set", "task_state_get", "checkpoint_create",
         "memory_save", "memory_search", "memory_list",
         "project_create", "project_list",
