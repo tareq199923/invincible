@@ -82,7 +82,15 @@ def test_views_return_copies():
 
 # --- policy agreement (policy stays hand-written) ----------------------------
 
-_OUTSIDE = "C:/definitely-outside-sandbox-xyz/probe.txt"
+# Outside-the-sandbox probe path. Must be absolute AND outside the repo
+# on BOTH platforms: a Windows drive path (C:/...) is relative on POSIX
+# and resolves inside the repo root there, so it would NOT be blocked
+# on Linux CI (it blocked nowhere — the failure mode is "pass").
+_OUTSIDE = (
+    "C:/definitely-outside-sandbox-xyz/probe.txt"
+    if os.name == "nt"
+    else "/definitely-outside-sandbox-xyz/probe.txt"
+)
 
 
 def _outcome(tool_name: str, args: dict, **kwargs) -> str:
