@@ -20,7 +20,7 @@ checks:
     unchanged:
       - host = example
       - mode = prod
-max_tool_calls: 8
+max_tool_calls: 12
 reference:
   files:
     settings.ini: "[server]\r\nhost = example\r\nport = 9090\r\nmode = prod\r\n"

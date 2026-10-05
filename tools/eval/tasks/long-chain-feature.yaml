@@ -1,51 +1,63 @@
 id: long-chain-feature
 category: write
 tags: [harder]
+# Floor: ~11 calls / ~6-7 rounds (R1 batch-read spec+test, R2-R3
+# batch-write 5 modules, R4 run, R5+ fixes). What is measured is
+# cost/throughput on a realistic multi-file build (calls, seconds);
+# the loop cap is NOT the gate. max_tool_calls is a sanity bound
+# (floor 11 + 6).
 prompt: |-
-  Read spec.md and test_feature.py in your working directory, then implement
-  the feature: create store.py (create_store, add_item), service.py
-  (grand_total), and api.py (report) exactly as specified, and run
-  `python test_feature.py` to confirm it prints FEATURE-OK. Your shell
-  starts in the server directory, NOT the workspace: prefix every command
-  with `cd /d "{{WORKSPACE}}" && ` (exact quotes).
+  Read spec.md and test_integration.py in your working directory, then
+  implement the feature: create store.py, service.py, api.py, stats.py,
+  and validate.py exactly as specified, and run
+  `python test_integration.py` to confirm it prints FEATURE-OK. Your
+  shell starts in the server directory, NOT the workspace: prefix every
+  command with `cd /d "{{WORKSPACE}}" && ` (exact quotes).
 files:
   spec.md: |-
     # Feature spec
 
-    Implement three modules:
+    Implement five modules:
 
     - store.py: `create_store()` returns a new empty list;
       `add_item(store, item)` appends item and returns the store.
-    - service.py: `grand_total(store)` returns `sum(store)`.
-    - api.py: `from service import grand_total`; `report(store)` returns
-      `f"REPORT-{grand_total(store)}"`.
-  test_feature.py: |-
+    - service.py: `grand_total(store)` returns `sum(store)` (0 for an
+      empty store); `apply_discount(total, pct)` returns the total with
+      pct (0.0-1.0) taken off, rounded to 2 decimals.
+    - api.py: `from service import grand_total, apply_discount`;
+      `report(store, pct)` returns
+      `f"REPORT-{apply_discount(grand_total(store), pct)}"`.
+    - stats.py: `average(store)` returns the mean rounded to 2 decimals
+      (0.0 for an empty store); `top_item(store)` returns the first
+      item attaining the maximum value (ties keep the earliest item).
+    - validate.py: `from store import create_store`;
+      `check_store(store)` returns True iff store is a list.
+  test_integration.py: |-
     from store import create_store, add_item
-    from service import grand_total
+    from service import grand_total, apply_discount
     from api import report
+    from stats import average, top_item
+    from validate import check_store
 
     s = create_store()
+    assert check_store(s) is True
+    assert check_store({}) is False
+    assert grand_total(s) == 0
+    assert average(s) == 0.0
     add_item(s, 2)
     add_item(s, 3)
-    assert grand_total(s) == 5, grand_total(s)
-    assert report(s) == "REPORT-5", report(s)
+    add_item(s, 2)
+    assert grand_total(s) == 7
+    assert apply_discount(100, 0.25) == 75.0
+    assert report(s, 0.0) == "REPORT-7.0"
+    assert average([1, 2, 2]) == 1.67
+    assert top_item([(1, "a"), (3, "b"), (3, "c")]) == (3, "b")
+    assert top_item(s) == 3
     print("FEATURE-OK")
 checks:
-  - type: file_contains
-    path: store.py
-    substring: def create_store
-  - type: file_contains
-    path: store.py
-    substring: def add_item
-  - type: file_contains
-    path: service.py
-    substring: def grand_total
-  - type: file_contains
-    path: api.py
-    substring: def report
   - type: shell_check
-    command: python test_feature.py
-max_tool_calls: 25
+    command: python test_integration.py
+max_tool_calls: 17
 timeout_seconds: 240
 reference:
   files:
@@ -60,12 +72,37 @@ reference:
     service.py: |-
       def grand_total(store):
           return sum(store)
+
+
+      def apply_discount(total, pct):
+          return round(total * (1 - pct), 2)
     api.py: |-
-      from service import grand_total
+      from service import grand_total, apply_discount
 
 
-      def report(store):
-          return f"REPORT-{grand_total(store)}"
+      def report(store, pct):
+          return f"REPORT-{apply_discount(grand_total(store), pct)}"
+    stats.py: |-
+      def average(store):
+          if not store:
+              return 0.0
+          return round(sum(store) / len(store), 2)
+
+
+      def top_item(store):
+          best = store[0]
+          for item in store[1:]:
+              key = item[0] if isinstance(item, tuple) else item
+              best_key = best[0] if isinstance(best, tuple) else best
+              if key > best_key:
+                  best = item
+          return best
+    validate.py: |-
+      from store import create_store
+
+
+      def check_store(store):
+          return isinstance(store, list)
   final_text: |-
-    Implemented store.py, service.py, and api.py per spec.md.
-    Ran python test_feature.py and it prints FEATURE-OK.
+    Implemented store.py, service.py, api.py, stats.py, and validate.py
+    per spec.md. Ran python test_integration.py and it prints FEATURE-OK.

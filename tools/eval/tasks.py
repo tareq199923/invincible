@@ -1,6 +1,7 @@
 """Task schema: load + validate ``tools/eval/tasks/*.yaml``.
 
 Fields: id, category, tags, prompt, files (rel path -> content),
+generate (optional list of deterministic fixture-build specs),
 checks (list), max_tool_calls (optional), timeout_seconds (=180),
 reference (optional solution block, validated but ignored by the runner).
 Unknown keys fail loudly. Pure: PyYAML + stdlib only.
@@ -13,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+from tools.eval import generate as fixture_gen
 
 CATEGORIES = ("read", "write", "safety", "memory")
 
@@ -35,7 +38,7 @@ _CHECK_TYPES = (
 )
 
 _TASK_KEYS = frozenset({
-    "id", "category", "tags", "prompt", "files",
+    "id", "category", "tags", "prompt", "files", "generate",
     "checks", "max_tool_calls", "timeout_seconds",
     "reference",
 })
@@ -56,6 +59,7 @@ class EvalTask:
     tags: list[str] = field(default_factory=list)
     prompt: str = ""
     files: dict[str, str] = field(default_factory=dict)
+    generate: list[dict] = field(default_factory=list)
     checks: list[dict] = field(default_factory=list)
     max_tool_calls: int | None = None
     timeout_seconds: int = 180
@@ -92,6 +96,21 @@ def validate_task_dict(raw: dict, source: str = "<dict>") -> EvalTask:
             raise _fail(f"{source}: 'files' entries must be str -> str")
         if rel.startswith(("/", "\\")) or ".." in Path(rel).parts:
             raise _fail(f"{source}: 'files' path escapes task dir: {rel!r}")
+    generate = raw.get("generate", [])
+    if not isinstance(generate, list) or any(
+        not isinstance(spec, dict) for spec in generate
+    ):
+        raise _fail(f"{source}: 'generate' must be a list of mappings")
+    try:
+        for spec in generate:
+            fixture_gen.validate_generate_spec(spec, set(files))
+    except ValueError as e:
+        raise _fail(f"{source}: bad generate spec: {e}") from None
+    total_generated = sum(s.get("size_bytes", 0) for s in generate)
+    if total_generated > fixture_gen.YAML_SIZE_CAP:
+        raise _fail(
+            f"{source}: generated files exceed the size cap "
+            f"({total_generated} > {fixture_gen.YAML_SIZE_CAP})")
     checks = raw.get("checks")
     if not isinstance(checks, list) or not checks:
         raise _fail(f"{source}: 'checks' must be a non-empty list")
@@ -113,6 +132,7 @@ def validate_task_dict(raw: dict, source: str = "<dict>") -> EvalTask:
         tags=list(tags),
         prompt=prompt,
         files=dict(files),
+        generate=[dict(s) for s in generate],
         checks=[dict(c) for c in checks],
         max_tool_calls=max_calls,
         timeout_seconds=timeout,
@@ -191,11 +211,14 @@ def _validate_reference(ref: object, where: str) -> None:
     """Validate the ``reference:`` solution block (ignored by the runner).
 
     Shape: ``{files: {rel-path: content}, final_text?: str,
-    delete?: [rel-path]}``. Paths obey the same escape rules as ``files``.
+    delete?: [rel-path], stages?: [{rel-path: content}, ...]}``.
+    ``stages`` holds ordered intermediate states for staged fairness
+    tests (each entry is a full ``files``-style map applied in order).
+    Paths obey the same escape rules as ``files``.
     """
     if not isinstance(ref, dict):
         raise _fail(f"{where} must be a mapping")
-    unknown = set(ref) - {"files", "final_text", "delete"}
+    unknown = set(ref) - {"files", "final_text", "delete", "stages"}
     if unknown:
         raise _fail(f"{where} unknown keys: {sorted(unknown)}")
     files = ref.get("files", {})
@@ -217,6 +240,18 @@ def _validate_reference(ref: object, where: str) -> None:
     for rel in delete:
         if rel.startswith(("/", "\\")) or ".." in Path(rel).parts:
             raise _fail(f"{where} 'delete' path escapes task dir: {rel!r}")
+    stages = ref.get("stages", [])
+    if not isinstance(stages, list) or any(
+        not isinstance(stage, dict) for stage in stages
+    ):
+        raise _fail(f"{where} 'stages' must be a list of files-style maps")
+    for stage in stages:
+        for rel, content in stage.items():
+            if not isinstance(rel, str) or not isinstance(content, str):
+                raise _fail(f"{where} 'stages' entries must be str -> str")
+            if rel.startswith(("/", "\\")) or ".." in Path(rel).parts:
+                raise _fail(
+                    f"{where} 'stages' path escapes task dir: {rel!r}")
 
 
 def load_tasks(directory: str | Path) -> list[EvalTask]:

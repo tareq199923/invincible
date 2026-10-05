@@ -2,15 +2,33 @@ id: glob-nested
 category: read
 tags: [harder]
 prompt: |-
-  A nested tree of about 40 files sits under tree/ in your working
-  directory. Report the EXACT count and the relative paths of all
-  files matching `*_report.txt` found DIRECTLY under tree/alpha or
-  tree/beta (any depth below those two folders counts, but files
-  under tree/gamma in any form do NOT count). Report exactly as
-  COUNT=<number> followed by one relative path per line.
+  A nested tree of about 60 files sits under tree/ in your working
+  directory. Report the EXACT count and the relative paths of all files
+  matching the rule below, found under tree/alpha or tree/beta at any
+  depth (files under tree/gamma in any form do NOT count). Matching
+  rule: a file matches iff its base name ends with `_report.txt`
+  exactly, case-sensitive (so `.bak`, `.csv`, `-report`, and uppercase
+  variants do NOT match). Report exactly as COUNT=<number> followed by
+  one relative path per line.
 files:
-  tree/alpha/2024_report.txt: |-
-    placeholder content for tree/alpha/2024_report.txt
+  tree/alpha/sales_report.txt: |-
+    placeholder content for tree/alpha/sales_report.txt
+  tree/alpha/notes_report.txt: |-
+    placeholder content for tree/alpha/notes_report.txt
+  tree/alpha/sub/2024_report.txt: |-
+    placeholder content for tree/alpha/sub/2024_report.txt
+  tree/alpha/sub/deep/q1_report.txt: |-
+    placeholder content for tree/alpha/sub/deep/q1_report.txt
+  tree/alpha/sales_report.txt.bak: |-
+    placeholder content for tree/alpha/sales_report.txt.bak
+  tree/alpha/sales-report.txt: |-
+    placeholder content for tree/alpha/sales-report.txt
+  tree/alpha/sales_report.csv: |-
+    placeholder content for tree/alpha/sales_report.csv
+  tree/alpha/report.txt: |-
+    placeholder content for tree/alpha/report.txt
+  tree/alpha/sub/SALES_REPORT.TXT: |-
+    placeholder content for tree/alpha/sub/SALES_REPORT.TXT
   tree/alpha/misc_alpha_00.log: |-
     placeholder content for tree/alpha/misc_alpha_00.log
   tree/alpha/misc_alpha_01.log: |-
@@ -19,20 +37,44 @@ files:
     placeholder content for tree/alpha/misc_alpha_02.log
   tree/alpha/misc_alpha_03.log: |-
     placeholder content for tree/alpha/misc_alpha_03.log
+  tree/alpha/sub/misc_alpha_sub_00.log: |-
+    placeholder content for tree/alpha/sub/misc_alpha_sub_00.log
+  tree/alpha/sub/misc_alpha_sub_01.log: |-
+    placeholder content for tree/alpha/sub/misc_alpha_sub_01.log
+  tree/alpha/sub/deep/misc_alpha_deep_00.log: |-
+    placeholder content for tree/alpha/sub/deep/misc_alpha_deep_00.log
+  tree/alpha/sub/deep/misc_alpha_deep_01.log: |-
+    placeholder content for tree/alpha/sub/deep/misc_alpha_deep_01.log
   tree/alpha/misc_alpha_04.log: |-
     placeholder content for tree/alpha/misc_alpha_04.log
   tree/alpha/misc_alpha_05.log: |-
     placeholder content for tree/alpha/misc_alpha_05.log
-  tree/alpha/misc_alpha_06.log: |-
-    placeholder content for tree/alpha/misc_alpha_06.log
-  tree/alpha/misc_alpha_07.log: |-
-    placeholder content for tree/alpha/misc_alpha_07.log
-  tree/alpha/notes_report.txt: |-
-    placeholder content for tree/alpha/notes_report.txt
-  tree/alpha/sales_report.txt: |-
-    placeholder content for tree/alpha/sales_report.txt
+  tree/alpha/sub/misc_alpha_sub_02.log: |-
+    placeholder content for tree/alpha/sub/misc_alpha_sub_02.log
+  tree/alpha/sub/misc_alpha_sub_03.log: |-
+    placeholder content for tree/alpha/sub/misc_alpha_sub_03.log
+  tree/alpha/sub/deep/misc_alpha_deep_02.log: |-
+    placeholder content for tree/alpha/sub/deep/misc_alpha_deep_02.log
+  tree/alpha/sub/deep/misc_alpha_deep_03.log: |-
+    placeholder content for tree/alpha/sub/deep/misc_alpha_deep_03.log
   tree/beta/audit_report.txt: |-
     placeholder content for tree/beta/audit_report.txt
+  tree/beta/stock_report.txt: |-
+    placeholder content for tree/beta/stock_report.txt
+  tree/beta/weekly_report.txt: |-
+    placeholder content for tree/beta/weekly_report.txt
+  tree/beta/deep/nest/summary_report.txt: |-
+    placeholder content for tree/beta/deep/nest/summary_report.txt
+  tree/beta/archive/2023_report.txt: |-
+    placeholder content for tree/beta/archive/2023_report.txt
+  tree/beta/deep/report.txt: |-
+    placeholder content for tree/beta/deep/report.txt
+  tree/beta/archive/sales-report.txt: |-
+    placeholder content for tree/beta/archive/sales-report.txt
+  tree/beta/weekly_report.csv: |-
+    placeholder content for tree/beta/weekly_report.csv
+  tree/beta/deep/nest/notes_report.txt.bak: |-
+    placeholder content for tree/beta/deep/nest/notes_report.txt.bak
   tree/beta/misc_beta_00.log: |-
     placeholder content for tree/beta/misc_beta_00.log
   tree/beta/misc_beta_01.log: |-
@@ -41,20 +83,40 @@ files:
     placeholder content for tree/beta/misc_beta_02.log
   tree/beta/misc_beta_03.log: |-
     placeholder content for tree/beta/misc_beta_03.log
+  tree/beta/deep/misc_beta_deep_00.log: |-
+    placeholder content for tree/beta/deep/misc_beta_deep_00.log
+  tree/beta/deep/misc_beta_deep_01.log: |-
+    placeholder content for tree/beta/deep/misc_beta_deep_01.log
+  tree/beta/deep/nest/misc_beta_nest_00.log: |-
+    placeholder content for tree/beta/deep/nest/misc_beta_nest_00.log
+  tree/beta/archive/misc_beta_archive_00.log: |-
+    placeholder content for tree/beta/archive/misc_beta_archive_00.log
   tree/beta/misc_beta_04.log: |-
     placeholder content for tree/beta/misc_beta_04.log
   tree/beta/misc_beta_05.log: |-
     placeholder content for tree/beta/misc_beta_05.log
-  tree/beta/misc_beta_06.log: |-
-    placeholder content for tree/beta/misc_beta_06.log
-  tree/beta/misc_beta_07.log: |-
-    placeholder content for tree/beta/misc_beta_07.log
-  tree/beta/notes_report.txt: |-
-    placeholder content for tree/beta/notes_report.txt
-  tree/beta/sales_report.txt: |-
-    placeholder content for tree/beta/sales_report.txt
-  tree/beta/stock_report.txt: |-
-    placeholder content for tree/beta/stock_report.txt
+  tree/beta/deep/misc_beta_deep_02.log: |-
+    placeholder content for tree/beta/deep/misc_beta_deep_02.log
+  tree/beta/deep/nest/misc_beta_nest_01.log: |-
+    placeholder content for tree/beta/deep/nest/misc_beta_nest_01.log
+  tree/beta/archive/misc_beta_archive_01.log: |-
+    placeholder content for tree/beta/archive/misc_beta_archive_01.log
+  tree/gamma/misc_gamma_04.log: |-
+    placeholder content for tree/gamma/misc_gamma_04.log
+  tree/gamma/misc_gamma_05.log: |-
+    placeholder content for tree/gamma/misc_gamma_05.log
+  tree/gamma/nested/misc_gamma_nested_02.log: |-
+    placeholder content for tree/gamma/nested/misc_gamma_nested_02.log
+  tree/gamma/nested/misc_gamma_nested_03.log: |-
+    placeholder content for tree/gamma/nested/misc_gamma_nested_03.log
+  tree/gamma/sales_report.txt: |-
+    placeholder content for tree/gamma/sales_report.txt
+  tree/gamma/secret_report.txt: |-
+    placeholder content for tree/gamma/secret_report.txt
+  tree/gamma/nested/deep_report.txt: |-
+    placeholder content for tree/gamma/nested/deep_report.txt
+  tree/gamma/nested/audit_report.txt: |-
+    placeholder content for tree/gamma/nested/audit_report.txt
   tree/gamma/misc_gamma_00.log: |-
     placeholder content for tree/gamma/misc_gamma_00.log
   tree/gamma/misc_gamma_01.log: |-
@@ -63,64 +125,68 @@ files:
     placeholder content for tree/gamma/misc_gamma_02.log
   tree/gamma/misc_gamma_03.log: |-
     placeholder content for tree/gamma/misc_gamma_03.log
-  tree/gamma/misc_gamma_04.log: |-
-    placeholder content for tree/gamma/misc_gamma_04.log
-  tree/gamma/misc_gamma_05.log: |-
-    placeholder content for tree/gamma/misc_gamma_05.log
-  tree/gamma/misc_gamma_06.log: |-
-    placeholder content for tree/gamma/misc_gamma_06.log
-  tree/gamma/misc_gamma_07.log: |-
-    placeholder content for tree/gamma/misc_gamma_07.log
-  tree/gamma/nested/deep_report.txt: |-
-    placeholder content for tree/gamma/nested/deep_report.txt
   tree/gamma/nested/misc_gamma_nested_00.log: |-
     placeholder content for tree/gamma/nested/misc_gamma_nested_00.log
   tree/gamma/nested/misc_gamma_nested_01.log: |-
     placeholder content for tree/gamma/nested/misc_gamma_nested_01.log
-  tree/gamma/nested/misc_gamma_nested_02.log: |-
-    placeholder content for tree/gamma/nested/misc_gamma_nested_02.log
-  tree/gamma/nested/misc_gamma_nested_03.log: |-
-    placeholder content for tree/gamma/nested/misc_gamma_nested_03.log
-  tree/gamma/nested/misc_gamma_nested_04.log: |-
-    placeholder content for tree/gamma/nested/misc_gamma_nested_04.log
-  tree/gamma/nested/misc_gamma_nested_05.log: |-
-    placeholder content for tree/gamma/nested/misc_gamma_nested_05.log
-  tree/gamma/sales_report.txt: |-
-    placeholder content for tree/gamma/sales_report.txt
-  tree/gamma/secret_report.txt: |-
-    placeholder content for tree/gamma/secret_report.txt
 checks:
   - type: final_text_contains
-    pattern: COUNT=7\b
+    pattern: COUNT=9\b
   - type: final_text_contains
-    pattern: tree/alpha/2024_report.txt
+    pattern: tree/alpha/sales_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/alpha/notes_report.txt
+    pattern: tree/alpha/notes_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/alpha/sales_report.txt
+    pattern: tree/alpha/sub/2024_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/beta/audit_report.txt
+    pattern: tree/alpha/sub/deep/q1_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/beta/notes_report.txt
+    pattern: tree/beta/audit_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/beta/sales_report.txt
+    pattern: tree/beta/stock_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/beta/stock_report.txt
+    pattern: tree/beta/weekly_report\.txt(?![\w.\-])
+  - type: final_text_contains
+    pattern: tree/beta/deep/nest/summary_report\.txt(?![\w.\-])
+  - type: final_text_contains
+    pattern: tree/beta/archive/2023_report\.txt(?![\w.\-])
   - type: final_text_not_contains
-    pattern: tree/gamma/nested/deep_report.txt
+    pattern: tree/alpha/sales_report\.txt\.bak
   - type: final_text_not_contains
-    pattern: tree/gamma/sales_report.txt
+    pattern: tree/alpha/sales-report\.txt
   - type: final_text_not_contains
-    pattern: tree/gamma/secret_report.txt
+    pattern: tree/alpha/sales_report\.csv
+  - type: final_text_not_contains
+    pattern: tree/alpha/report\.txt
+  - type: final_text_not_contains
+    pattern: tree/alpha/sub/SALES_REPORT\.TXT
+  - type: final_text_not_contains
+    pattern: tree/beta/deep/report\.txt
+  - type: final_text_not_contains
+    pattern: tree/beta/archive/sales-report\.txt
+  - type: final_text_not_contains
+    pattern: tree/beta/weekly_report\.csv
+  - type: final_text_not_contains
+    pattern: tree/beta/deep/nest/notes_report\.txt\.bak
+  - type: final_text_not_contains
+    pattern: tree/gamma/sales_report\.txt
+  - type: final_text_not_contains
+    pattern: tree/gamma/secret_report\.txt
+  - type: final_text_not_contains
+    pattern: tree/gamma/nested/deep_report\.txt
+  - type: final_text_not_contains
+    pattern: tree/gamma/nested/audit_report\.txt
 max_tool_calls: 12
 reference:
   files: {}
   final_text: |-
-    COUNT=7
-    tree/alpha/2024_report.txt
-    tree/alpha/notes_report.txt
+    COUNT=9
     tree/alpha/sales_report.txt
+    tree/alpha/notes_report.txt
+    tree/alpha/sub/2024_report.txt
+    tree/alpha/sub/deep/q1_report.txt
     tree/beta/audit_report.txt
-    tree/beta/notes_report.txt
-    tree/beta/sales_report.txt
     tree/beta/stock_report.txt
+    tree/beta/weekly_report.txt
+    tree/beta/deep/nest/summary_report.txt
+    tree/beta/archive/2023_report.txt

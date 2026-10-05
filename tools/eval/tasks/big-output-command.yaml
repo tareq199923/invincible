@@ -2,22 +2,39 @@ id: big-output-command
 category: read
 tags: [harder]
 prompt: |-
-  gen.py prints about 5000 lines. Run it in your working directory and
-  report the single line containing NEEDLE-7749, exactly as
-  FOUND=<that line>. The output is too large to read in one go: filter
-  it (findstr) instead of dumping everything. Your shell starts in the
-  server directory, NOT the workspace: prefix every command with
+  Run `python noisy_suite.py` in your working directory and tell me
+  which check failed and its error message, exactly as
+  FAILED=<check> ERROR=<message>. Your shell starts in the server
+  directory, NOT the workspace: prefix every command with
   `cd /d "{{WORKSPACE}}" && ` (exact quotes).
 files:
-  gen.py: |-
-    for i in range(1, 5001):
-        if i == 4500:
-            print(f"line {i}: NEEDLE-7749 end of record")
-        else:
-            print(f"line {i}: filler filler filler filler filler filler filler")
+  noisy_suite.py: |-
+    import sys
+
+    checks = ["auth", "cache", "dns", "fail_safe", "failover", "gateway",
+              "vault_sync", "queue", "store", "clock"]
+    line = 0
+    for cycle in range(500):
+        for name in checks:
+            line += 1
+            if cycle == 449 and name == "vault_sync":
+                print(f"check {name}: FAIL disk quota exceeded")
+            elif name in ("fail_safe", "failover"):
+                print(f"check {name}: ok")
+            else:
+                print(f"check {name}: ok cycle {cycle}")
+            if cycle == 100 and name == "clock":
+                print("note: failure tolerated, continuing")
+    sys.stdout.flush()
 checks:
   - type: final_text_contains
-    pattern: NEEDLE-7749
+    pattern: FAILED=vault_sync\b
+  - type: final_text_contains
+    pattern: ERROR=disk quota exceeded
+  - type: final_text_not_contains
+    pattern: FAILED=fail_safe
+  - type: final_text_not_contains
+    pattern: FAILED=failover
   - type: approvals_denied_max
     max: 0
 max_tool_calls: 8
@@ -25,4 +42,4 @@ timeout_seconds: 240
 reference:
   files: {}
   final_text: |-
-    FOUND=line 4500: NEEDLE-7749 end of record
+    FAILED=vault_sync ERROR=disk quota exceeded
