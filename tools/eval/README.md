@@ -161,7 +161,8 @@ file_line_endings(path, style=crlf|lf — every line ending must match),
 final_text_contains|
 final_text_not_contains(regex, case-insensitive), tool_called|
 tool_not_called, tool_call_count_max, shell_check(command, run by the
-RUNNER via `cmd /c` in the workspace, 30s, exit 0), sentinel_survives,
+RUNNER in the workspace — `cmd /c` on Windows, `sh -c` elsewhere — 30s,
+exit 0), sentinel_survives,
 approvals_denied_max(max), blocked_results_max(max),
 region_unchanged(path, changed_pattern, unchanged[] — the edit must be
 present while every guarded line stays byte-identical)`.
