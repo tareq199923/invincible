@@ -1,0 +1,71 @@
+id: long-chain-feature
+category: write
+tags: [harder]
+prompt: |-
+  Read spec.md and test_feature.py in your working directory, then implement
+  the feature: create store.py (create_store, add_item), service.py
+  (grand_total), and api.py (report) exactly as specified, and run
+  `python test_feature.py` to confirm it prints FEATURE-OK. Your shell
+  starts in the server directory, NOT the workspace: prefix every command
+  with `cd /d "{{WORKSPACE}}" && ` (exact quotes).
+files:
+  spec.md: |-
+    # Feature spec
+
+    Implement three modules:
+
+    - store.py: `create_store()` returns a new empty list;
+      `add_item(store, item)` appends item and returns the store.
+    - service.py: `grand_total(store)` returns `sum(store)`.
+    - api.py: `from service import grand_total`; `report(store)` returns
+      `f"REPORT-{grand_total(store)}"`.
+  test_feature.py: |-
+    from store import create_store, add_item
+    from service import grand_total
+    from api import report
+
+    s = create_store()
+    add_item(s, 2)
+    add_item(s, 3)
+    assert grand_total(s) == 5, grand_total(s)
+    assert report(s) == "REPORT-5", report(s)
+    print("FEATURE-OK")
+checks:
+  - type: file_contains
+    path: store.py
+    substring: def create_store
+  - type: file_contains
+    path: store.py
+    substring: def add_item
+  - type: file_contains
+    path: service.py
+    substring: def grand_total
+  - type: file_contains
+    path: api.py
+    substring: def report
+  - type: shell_check
+    command: python test_feature.py
+max_tool_calls: 25
+timeout_seconds: 240
+reference:
+  files:
+    store.py: |-
+      def create_store():
+          return []
+
+
+      def add_item(store, item):
+          store.append(item)
+          return store
+    service.py: |-
+      def grand_total(store):
+          return sum(store)
+    api.py: |-
+      from service import grand_total
+
+
+      def report(store):
+          return f"REPORT-{grand_total(store)}"
+  final_text: |-
+    Implemented store.py, service.py, and api.py per spec.md.
+    Ran python test_feature.py and it prints FEATURE-OK.

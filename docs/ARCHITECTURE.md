@@ -609,9 +609,10 @@ mcp_endpoint
   ▼
 _dispatch(method, rpc_id, params, request)
   │  initialize   → protocolVersion 2025-06-18, capabilities.tools
-  │  tools/list   → the four tool descriptors
-  │  tools/call   → read_file | execute_bash | write_file | confirm_action
-  │                 execute_bash/write_file: denylist, then stage a pending
+  │  tools/list   → the tool descriptors (registry order)
+  │  tools/call   → read_file | execute_bash | write_file | edit_file | confirm_action
+  │                 (+ read-only machine tools, continuity/memory/project tools)
+  │                 execute_bash/write_file/edit_file: denylist, then stage a pending
   │                   action on app.state.pending_actions → token
   │                 confirm_action: approve → real action result
   │                                 deny     → {isError: true, text "Declined."}
@@ -661,3 +662,47 @@ Execution details:
 
 Full pattern inventory and threat model:
 [docs/SECURITY.md](SECURITY.md).
+
+---
+
+## 8. Adding a tool (registry checklist)
+
+Tool metadata lives in exactly one place: `core/harness_tools.py`
+(`HarnessTool` entries in `TOOLS` + the derived views). Every surface
+below derives from it, pinned by `tests/test_harness_tools_golden.py`
+(byte-identical wire shapes) and `tests/test_harness_tools_registry.py`
+(drift guards). To add a tool, do all of these — the drift tests fail
+loudly if you skip one:
+
+1. **Registry entry** (`core/harness_tools.py`): name, both
+   descriptions (MCP + webchat wordings differ — keep both accurate),
+   `properties` (MCP form; webchat strips `description` keys via the
+   single named derivation), `required`, flags (`read_only`,
+   `needs_approval` — defaults `True`, fail closed; `mcp`, `webchat`,
+   `webchat_modes`, `agent_job`, `router_agents`, `data_plane`,
+   `server_executable`). Add the name to `_WEBCHAT_ORDER` iff it is a
+   webchat tool (order matters — it is the wire order).
+2. **Execution branch** (still hand-written, per surface):
+   - `endpoints/mcp.py::_dispatch` branch for `tools/call` (+ confirm
+     gate choice: stage via `tool_executor` or run immediately).
+   - `core/webchat_agent.py` execution path (`_run_read` /
+     `_stage_mutating` / `_run_data_tool` / `_run_screenshot`).
+   - `invincible/agent/runner.py::execute_job` case, iff the tool runs
+     on the paired machine (machine-plane tools only; data-plane tools
+     run server-side and have no runner case).
+3. **Policy branch** (`core/harness_policy.py::before_tool_call`,
+   hand-written): machine-plane reads get the sandbox gate, mutating
+   tools the denylist gate; confirm/data/agent-only tools pass through
+   explicitly. The drift test asserts the classification agrees with
+   the registry — an unclassified tool fails it.
+4. **Tests**: extend the golden literals (regenerate from the new code,
+   then freeze), extend the drift expectations. Never weaken an
+   existing assertion to make a change pass.
+5. **Docs**: `docs/MCP_PROTOCOL.md` gains a per-tool section after the
+   code lands (docs follow implementation).
+
+What is still hand-maintained per tool after this refactor: the
+`_dispatch` bodies, the webchat executors, the runner cases, the policy
+branches, the audit action strings, and the two description wordings.
+The registry owns names, schemas, ordering, and classification flags —
+not behavior.

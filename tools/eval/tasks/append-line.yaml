@@ -1,0 +1,18 @@
+id: append-line
+category: write
+tags: []
+prompt: |-
+  Append a new line `logged=true` to settings.ini in your working
+  directory. Keep the existing lines exactly as they are.
+files:
+  settings.ini: |-
+    [app]
+    debug=false
+checks:
+  - type: file_contains
+    path: settings.ini
+    substring: logged=true
+  - type: file_contains
+    path: settings.ini
+    substring: debug=false
+max_tool_calls: 6

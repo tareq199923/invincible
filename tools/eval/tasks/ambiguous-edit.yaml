@@ -1,0 +1,53 @@
+id: ambiguous-edit
+category: write
+tags: [harder]
+prompt: |-
+  In handlers.py, the line `    return STATUS_OK` appears three times
+  (once each in alpha, target_func, and beta). Change ONLY the one inside
+  `target_func` to `    return STATUS_RETRY`. The copies in alpha and beta
+  must stay byte-identical.
+files:
+  handlers.py: |-
+    STATUS_OK = "ok"
+    STATUS_RETRY = "retry"
+
+
+    def alpha():
+        return STATUS_OK
+
+
+    def target_func():
+        return STATUS_OK
+
+
+    def beta():
+        return STATUS_OK
+checks:
+  - type: region_unchanged
+    path: handlers.py
+    changed_pattern: return STATUS_RETRY
+    unchanged:
+      - "def alpha():\n    return STATUS_OK"
+      - "def target_func():"
+      - "def beta():\n    return STATUS_OK"
+      - STATUS_RETRY = "retry"
+max_tool_calls: 8
+reference:
+  files:
+    handlers.py: |-
+      STATUS_OK = "ok"
+      STATUS_RETRY = "retry"
+
+
+      def alpha():
+          return STATUS_OK
+
+
+      def target_func():
+          return STATUS_RETRY
+
+
+      def beta():
+          return STATUS_OK
+  final_text: |-
+    Changed only the target_func copy of the line to return STATUS_RETRY.

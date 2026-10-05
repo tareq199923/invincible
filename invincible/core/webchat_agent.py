@@ -9,7 +9,7 @@ module adds the three agent modes on top of the SAME pipeline
 - ``plan``   - read-only inspection tools only, offered by construction
   (the model cannot take a mutating action: the tools are absent from
   the request, not merely forbidden by prompt). Ends with a plan.
-- ``manual`` - all tools; every ``execute_bash``/``write_file`` pauses
+- ``manual`` - all tools; every ``execute_bash``/``write_file``/``edit_file`` pauses
   for the user's explicit browser approval before running. Reads run
   immediately (same posture as ``POST /mcp``).
 - ``auto``   - all tools run immediately, no approvals. Denylists still
@@ -31,9 +31,11 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
+import platform
 
 from invincible.compat.common import upstream_error_detail
-from invincible.core import tool_executor
+from invincible.core import harness_tools, tool_executor
 from invincible.core.accounts import AccountError, ProjectService
 from invincible.core.chat_service import _persist_new_turns
 from invincible.core.continuity import ContinuityConflictError
@@ -57,33 +59,15 @@ logger = logging.getLogger("invincible.webchat.agent")
 WEBCHAT_MODES = ("plan", "manual", "auto")
 DEFAULT_MODE = "manual"
 
-READ_ONLY_TOOLS = (
-    "read_file",
-    "list_dir",
-    "code_search",
-    "git_status",
-    "git_diff",
-    "git_log",
-    "process_list",
-)
-MUTATING_TOOLS = ("execute_bash", "write_file")
+READ_ONLY_TOOLS = harness_tools.read_only_names()
+MUTATING_TOOLS = harness_tools.approval_required_names()
 # Data-plane reads (memory/project/continuity) - safe in plan mode.
-DATA_READ_TOOLS = (
-    "memory_search",
-    "memory_list",
-    "project_list",
-    "task_state_get",
-)
+DATA_READ_TOOLS = harness_tools.data_read_names()
 # Data-plane writes - manual/auto only, never plan.
-DATA_WRITE_TOOLS = (
-    "memory_save",
-    "project_create",
-    "task_state_set",
-    "checkpoint_create",
-)
+DATA_WRITE_TOOLS = harness_tools.data_write_names()
 # Agent-only read: runs on the paired machine, never on the server host
 # (same SSRF posture as POST /mcp screenshot).
-AGENT_ONLY_TOOLS = ("screenshot",)
+AGENT_ONLY_TOOLS = harness_tools.agent_only_names()
 ALL_DATA_TOOLS = DATA_READ_TOOLS + DATA_WRITE_TOOLS
 READ_ONLY_BATCH_TOOLS = frozenset(
     READ_ONLY_TOOLS + AGENT_ONLY_TOOLS + DATA_READ_TOOLS)
@@ -102,127 +86,22 @@ APPROVAL_WAIT_SECONDS = 300.0
 _PREVIEW_CHARS = 500
 # Response caps mirrored from POST /mcp (endpoints/mcp.py): MCP results
 # land in model context, so the same token discipline applies here.
-_MEMORY_SEARCH_DEFAULT = 5
-_MEMORY_SEARCH_MAX = 10
-_MEMORY_LIST_DEFAULT = 10
-_MEMORY_LIST_MAX = 20
-_PROJECT_CAP = 50
+# Single definition lives in core/harness_tools.py; these aliases keep
+# the existing uses below unchanged.
+_MEMORY_SEARCH_DEFAULT = harness_tools.MEMORY_SEARCH_DEFAULT
+_MEMORY_SEARCH_MAX = harness_tools.MEMORY_SEARCH_MAX
+_MEMORY_LIST_DEFAULT = harness_tools.MEMORY_LIST_DEFAULT
+_MEMORY_LIST_MAX = harness_tools.MEMORY_LIST_MAX
+_PROJECT_CAP = harness_tools.PROJECT_CAP
 
 
-def _tool(name: str, description: str, properties: dict,
-          required: list) -> dict:
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            },
-        },
-    }
-
-
-WEBCHAT_TOOL_SCHEMAS = [
-    _tool("read_file", "Read a file's contents on the machine that "
-          "executes tools (your paired PC when an agent is connected, "
-          "else the server host). Secret/state files are rejected. "
-          "Results are capped at 65536 characters and include a "
-          "truncated flag.",
-          {"path": {"type": "string"}}, ["path"]),
-    _tool("list_dir", "List a directory's entries (names, kinds, sizes) "
-          "on the executing machine. Hidden files skipped unless asked.",
-          {"path": {"type": "string"},
-           "limit": {"type": "integer"},
-           "show_hidden": {"type": "boolean"}}, ["path"]),
-    _tool("code_search", "Search files for a text pattern under a "
-          "directory (case-insensitive, capped results).",
-          {"pattern": {"type": "string"}, "path": {"type": "string"},
-           "max_results": {"type": "integer"}}, ["pattern", "path"]),
-    _tool("git_status", "Git working-tree status for the repo "
-          "containing a path. Read-only; errors outside a repo.",
-          {"path": {"type": "string"}}, ["path"]),
-    _tool("git_diff", "Unstaged git diff (+stat) for the repo containing "
-          "a path. Read-only; large diffs truncated.",
-          {"path": {"type": "string"}}, ["path"]),
-    _tool("git_log", "Recent commits for the repo containing a path, "
-          "newest first. Read-only.",
-          {"path": {"type": "string"},
-           "limit": {"type": "integer"}}, ["path"]),
-    _tool("process_list", "Running processes (pid, name, cpu/mem) on "
-          "the executing machine. Read-only.",
-          {"limit": {"type": "integer"}}, []),
-    _tool("execute_bash", "Run a shell command on the executing "
-          "machine. Denylisted commands (destructive fs ops, privilege "
-          "escalation, power commands) are rejected outright. Depending "
-          "on the chat mode this call either runs immediately or pauses "
-          "for the user's approval first.",
-          {"command": {"type": "string"}}, ["command"]),
-    _tool("write_file", "Write content to a file on the executing "
-          "machine. Security/state paths are rejected outright. "
-          "Depending on the chat mode this call either runs immediately "
-          "or pauses for the user's approval first.",
-          {"path": {"type": "string"},
-           "content": {"type": "string"}}, ["path", "content"]),
-    _tool("screenshot", "Capture a headless-Chrome screenshot (1280x800 "
-          "PNG) of an http(s) URL for visual validation. Runs ONLY on "
-          "your paired machine - the server never fetches caller URLs.",
-          {"url": {"type": "string"}}, ["url"]),
-    _tool("memory_save", "Deliberately store a fact about the user or one "
-          "of their projects into their memory store - the same store "
-          "dashboard and gateway chats read. Use for durable facts worth "
-          "recalling later; for task progress use task_state_set instead.",
-          {"content": {"type": "string"},
-           "kind": {"type": "string",
-                    "enum": list(MEMORY_KINDS)},
-           "project": {"type": "string"}}, ["content"]),
-    _tool("memory_search", "Search the user's memory store with the same "
-          "ranking gateway chats use. Returns a small ranked list, never "
-          "a dump.",
-          {"query": {"type": "string"},
-           "project": {"type": "string"},
-           "limit": {"type": "integer"}}, ["query"]),
-    _tool("memory_list", "Browse the user's most recent memories, newest "
-          "first. Optional kind/project filters; capped rows. No delete "
-          "over chat: deletion stays dashboard-only.",
-          {"limit": {"type": "integer"},
-           "kind": {"type": "string",
-                    "enum": list(MEMORY_KINDS)},
-           "project": {"type": "string"}}, []),
-    _tool("project_create", "Create a new project for the user. Projects "
-          "scope memories. Names 1-100 chars, unique per user.",
-          {"name": {"type": "string"}}, ["name"]),
-    _tool("project_list", "List the user's projects (id, name, "
-          "is_default). Call before project-scoped memory_save.",
-          {"include_archived": {"type": "boolean"}}, []),
-    _tool("task_state_set", "Persist canonical task progress into the "
-          "shared continuity store for this session. Payload must be a "
-          "JSON OBJECT of structured facts to preserve verbatim.",
-          {"payload": {"type": "string"},
-           "task_key": {"type": "string"},
-           "status": {"type": "string",
-                      "enum": ["active", "blocked", "done", "cancelled"]},
-           "expected_version": {"type": "integer"},
-           "session_id": {"type": "string"}}, ["payload"]),
-    _tool("task_state_get", "Read the latest trusted task state "
-          "previously persisted via task_state_set.",
-          {"task_key": {"type": "string"},
-           "session_id": {"type": "string"}}, []),
-    _tool("checkpoint_create", "Snapshot the current task-state version "
-          "as a named checkpoint (e.g. 'completed through 37').",
-          {"note": {"type": "string"},
-           "task_key": {"type": "string"},
-           "session_id": {"type": "string"}}, []),
-]
+WEBCHAT_TOOL_SCHEMAS = harness_tools.webchat_schemas()
 
 _PLAN_TOOLS = READ_ONLY_TOOLS + AGENT_ONLY_TOOLS + DATA_READ_TOOLS
 _TOOLS_BY_MODE = {
-    "plan": [s for s in WEBCHAT_TOOL_SCHEMAS
-             if s["function"]["name"] in _PLAN_TOOLS],
-    "manual": list(WEBCHAT_TOOL_SCHEMAS),
-    "auto": list(WEBCHAT_TOOL_SCHEMAS),
+    "plan": harness_tools.webchat_for_mode("plan"),
+    "manual": harness_tools.webchat_for_mode("manual"),
+    "auto": harness_tools.webchat_for_mode("auto"),
 }
 
 # NOTE: these prompts semantically duplicate ``harness_router``'s
@@ -245,10 +124,10 @@ MODE_SYSTEM_PROMPTS = {
     ),
     "manual": (
         "You help operate the user's own machine. You have inspection "
-        "tools plus execute_bash and write_file, plus memory/project/"
+        "tools plus execute_bash, write_file, and edit_file, plus memory/project/"
         "continuity tools (memory_save/search/list, project_create/list, "
         "task_state_set/get, checkpoint_create) and screenshot. Reads run "
-        "immediately; each execute_bash/write_file call pauses for the "
+        "immediately; each execute_bash/write_file/edit_file call pauses for the "
         "user's explicit approval before running - call the tool, briefly "
         "say what will happen, and wait for the result to come back. If "
         "the user declines (or approval times out), respect it and offer "
@@ -257,13 +136,84 @@ MODE_SYSTEM_PROMPTS = {
     ),
     "auto": (
         "You help operate the user's own machine autonomously. You have "
-        "inspection tools plus execute_bash and write_file, plus "
+        "inspection tools plus execute_bash, write_file, and edit_file, plus "
         "memory/project/continuity tools and screenshot, which run "
         "immediately without further confirmation. Act carefully and "
         "least-privilege: inspect before mutating, verify afterwards, "
         "and stop when done. Never exfiltrate data off the machine."
     ),
 }
+
+
+def _local_os_shell() -> tuple[str, str]:
+    """OS + shell of THIS machine (local tool execution). No guessing:
+    cmd.exe on Windows, sh elsewhere."""
+    if os.name == "nt":
+        return "Windows", "cmd.exe"
+    try:
+        return platform.system() or "unknown", "sh"
+    except Exception:
+        return "unknown", "sh"
+
+
+def environment_note(
+    execution: str, *, agent_platform: str | None = None,
+    mode: str = "manual",
+) -> str:
+    """OS/shell + tool-discipline note, appended AFTER the static prompt
+    (prompt-cache friendly: the static prefix is identical every turn).
+
+    ``execution`` is ``"local"`` (tools run here) or ``"agent"`` (tools
+    run on the paired machine). Routed OS comes from the agent's
+    reported platform when the protocol carries it (WS hello); otherwise
+    a neutral unknown-shell line. ``render_env_block`` was not reused:
+    it renders model/cwd/date for the harness router, a different axis.
+
+    Plan mode omits the mutating-tool guidance (edit_file/write_file
+    are not offered there); OS/shell facts and the read-tool
+    preference stay.
+    """
+    read_guidance = (
+        "Prefer code_search/read_file/list_dir over shell reads."
+    )
+    if mode == "plan":
+        guidance = read_guidance
+    else:
+        guidance = (
+            "Prefer edit_file for changing existing files; write_file "
+            "only for new files or full rewrites. "
+            f"{read_guidance} "
+            "Never use inline `python -c` to edit files. If a tool call "
+            "is declined or blocked, do not retry another way, tell "
+            "the user."
+        )
+    if execution == "agent":
+        reported = str(agent_platform or "").strip()
+        if reported:
+            return (
+                f"Tools run on your paired machine ({reported}). "
+                f"Chain commands with `&&`. {guidance}"
+            )
+        return (
+            "Tools run on your paired machine (shell/OS unknown: check "
+            f"before using OS-specific commands). {guidance}"
+        )
+    os_name, shell = _local_os_shell()
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        cwd = "unknown"
+    if os_name == "Windows":
+        return (
+            f"Tools run locally on Windows, shell cmd.exe, working "
+            f"directory {cwd}. Chain commands with `&&`. Avoid tools "
+            f"missing on Windows (sed, awk, grep, printf, head/tail). "
+            f"{guidance}"
+        )
+    return (
+        f"Tools run locally on {os_name}, shell {shell}, working "
+        f"directory {cwd}. Chain commands with `&&`. {guidance}"
+    )
 
 
 class ApprovalWaiter:
@@ -358,6 +308,8 @@ def summarize_call(name: str, args: dict) -> str:
     if name == "write_file":
         return f"Write {args.get('path', '')} " \
             f"({len(str(args.get('content', '')))} bytes)"
+    if name == "edit_file":
+        return f"Edit {args.get('path', '')}"
     if name == "read_file":
         return f"Read {args.get('path', '')}"
     if name == "list_dir":
@@ -399,6 +351,14 @@ def approval_detail(name: str, args: dict) -> str:
         preview = content[:_PREVIEW_CHARS]
         if len(content) > _PREVIEW_CHARS:
             preview += f"\n… ({len(content)} bytes total)"
+        return f"{args.get('path', '')}\n---\n{preview}"
+    if name == "edit_file":
+        old = str(args.get("old_string", ""))
+        new = str(args.get("new_string", ""))
+        preview = (f"-{old[:200]}\n+{new[:200]}"
+                   if old or new else "")
+        if len(old) + len(new) > _PREVIEW_CHARS:
+            preview += f"\n… ({len(old) + len(new)} chars total)"
         return f"{args.get('path', '')}\n---\n{preview}"
     return json.dumps(args)[:_PREVIEW_CHARS]
 
@@ -478,6 +438,17 @@ def _stage_mutating(store, name: str, args: dict,
         return tool_executor.write_file(
             str(args.get("path", "")), str(args.get("content", "")),
             store, owner_subject=owner_subject)
+    if name == "edit_file":
+        # JSON null is not the string "None": a null new_string deletes
+        # text, a null/missing old_string errors like an empty one.
+        old_raw = args.get("old_string")
+        new_raw = args.get("new_string")
+        return tool_executor.edit_file(
+            str(args.get("path", "")),
+            "" if old_raw is None else str(old_raw),
+            "" if new_raw is None else str(new_raw),
+            store, replace_all=args.get("replace_all", False) is True,
+            owner_subject=owner_subject)
     raise tool_executor.ToolBlocked(f"Unknown mutating tool: {name}")
 
 
@@ -783,6 +754,7 @@ async def run_agent_turn(
     retrieval=None,
     continuity=None,
     engine=None,
+    agent_platform: str | None = None,
 ):
     """Run one agentic turn, yielding ``(event, data)`` pairs.
 
@@ -795,13 +767,19 @@ async def run_agent_turn(
     in shape to API-path turns.
     """
     tools = _TOOLS_BY_MODE[mode]
+    agent_routed = executor is not None
+    note = environment_note(
+        "agent" if agent_routed else "local",
+        agent_platform=agent_platform,
+        mode=mode,
+    )
     full = prepared.full_messages + [
-        {"role": "system", "content": MODE_SYSTEM_PROMPTS[mode]}
+        {"role": "system",
+         "content": f"{MODE_SYSTEM_PROMPTS[mode]}\n\n{note}"}
     ]
     turn = list(prepared.to_persist)
     tools_used = 0
     full_text = ""
-    agent_routed = executor is not None
     # True once this turn has been appended to history, by either the happy
     # path or _persist_partial. Guarantees at most one append per turn, so a
     # disconnect racing the final commit cannot double-write.

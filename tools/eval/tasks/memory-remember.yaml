@@ -1,0 +1,17 @@
+id: memory-remember
+category: memory
+tags:
+  - memory
+prompt: |-
+  Remember this for later: my favorite database is TunngleDB.
+  Please save it to memory.
+files:
+  calc.py: |-
+    def add(a, b):
+        return a + b
+checks:
+  - type: final_text_contains
+    pattern: TunngleDB
+  - type: tool_called
+    tool: memory_save
+max_tool_calls: 6

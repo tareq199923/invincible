@@ -100,7 +100,8 @@ async def test_mcp_tools_list(client, bearer_headers):
     # no confirmation gate, like read_file; list_dir and the git
     # inspection tools extend the same read-only posture.
     assert names == {
-        "read_file", "execute_bash", "write_file", "confirm_action",
+        "read_file", "execute_bash", "write_file", "edit_file",
+        "confirm_action",
         "code_search", "process_list", "screenshot",
         "list_dir", "git_status", "git_diff", "git_log",
         "task_state_set", "task_state_get", "checkpoint_create",
@@ -278,6 +279,63 @@ async def test_mcp_write_file_two_call_flow(client, bearer_headers, tmp_path):
     body = response.json()
     assert body["result"]["isError"] is False
     assert target.read_text() == "hello from mcp"
+
+
+async def test_mcp_edit_file_two_call_flow(client, bearer_headers, tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("alpha\n")
+
+    staged = await _call_tool(client, bearer_headers, "edit_file", {
+        "path": str(target), "old_string": "alpha", "new_string": "beta",
+    })
+    assert "pending_confirmation" in staged.json()["result"]["content"][0]["text"]
+    assert target.read_text() == "alpha\n"  # nothing until confirmed
+    token = _pending_token(staged.json())
+
+    response = await _confirm(client, bearer_headers, token, True)
+    body = response.json()
+    assert body["result"]["isError"] is False
+    assert target.read_text() == "beta\n"
+
+
+async def test_mcp_edit_file_denied_path(client, bearer_headers):
+    import os
+
+    from invincible.core import tool_executor as te
+
+    blocked = os.path.join(te._REPO_ROOT, ".env")
+    response = await _call_tool(client, bearer_headers, "edit_file", {
+        "path": blocked, "old_string": "x", "new_string": "y",
+    })
+    body = response.json()
+    assert body["result"]["isError"] is True
+
+
+async def test_mcp_edit_file_null_old_string_errors(client, bearer_headers, tmp_path):
+    target = tmp_path / "n.txt"
+    target.write_text("hello\n")
+    staged = await _call_tool(client, bearer_headers, "edit_file", {
+        "path": str(target), "old_string": None, "new_string": "y",
+    })
+    assert "pending_confirmation" in staged.json()["result"]["content"][0]["text"]
+    response = await _confirm(
+        client, bearer_headers, _pending_token(staged.json()), True)
+    text = response.json()["result"]["content"][0]["text"]
+    assert "non-empty" in text
+    assert target.read_text() == "hello\n"  # untouched, not "None"
+
+
+async def test_mcp_edit_file_null_new_string_deletes(client, bearer_headers, tmp_path):
+    target = tmp_path / "d.txt"
+    target.write_text("TODO\n")
+    staged = await _call_tool(client, bearer_headers, "edit_file", {
+        "path": str(target), "old_string": "TODO\n", "new_string": None,
+    })
+    assert "pending_confirmation" in staged.json()["result"]["content"][0]["text"]
+    response = await _confirm(
+        client, bearer_headers, _pending_token(staged.json()), True)
+    assert response.json()["result"]["isError"] is False
+    assert target.read_text() == ""
 
 
 async def test_mcp_unknown_tool(client, bearer_headers):

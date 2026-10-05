@@ -1,0 +1,21 @@
+id: list-directory
+category: read
+tags: []
+prompt: |-
+  List the files in your working directory and report their names.
+files:
+  calc.py: |-
+    def add(a, b):
+        return a + b
+  config.json: |-
+    {"name": "eval-proj"}
+  notes.txt: |-
+    Remember to buy milk.
+checks:
+  - type: final_text_contains
+    pattern: calc\.py
+  - type: final_text_contains
+    pattern: config\.json
+  - type: tool_called
+    tool: list_dir
+max_tool_calls: 6

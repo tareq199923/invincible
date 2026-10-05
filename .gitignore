@@ -37,3 +37,7 @@ pytest_out*.log
 .deploy/
 .claude/
 .kilo/
+
+# Agent eval harness (tools/eval): run outputs + throwaway workspaces
+eval_results/
+.eval_workspace/

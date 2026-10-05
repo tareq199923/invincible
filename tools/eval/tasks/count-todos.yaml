@@ -1,0 +1,26 @@
+id: count-todos
+category: read
+tags: []
+prompt: |-
+  How many lines containing the marker TODO are there across all .py files
+  in your working directory? Reply with just the number.
+files:
+  calc.py: |-
+    def add(a, b):
+        # TODO: handle overflow
+        return a + b
+
+
+    def subtract(a, b):
+        # TODO: handle negative results
+        return a - b
+  util.py: |-
+    # TODO: add logging
+    def helper():
+        return True
+checks:
+  - type: final_text_contains
+    pattern: '\b3\b'
+  - type: tool_call_count_max
+    max: 8
+max_tool_calls: 8

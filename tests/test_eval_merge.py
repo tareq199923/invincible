@@ -1,0 +1,275 @@
+"""Merge command: combine result files, drop infra failures, guard model."""
+
+from __future__ import annotations
+
+import json
+
+from tools.eval import report, run_eval
+
+
+def _run(task: str, *, passed: bool, error: dict | None = None) -> dict:
+    r = {"task_id": task, "passed": passed, "tool_calls_total": 1.0,
+         "seconds": 5.0}
+    if error is not None:
+        r["error"] = error
+    return r
+
+
+def _file(tmp_path, name: str, runs: list[dict], model: str = "m1") -> str:
+    path = tmp_path / name
+    path.write_text(json.dumps({
+        "meta": {"label": name, "model": model},
+        "summary": {}, "overall": 0.0, "runs": runs,
+    }), encoding="utf-8")
+    return str(path)
+
+
+def test_merge_drops_infra_and_recomputes(tmp_path, capsys, monkeypatch):
+    import tools.eval.runner as runner
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path / "results")
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=True),
+        _run("t1", passed=False,
+             error={"message": "All providers failed", "status": 503}),
+    ])
+    topup = _file(tmp_path, "b.json", [_run("t1", passed=True)])
+    rc = run_eval.main(["merge", "--label", "clean", base, topup])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "1 infra failures dropped" in out
+    files = list((tmp_path / "results").glob("*-clean.json"))
+    assert len(files) == 1
+    payload = json.loads(files[0].read_text(encoding="utf-8"))
+    assert len(payload["runs"]) == 2
+    assert payload["summary"]["t1"]["pass_rate"] == 1.0
+
+
+def test_merge_output_file_and_summary(tmp_path, capsys, monkeypatch):
+    import tools.eval.runner as runner
+    outdir = tmp_path / "results"
+    monkeypatch.setattr(runner, "RESULTS_DIR", outdir)
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=True),
+        _run("t1", passed=False,
+             error={"message": "cooldown", "status": 503}),
+        _run("t2", passed=False),
+    ])
+    topup = _file(tmp_path, "b.json", [_run("t1", passed=True)])
+    rc = run_eval.main(["merge", "--label", "clean", base, topup])
+    out = capsys.readouterr().out
+    assert rc == 0
+    files = list(outdir.glob("*-clean.json"))
+    assert len(files) == 1
+    payload = json.loads(files[0].read_text(encoding="utf-8"))
+    assert payload["meta"]["model"] == "m1"
+    assert len(payload["runs"]) == 3  # infra run dropped
+    assert payload["summary"]["t1"]["passed"] == 2
+    assert payload["summary"]["t1"]["runs"] == 2
+    assert payload["summary"]["t2"]["runs"] == 1
+    assert "note: uneven coverage" in out
+    # same-model guarantee is recorded for later compares
+    assert payload["meta"]["merged_from"]
+
+
+def test_merge_refuses_cross_model(tmp_path, capsys):
+    a = _file(tmp_path, "a.json", [_run("t1", passed=True)], model="m1")
+    b = _file(tmp_path, "b.json", [_run("t1", passed=True)], model="m2")
+    rc = run_eval.main(["merge", "--label", "x", a, b])
+    assert rc == 2
+    assert "disagree on model" in capsys.readouterr().out
+
+
+def test_merge_refuses_task_with_zero_genuine_runs(tmp_path, capsys):
+    a = _file(tmp_path, "a.json", [
+        _run("t1", passed=True),
+        _run("t2", passed=False,
+             error={"message": "cooldown", "status": 503}),
+    ])
+    rc = run_eval.main(["merge", "--label", "x", a])
+    assert rc == 2
+    assert "zero genuine runs remain for: t2" in capsys.readouterr().out
+
+
+def test_merge_refuses_all_infra(tmp_path, capsys):
+    a = _file(tmp_path, "a.json", [
+        _run("t1", passed=False, error={"status": 503}),
+    ])
+    rc = run_eval.main(["merge", "--label", "x", a])
+    assert rc == 2
+    assert "every run is an infra failure" in capsys.readouterr().out
+
+
+def test_merge_drops_task_timeout_as_infra(tmp_path, capsys, monkeypatch):
+    """A timed-out run is infra (never a pass): merge drops it and a
+    top-up file supplies the replacement."""
+    import tools.eval.runner as runner
+    outdir = tmp_path / "results"
+    monkeypatch.setattr(runner, "RESULTS_DIR", outdir)
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=True),
+        # Timed out but end-state checks happened to pass: bogus as a pass.
+        _run("t1", passed=True,
+             error={"message": "task timeout", "status": -1}),
+    ])
+    topup = _file(tmp_path, "b.json", [_run("t1", passed=True)])
+    rc = run_eval.main(["merge", "--label", "clean", base, topup])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "1 infra failures dropped" in out
+    payload = json.loads(
+        list(outdir.glob("*-clean.json"))[0].read_text(encoding="utf-8"))
+    assert len(payload["runs"]) == 2
+    assert payload["summary"]["t1"]["timeouts"] == 0
+    assert payload["summary"]["t1"]["completed"] == 2
+    assert payload["summary"]["t1"]["pass_rate"] == 1.0
+
+
+def test_merged_summary_matches_summarize_runs():
+    runs = [_run("t1", passed=True), _run("t1", passed=True),
+            _run("t1", passed=False)]
+    summary, overall = report.summarize_runs(runs)
+    assert summary["t1"]["passed"] == 2
+    assert summary["t1"]["runs"] == 3
+    assert abs(overall - 2 / 3) < 1e-9
+
+
+def _summary_file(tmp_path, name: str, runs: list[dict],
+                  model: str = "m1") -> str:
+    """A result file carrying a real (recomputed) summary."""
+    summary, overall = report.summarize_runs(runs)
+    path = tmp_path / name
+    path.write_text(json.dumps({
+        "meta": {"label": name, "model": model},
+        "summary": summary, "overall": overall, "runs": runs,
+    }), encoding="utf-8")
+    return str(path)
+
+
+def test_compare_cli_flags_timeout_rise(tmp_path, capsys):
+    base = _summary_file(tmp_path, "a.json", [_run("t1", passed=True)])
+    other = _summary_file(tmp_path, "b.json", [
+        _run("t1", passed=True),
+        _run("t1", passed=True,
+             error={"message": "task timeout", "status": -1}),
+    ])
+    rc = run_eval.main(["compare", base, other])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "MORE timeouts" in out
+    assert "t1" in out
+
+
+def test_compare_cli_clean_returns_zero(tmp_path, capsys):
+    base = _summary_file(tmp_path, "a.json", [
+        _run("t1", passed=True), _run("t1", passed=True)])
+    rc = run_eval.main(["compare", base, base])
+    assert rc == 0
+    assert "MORE timeouts" not in capsys.readouterr().out
+
+
+def test_merge_drop_task_cleans_single_file(tmp_path, capsys, monkeypatch):
+    """--drop-task discards stale genuine runs (cleaning succeeds w/o task)."""
+    import tools.eval.runner as runner
+    outdir = tmp_path / "results"
+    monkeypatch.setattr(runner, "RESULTS_DIR", outdir)
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=False),
+        _run("t2", passed=True),
+    ])
+    rc = run_eval.main(
+        ["merge", "--label", "clean", "--drop-task", "t1", base])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "dropped task t1: 1 run(s) from base file" in out
+    payload = json.loads(
+        list(outdir.glob("*-clean.json"))[0].read_text(encoding="utf-8"))
+    assert [r["task_id"] for r in payload["runs"]] == ["t2"]
+
+
+def test_merge_drop_task_repeatable(tmp_path, capsys, monkeypatch):
+    import tools.eval.runner as runner
+    outdir = tmp_path / "results"
+    monkeypatch.setattr(runner, "RESULTS_DIR", outdir)
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=False),
+        _run("t2", passed=False),
+        _run("t3", passed=True),
+    ])
+    rc = run_eval.main([
+        "merge", "--label", "clean",
+        "--drop-task", "t1", "--drop-task", "t2", base])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "dropped task t1: 1 run(s) from base file" in out
+    assert "dropped task t2: 1 run(s) from base file" in out
+    payload = json.loads(
+        list(outdir.glob("*-clean.json"))[0].read_text(encoding="utf-8"))
+    assert [r["task_id"] for r in payload["runs"]] == ["t3"]
+
+
+def test_merge_drop_task_applies_to_base_only(tmp_path, capsys, monkeypatch):
+    """--drop-task drops the base's stale runs; the top-up's replacement
+    runs in the SAME merge are kept (old behavior dropped them too and
+    refused with zero genuine runs)."""
+    import tools.eval.runner as runner
+    outdir = tmp_path / "results"
+    monkeypatch.setattr(runner, "RESULTS_DIR", outdir)
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=False),
+        _run("t2", passed=True),
+    ])
+    topup = _file(tmp_path, "b.json", [_run("t1", passed=True)])
+    rc = run_eval.main(
+        ["merge", "--label", "x", "--drop-task", "t1", base, topup])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "dropped task t1: 1 run(s) from base file" in out
+    payload = json.loads(
+        list(outdir.glob("*-x.json"))[0].read_text(encoding="utf-8"))
+    t1_runs = [r for r in payload["runs"] if r["task_id"] == "t1"]
+    assert len(t1_runs) == 1
+    assert t1_runs[0]["passed"] is True
+
+
+def test_merge_drop_task_refuses_when_topup_has_no_genuine_runs(
+    tmp_path, capsys,
+):
+    """Dropped from the base, replacement only infra in the top-up:
+    still refuses instead of silently losing the task."""
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=False),
+        _run("t2", passed=True),
+    ])
+    topup = _file(tmp_path, "b.json", [
+        _run("t1", passed=False,
+             error={"message": "All providers failed", "status": 503}),
+    ])
+    rc = run_eval.main(
+        ["merge", "--label", "x", "--drop-task", "t1", base, topup])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "zero genuine runs remain for: t1" in out
+
+
+def test_merge_drop_task_two_step_replace(tmp_path, capsys, monkeypatch):
+    """Clean with --drop-task, re-run, merge top-up WITHOUT --drop-task."""
+    import tools.eval.runner as runner
+    outdir = tmp_path / "results"
+    monkeypatch.setattr(runner, "RESULTS_DIR", outdir)
+    base = _file(tmp_path, "a.json", [
+        _run("t1", passed=False),
+        _run("t2", passed=True),
+    ])
+    rc = run_eval.main(
+        ["merge", "--label", "clean", "--drop-task", "t1", base])
+    assert rc == 0
+    capsys.readouterr()
+    cleaned = str(list(outdir.glob("*-clean.json"))[0])
+    topup = _file(tmp_path, "b.json", [_run("t1", passed=True)])
+    rc = run_eval.main(["merge", "--label", "final", cleaned, topup])
+    assert rc == 0
+    payload = json.loads(
+        list(outdir.glob("*-final.json"))[0].read_text(encoding="utf-8"))
+    t1_runs = [r for r in payload["runs"] if r["task_id"] == "t1"]
+    assert len(t1_runs) == 1
+    assert t1_runs[0]["passed"] is True

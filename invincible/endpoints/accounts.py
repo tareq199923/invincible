@@ -106,7 +106,11 @@ async def _audit(request: Request, action: str, **kwargs) -> None:
     if log is None:
         return
     try:
-        await log.record(action, actor_kind="user", **kwargs)
+        # setdefault, not a duplicate keyword: callers (e.g. webchat
+        # approval/tool audits) pass actor_kind explicitly, which used
+        # to raise TypeError and silently drop the row.
+        kwargs.setdefault("actor_kind", "user")
+        await log.record(action, **kwargs)
     except Exception:  # noqa: BLE001 - telemetry only
         logger.warning("audit write failed for %s", action, exc_info=True)
 

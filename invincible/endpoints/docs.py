@@ -25,6 +25,7 @@ from fastapi import APIRouter, Request
 from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 
+from invincible.core import harness_tools
 from invincible.endpoints.template_filters import register_template_filters
 
 router = APIRouter(tags=["docs"])
@@ -59,15 +60,12 @@ def _toc(markdown: str) -> list:
 
 # Plane split for the docs tool tables. Data-plane tools read/write the
 # caller's own rows (memory, task state, projects) and need no machine
-# online; every other tool executes on a paired machine. Membership
-# mirrors the dispatch branches in endpoints/mcp.py, and
-# tests/test_docs.py pins it against the live TOOLS list so a rename
-# fails loudly instead of silently misfiling a tool in the docs.
-_DATA_PLANE_TOOLS = frozenset({
-    "memory_save", "memory_search", "memory_list",
-    "task_state_set", "task_state_get", "checkpoint_create",
-    "project_create", "project_list",
-})
+# online; every other tool executes on a paired machine. Membership is
+# derived from the tool registry (same data-plane flag the dispatch
+# branches implement), and tests/test_docs.py pins it against the live
+# TOOLS list so a rename fails loudly instead of silently misfiling a
+# tool in the docs.
+_DATA_PLANE_TOOLS = harness_tools.docs_data_plane_names()
 
 
 def _mcp_tool_rows() -> dict:

@@ -1,0 +1,433 @@
+id: edit-large-file
+category: write
+tags: [hard]
+prompt: |-
+  In bigmodule.py, change TAX_RATE from 0.19 to 0.23. Do not change any other line of bigmodule.py, and do not touch limits.json. Run `python check_tax.py` to confirm. Your shell starts in the server directory, NOT the workspace: prefix every command with `cd /d "{{WORKSPACE}}" && ` (exact quotes).
+files:
+  bigmodule.py: |-
+    """Big module: many small helpers plus one tax function."""
+
+
+    BASE = 100
+
+
+    def helper_00(a, b):
+        """Helper 00: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_01(a, b):
+        """Helper 01: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_02(a, b):
+        """Helper 02: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_03(a, b):
+        """Helper 03: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_04(a, b):
+        """Helper 04: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_05(a, b):
+        """Helper 05: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_06(a, b):
+        """Helper 06: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_07(a, b):
+        """Helper 07: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_08(a, b):
+        """Helper 08: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_09(a, b):
+        """Helper 09: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_10(a, b):
+        """Helper 10: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_11(a, b):
+        """Helper 11: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_12(a, b):
+        """Helper 12: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_13(a, b):
+        """Helper 13: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_14(a, b):
+        """Helper 14: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_15(a, b):
+        """Helper 15: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_16(a, b):
+        """Helper 16: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_17(a, b):
+        """Helper 17: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_18(a, b):
+        """Helper 18: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_19(a, b):
+        """Helper 19: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_20(a, b):
+        """Helper 20: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_21(a, b):
+        """Helper 21: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_22(a, b):
+        """Helper 22: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_23(a, b):
+        """Helper 23: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_24(a, b):
+        """Helper 24: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_25(a, b):
+        """Helper 25: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_26(a, b):
+        """Helper 26: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_27(a, b):
+        """Helper 27: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_28(a, b):
+        """Helper 28: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_29(a, b):
+        """Helper 29: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_30(a, b):
+        """Helper 30: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_31(a, b):
+        """Helper 31: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_32(a, b):
+        """Helper 32: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_33(a, b):
+        """Helper 33: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_34(a, b):
+        """Helper 34: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_35(a, b):
+        """Helper 35: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_36(a, b):
+        """Helper 36: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_37(a, b):
+        """Helper 37: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_38(a, b):
+        """Helper 38: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_39(a, b):
+        """Helper 39: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_40(a, b):
+        """Helper 40: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    def helper_41(a, b):
+        """Helper 41: combine two values."""
+        total = a + b
+        total = total * 2
+        total = total - a
+        total = total + b
+        total = total // 1
+        return total
+
+    TAX_RATE = 0.19
+
+
+    def compute_tax(amount):
+        """Compute tax at the current rate."""
+        return amount * TAX_RATE
+
+
+    CURRENCY = "USD"
+
+
+    if __name__ == "__main__":
+        print(compute_tax(100))
+  check_tax.py: |-
+    from bigmodule import compute_tax
+
+
+    got = compute_tax(100)
+    assert abs(got - 23.0) < 1e-9, got
+    print("TAX-OK")
+  limits.json: |-
+    {"max_helpers": 42, "currency": "USD"}
+checks:
+  - type: file_contains
+    path: bigmodule.py
+    substring: TAX_RATE = 0.23
+  - type: region_unchanged
+    path: bigmodule.py
+    changed_pattern: TAX_RATE = 0\.23
+    unchanged:
+      - "def helper_00(a, b):"
+      - "def helper_20(a, b):"
+      - "def helper_41(a, b):"
+      - Compute tax at the current rate.
+      - return amount * TAX_RATE
+      - CURRENCY = "USD"
+      - print(compute_tax(100))
+  - type: file_unchanged
+    path: limits.json
+  - type: shell_check
+    command: python check_tax.py
+max_tool_calls: 12

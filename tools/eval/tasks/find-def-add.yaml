@@ -1,0 +1,25 @@
+id: find-def-add
+category: read
+tags: []
+prompt: |-
+  Which file in your working directory defines the function `add`?
+  Reply with just the file name.
+files:
+  calc.py: |-
+    def add(a, b):
+        return a + b
+
+
+    def subtract(a, b):
+        return a - b
+  config.json: |-
+    {"name": "eval-proj", "threshold": 42}
+  README.md: |-
+    # Eval project
+    Calculator helpers live in calc.py.
+checks:
+  - type: final_text_contains
+    pattern: calc\.py
+  - type: tool_call_count_max
+    max: 8
+max_tool_calls: 8
