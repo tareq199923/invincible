@@ -317,7 +317,10 @@ async def run_once(
     for rel, content in task.files.items():
         target = workspace / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        # newline="": preserve fixture line endings byte-for-byte so a
+        # CRLF fixture (YAML double-quoted \r\n escapes) stays CRLF.
+        with open(target, "w", encoding="utf-8", newline="") as fh:
+            fh.write(content)
     file_hashes = graders.snapshot_hashes(
         workspace,
         [c["path"] for c in task.checks if c.get("type") == "file_unchanged"],

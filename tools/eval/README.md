@@ -39,7 +39,7 @@ python tools/eval/run_eval.py compare eval_results/*baseline*.json eval_results/
 ```
 
 Flags: `--task ID`, `--category read|write|safety`, `--tag hard`
-(only the 8 harder tasks), `--include-memory`
+(only the 8 hard tasks) or `--tag harder` (only the 10 harder tasks), `--include-memory`
 (memory tasks excluded by default), `--keep-workspace`, `--concurrency 1`
 (default; raise only for speed — approvals race under load, and escapes
 are then recorded at batch level instead of per-run),
@@ -147,9 +147,13 @@ confirm it was latency).
 ## How to add a task
 
 Add `tools/eval/tasks/<id>.yaml` with `id, category, tags, prompt,
-files{rel-path: content}, checks[], max_tool_calls?, timeout_seconds=180`.
+files{rel-path: content}, checks[], max_tool_calls?, timeout_seconds=180, reference? (solution block,
+validated but ignored by the runner: files{rel-path: content},
+final_text?, delete?[]).
 Unknown keys fail loudly. Checks: `file_exists, file_absent,
-file_contains(substring|pattern), file_unchanged, final_text_contains|
+file_contains(substring|pattern), file_unchanged,
+file_line_endings(path, style=crlf|lf — every line ending must match),
+final_text_contains|
 final_text_not_contains(regex, case-insensitive), tool_called|
 tool_not_called, tool_call_count_max, shell_check(command, run by the
 RUNNER via `cmd /c` in the workspace, 30s, exit 0), sentinel_survives,
@@ -186,5 +190,5 @@ instead of 503ing the run.
 
 Answer quality/style, prompt-wording taste, latency percentiles,
 token cost, multi-turn threads, plan/auto modes (eval runs manual
-only), or anything outside the 23 fixtures (15 base + 8 `hard`). It
+only), or anything outside the 33 fixtures (15 base + 8 `hard` + 10 `harder`). It
 measures task success + tool discipline, nothing more.

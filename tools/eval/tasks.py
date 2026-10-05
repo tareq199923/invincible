@@ -1,7 +1,8 @@
 """Task schema: load + validate ``tools/eval/tasks/*.yaml``.
 
 Fields: id, category, tags, prompt, files (rel path -> content),
-checks (list), max_tool_calls (optional), timeout_seconds (=180).
+checks (list), max_tool_calls (optional), timeout_seconds (=180),
+reference (optional solution block, validated but ignored by the runner).
 Unknown keys fail loudly. Pure: PyYAML + stdlib only.
 """
 
@@ -20,6 +21,7 @@ _CHECK_TYPES = (
     "file_absent",
     "file_contains",
     "file_unchanged",
+    "file_line_endings",
     "final_text_contains",
     "final_text_not_contains",
     "tool_called",
@@ -35,11 +37,13 @@ _CHECK_TYPES = (
 _TASK_KEYS = frozenset({
     "id", "category", "tags", "prompt", "files",
     "checks", "max_tool_calls", "timeout_seconds",
+    "reference",
 })
 
 _CHECK_KEYS = frozenset({
     "type", "path", "substring", "pattern", "command",
     "tool", "max", "hash_of", "changed_pattern", "unchanged",
+    "style",
 })
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -101,6 +105,8 @@ def validate_task_dict(raw: dict, source: str = "<dict>") -> EvalTask:
     timeout = raw.get("timeout_seconds", 180)
     if not isinstance(timeout, int) or timeout <= 0:
         raise _fail(f"{source}: 'timeout_seconds' must be a positive int")
+    if "reference" in raw:
+        _validate_reference(raw["reference"], f"{source}: 'reference'")
     return EvalTask(
         id=task_id,
         category=category,
@@ -156,6 +162,13 @@ def _validate_check(check: object, where: str) -> None:
     elif ctype in ("approvals_denied_max", "blocked_results_max"):
         if not isinstance(check.get("max"), int) or check["max"] < 0:
             raise _fail(f"{where}: '{ctype}' needs non-negative 'max'")
+    elif ctype == "file_line_endings":
+        if not isinstance(check.get("path"), str):
+            raise _fail(f"{where}: 'file_line_endings' needs string 'path'")
+        if check.get("style") not in ("crlf", "lf"):
+            raise _fail(
+                f"{where}: 'file_line_endings' needs 'style' "
+                "to be 'crlf' or 'lf'")
     elif ctype == "region_unchanged":
         if not isinstance(check.get("path"), str):
             raise _fail(f"{where}: 'region_unchanged' needs string 'path'")
@@ -172,6 +185,38 @@ def _validate_check(check: object, where: str) -> None:
             raise _fail(
                 f"{where}: 'region_unchanged' needs a non-empty "
                 "'unchanged' list of strings")
+
+
+def _validate_reference(ref: object, where: str) -> None:
+    """Validate the ``reference:`` solution block (ignored by the runner).
+
+    Shape: ``{files: {rel-path: content}, final_text?: str,
+    delete?: [rel-path]}``. Paths obey the same escape rules as ``files``.
+    """
+    if not isinstance(ref, dict):
+        raise _fail(f"{where} must be a mapping")
+    unknown = set(ref) - {"files", "final_text", "delete"}
+    if unknown:
+        raise _fail(f"{where} unknown keys: {sorted(unknown)}")
+    files = ref.get("files", {})
+    if not isinstance(files, dict):
+        raise _fail(f"{where} 'files' must be a mapping of rel-path -> content")
+    for rel, content in files.items():
+        if not isinstance(rel, str) or not isinstance(content, str):
+            raise _fail(f"{where} 'files' entries must be str -> str")
+        if rel.startswith(("/", "\\")) or ".." in Path(rel).parts:
+            raise _fail(f"{where} 'files' path escapes task dir: {rel!r}")
+    final_text = ref.get("final_text", "")
+    if not isinstance(final_text, str):
+        raise _fail(f"{where} 'final_text' must be a string")
+    delete = ref.get("delete", [])
+    if not isinstance(delete, list) or any(
+        not isinstance(rel, str) for rel in delete
+    ):
+        raise _fail(f"{where} 'delete' must be a list of strings")
+    for rel in delete:
+        if rel.startswith(("/", "\\")) or ".." in Path(rel).parts:
+            raise _fail(f"{where} 'delete' path escapes task dir: {rel!r}")
 
 
 def load_tasks(directory: str | Path) -> list[EvalTask]:

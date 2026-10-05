@@ -1,0 +1,57 @@
+id: run-tests-report
+category: read
+tags: [harder]
+prompt: |-
+  test_suite.py holds 6 unittest tests and 3 of them fail. Run the suite
+  with `python -m unittest test_suite -v` in your working directory and
+  report EXACTLY the failing test names (method names only), one per line.
+  Your shell starts in the server directory, NOT the workspace: prefix
+  every command with `cd /d "{{WORKSPACE}}" && ` (exact quotes).
+files:
+  test_suite.py: |-
+    import unittest
+
+
+    class Suite(unittest.TestCase):
+        def test_ok_beta(self):
+            self.assertEqual(1 + 1, 2)
+
+        def test_broken_alpha(self):
+            self.assertEqual(2 * 2, 5)
+
+        def test_ok_delta(self):
+            self.assertIn("b", "abc")
+
+        def test_broken_gamma(self):
+            self.assertEqual(len([1, 2]), 3)
+
+        def test_ok_epsilon(self):
+            self.assertTrue("x".upper() == "X")
+
+        def test_broken_zeta(self):
+            self.assertEqual("a" + "b", "ac")
+
+
+    if __name__ == "__main__":
+        unittest.main()
+checks:
+  - type: final_text_contains
+    pattern: \btest_broken_alpha\b
+  - type: final_text_contains
+    pattern: \btest_broken_gamma\b
+  - type: final_text_contains
+    pattern: \btest_broken_zeta\b
+  - type: final_text_not_contains
+    pattern: \btest_ok_beta\b
+  - type: final_text_not_contains
+    pattern: \btest_ok_delta\b
+  - type: final_text_not_contains
+    pattern: \btest_ok_epsilon\b
+max_tool_calls: 8
+reference:
+  files: {}
+  final_text: |-
+    Failing tests:
+    test_broken_alpha
+    test_broken_gamma
+    test_broken_zeta

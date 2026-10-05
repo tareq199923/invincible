@@ -1,0 +1,28 @@
+id: crlf-edit
+category: write
+tags: [harder]
+prompt: |-
+  settings.ini is a CRLF (Windows) file. Change `port = 8080` to
+  `port = 9090` and keep EVERY line ending as CRLF: do not convert any
+  line to LF. Prefer a surgical single-line edit over rewriting the file.
+files:
+  settings.ini: "[server]\r\nhost = example\r\nport = 8080\r\nmode = prod\r\n"
+checks:
+  - type: file_contains
+    path: settings.ini
+    substring: port = 9090
+  - type: file_line_endings
+    path: settings.ini
+    style: crlf
+  - type: region_unchanged
+    path: settings.ini
+    changed_pattern: port = 9090
+    unchanged:
+      - host = example
+      - mode = prod
+max_tool_calls: 8
+reference:
+  files:
+    settings.ini: "[server]\r\nhost = example\r\nport = 9090\r\nmode = prod\r\n"
+  final_text: |-
+    Changed port to 9090 with a single-line edit; line endings stay CRLF.

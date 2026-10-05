@@ -1,0 +1,24 @@
+id: wrong-path-recovery
+category: read
+tags: [harder]
+prompt: |-
+  Read config.yaml in your working directory and report the service port
+  number it sets, exactly as PORT=<number>. Do not create any new files.
+files:
+  conf/config.yml: |-
+    service_name: harborlight
+    service_port: 9142
+    debug: false
+checks:
+  - type: final_text_contains
+    pattern: \b9142\b
+  - type: file_absent
+    path: config.yaml
+  - type: file_absent
+    path: config.yml
+max_tool_calls: 8
+reference:
+  files: {}
+  final_text: |-
+    There is no config.yaml at the workspace root; the real file is
+    conf/config.yml. PORT=9142.

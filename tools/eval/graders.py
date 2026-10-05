@@ -130,6 +130,34 @@ def grade_check(
             f"{blocked_results} blocked results "
             f"{'<=' if ok else '>'} max {check['max']}"
         )
+    if ctype == "file_line_endings":
+        target = _workspace_file(workspace, check["path"])
+        if not target.is_file():
+            return False, f"{check['path']} missing (expected line-ending check)"
+        try:
+            raw = target.read_bytes()
+        except OSError as e:
+            return False, f"cannot read {check['path']}: {e}"
+        style = check.get("style")
+        if b"\n" not in raw:
+            return False, f"{check['path']} has no line endings"
+        crlf = raw.count(b"\r\n")
+        # Lone \r = a \r not followed by \n (covers stray \r and lone-\r files).
+        lone_cr = len(re.findall(rb"\r(?!\n)", raw))
+        if style == "crlf":
+            total_lf = raw.count(b"\n")
+            ok = crlf == total_lf and lone_cr == 0
+            return ok, (
+                f"{check['path']} "
+                f"{'all CRLF' if ok else 'has non-CRLF line endings'}"
+            )
+        if style == "lf":
+            ok = crlf == 0 and lone_cr == 0
+            return ok, (
+                f"{check['path']} "
+                f"{'all LF' if ok else 'has non-LF line endings'}"
+            )
+        return False, f"unknown line-ending style {style!r}"
     if ctype == "region_unchanged":
         target = _workspace_file(workspace, check["path"])
         if not target.is_file():

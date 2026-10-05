@@ -1,0 +1,45 @@
+id: two-bugs-two-files
+category: write
+tags: [harder]
+prompt: |-
+  test_all.py currently fails because of two independent bugs: one in
+  calc.py and one in words.py. Find and fix BOTH bugs so that running
+  `python test_all.py` in your working directory prints ALL-OK. Your shell
+  starts in the server directory, NOT the workspace: prefix every command
+  with `cd /d "{{WORKSPACE}}" && ` (exact quotes).
+files:
+  calc.py: |-
+    def add(a, b):
+        return a - b
+  words.py: |-
+    def shout(s):
+        return s.lower()
+  test_all.py: |-
+    from calc import add
+    from words import shout
+
+    assert add(2, 3) == 5, "add(2, 3) should be 5"
+    assert add(-1, 1) == 0, "add(-1, 1) should be 0"
+    assert shout("hi") == "HI", 'shout("hi") should be "HI"'
+    print("ALL-OK")
+checks:
+  - type: file_contains
+    path: calc.py
+    substring: return a + b
+  - type: file_contains
+    path: words.py
+    substring: return s.upper()
+  - type: shell_check
+    command: python test_all.py
+max_tool_calls: 6
+reference:
+  files:
+    calc.py: |-
+      def add(a, b):
+          return a + b
+    words.py: |-
+      def shout(s):
+          return s.upper()
+  final_text: |-
+    Fixed add in calc.py and shout in words.py.
+    Ran python test_all.py and it prints ALL-OK.
