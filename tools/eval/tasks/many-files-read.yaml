@@ -6,8 +6,8 @@ prompt: |-
   your working directory. Each log records request attempts and their
   results, plus which service each node runs. Answer: which service
   logged a timeout on its third attempt, and what retry delay (in ms)
-  was configured for that service? Report exactly as
-  SERVICE=<name> DELAY_MS=<number>.
+  was configured for that service? Output your answer as exactly one
+  line in the format SERVICE=<name> DELAY_MS=<number>.
 files: {}
 generate:
   - kind: retry_logs
@@ -90,14 +90,13 @@ generate:
           approx_line: 40
 checks:
   - type: final_text_contains
-    pattern: SERVICE=meridian\b
-  - type: final_text_contains
-    pattern: DELAY_MS=400\b
+    pattern: (?<![\w])SERVICE=meridian[ \t]+DELAY_MS=400\b
   - type: final_text_not_contains
-    pattern: SERVICE=halcyon
-  - type: final_text_not_contains
-    pattern: DELAY_MS=250
-max_tool_calls: 16
+    pattern: (?<![\w])SERVICE=halcyon[ \t]+DELAY_MS=250
+# Budget is a sanity bound only: the round cap is the real constraint.
+# A correct run (b694f35d080f) read 11 logs one call at a time and was
+# failed on budget at 19 calls, so keep this well above that.
+max_tool_calls: 30
 timeout_seconds: 240
 reference:
   files: {}

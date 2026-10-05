@@ -391,14 +391,50 @@ def _matches(pattern: str, text: str) -> bool:
 
 def test_b1_field_patterns():
     good = "SERVICE=meridian DELAY_MS=400"
-    assert _matches(r"SERVICE=meridian\b", good)
-    assert _matches(r"DELAY_MS=400\b", good)
-    assert not _matches(r"SERVICE=halcyon", good)
-    assert not _matches(r"DELAY_MS=250", good)
+    assert _matches(r"(?<![\w])SERVICE=meridian[ \t]+DELAY_MS=400\b", good)
+    assert not _matches(
+        r"(?<![\w])SERVICE=halcyon[ \t]+DELAY_MS=250", good)
+    # Explaining the work by quoting the decoy policy line is fine as
+    # long as the answer ends with the single-line meridian/400 answer.
+    explained = (
+        "policy service=halcyon retry_delay_ms=250 is only the decoy; "
+        "the attempt-3 timeout is q9z4 on meridian.\n"
+        "SERVICE=meridian DELAY_MS=400"
+    )
+    assert _matches(
+        r"(?<![\w])SERVICE=meridian[ \t]+DELAY_MS=400\b", explained)
+    assert not _matches(
+        r"(?<![\w])SERVICE=halcyon[ \t]+DELAY_MS=250", explained)
+    # A halcyon/250 answer fails both directions.
     wrong = "SERVICE=halcyon DELAY_MS=250"
-    assert _matches(r"SERVICE=halcyon", wrong)
-    assert _matches(r"DELAY_MS=250", wrong)
-    assert not _matches(r"SERVICE=meridian\b", wrong)
+    assert not _matches(
+        r"(?<![\w])SERVICE=meridian[ \t]+DELAY_MS=400\b", wrong)
+    assert _matches(
+        r"(?<![\w])SERVICE=halcyon[ \t]+DELAY_MS=250", wrong)
+    # Meridian in the wrong format fails: newline cannot join the pair,
+    # and split lines do not form the single-line answer.
+    assert not _matches(
+        r"(?<![\w])SERVICE=meridian[ \t]+DELAY_MS=400\b",
+        "SERVICE=meridian\nDELAY_MS=400")
+    assert not _matches(
+        r"(?<![\w])SERVICE=meridian[ \t]+DELAY_MS=400\b",
+        "SERVICE=meridian")
+    # Tab between fields is still one line, so it passes.
+    assert _matches(
+        r"(?<![\w])SERVICE=meridian[ \t]+DELAY_MS=400\b",
+        "SERVICE=meridian\tDELAY_MS=400")
+
+
+def test_many_files_budget_is_sanity_bound():
+    raw = _raw_tasks()["many-files-read"]
+    assert raw["max_tool_calls"] >= 25, raw["max_tool_calls"]
+
+
+def test_many_files_prompt_demands_single_line_answer():
+    raw = _raw_tasks()["many-files-read"]
+    prompt = raw["prompt"]
+    assert "exactly one" in prompt
+    assert "SERVICE=<name> DELAY_MS=<number>" in prompt
 
 
 def test_b2_field_patterns():
@@ -423,18 +459,67 @@ def test_b3_trap_names():
 
 
 def test_b4_end_anchor_cases():
-    true = r"tree/alpha/sales_report\.txt(?![\w.\-])"
+    true = r"tree[\\/]alpha[\\/]sales_report\.txt(?![\w.\-])"
     assert _matches(true, "tree/alpha/sales_report.txt")
+    assert _matches(true, r"tree\alpha\sales_report.txt")
     assert not _matches(true, "tree/alpha/sales_report.txt.bak")
+    assert not _matches(true, r"tree\alpha\sales_report.txt.bak")
     assert not _matches(true, "tree/alpha/sales-report.txt")
+    assert not _matches(true, r"tree\alpha\sales-report.txt")
     # Case-insensitive graders match the same path in any case with the
     # true pattern — that is exactly why the full-path not_contains
     # guard below must exist (a bare-name true check cannot tell
     # SALES_REPORT.TXT apart from sales_report.txt).
     assert _matches(true, "TREE/ALPHA/SALES_REPORT.TXT")
+    assert _matches(true, r"TREE\ALPHA\SALES_REPORT.TXT")
     assert _matches(
-        r"tree/alpha/sub/SALES_REPORT\.TXT",
+        r"tree[\\/]alpha[\\/]sub[\\/]SALES_REPORT\.TXT",
         "saw tree/alpha/sub/SALES_REPORT.TXT listed")
+    assert _matches(
+        r"tree[\\/]alpha[\\/]sub[\\/]SALES_REPORT\.TXT",
+        r"saw tree\alpha\sub\SALES_REPORT.TXT listed")
+
+
+def test_glob_reference_passes_both_separators(tmp_path: Path):
+    raw = _raw_tasks()["glob-nested"]
+    ref_text = raw["reference"]["final_text"]
+    backslash_text = ref_text.replace("/", "\\")
+    for text in (ref_text, backslash_text):
+        passed, results = graders.grade_all(
+            raw["checks"], workspace=tmp_path, final_text=text,
+            tool_counts={})
+        assert passed is True, (
+            "reference must pass with either separator: "
+            + str([(r["type"], r["passed"], r["reason"]) for r in results])
+        )
+
+
+def test_glob_decoys_fail_either_separator():
+    raw = _raw_tasks()["glob-nested"]
+    decoys = [
+        c["pattern"] for c in raw["checks"]
+        if c["type"] == "final_text_not_contains"
+    ]
+    assert decoys, "expected decoy not_contains patterns"
+    for pattern in decoys:
+        assert "[\\\\/]" in pattern, pattern
+        # Reconstruct one forward-slash and one backslash witness from
+        # the pattern: unescape "\." then swap the separator class.
+        fwd = pattern.replace("[\\\\/]", "/").replace("\\.", ".")
+        bwd = pattern.replace("[\\\\/]", "\\").replace("\\.", ".")
+        # Strip trailing lookahead (only the contains patterns have it;
+        # decoys do not, but be tolerant either way).
+        fwd = fwd.split("(?!", 1)[0]
+        bwd = bwd.split("(?!", 1)[0]
+        assert _matches(pattern, f"excluded {fwd} here"), pattern
+        assert _matches(pattern, f"excluded {bwd} here"), pattern
+
+
+def test_glob_prompt_lists_matches_only():
+    raw = _raw_tasks()["glob-nested"]
+    prompt = raw["prompt"]
+    assert "matching paths only" in prompt
+    assert "Do not list" in prompt and "excluded" in prompt
 
 
 # --- glob fixture integrity ---------------------------------------------------
@@ -461,7 +546,9 @@ def test_glob_count_matches_fixture():
         if c["type"] == "final_text_contains" and "COUNT" not in c["pattern"])
     assert len(listed) == len(expected)
     for pattern, rel in zip(listed, expected, strict=True):
-        assert pattern.startswith(rel.split(".txt")[0])
+        normalized = pattern.replace("[\\\\/]", "/").replace("\\.", ".")
+        normalized = normalized.split("(?!", 1)[0]
+        assert normalized.startswith(rel.split(".txt")[0]), (pattern, rel)
 
 
 def test_glob_no_casefold_collision():

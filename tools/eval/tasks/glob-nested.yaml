@@ -9,7 +9,8 @@ prompt: |-
   rule: a file matches iff its base name ends with `_report.txt`
   exactly, case-sensitive (so `.bak`, `.csv`, `-report`, and uppercase
   variants do NOT match). Report exactly as COUNT=<number> followed by
-  one relative path per line.
+  one relative path per line, listing matching paths only. Do not list
+  excluded or non-matching files.
 files:
   tree/alpha/sales_report.txt: |-
     placeholder content for tree/alpha/sales_report.txt
@@ -133,49 +134,49 @@ checks:
   - type: final_text_contains
     pattern: COUNT=9\b
   - type: final_text_contains
-    pattern: tree/alpha/sales_report\.txt(?![\w.\-])
+    pattern: tree[\\/]alpha[\\/]sales_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/alpha/notes_report\.txt(?![\w.\-])
+    pattern: tree[\\/]alpha[\\/]notes_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/alpha/sub/2024_report\.txt(?![\w.\-])
+    pattern: tree[\\/]alpha[\\/]sub[\\/]2024_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/alpha/sub/deep/q1_report\.txt(?![\w.\-])
+    pattern: tree[\\/]alpha[\\/]sub[\\/]deep[\\/]q1_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/beta/audit_report\.txt(?![\w.\-])
+    pattern: tree[\\/]beta[\\/]audit_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/beta/stock_report\.txt(?![\w.\-])
+    pattern: tree[\\/]beta[\\/]stock_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/beta/weekly_report\.txt(?![\w.\-])
+    pattern: tree[\\/]beta[\\/]weekly_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/beta/deep/nest/summary_report\.txt(?![\w.\-])
+    pattern: tree[\\/]beta[\\/]deep[\\/]nest[\\/]summary_report\.txt(?![\w.\-])
   - type: final_text_contains
-    pattern: tree/beta/archive/2023_report\.txt(?![\w.\-])
+    pattern: tree[\\/]beta[\\/]archive[\\/]2023_report\.txt(?![\w.\-])
   - type: final_text_not_contains
-    pattern: tree/alpha/sales_report\.txt\.bak
+    pattern: tree[\\/]alpha[\\/]sales_report\.txt\.bak
   - type: final_text_not_contains
-    pattern: tree/alpha/sales-report\.txt
+    pattern: tree[\\/]alpha[\\/]sales-report\.txt
   - type: final_text_not_contains
-    pattern: tree/alpha/sales_report\.csv
+    pattern: tree[\\/]alpha[\\/]sales_report\.csv
   - type: final_text_not_contains
-    pattern: tree/alpha/report\.txt
+    pattern: tree[\\/]alpha[\\/]report\.txt
   - type: final_text_not_contains
-    pattern: tree/alpha/sub/SALES_REPORT\.TXT
+    pattern: tree[\\/]alpha[\\/]sub[\\/]SALES_REPORT\.TXT
   - type: final_text_not_contains
-    pattern: tree/beta/deep/report\.txt
+    pattern: tree[\\/]beta[\\/]deep[\\/]report\.txt
   - type: final_text_not_contains
-    pattern: tree/beta/archive/sales-report\.txt
+    pattern: tree[\\/]beta[\\/]archive[\\/]sales-report\.txt
   - type: final_text_not_contains
-    pattern: tree/beta/weekly_report\.csv
+    pattern: tree[\\/]beta[\\/]weekly_report\.csv
   - type: final_text_not_contains
-    pattern: tree/beta/deep/nest/notes_report\.txt\.bak
+    pattern: tree[\\/]beta[\\/]deep[\\/]nest[\\/]notes_report\.txt\.bak
   - type: final_text_not_contains
-    pattern: tree/gamma/sales_report\.txt
+    pattern: tree[\\/]gamma[\\/]sales_report\.txt
   - type: final_text_not_contains
-    pattern: tree/gamma/secret_report\.txt
+    pattern: tree[\\/]gamma[\\/]secret_report\.txt
   - type: final_text_not_contains
-    pattern: tree/gamma/nested/deep_report\.txt
+    pattern: tree[\\/]gamma[\\/]nested[\\/]deep_report\.txt
   - type: final_text_not_contains
-    pattern: tree/gamma/nested/audit_report\.txt
+    pattern: tree[\\/]gamma[\\/]nested[\\/]audit_report\.txt
 max_tool_calls: 12
 reference:
   files: {}
