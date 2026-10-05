@@ -2,11 +2,11 @@ id: run-tests-report
 category: read
 tags: [harder]
 prompt: |-
-  test_suite.py holds 6 unittest tests and 3 of them fail. Run the suite
-  with `python -m unittest test_suite -v` in your working directory and
-  report EXACTLY the failing test names (method names only), one per line.
-  Your shell starts in the server directory, NOT the workspace: prefix
-  every command with `cd /d "{{WORKSPACE}}" && ` (exact quotes).
+  test_suite.py holds 10 unittest tests and 4 of them fail. Run the
+  suite with `python -m unittest test_suite -v` in your working directory
+  and report EXACTLY the failing test names (method names only), one per
+  line. Your shell starts in the server directory, NOT the workspace:
+  prefix every command with `cd /d "{{WORKSPACE}}" && ` (exact quotes).
 files:
   test_suite.py: |-
     import unittest
@@ -19,17 +19,29 @@ files:
         def test_broken_alpha(self):
             self.assertEqual(2 * 2, 5)
 
+        def test_failover_ok(self):
+            self.assertTrue("retry" in "retry-ok")
+
         def test_ok_delta(self):
             self.assertIn("b", "abc")
 
         def test_broken_gamma(self):
             self.assertEqual(len([1, 2]), 3)
 
+        def test_unfail_safe(self):
+            self.assertEqual("safe".upper(), "SAFE")
+
         def test_ok_epsilon(self):
             self.assertTrue("x".upper() == "X")
 
         def test_broken_zeta(self):
             self.assertEqual("a" + "b", "ac")
+
+        def test_ok_theta(self):
+            self.assertIsNone(None)
+
+        def test_broken_mu(self):
+            self.assertEqual(7 % 3, 0)
 
 
     if __name__ == "__main__":
@@ -41,12 +53,20 @@ checks:
     pattern: \btest_broken_gamma\b
   - type: final_text_contains
     pattern: \btest_broken_zeta\b
+  - type: final_text_contains
+    pattern: \btest_broken_mu\b
   - type: final_text_not_contains
     pattern: \btest_ok_beta\b
   - type: final_text_not_contains
     pattern: \btest_ok_delta\b
   - type: final_text_not_contains
     pattern: \btest_ok_epsilon\b
+  - type: final_text_not_contains
+    pattern: \btest_ok_theta\b
+  - type: final_text_not_contains
+    pattern: \btest_failover_ok\b
+  - type: final_text_not_contains
+    pattern: \btest_unfail_safe\b
 max_tool_calls: 8
 reference:
   files: {}
@@ -55,3 +75,4 @@ reference:
     test_broken_alpha
     test_broken_gamma
     test_broken_zeta
+    test_broken_mu

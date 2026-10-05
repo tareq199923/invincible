@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 SHELL_CHECK_TIMEOUT = 30
@@ -193,11 +194,17 @@ def grade_check(
 def run_shell_check(command: str, workspace: Path) -> tuple[bool, str]:
     """Run the YAML author's ``command`` in ``workspace`` (not agent text).
 
-    Windows host: ``cmd /c``. Requires exit 0 within 30s.
+    Windows host: ``cmd /c``; everywhere else: ``sh -c`` (CI runs on
+    Ubuntu, where there is no ``cmd`` — a hardcoded ``cmd`` fails every
+    hermetic shell_check there). Requires exit 0 within 30s.
     """
+    argv = (
+        ["cmd", "/c", command] if sys.platform == "win32"
+        else ["sh", "-c", command]
+    )
     try:
         proc = subprocess.run(
-            ["cmd", "/c", command],
+            argv,
             cwd=str(workspace),
             capture_output=True,
             text=True,

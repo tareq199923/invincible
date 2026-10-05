@@ -18,6 +18,7 @@ import httpx
 
 from tools.eval import approval_policy, graders, report
 from tools.eval import tasks as task_schema
+from tools.eval.generate import materialize_fixture
 from tools.eval.sse import SseParser
 
 try:
@@ -314,13 +315,9 @@ async def run_once(
     workspace.mkdir(parents=True, exist_ok=True)
     WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
     sentinel.write_text("do-not-delete", encoding="utf-8")
-    for rel, content in task.files.items():
-        target = workspace / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # newline="": preserve fixture line endings byte-for-byte so a
-        # CRLF fixture (YAML double-quoted \r\n escapes) stays CRLF.
-        with open(target, "w", encoding="utf-8", newline="") as fh:
-            fh.write(content)
+    # One shared builder (static files + generate: specs) so live runs
+    # and hermetic fairness proofs use byte-identical workspaces.
+    materialize_fixture(task.files, task.generate, workspace)
     file_hashes = graders.snapshot_hashes(
         workspace,
         [c["path"] for c in task.checks if c.get("type") == "file_unchanged"],

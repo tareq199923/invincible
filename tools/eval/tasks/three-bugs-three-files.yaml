@@ -1,0 +1,76 @@
+id: three-bugs-three-files
+category: write
+tags: [harder]
+# Floor: batched path ~9 calls / ~3 rounds (5 reads, 3 edits, 1 run);
+# stepwise path 11 calls / 11 rounds. What is measured here is the
+# CASCADE (each test_all.py run reveals exactly one bug, so test-driven
+# agents must iterate); the loop cap is NOT the gate. max_tool_calls is
+# a sanity bound against runaway loops (stepwise 11 + 4).
+prompt: |-
+  test_all.py currently fails. There is more than one bug, in more than
+  one file. Find and fix them all so that running `python test_all.py`
+  in your working directory prints ALL-OK. Your shell starts in the
+  server directory, NOT the workspace: prefix every command with
+  `cd /d "{{WORKSPACE}}" && ` (exact quotes).
+files:
+  calc.py: |-
+    def add(a, b):
+        return a - b
+  words.py: |-
+    def shout(s):
+        return s[1:].upper()
+  cart.py: |-
+    from calc import add
+    from prices import discount
+
+
+    def total(items):
+        t = 0
+        for p in items:
+            t = add(t, p)
+        return t
+
+
+    def checkout(items, pct):
+        return discount(total(items), pct)
+  prices.py: |-
+    def discount(price, pct):
+        return round(price, 2)
+  test_all.py: |-
+    from calc import add
+    from cart import total, checkout
+    from words import shout
+
+    assert add(2, 3) == 5, "add(2, 3) should be 5"
+    assert total([2, 3]) == 5, "total([2, 3]) should be 5"
+    assert shout("hi") == "HI", 'shout("hi") should be "HI"'
+    assert checkout([10, 10], 0.25) == 15.0, "checkout should be 15.0"
+    print("ALL-OK")
+checks:
+  - type: shell_check
+    command: python test_all.py
+max_tool_calls: 15
+reference:
+  files:
+    calc.py: |-
+      def add(a, b):
+          return a + b
+    words.py: |-
+      def shout(s):
+          return s.upper()
+    prices.py: |-
+      def discount(price, pct):
+          return round(price * (1 - pct), 2)
+  final_text: |-
+    Fixed add in calc.py, shout in words.py, and discount in prices.py.
+    Ran python test_all.py and it prints ALL-OK.
+  stages:
+    - calc.py: |-
+        def add(a, b):
+            return a + b
+    - calc.py: |-
+        def add(a, b):
+            return a + b
+      words.py: |-
+        def shout(s):
+            return s.upper()
