@@ -174,7 +174,9 @@ def environment_note(
     preference stay.
     """
     read_guidance = (
-        "Prefer find_files/code_search/read_file/list_dir over shell reads."
+        "Prefer find_files/code_search/read_file/list_dir over shell reads. "
+        "When hunting across many files, search first "
+        "(code_search/find_files) and read only the hits."
     )
     if mode == "plan":
         guidance = read_guidance

@@ -586,6 +586,7 @@ def test_environment_note_plan_omits_mutating_guidance():
     assert "Tools run locally on" in note
     assert "Chain commands with `&&`" in note
     assert "Prefer find_files/code_search/read_file/list_dir over shell reads." in note
+    assert "search first" in note
     assert "edit_file" not in note
     assert "write_file" not in note
     assert "python -c" not in note
@@ -603,6 +604,18 @@ def test_environment_note_manual_and_auto_keep_mutating_guidance():
         assert "Prefer edit_file for changing existing files" in note
         assert "Never use inline `python -c` to edit files" in note
         assert "do not retry another way, tell the user" in note
+
+
+def test_environment_note_search_first_in_all_modes():
+    """The search-first nudge rides the shared read guidance, so every
+    mode (including read-only plan) and both executions carry it."""
+    from invincible.core.webchat_agent import environment_note
+
+    for mode in ("plan", "manual", "auto"):
+        for execution in ("local", "agent"):
+            note = environment_note(execution, mode=mode)
+            assert "search first" in note, (mode, execution)
+            assert "code_search/find_files" in note, (mode, execution)
 
 
 def test_stage_mutating_edit_file_null_safety(tmp_path):
