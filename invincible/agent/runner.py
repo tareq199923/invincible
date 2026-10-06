@@ -44,7 +44,7 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 
 from invincible.agent import sandbox
-from invincible.core import tool_executor
+from invincible.core import harness_tools, tool_executor
 from invincible.core.settings import AGENT_POLL_HOLD_SECONDS, settings
 
 POLL_BACKOFF_SECONDS = 2.0
@@ -164,7 +164,9 @@ async def execute_job(job: dict) -> dict:
             )
         if job_type == "read_file":
             sandbox.check_agent_read(args.get("path", ""))
-            return await _read_local(args.get("path", ""))
+            return await _read_local(
+                args.get("path", ""),
+                args.get("offset"), args.get("limit"))
         if job_type == "code_search":
             # H6a: home sandbox re-check (Wall 2), then the EXACT shared
             # search the server uses — byte-identical result shapes.
@@ -241,17 +243,18 @@ async def execute_job(job: dict) -> dict:
             )
         return {
             "status": "error",
-            "error": f"Unknown job type: {job_type}",
+            "error": f"Unknown job type: {job_type}. Valid job types: "
+                     f"{', '.join(harness_tools.agent_job_names())}.",
         }
     except tool_executor.ToolBlocked as e:
         return {"status": "blocked", "reason": e.reason}
 
 
-async def _read_local(path: str) -> dict:
+async def _read_local(path: str, offset=None, limit=None) -> dict:
     """Same read result shapes tool_executor.read_file produces, with
     the agent sandbox as the gate instead of the server's read
     roots."""
-    return await tool_executor._read_file(path)
+    return await tool_executor._read_file(path, offset, limit)
 
 
 async def run_agent(base_url: str, api_key: str,

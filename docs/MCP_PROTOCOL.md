@@ -486,6 +486,14 @@ Phase 15b continuity tools, the memory tools, and the project tools):
 "arguments": {"path": "C:\\Users\\me\\project\\notes.txt"}
 ```
 
+Optional `offset` (1-based first line, default 1) and `limit` (max lines)
+page through large files; `truncated` is `true` whenever lines or
+characters past the window exist:
+
+```json
+"arguments": {"path": "C:\\Users\\me\\project\\notes.txt", "offset": 120, "limit": 60}
+```
+
 No confirmation. The content is limited to 65536 characters; `truncated`
 is `true` when more content was available. Result (success):
 
@@ -524,7 +532,7 @@ Denylisted target (`.env`, `sessions.db`, `.git/`):
   "jsonrpc": "2.0",
   "id": 3,
   "result": {
-    "content": [{"type": "text", "text": "Blocked: read of Invincible's .env file (.env)"}],
+    "content": [{"type": "text", "text": "Blocked: read of Invincible's .env file (.env). Use a different path, or ask the user for an allowed one — do not try alternate spellings or copies of this path."}],
     "isError": true
   }
 }

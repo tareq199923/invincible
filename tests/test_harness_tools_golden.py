@@ -14,7 +14,10 @@ GOLDEN_MCP_TOOLS = [
         '(extend with INVINCIBLE_READ_ROOTS); files holding secrets or'
         ' sensitive state (.env, sessions.db, .git/) are rejected '
         'outright wherever they sit. Results are capped at 65536 '
-        'characters and include a truncated flag. No confirmation is '
+        'characters and include a truncated flag. Optional offset '
+        '(1-based first line, default 1) and limit (max lines) page '
+        'through large files; the character cap still applies to the '
+        'window. No confirmation is '
         'required for other files since reading is non-destructive.'
         ),
         'inputSchema': {
@@ -22,6 +25,12 @@ GOLDEN_MCP_TOOLS = [
             'properties': {
                 'path': {
                     'type': 'string',
+                },
+                'offset': {
+                    'type': 'integer',
+                },
+                'limit': {
+                    'type': 'integer',
                 },
             },
             'required': [
@@ -612,13 +621,19 @@ GOLDEN_WEBCHAT_SCHEMAS = [
             ' (your paired PC when an agent is connected, else the '
             'server host). Secret/state files are rejected. Results '
             'are capped at 65536 characters and include a truncated '
-            'flag.'
+            'flag. Optional offset/limit page through large files by line.'
             ),
             'parameters': {
                 'type': 'object',
                 'properties': {
                     'path': {
                         'type': 'string',
+                    },
+                    'offset': {
+                        'type': 'integer',
+                    },
+                    'limit': {
+                        'type': 'integer',
                     },
                 },
                 'required': [
@@ -1467,8 +1482,12 @@ async def test_runner_handles_all_machine_tools():
 
 async def test_runner_unknown_job_type_shape():
     from invincible.agent import runner
+    from invincible.core import harness_tools
 
     result = await runner.execute_job(
         {"type": "frobnicate_xyz", "args": {}})
     assert result == {
-        "status": "error", "error": "Unknown job type: frobnicate_xyz"}
+        "status": "error",
+        "error": f"Unknown job type: frobnicate_xyz. Valid job types: "
+                 f"{', '.join(harness_tools.agent_job_names())}.",
+    }

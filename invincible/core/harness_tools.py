@@ -98,16 +98,20 @@ TOOLS: tuple[HarnessTool, ...] = (
             "(extend with INVINCIBLE_READ_ROOTS); files holding secrets or "
             "sensitive state (.env, sessions.db, .git/) are rejected "
             "outright wherever they sit. Results are capped at 65536 "
-            "characters and include a truncated flag. No confirmation is "
+            "characters and include a truncated flag. Optional offset "
+            "(1-based first line, default 1) and limit (max lines) page "
+            "through large files; the character cap still applies to the "
+            "window. No confirmation is "
             "required for other files since reading is non-destructive."
         ),
         description_webchat=(
             "Read a file's contents on the machine that executes tools "
             "(your paired PC when an agent is connected, else the server "
             "host). Secret/state files are rejected. Results are capped "
-            "at 65536 characters and include a truncated flag."
+            "at 65536 characters and include a truncated flag. Optional "
+            "offset/limit page through large files by line."
         ),
-        properties={"path": _str()},
+        properties={"path": _str(), "offset": _int(), "limit": _int()},
         required=("path",),
         read_only=True,
         needs_approval=False,
@@ -695,6 +699,25 @@ def get_tool(name: str) -> HarnessTool | None:
     return _BY_NAME.get(name)
 
 
+def expected_args_hint(name: str) -> str:
+    """Compact expected-arguments hint for arg-shape errors (Step 3).
+
+    Pure metadata formatting: property names + required names for one
+    tool, so a caller that sent malformed arguments can retry
+    correctly. Empty string for unknown names (the unknown-tool error
+    owns those).
+    """
+    tool = _BY_NAME.get(name or "")
+    if tool is None:
+        return ""
+    names = ", ".join(tool.properties) if tool.properties else "(no arguments)"
+    required = ", ".join(tool.required) if tool.required else "none"
+    return (
+        f" Expected arguments for {tool.name}: "
+        f"{{{names}}}; required: {required}."
+    )
+
+
 def webchat_properties(properties: dict) -> dict:
     """Derive the webchat property schemas from the ``/mcp`` form.
 
@@ -820,6 +843,33 @@ def router_tools(agent_name: str) -> tuple[str, ...]:
     """Today's agent tool tuples (triage/operator), in registry order."""
     return tuple(
         tool.name for tool in TOOLS if agent_name in tool.router_agents)
+
+
+def mcp_tool_names() -> tuple[str, ...]:
+    """Names the ``/mcp`` surface accepts, in registry order (Step 4:
+    unknown-tool errors list these)."""
+    return tuple(tool.name for tool in TOOLS if tool.mcp)
+
+
+def webchat_tool_names() -> tuple[str, ...]:
+    """Names the webchat surface accepts, in webchat order (Step 4:
+    unknown-tool errors list these)."""
+    return _WEBCHAT_ORDER
+
+
+def webchat_names_for_mode(mode: str) -> tuple[str, ...]:
+    """Names offered in one webchat mode, in webchat order (Step 4:
+    the tool-call loop names only what this mode actually offers)."""
+    return tuple(
+        name for name in _WEBCHAT_ORDER
+        if mode in _BY_NAME[name].webchat_modes
+    )
+
+
+def agent_job_names() -> tuple[str, ...]:
+    """Job types the agent runner accepts, in registry order (Step 4:
+    unknown-job errors list these)."""
+    return tuple(tool.name for tool in TOOLS if tool.agent_job)
 
 
 def docs_data_plane_names() -> frozenset[str]:

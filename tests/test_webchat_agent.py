@@ -117,7 +117,7 @@ async def test_plan_mode_offers_read_only_tools(
     router_setter({"w1.example.com": handler})
     reads = []
 
-    async def fake_read(path):
+    async def fake_read(path, *args):
         reads.append(path)
         return {"status": "read", "path": path, "content": "hello"}
 
@@ -512,7 +512,7 @@ async def test_read_only_tool_calls_run_concurrently(
     arrived = set()
     both_started = asyncio.Event()
 
-    async def fake_read(path):
+    async def fake_read(path, *args):
         arrived.add(path)
         if len(arrived) == 2:
             both_started.set()
@@ -537,6 +537,59 @@ async def test_read_only_tool_calls_run_concurrently(
     assert [message.get("role") for message in history] == [
         "user", "assistant", "tool", "tool", "assistant",
     ]
+
+
+async def test_malformed_tool_arguments_echo_expected_schema(
+    client, byok_env, router_setter,
+):
+    bad_call = {
+        "id": "c1",
+        "type": "function",
+        "function": {"name": "read_file", "arguments": "{not valid json"},
+    }
+    _bodies, handler = scripted([
+        tool_body("w1", [bad_call]),
+        provider_body("w1", content="noted"),
+    ])
+    router_setter({"w1.example.com": handler})
+    await agent_user(client, "badargs@example.com")
+    resp = await client.post("/dashboard/chat/stream", json={
+        "session_id": "web-badargs", "message": "read it",
+        "mode": "plan"})
+    assert resp.status_code == 200, resp.text
+    events = parse_web_events(resp.text)
+    results = [data for name, data in events if name == "tool_result"]
+    assert len(results) == 1
+    assert "not valid JSON" in json.dumps(results[0])
+    assert "Expected arguments for read_file" in json.dumps(results[0])
+
+
+async def test_unknown_tool_call_lists_valid_names(
+    client, byok_env, router_setter,
+):
+    bad_call = {
+        "id": "c1",
+        "type": "function",
+        "function": {
+            "name": "frobnicate_xyz", "arguments": json.dumps({})},
+    }
+    _bodies, handler = scripted([
+        tool_body("w1", [bad_call]),
+        provider_body("w1", content="noted"),
+    ])
+    router_setter({"w1.example.com": handler})
+    await agent_user(client, "badtool@example.com")
+    resp = await client.post("/dashboard/chat/stream", json={
+        "session_id": "web-badtool", "message": "do it",
+        "mode": "plan"})
+    assert resp.status_code == 200, resp.text
+    events = parse_web_events(resp.text)
+    results = [data for name, data in events if name == "tool_result"]
+    assert len(results) == 1
+    text = json.dumps(results[0])
+    assert "Unknown tool: frobnicate_xyz" in text
+    assert "Valid tools:" in text
+    assert "read_file" in text
 
 
 # --- environment_note: OS/shell guidance after the static prompt -----------

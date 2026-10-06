@@ -264,6 +264,17 @@ async def _dispatch(method, rpc_id, params, request,
     if method == "tools/call":
         name = params.get("name")
         args = params.get("arguments") or {}
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                args = None
+        if not isinstance(args, dict):
+            return _result(rpc_id, _tool_content(
+                f"Tool arguments for '{name}' were not valid JSON."
+                f"{harness_tools.expected_args_hint(name or '')}",
+                is_error=True,
+            ))
         pending_actions = request.app.state.pending_actions
         # Phase 2: every staged action is bound to the caller's subject;
         # only the same subject may later confirm it.
@@ -286,13 +297,16 @@ async def _dispatch(method, rpc_id, params, request,
                 if agent_executor is not None:
                     # H2: policy gate (agent-routed: server roots skipped,
                     # the agent's home sandbox gates locally as Wall 3).
+                    read_args = {
+                        "path": args.get("path", ""),
+                        "offset": args.get("offset"),
+                        "limit": args.get("limit"),
+                    }
                     before_tool_call(
-                        "read_file", {"path": args.get("path", "")},
+                        "read_file", read_args,
                         agent_routed=True,
                     )
-                    result = await agent_executor(
-                        "read_file", {"path": args.get("path", "")}
-                    )
+                    result = await agent_executor("read_file", read_args)
                 else:
                     # H2: policy gate before local execution (same check
                     # read_file runs internally; the gate is the single
@@ -300,7 +314,8 @@ async def _dispatch(method, rpc_id, params, request,
                     before_tool_call(
                         "read_file", {"path": args.get("path", "")})
                     result = await tool_executor.read_file(
-                        args.get("path", ""))
+                        args.get("path", ""),
+                        args.get("offset"), args.get("limit"))
                 status = result.get("status")
                 if status in ("agent_offline", "agent_timeout"):
                     await _audit_action(request, name, status,
@@ -699,7 +714,9 @@ async def _dispatch(method, rpc_id, params, request,
                             payload = json.loads(args.get("payload") or "")
                         except json.JSONDecodeError as e:
                             return _result(rpc_id, _tool_content(
-                                f"payload must be a JSON object: {e}",
+                                f"payload must be a JSON object: {e} (a "
+                                "{...} mapping encoded as a string)."
+                                f"{harness_tools.expected_args_hint(name)}",
                                 is_error=True,
                             ))
                         head = await engine.set_state(
@@ -965,7 +982,11 @@ async def _dispatch(method, rpc_id, params, request,
                     "projects": listing, "count": len(listing),
                 })))
 
-            return _error(rpc_id, -32601, f"Unknown tool: {name}")
+            return _error(
+                rpc_id, -32601,
+                f"Unknown tool: {name}. Valid tools: "
+                f"{', '.join(harness_tools.mcp_tool_names())}.",
+            )
 
         except tool_executor.ToolBlocked as e:
             _emit_harness(

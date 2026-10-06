@@ -175,6 +175,17 @@ def test_path_outside_root_blocked(real_home_root):
         sandbox.check_agent_write("C:/Windows/system32/evil.dll")
 
 
+def test_sandbox_block_reasons_carry_next_step(real_home_root):
+    with pytest.raises(ToolBlocked) as excinfo:
+        sandbox.check_agent_read(
+            os.path.join(os.path.dirname(str(real_home_root)), "elsewhere.txt")
+        )
+    assert "different file" in excinfo.value.reason
+    with pytest.raises(ToolBlocked) as excinfo:
+        sandbox.check_agent_read(_in(real_home_root, ".env"))
+    assert "ask the user" in excinfo.value.reason
+
+
 def test_agent_root_env_override(tmp_path, monkeypatch):
     other = tmp_path / "other-root"
     other.mkdir()

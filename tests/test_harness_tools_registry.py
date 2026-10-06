@@ -35,6 +35,34 @@ def test_all_names_resolve():
     assert harness_tools.get_tool("frobnicate_xyz") is None
 
 
+def test_expected_args_hint_names_properties_and_required():
+    hint = harness_tools.expected_args_hint("read_file")
+    assert "path" in hint and "offset" in hint and "limit" in hint
+    assert "required: path" in hint
+    assert harness_tools.expected_args_hint("frobnicate_xyz") == ""
+    assert harness_tools.expected_args_hint("") == ""
+
+
+def test_surface_name_helpers_match_derived_surfaces():
+    from invincible.core import webchat_agent
+
+    assert set(harness_tools.mcp_tool_names()) == {
+        tool.name for tool in harness_tools.TOOLS if tool.mcp
+    }
+    assert "confirm_action" in harness_tools.mcp_tool_names()
+    assert tuple(harness_tools.webchat_tool_names()) == tuple(
+        s["function"]["name"] for s in webchat_agent.WEBCHAT_TOOL_SCHEMAS
+    )
+    plan = harness_tools.webchat_names_for_mode("plan")
+    assert "read_file" in plan
+    assert "write_file" not in plan
+    assert "execute_bash" not in plan
+    assert set(harness_tools.webchat_names_for_mode("manual")) - set(plan)
+    assert set(harness_tools.agent_job_names()) == {
+        tool.name for tool in harness_tools.TOOLS if tool.agent_job
+    }
+
+
 def test_webchat_order_matches_surface():
     assert set(harness_tools._WEBCHAT_ORDER) == {
         tool.name for tool in harness_tools.TOOLS if tool.webchat

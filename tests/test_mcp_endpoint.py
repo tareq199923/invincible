@@ -129,6 +129,28 @@ async def test_mcp_call_blocked_command(client, bearer_headers):
     assert "Blocked" in body["result"]["content"][0]["text"]
 
 
+async def test_mcp_string_arguments_echo_expected_schema(
+        client, bearer_headers):
+    response = await _call_tool(
+        client, bearer_headers, "read_file", "{not valid json")
+    body = response.json()
+    assert body["result"]["isError"] is True
+    text = body["result"]["content"][0]["text"]
+    assert "not valid JSON" in text
+    assert "Expected arguments for read_file" in text
+    assert "path" in text
+
+
+async def test_mcp_unknown_tool_lists_valid_names(client, bearer_headers):
+    response = await _call_tool(
+        client, bearer_headers, "frobnicate_xyz", {})
+    body = response.json()
+    assert body["error"]["code"] == -32601
+    assert "Unknown tool: frobnicate_xyz" in body["error"]["message"]
+    assert "Valid tools:" in body["error"]["message"]
+    assert "read_file" in body["error"]["message"]
+
+
 def _pending_token(body):
     """Extract the token from a pending_confirmation result."""
     result = json.loads(body["result"]["content"][0]["text"])

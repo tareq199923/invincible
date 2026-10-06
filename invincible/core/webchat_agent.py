@@ -176,7 +176,8 @@ def environment_note(
     read_guidance = (
         "Prefer find_files/code_search/read_file/list_dir over shell reads. "
         "When hunting across many files, search first "
-        "(code_search/find_files) and read only the hits."
+        "(code_search/find_files) and read only the hits. "
+        "For large files, page with read_file offset/limit."
     )
     if mode == "plan":
         guidance = read_guidance
@@ -399,7 +400,13 @@ async def _run_read(executor, name: str, args: dict,
     if executor is not None:
         return await executor(name, args)
     if name == "read_file":
-        return await tool_executor.read_file(str(args.get("path", "")))
+        limit_raw = args.get("limit")
+        return await tool_executor.read_file(
+            str(args.get("path", "")),
+            _coerce_int(args.get("offset"), 1),
+            None if limit_raw is None
+            else _coerce_int(limit_raw, 0),
+        )
     if name == "list_dir":
         return await tool_executor.list_dir(
             str(args.get("path", "")),
@@ -434,7 +441,11 @@ async def _run_read(executor, name: str, args: dict,
             _coerce_int(args.get("limit"),
                         tool_executor.PROCESSES_DEFAULT_LIMIT)
         )
-    return {"status": "error", "error": f"Unknown tool: {name}"}
+    valid = ", ".join(
+        n for n in harness_tools.webchat_tool_names()
+        if n in READ_ONLY_BATCH_TOOLS)
+    return {"status": "error",
+            "error": f"Unknown tool: {name}. Valid tools: {valid}."}
 
 
 def _stage_mutating(store, name: str, args: dict,
@@ -460,7 +471,9 @@ def _stage_mutating(store, name: str, args: dict,
             "" if new_raw is None else str(new_raw),
             store, replace_all=args.get("replace_all", False) is True,
             owner_subject=owner_subject)
-    raise tool_executor.ToolBlocked(f"Unknown mutating tool: {name}")
+    raise tool_executor.ToolBlocked(
+        f"Unknown mutating tool: {name}. Valid tools: "
+        f"{', '.join(MUTATING_TOOLS)}.")
 
 
 async def _webchat_project_id(engine, user_id: int, args: dict):
@@ -710,7 +723,11 @@ async def _run_data_tool(
                 except (json.JSONDecodeError, TypeError):
                     return {
                         "status": "error",
-                        "error": "payload must be a JSON object.",
+                        "error": (
+                            "payload must be a JSON object (a {...} "
+                            "mapping encoded as a string)."
+                            f"{harness_tools.expected_args_hint(name)}"
+                        ),
                     }, False
                 head = await continuity.set_state(
                     session_id, payload,
@@ -741,7 +758,11 @@ async def _run_data_tool(
             return {"status": "error", "error": str(e)}, False
         except ValueError as e:
             return {"status": "error", "error": str(e)}, False
-    return {"status": "error", "error": f"Unknown tool: {name}."}, False
+    valid = ", ".join(
+        n for n in harness_tools.webchat_tool_names()
+        if n in ALL_DATA_TOOLS + AGENT_ONLY_TOOLS)
+    return {"status": "error",
+            "error": f"Unknown tool: {name}. Valid tools: {valid}."}, False
 
 
 def _error_text(body: object) -> str:
@@ -982,10 +1003,16 @@ async def run_agent_turn(
                     fname = item["name"]
                     fargs = item["args"]
                     if not item["valid_args"]:
+                        hint = harness_tools.expected_args_hint(fname)
                         outcome = {
                             "result": {
                                 "status": "error",
-                                "error": "Tool arguments were not valid JSON.",
+                                "error": (
+                                    f"Tool arguments for '{fname}' were "
+                                    f"not valid JSON.{hint}"
+                                ) if fname else (
+                                    "Tool arguments were not valid JSON."
+                                ),
                             },
                             "ok": False,
                         }
@@ -993,10 +1020,13 @@ async def run_agent_turn(
                         READ_ONLY_TOOLS + MUTATING_TOOLS
                         + ALL_DATA_TOOLS + AGENT_ONLY_TOOLS
                     ):
+                        valid = ", ".join(
+                            harness_tools.webchat_names_for_mode(mode))
                         outcome = {
                             "result": {
                                 "status": "error",
-                                "error": f"Unknown tool: {fname}.",
+                                "error": f"Unknown tool: {fname}. "
+                                         f"Valid tools: {valid}.",
                             },
                             "ok": False,
                         }

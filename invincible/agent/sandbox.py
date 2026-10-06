@@ -37,7 +37,11 @@ elsewhere; this is the third wall only.
 import os
 import re
 
-from invincible.core.tool_executor import ToolBlocked
+from invincible.core.tool_executor import (
+    HINT_BLOCKED_OUTSIDE_ROOTS,
+    HINT_BLOCKED_PATH,
+    ToolBlocked,
+)
 
 # Matched on every component of the requested path, case-insensitive.
 # Entries appear once and are applied to BOTH reads and writes: unlike
@@ -98,12 +102,15 @@ def check_agent_path(path: str, verb: str) -> None:
     if not (norm == root or norm.startswith(root + os.sep)):
         raise ToolBlocked(
             f"{verb} of path outside the agent sandbox root ({root}): "
-            f"{path}"
+            f"{path}. {HINT_BLOCKED_OUTSIDE_ROOTS}"
         )
     for part in real_path.split(os.sep):
         for pattern, reason in _BASENAME_PATTERNS:
             if pattern.match(part):
-                raise ToolBlocked(f"{verb} of {reason} ({real_path})")
+                raise ToolBlocked(
+                    f"{verb} of {reason} ({real_path}). "
+                    f"{HINT_BLOCKED_PATH}"
+                )
 
 
 def check_agent_read(path: str) -> None:

@@ -463,6 +463,98 @@ async def test_read_file_protected_path_raises_without_touching_disk():
         await tool_executor.read_file(target)
 
 
+def test_blocked_command_reason_carries_next_step():
+    with pytest.raises(tool_executor.ToolBlocked) as excinfo:
+        tool_executor.check_denylist("sudo apt update")
+    assert "sudo" in excinfo.value.reason
+    assert "non-destructive alternative" in excinfo.value.reason
+
+
+def test_blocked_protected_path_reason_carries_next_step():
+    target = os.path.join(tool_executor._REPO_ROOT, ".env")
+    with pytest.raises(tool_executor.ToolBlocked) as excinfo:
+        tool_executor.check_write_denylist(target)
+    assert ".env" in excinfo.value.reason
+    assert "ask the user" in excinfo.value.reason
+
+
+def test_blocked_outside_roots_reason_carries_next_step(
+        tmp_path, monkeypatch):
+    monkeypatch.delenv("INVINCIBLE_READ_ROOTS", raising=False)
+    with pytest.raises(tool_executor.ToolBlocked) as excinfo:
+        tool_executor.check_read_denylist(str(tmp_path / "elsewhere.txt"))
+    assert "allowed roots" in excinfo.value.reason
+    assert "different file" in excinfo.value.reason
+
+
+async def test_read_file_offset_and_limit_page_by_line(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    target = tmp_path / "paged.txt"
+    target.write_text("one\ntwo\nthree\nfour\n")
+
+    result = await tool_executor.read_file(str(target), 2, 2)
+
+    assert result["status"] == "read"
+    assert result["content"] == "two\nthree\n"
+    assert result["truncated"] is True  # line four remains past the window
+
+
+async def test_read_file_limit_none_reads_to_end(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    target = tmp_path / "tail.txt"
+    target.write_text("one\ntwo\nthree\n")
+
+    result = await tool_executor.read_file(str(target), 2)
+
+    assert result["status"] == "read"
+    assert result["content"] == "two\nthree\n"
+    assert result["truncated"] is False
+
+
+async def test_read_file_offset_past_end_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    target = tmp_path / "short.txt"
+    target.write_text("only\n")
+
+    result = await tool_executor.read_file(str(target), 99, 10)
+
+    assert result["status"] == "read"
+    assert result["content"] == ""
+    assert result["truncated"] is False
+
+
+async def test_read_file_paging_counts_crlf_lines(tmp_path, monkeypatch):
+    # Text-mode reads translate CRLF (legacy behavior); paging still
+    # counts physical lines.
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    target = tmp_path / "crlf.txt"
+    target.write_bytes(b"one\r\ntwo\r\nthree\r\n")
+
+    result = await tool_executor.read_file(str(target), 2, 1)
+
+    assert result["status"] == "read"
+    assert result["content"] == "two\n"
+    assert result["truncated"] is True
+
+
+async def test_read_file_paging_clamps_bad_bounds(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_READ_ROOTS", str(tmp_path))
+    target = tmp_path / "clamp.txt"
+    target.write_text("one\ntwo\n")
+
+    floored = await tool_executor.read_file(str(target), 0)
+    assert floored["content"] == "one\ntwo\n"
+    assert floored["truncated"] is False
+
+    empty = await tool_executor.read_file(str(target), 1, 0)
+    assert empty["content"] == ""
+    assert empty["truncated"] is True
+
+    garbage = await tool_executor.read_file(str(target), "bogus", "bogus")
+    assert garbage["content"] == "one\ntwo\n"
+    assert garbage["truncated"] is False
+
+
 def test_write_denylist_allows_paths_outside_repo(tmp_path):
     tool_executor.check_write_denylist(
         str(tmp_path / "scratch.txt")

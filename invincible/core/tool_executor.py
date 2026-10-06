@@ -194,6 +194,25 @@ class ToolBlocked(Exception):
         super().__init__(reason)
 
 
+# Step 3: model-facing next-step hints. Block reasons surface to the model
+# inside tool results ("Blocked: <reason>"), so each reason class carries
+# a one-sentence directive saying what to do INSTEAD — the live prompt
+# already tells the model not to retry blocked calls another way; these
+# hints make the blocked result itself actionable.
+HINT_BLOCKED_COMMAND = (
+    "Pick a non-destructive alternative; this block cannot be approved "
+    "away, so do not reword the same action to evade it."
+)
+HINT_BLOCKED_PATH = (
+    "Use a different path, or ask the user for an allowed one — do not "
+    "try alternate spellings or copies of this path."
+)
+HINT_BLOCKED_OUTSIDE_ROOTS = (
+    "Ask the user to place the file under the working directory or an "
+    "allowed root, or pick a different file."
+)
+
+
 # Reserved args key carrying the staging subject through pending_actions
 # persistence (Phase 2); stripped on load, never seen by tool execution.
 _OWNER_SUBJECT_KEY = "_owner_subject"
@@ -398,7 +417,7 @@ class PendingActionStore:
 def check_denylist(command: str) -> None:
     for pattern, reason in DENYLIST_PATTERNS:
         if pattern.search(command):
-            raise ToolBlocked(reason)
+            raise ToolBlocked(f"{reason}. {HINT_BLOCKED_COMMAND}")
 
 
 def _check_protected_path(
@@ -427,7 +446,8 @@ def _check_protected_path(
     rel = rel.replace(os.sep, "/")
     for pattern, reason in patterns:
         if pattern.match(rel):
-            raise ToolBlocked(f"{verb} of {reason} ({rel})")
+            raise ToolBlocked(
+                f"{verb} of {reason} ({rel}). {HINT_BLOCKED_PATH}")
 
 
 # read_file is sandboxed to a small set of roots: the repo root, the
@@ -464,12 +484,14 @@ def check_read_denylist(path: str) -> None:
     if not any(norm == root or norm.startswith(root + os.sep) for root in roots):
         raise ToolBlocked(
             f"read of path outside the allowed roots ({abs_path}). "
-            "Set INVINCIBLE_READ_ROOTS to grant access to other directories."
+            "Set INVINCIBLE_READ_ROOTS to grant access to other directories. "
+            f"{HINT_BLOCKED_OUTSIDE_ROOTS}"
         )
     for part in abs_path.split(os.sep):
         for pattern, reason in _BASENAME_READ_DENYLIST:
             if pattern.match(part):
-                raise ToolBlocked(f"read of {reason} ({abs_path})")
+                raise ToolBlocked(
+                    f"read of {reason} ({abs_path}). {HINT_BLOCKED_PATH}")
     _check_protected_path(path, READ_DENYLIST_PATTERNS, "read")
 
 
@@ -824,17 +846,64 @@ async def confirm_action(
 READ_FILE_CONTENT_CHAR_CAP = 64 * 1024
 
 
-async def _read_file(path: str) -> dict:
+async def _read_file(path: str, offset: int | None = None,
+                     limit: int | None = None) -> dict:
+    """Line-paged read. ``offset`` is the 1-based first line (default 1);
+    ``limit`` caps how many lines come back (default: the whole file).
+    The 64K character cap still bounds the returned window, and
+    ``truncated`` is true whenever content past the window exists —
+    more lines, or more characters, than were returned. The default call
+    (no offset/limit) reproduces the legacy whole-file read exactly."""
+    try:
+        first_line = int(offset) if offset is not None else 1
+    except (TypeError, ValueError):
+        first_line = 1
+    first_line = max(first_line, 1)
+    try:
+        max_lines = int(limit) if limit is not None else None
+    except (TypeError, ValueError):
+        max_lines = None
+    if max_lines is not None:
+        max_lines = max(max_lines, 0)
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
-            content = f.read(READ_FILE_CONTENT_CHAR_CAP + 1)
-        truncated = len(content) > READ_FILE_CONTENT_CHAR_CAP
-        return {
-            "status": "read",
-            "path": path,
-            "content": content[:READ_FILE_CONTENT_CHAR_CAP],
-            "truncated": truncated,
-        }
+            for _ in range(first_line - 1):
+                if not f.readline():
+                    return {"status": "read", "path": path,
+                            "content": "", "truncated": False}
+            chunks: list[str] = []
+            chars = 0
+            lines_taken = 0
+            truncated = False
+            while max_lines is None or lines_taken < max_lines:
+                line = f.readline()
+                if not line:
+                    break
+                room = READ_FILE_CONTENT_CHAR_CAP + 1 - chars
+                if room <= 0:
+                    truncated = True
+                    break
+                if len(line) > room:
+                    chunks.append(line[:room])
+                    chars += room
+                    truncated = True
+                    break
+                chunks.append(line)
+                chars += len(line)
+                lines_taken += 1
+            if (not truncated and max_lines is not None
+                    and lines_taken >= max_lines and f.read(1)):
+                truncated = True
+            content = "".join(chunks)
+            if len(content) > READ_FILE_CONTENT_CHAR_CAP:
+                content = content[:READ_FILE_CONTENT_CHAR_CAP]
+                truncated = True
+            return {
+                "status": "read",
+                "path": path,
+                "content": content,
+                "truncated": truncated,
+            }
     except FileNotFoundError:
         return {"status": "error", "error": f"File not found: {path}"}
     except IsADirectoryError:
@@ -845,7 +914,8 @@ async def _read_file(path: str) -> dict:
         return {"status": "error", "error": str(e)}
 
 
-async def read_file(path: str) -> dict:
+async def read_file(path: str, offset: int | None = None,
+                    limit: int | None = None) -> dict:
     """No approval step - reading isn't destructive, so the friction
     wouldn't buy anything. The sandbox is the gate instead: reads are only
     allowed under the repo root, the server's working directory, and any
@@ -855,7 +925,7 @@ async def read_file(path: str) -> dict:
     code is the entire point of this tool."""
     check_read_denylist(path)  # raises ToolBlocked; caller maps it to a response
 
-    return await _read_file(path)
+    return await _read_file(path, offset, limit)
 
 
 # --- Harness H6a: read-only machine tools ------------------------------------
