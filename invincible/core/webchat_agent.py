@@ -174,7 +174,7 @@ def environment_note(
     preference stay.
     """
     read_guidance = (
-        "Prefer code_search/read_file/list_dir over shell reads."
+        "Prefer find_files/code_search/read_file/list_dir over shell reads."
     )
     if mode == "plan":
         guidance = read_guidance
@@ -314,6 +314,8 @@ def summarize_call(name: str, args: dict) -> str:
         return f"Read {args.get('path', '')}"
     if name == "list_dir":
         return f"List {args.get('path', '')}"
+    if name == "find_files":
+        return f"Find {args.get('pattern', '')} in {args.get('path', '')}"
     if name == "code_search":
         return f"Search {args.get('pattern', '')} in {args.get('path', '')}"
     if name in ("git_status", "git_diff", "git_log"):
@@ -401,6 +403,13 @@ async def _run_read(executor, name: str, args: dict,
             str(args.get("path", "")),
             _coerce_int(args.get("limit"),
                         tool_executor.LIST_DIR_DEFAULT_LIMIT),
+            bool(args.get("show_hidden", False)),
+        )
+    if name == "find_files":
+        return await tool_executor.find_files(
+            str(args.get("pattern", "")), str(args.get("path", "")),
+            _coerce_int(args.get("max_results"),
+                        tool_executor.FIND_DEFAULT_MAX_RESULTS),
             bool(args.get("show_hidden", False)),
         )
     if name == "code_search":

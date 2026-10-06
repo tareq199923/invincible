@@ -122,7 +122,7 @@ def test_read_gated_set_matches_runner_reads():
                 "process_list", "screenshot")
     }
     assert runner_reads == {
-        "read_file", "code_search", "list_dir",
+        "read_file", "code_search", "list_dir", "find_files",
         "git_status", "git_diff", "git_log",
     }
     repo = tool_executor._REPO_ROOT
@@ -136,7 +136,7 @@ def test_read_gated_set_matches_runner_reads():
 def test_policy_passthrough_set_is_exact():
     gated = {
         "execute_bash", "write_file", "edit_file",
-        "read_file", "code_search", "list_dir",
+        "read_file", "code_search", "list_dir", "find_files",
         "git_status", "git_diff", "git_log",
     }
     expected_passthrough = _names(harness_tools.TOOLS) - gated
@@ -162,6 +162,7 @@ _RUNNER_SAFE_ARGS = {
     "read_file": {"path": _OUTSIDE},
     "code_search": {"path": "C:/definitely-outside-sandbox-xyz"},
     "list_dir": {"path": "C:/definitely-outside-sandbox-xyz"},
+    "find_files": {"path": "C:/definitely-outside-sandbox-xyz"},
     "git_status": {"path": "C:/definitely-outside-sandbox-xyz"},
     "git_diff": {"path": "C:/definitely-outside-sandbox-xyz"},
     "git_log": {"path": "C:/definitely-outside-sandbox-xyz"},
@@ -211,7 +212,7 @@ async def test_mcp_dispatch_covers_every_mcp_tool():
     dispatched = [
         tool.name for tool in harness_tools.TOOLS if tool.mcp
     ]
-    assert len(dispatched) == 20
+    assert len(dispatched) == 21
     hostile = {
         "execute_bash": {"command": "rm -rf /"},
         "write_file": {"path": _OUTSIDE},
@@ -219,6 +220,7 @@ async def test_mcp_dispatch_covers_every_mcp_tool():
         "read_file": {"path": _OUTSIDE},
         "code_search": {"pattern": "x", "path": _OUTSIDE},
         "list_dir": {"path": _OUTSIDE},
+        "find_files": {"pattern": "x", "path": _OUTSIDE},
         "git_status": {"path": _OUTSIDE},
         "git_diff": {"path": _OUTSIDE},
         "git_log": {"path": _OUTSIDE},

@@ -515,3 +515,118 @@ async def test_mcp_screenshot_unavailable_without_routing(
     payload = json.loads(result["content"][0]["text"])
     assert payload["status"] == "unavailable"
     assert "invincible harness connect" in payload["reason"]
+
+
+def _find_tree(tmp_path):
+    (tmp_path / "alpha").mkdir()
+    (tmp_path / "alpha" / "sales_report.txt").write_text("a\n")
+    (tmp_path / "alpha" / "sales_report.txt.bak").write_text("b\n")
+    (tmp_path / "alpha" / "SALES_REPORT.TXT").write_text("c\n")
+    sub = tmp_path / "alpha" / "sub"
+    sub.mkdir()
+    (sub / "2024_report.txt").write_text("d\n")
+    (tmp_path / "beta").mkdir()
+    (tmp_path / "beta" / "audit_report.txt").write_text("e\n")
+    (tmp_path / "gamma").mkdir()
+    (tmp_path / "gamma" / "secret_report.txt").write_text("f\n")
+    return tmp_path
+
+
+async def test_find_files_basename_match_case_sensitive(tmp_path):
+    root = _find_tree(tmp_path)
+    out = await tool_executor._find_files(
+        "*_report.txt", str(root / "alpha"), 20, False)
+    assert out["status"] == "files"
+    names = {os.path.basename(p) for p in out["matches"]}
+    assert names == {"sales_report.txt", "2024_report.txt"}
+    assert out["truncated"] is False
+
+
+async def test_find_files_scoped_path_excludes_gamma(tmp_path):
+    root = _find_tree(tmp_path)
+    out = await tool_executor._find_files(
+        "*_report.txt", str(root / "beta"), 20, False)
+    assert {os.path.basename(p) for p in out["matches"]} == {
+        "audit_report.txt"}
+    out = await tool_executor._find_files(
+        "*_report.txt", str(root / "gamma"), 20, False)
+    assert {os.path.basename(p) for p in out["matches"]} == {
+        "secret_report.txt"}
+
+
+async def test_find_files_hidden_and_cap(tmp_path):
+    root = tmp_path
+    (root / ".hidden_report.txt").write_text("h\n")
+    (root / "a_report.txt").write_text("a\n")
+    (root / "b_report.txt").write_text("b\n")
+    (root / "c_report.txt").write_text("c\n")
+    out = await tool_executor._find_files("*_report.txt", str(root), 20)
+    assert ".hidden_report.txt" not in {
+        os.path.basename(p) for p in out["matches"]}
+    out = await tool_executor._find_files(
+        "*_report.txt", str(root), 20, True)
+    assert ".hidden_report.txt" in {
+        os.path.basename(p) for p in out["matches"]}
+    out = await tool_executor._find_files("*_report.txt", str(root), 2)
+    assert len(out["matches"]) == 2
+    assert out["truncated"] is True
+
+
+async def test_find_files_errors(tmp_path):
+    out = await tool_executor._find_files("", str(tmp_path), 20)
+    assert out["status"] == "error"
+    out = await tool_executor._find_files("a/b", str(tmp_path), 20)
+    assert out["status"] == "error"
+    out = await tool_executor._find_files(
+        "x*", str(tmp_path / "missing"), 20)
+    assert out["status"] == "error"
+
+
+async def test_find_files_server_gate_blocks_outside_roots(
+        tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(tool_executor.ToolBlocked):
+        await tool_executor.find_files(
+            "*", os.path.abspath(os.path.join("..", "x")), 10)
+
+
+async def test_runner_find_files_sandbox(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVINCIBLE_AGENT_ROOT", str(tmp_path))
+    root = _find_tree(tmp_path)
+    out = await execute_job({
+        "job_id": "jf1", "type": "find_files",
+        "args": {"pattern": "*_report.txt",
+                 "path": str(root / "alpha"), "max_results": 10},
+    })
+    assert out["status"] == "files"
+    assert any(p.endswith("sales_report.txt") for p in out["matches"])
+    out = await execute_job({
+        "job_id": "jf2", "type": "find_files",
+        "args": {"pattern": "*", "path": "/etc", "max_results": 10},
+    })
+    assert out["status"] == "blocked"
+
+
+async def test_mcp_find_files_round_trip(client, bearer_headers, tmp_path,
+                                        monkeypatch):
+    from invincible.core import settings as settings_module
+
+    monkeypatch.setattr(
+        settings_module.settings, "read_roots",
+        lambda: [str(tmp_path)])
+    _find_tree(tmp_path)
+    result = await _call(client, bearer_headers, "find_files", {
+        "pattern": "*_report.txt", "path": str(tmp_path / "alpha"),
+        "max_results": 10})
+    assert result["isError"] is False
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["status"] == "files"
+    assert any(p.endswith("sales_report.txt")
+               for p in payload["matches"])
+
+
+async def test_mcp_find_files_blocked_outside_roots(client, bearer_headers):
+    result = await _call(client, bearer_headers, "find_files",
+                         {"pattern": "*", "path": "/etc"})
+    assert result["isError"] is True
+    assert "Blocked" in result["content"][0]["text"]

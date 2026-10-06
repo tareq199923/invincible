@@ -189,6 +189,21 @@ async def execute_job(job: dict) -> dict:
                 args.get("path", "") or ".", dir_limit,
                 bool(args.get("show_hidden", False)),
             )
+        if job_type == "find_files":
+            # Read-only like list_dir: home sandbox re-check, then
+            # the EXACT shared finder the server uses.
+            sandbox.check_agent_read(args.get("path", "") or ".")
+            try:
+                find_limit = int(
+                    args.get("max_results")
+                    or tool_executor.FIND_DEFAULT_MAX_RESULTS
+                )
+            except (TypeError, ValueError):
+                find_limit = tool_executor.FIND_DEFAULT_MAX_RESULTS
+            return await tool_executor._find_files(
+                args.get("pattern", ""), args.get("path", "") or ".",
+                find_limit, bool(args.get("show_hidden", False)),
+            )
         if job_type == "git_status":
             # Read-only git inspection: same sandbox as reads.
             sandbox.check_agent_read(args.get("path", "") or ".")

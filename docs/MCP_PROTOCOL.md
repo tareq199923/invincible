@@ -332,6 +332,20 @@ Phase 15b continuity tools, the memory tools, and the project tools):
         }
       },
       {
+        "name": "find_files",
+        "description": "Find files by basename glob under a directory, recursively; same sandbox as read_file. ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "pattern": {"type": "string"},
+            "path": {"type": "string"},
+            "max_results": {"type": "integer"},
+            "show_hidden": {"type": "boolean"}
+          },
+          "required": ["pattern", "path"]
+        }
+      },
+      {
         "name": "git_status",
         "description": "Git working-tree status for the repo containing a path; read-only. ...",
         "inputSchema": {
@@ -715,6 +729,28 @@ directory) is an error result; denylisted paths answer `Blocked: ...`,
  "entries": [{"name": "sub", "type": "dir", "size": 0},
              {"name": "a.txt", "type": "file", "size": 41}],
  "truncated": false}
+```
+
+#### `find_files`
+
+```json
+"arguments": {"pattern": "*_report.txt", "path": "C:\\Users\\me\\project", "max_results": 20, "show_hidden": false}
+```
+
+Finds files by basename glob under `path`, recursively at any
+depth — `fnmatch` case-sensitive basename match (so `*_report.txt`
+matches `sales_report.txt` but not `sales_report.txt.bak`,
+`sales-report.txt`, or `SALES_REPORT.TXT`). Same sandbox as
+`read_file` (server read roots locally, the agent's home when
+routed). Hidden (dot) files are skipped unless `show_hidden` is
+true; `max_results` defaults to 20, capped at 50. A missing path
+is an error result; denylisted paths answer `Blocked: ...`,
+`isError: true`. No confirmation (read-only).
+
+```json
+{"status": "files", "pattern": "*_report.txt", "path": "...",
+ "matches": [".../tree/alpha/sales_report.txt"],
+ "truncated": false, "files_scanned": 42}
 ```
 
 #### `git_status` / `git_diff` / `git_log`

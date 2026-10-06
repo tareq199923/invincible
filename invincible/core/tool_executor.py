@@ -74,6 +74,7 @@ mutating the filesystem underneath the process.
 import asyncio
 import base64
 import contextlib
+import fnmatch
 import json
 import logging
 import os
@@ -1238,6 +1239,80 @@ async def list_dir(path: str, limit: int = LIST_DIR_DEFAULT_LIMIT,
     """Server-side entry: read-denylist gate, then shared listing."""
     check_read_denylist(path or ".")  # raises ToolBlocked
     return await _list_dir(path, limit, show_hidden)
+
+
+FIND_DEFAULT_MAX_RESULTS = 20
+FIND_MAX_RESULTS_CAP = 50
+
+
+def _walk_find(
+    pattern: str, root: str, max_results: int, show_hidden: bool = False
+) -> tuple[list, int, bool]:
+    """Synchronous basename-glob walk (run in a thread). Case-sensitive
+    ``fnmatch.fnmatchcase`` on the basename at any depth. Returns
+    (matches, files_scanned, truncated) with absolute-path matches."""
+    matches: list = []
+    files_scanned = 0
+    truncated = False
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in _SEARCH_SKIP_DIRS
+            and (show_hidden or not d.startswith("."))
+        )
+        for filename in sorted(filenames):
+            if not show_hidden and filename.startswith("."):
+                continue
+            full = os.path.join(dirpath, filename)
+            files_scanned += 1
+            if fnmatch.fnmatchcase(filename, pattern):
+                matches.append(full)
+                if len(matches) >= max_results:
+                    truncated = True
+                    return matches, files_scanned, truncated
+    return matches, files_scanned, truncated
+
+
+async def _find_files(
+    pattern: str, path: str, max_results: int, show_hidden: bool = False
+) -> dict:
+    """Find files by basename glob under path. Path is ASSUMED vetted
+    by the caller (server read denylist or agent home sandbox) — this
+    function only executes."""
+    if not isinstance(pattern, str) or not pattern.strip():
+        return {"status": "error", "error": "pattern must be non-empty"}
+    if "/" in pattern or "\\" in pattern:
+        return {"status": "error",
+                "error": "pattern must be a basename glob, not a path"}
+    try:
+        limit = max(1, min(int(max_results or FIND_DEFAULT_MAX_RESULTS),
+                           FIND_MAX_RESULTS_CAP))
+    except (TypeError, ValueError):
+        limit = FIND_DEFAULT_MAX_RESULTS
+    target = os.path.abspath(os.path.expanduser(path or "."))
+    if os.path.isfile(target):
+        if fnmatch.fnmatchcase(os.path.basename(target), pattern):
+            return {"status": "files", "pattern": pattern, "path": path,
+                    "matches": [target], "truncated": False,
+                    "files_scanned": 1}
+        return {"status": "files", "pattern": pattern, "path": path,
+                "matches": [], "truncated": False, "files_scanned": 1}
+    if not os.path.isdir(target):
+        return {"status": "error", "error": f"Path not found: {path}"}
+    matches, scanned, truncated = await asyncio.to_thread(
+        _walk_find, pattern, target, limit, bool(show_hidden))
+    return {"status": "files", "pattern": pattern, "path": path,
+            "matches": matches, "truncated": truncated,
+            "files_scanned": scanned}
+
+
+async def find_files(
+    pattern: str, path: str, max_results: int = FIND_DEFAULT_MAX_RESULTS,
+    show_hidden: bool = False,
+) -> dict:
+    """Server-side entry: read-denylist gate, then shared finder."""
+    check_read_denylist(path or ".")  # raises ToolBlocked
+    return await _find_files(pattern, path, max_results, show_hidden)
 
 
 async def _git_run(path: str, args: list,
