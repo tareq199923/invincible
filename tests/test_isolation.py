@@ -601,10 +601,19 @@ async def test_cross_user_result_submission_is_indistinguishable(
     live_id = live_poll.json()["job"]["job_id"]
 
     expired_task = await _stage_agent_job(uid_a, timeout=0.05)
+    # Poll immediately, with no sleep: dispatch stages the job
+    # synchronously before parking on its future, so the queued job is
+    # already there when this poll runs — no wall-clock assumption,
+    # however slow the loop runs. (The old sleep-then-poll raced the
+    # 50ms dispatch deadline and flaked under CI coverage load.)
     expired_poll = await client.post("/agent/poll", headers=_bearer(key_a))
     expired_id = expired_poll.json()["job"]["job_id"]
-    expired_result = await asyncio.wait_for(expired_task, 1)
+    expired_result = await asyncio.wait_for(expired_task, 5)
     assert expired_result["status"] == "agent_timeout"
+    # The timed-out job is dropped from the queue: a later poll never
+    # picks up stale work nobody is waiting on.
+    dropped_poll = await client.post("/agent/poll", headers=_bearer(key_a))
+    assert dropped_poll.json() == {"job": None}
 
     responses = []
     for job_id in (live_id, expired_id, "no-such-job-id"):
