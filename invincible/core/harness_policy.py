@@ -61,8 +61,10 @@ def before_tool_call(
             return
         tool_executor.check_read_denylist(str(argv.get("path", "") or "."))
         return
-    # confirm_action, process_list, screenshot, memory_*, project_*,
-    # task_state_*, unknown: no pre-check here — owned by token
-    # resolution / dispatch / data-plane (screenshot is agent-only and
-    # process_list carries no path).
+    # confirm_action, process_list, screenshot, web_fetch, memory_*,
+    # project_*, task_state_*, todo, unknown: no pre-check here — owned
+    # by token resolution / dispatch / data-plane (screenshot and
+    # web_fetch are agent-only, process_list carries no path, todo
+    # lives in the continuity store under a reserved key with no
+    # filesystem surface).
     return

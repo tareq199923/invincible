@@ -119,18 +119,20 @@ MODE_SYSTEM_PROMPTS = {
         "You are helping plan work on the user's own machine. Produce a "
         "concrete step-by-step plan and stop. You have read-only "
         "inspection tools (read files, list directories, search code, "
-        "git info, processes, screenshot) plus read-only memory/project/"
+        "git info, processes, screenshot, web_fetch) plus read-only "
+        "memory/project/"
         "task lookups (memory_search/list, project_list, task_state_get) "
         "and the todo step-list for tracking the plan itself "
         "- use them to ground the plan in reality. "
-        "You cannot change anything: no mutating tools are available. "
+        "You cannot change anything on the machine: no machine-mutating "
+        "tools are available. "
         "Never claim an action was taken; end with the plan."
     ),
     "manual": (
         "You help operate the user's own machine. You have inspection "
         "tools plus execute_bash, write_file, and edit_file, plus memory/project/"
         "continuity tools (memory_save/search/list, project_create/list, "
-        "task_state_set/get, checkpoint_create) and screenshot. Reads run "
+        "task_state_set/get, checkpoint_create) and screenshot/web_fetch. Reads run "
         "immediately; each execute_bash/write_file/edit_file call pauses for the "
         "user's explicit approval before running - call the tool, briefly "
         "say what will happen, and wait for the result to come back. If "
@@ -141,7 +143,7 @@ MODE_SYSTEM_PROMPTS = {
     "auto": (
         "You help operate the user's own machine autonomously. You have "
         "inspection tools plus execute_bash, write_file, and edit_file, plus "
-        "memory/project/continuity tools and screenshot, which run "
+        "memory/project/continuity tools and screenshot/web_fetch, which run "
         "immediately without further confirmation. Act carefully and "
         "least-privilege: inspect before mutating, verify afterwards, "
         "and stop when done. Never exfiltrate data off the machine."
@@ -332,6 +334,8 @@ def summarize_call(name: str, args: dict) -> str:
         return "List processes"
     if name == "screenshot":
         return f"Screenshot {str(args.get('url', ''))[:200]}"
+    if name == "web_fetch":
+        return f"Fetch {str(args.get('url', ''))[:200]}"
     if name == "memory_save":
         return f"Save memory ({len(str(args.get('content', '')))} chars)"
     if name == "memory_search":
@@ -520,6 +524,24 @@ async def _run_screenshot(executor, args: dict) -> dict:
             ),
         }
     return await executor("screenshot", {"url": str(args.get("url", ""))})
+
+
+async def _run_web_fetch(executor, args: dict) -> dict:
+    """Agent-only URL fetch: never falls back to local (SSRF posture).
+
+    Mirrors POST /mcp web_fetch: without routing, report unavailability
+    instead of fetching caller URLs on the server host.
+    """
+    if executor is None:
+        return {
+            "status": "unavailable",
+            "reason": (
+                "Web fetches run on your paired machine: "
+                "set INVINCIBLE_AGENT_ROUTING=1 and start "
+                "one with: invincible harness connect"
+            ),
+        }
+    return await executor("web_fetch", {"url": str(args.get("url", ""))})
 
 
 async def _run_data_tool(
@@ -1134,7 +1156,10 @@ async def _execute_call(
         outcome["result"], outcome["ok"] = result, _result_ok(result)
         return
     if name in AGENT_ONLY_TOOLS:
-        result = await _run_screenshot(executor, args)
+        if name == "web_fetch":
+            result = await _run_web_fetch(executor, args)
+        else:
+            result = await _run_screenshot(executor, args)
         outcome["result"], outcome["ok"] = result, _result_ok(result)
         return
     if name in ALL_DATA_TOOLS:

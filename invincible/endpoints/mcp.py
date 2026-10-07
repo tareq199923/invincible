@@ -626,6 +626,31 @@ async def _dispatch(method, rpc_id, params, request,
                     ))
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
+            if name == "web_fetch":
+                # Agent-only like screenshot — the server never fetches
+                # caller-supplied URLs (SSRF). Without routing, report
+                # unavailability instead of failing the call shape.
+                agent_executor = await _agent_executor(request, owner_subject)
+                if agent_executor is None:
+                    return _result(rpc_id, _tool_content(json.dumps({
+                        "status": "unavailable",
+                        "reason": (
+                            "Web fetches run on your paired machine: "
+                            "set INVINCIBLE_AGENT_ROUTING=1 and start "
+                            "one with: invincible harness connect"
+                        ),
+                    })))
+                result = await agent_executor(
+                    "web_fetch", {"url": args.get("url", "")})
+                status = result.get("status")
+                if status in ("agent_offline", "agent_timeout"):
+                    await _audit_action(request, name, status,
+                                        subject=owner_subject)
+                    return _result(rpc_id, _tool_content(
+                        result.get("message", status), is_error=True
+                    ))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
+
             if name == "confirm_action":
                 # Only a real JSON boolean can approve - anything else
                 # (absent, string, number) is treated as deny.

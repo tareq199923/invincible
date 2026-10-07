@@ -86,6 +86,7 @@ import subprocess
 import tempfile
 import time
 
+import httpx
 from sqlalchemy import delete
 
 from invincible.core.db import pending_actions
@@ -959,6 +960,9 @@ SCREENSHOT_WIDTH = 1280
 SCREENSHOT_HEIGHT = 800
 SCREENSHOT_TIMEOUT_SECONDS = 30.0
 SCREENSHOT_MAX_BYTES = 2 * 1024 * 1024
+# Plain-text URL fetching for read-heavy research (agent-side only).
+WEB_FETCH_TIMEOUT_SECONDS = 30.0
+WEB_FETCH_MAX_BYTES = 1 * 1024 * 1024
 _CHROME_BINARIES = (
     "google-chrome", "google-chrome-stable", "chrome", "chromium",
     "chromium-browser", "chrome.exe", "chromium.exe",
@@ -1622,3 +1626,55 @@ async def _take_screenshot(url: str, timeout: float) -> dict:
         if tmp:
             with contextlib.suppress(OSError):
                 os.unlink(tmp)
+
+
+async def _fetch_url(
+    url: str, timeout: float,
+    *, transport: httpx.AsyncBaseTransport | None = None,
+) -> dict:
+    """Fetch a URL's body as text. Runs ONLY on the user's own machine
+    (agent-routed): the server never fetches caller-supplied URLs, so
+    this path cannot become an SSRF primitive. Non-http(s) URLs are
+    refused outright; responses over WEB_FETCH_MAX_BYTES are refused
+    rather than truncated into model context.
+
+    ``transport`` is test-only (httpx.MockTransport keeps unit tests
+    hermetic); production callers omit it.
+    """
+    if not re.match(r"^https?://", url.strip(), re.I):
+        return {"status": "error",
+                "error": "web_fetch URL must start with http:// or https://"}
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout, transport=transport,
+            follow_redirects=True,
+        ) as client, client.stream("GET", url) as response:
+            if response.status_code < 200 or response.status_code >= 300:
+                return {"status": "error",
+                        "error": f"web_fetch failed with status "
+                                 f"{response.status_code} for {url}"}
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in response.aiter_bytes():
+                total += len(chunk)
+                if total > WEB_FETCH_MAX_BYTES:
+                    return {"status": "error",
+                            "error": f"web_fetch response too large "
+                                     f"(over {WEB_FETCH_MAX_BYTES} "
+                                     f"bytes); narrow the URL"}
+                chunks.append(chunk)
+            data = b"".join(chunks)
+            content_type = response.headers.get("content-type")
+        return {"status": "web_fetch",
+                "content_text": data.decode("utf-8", errors="replace"),
+                "content_type": content_type,
+                "bytes": len(data), "url": url}
+    except httpx.TimeoutException:
+        return {"status": "error",
+                "error": f"web_fetch timed out after {timeout}s"}
+    except httpx.HTTPError as e:
+        logger.error(f"web_fetch failed: {e}")
+        return {"status": "error", "error": str(e)}
+    except Exception as e:
+        logger.error(f"web_fetch failed: {e}")
+        return {"status": "error", "error": str(e)}

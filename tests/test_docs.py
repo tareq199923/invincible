@@ -186,7 +186,7 @@ async def test_docs_mcp_tool_planes(docs_client):
         assert f"<code>{name}</code>" not in second, name
     for name in ("read_file", "execute_bash", "write_file", "code_search",
                  "list_dir", "find_files", "git_status", "process_list",
-                 "screenshot"):
+                 "screenshot", "web_fetch"):
         assert f"<code>{name}</code>" in second, name
     for tool in TOOLS:
         assert body.count(f"<code>{tool['name']}</code>") == 1, tool["name"]

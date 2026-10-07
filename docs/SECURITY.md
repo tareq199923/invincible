@@ -331,7 +331,12 @@ machines (`INVINCIBLE_AGENT_ROUTING=1`, §10). `screenshot` is agent-only:
 the server never fetches caller-supplied URLs, so a token that can call
 tools cannot turn the server into an SSRF fetcher (no cloud-metadata or
 intranet reads); only `http(s)` URLs render, and only on the approver's
-own machine.
+own machine. `web_fetch` shares that posture exactly (agent-only,
+`http(s)`-only refusal inside the agent helper, 1MB response cap,
+30s timeout, non-2xx refused without a body): the refusal rationale is
+the same — a bearer token must never buy server-side fetches of
+attacker-chosen URLs — and the caps keep a malicious or runaway page
+from blowing up model context or hanging the agent loop.
 
 ### 2.0 Approval remains remote and token-based — the trust boundary
 

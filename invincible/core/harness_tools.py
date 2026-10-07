@@ -409,6 +409,31 @@ TOOLS: tuple[HarnessTool, ...] = (
         server_executable=False,
     ),
     HarnessTool(
+        name="web_fetch",
+        description_mcp=(
+            "Fetch a URL's body as text for read-heavy research (docs, "
+            "references, changelogs). Runs ONLY on your paired machine "
+            "(agent routing must be on) — the server never fetches "
+            "caller-supplied URLs, so this path cannot become an SSRF "
+            "primitive. Only http(s) URLs; non-2xx and responses over "
+            "1MB are refused. No confirmation required."
+        ),
+        description_webchat=(
+            "Fetch a URL's body as text for read-heavy research. Runs "
+            "ONLY on your paired machine - the server never fetches "
+            "caller URLs."
+        ),
+        properties={"url": _str()},
+        required=("url",),
+        read_only=True,
+        needs_approval=False,
+        mcp=True,
+        webchat=True,
+        webchat_modes=("plan", "manual", "auto"),
+        agent_job="web_fetch",
+        server_executable=False,
+    ),
+    HarnessTool(
         name="confirm_action",
         description_mcp=(
             "Approve or deny a pending execute_bash/write_file/edit_file "
@@ -711,6 +736,7 @@ _WEBCHAT_ORDER: tuple[str, ...] = (
     "write_file",
     "edit_file",
     "screenshot",
+    "web_fetch",
     "memory_save",
     "memory_search",
     "memory_list",

@@ -806,6 +806,27 @@ Captures over 2MB are refused. No confirmation (read-only).
 {"status": "screenshot", "mime": "image/png", "data_b64": "...", "bytes": 48210, "url": "..."}
 ```
 
+#### `web_fetch`
+
+```json
+"arguments": {"url": "https://example.com/changelog"}
+```
+
+Plain-text fetch of an `http(s)` URL's body for read-heavy research
+(docs, references, changelogs). **Agent-only by design, same posture
+as `screenshot`**: without routing it answers
+`{"status": "unavailable", ...}`, with routing on but no agent
+connected it answers `agent_offline` — the server never fetches
+caller-supplied URLs, so this path cannot become an SSRF primitive.
+Non-`http(s)` URLs are refused outright, non-2xx statuses are errors
+(no body), and responses over 1MB are refused rather than truncated
+into context. No confirmation (read-only). Offered in every mode
+including plan.
+
+```json
+{"status": "web_fetch", "content_text": "...", "content_type": "text/html; charset=utf-8", "bytes": 48210, "url": "..."}
+```
+
 #### `memory_save`
 
 ```json

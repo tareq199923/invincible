@@ -147,7 +147,7 @@ def test_read_gated_set_matches_runner_reads():
         for tool in harness_tools.TOOLS
         if tool.agent_job
         not in (None, "execute_bash", "write_file", "edit_file",
-                "process_list", "screenshot")
+                "process_list", "screenshot", "web_fetch")
     }
     assert runner_reads == {
         "read_file", "code_search", "list_dir", "find_files",
@@ -169,7 +169,7 @@ def test_policy_passthrough_set_is_exact():
     }
     expected_passthrough = _names(harness_tools.TOOLS) - gated
     assert expected_passthrough == {
-        "process_list", "screenshot", "confirm_action",
+        "process_list", "screenshot", "web_fetch", "confirm_action",
         "task_state_set", "task_state_get", "checkpoint_create",
         "todo",
         "memory_save", "memory_search", "memory_list",
@@ -197,6 +197,7 @@ _RUNNER_SAFE_ARGS = {
     "git_log": {"path": "C:/definitely-outside-sandbox-xyz"},
     "process_list": {"limit": 1},
     "screenshot": {"url": "not-a-url"},
+    "web_fetch": {"url": "not-a-url"},
 }
 
 
@@ -241,7 +242,7 @@ async def test_mcp_dispatch_covers_every_mcp_tool():
     dispatched = [
         tool.name for tool in harness_tools.TOOLS if tool.mcp
     ]
-    assert len(dispatched) == 22
+    assert len(dispatched) == 23
     hostile = {
         "execute_bash": {"command": "rm -rf /"},
         "write_file": {"path": _OUTSIDE},

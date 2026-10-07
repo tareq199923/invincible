@@ -241,6 +241,14 @@ async def execute_job(job: dict) -> dict:
                 args.get("url", ""),
                 float(args.get("timeout", 30.0)),
             )
+        if job_type == "web_fetch":
+            # Same agent-only posture as screenshot: URL-shape refusal
+            # happens inside _fetch_url; no home path is touched so no
+            # sandbox check applies.
+            return await tool_executor._fetch_url(
+                args.get("url", ""),
+                float(args.get("timeout", 30.0)),
+            )
         return {
             "status": "error",
             "error": f"Unknown job type: {job_type}. Valid job types: "

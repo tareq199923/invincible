@@ -324,6 +324,28 @@ GOLDEN_MCP_TOOLS = [
         },
     },
     {
+        'name': 'web_fetch',
+        'description': (
+        "Fetch a URL's body as text for read-heavy research (docs, "
+        'references, changelogs). Runs ONLY on your paired machine '
+        '(agent routing must be on) — the server never fetches '
+        'caller-supplied URLs, so this path cannot become an SSRF '
+        'primitive. Only http(s) URLs; non-2xx and responses over '
+        '1MB are refused. No confirmation required.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'url': {
+                    'type': 'string',
+                },
+            },
+            'required': [
+                'url',
+            ],
+        },
+    },
+    {
         'name': 'confirm_action',
         'description': (
         'Approve or deny a pending execute_bash/write_file/edit_file '
@@ -638,6 +660,7 @@ GOLDEN_MCP_TOOL_NAMES = [
     'git_log',
     'process_list',
     'screenshot',
+    'web_fetch',
     'confirm_action',
     'task_state_set',
     'task_state_get',
@@ -962,6 +985,28 @@ GOLDEN_WEBCHAT_SCHEMAS = [
     {
         'type': 'function',
         'function': {
+            'name': 'web_fetch',
+            'description': (
+            "Fetch a URL's body as text for read-heavy research. Runs"
+            ' ONLY on your paired machine - the server never fetches '
+            'caller URLs.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'url': {
+                        'type': 'string',
+                    },
+                },
+                'required': [
+                    'url',
+                ],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
             'name': 'memory_save',
             'description': (
             'Deliberately store a fact about the user or one of their '
@@ -1235,6 +1280,7 @@ GOLDEN_WEBCHAT_TOOL_NAMES = [
     'write_file',
     'edit_file',
     'screenshot',
+    'web_fetch',
     'memory_save',
     'memory_search',
     'memory_list',
@@ -1256,6 +1302,7 @@ GOLDEN_PLAN_TOOLS = [
     'git_log',
     'process_list',
     'screenshot',
+    'web_fetch',
     'memory_search',
     'memory_list',
     'project_list',
@@ -1276,6 +1323,7 @@ GOLDEN_MANUAL_TOOLS = [
     'write_file',
     'edit_file',
     'screenshot',
+    'web_fetch',
     'memory_save',
     'memory_search',
     'memory_list',
@@ -1300,6 +1348,7 @@ GOLDEN_AUTO_TOOLS = [
     'write_file',
     'edit_file',
     'screenshot',
+    'web_fetch',
     'memory_save',
     'memory_search',
     'memory_list',
@@ -1411,7 +1460,8 @@ def test_approval_required_set():
     assert set(webchat_agent.MUTATING_TOOLS) == {
         "execute_bash", "write_file", "edit_file"}
     # Manual mode stages exactly the mutating tools; plan mode offers
-    # only reads (+agent-only screenshot); auto offers everything.
+    # only reads (+agent-only screenshot/web_fetch, +the todo step-list
+    # which mutates no machine); auto offers everything.
     plan = {s["function"]["name"]
             for s in webchat_agent._TOOLS_BY_MODE["plan"]}
     assert "execute_bash" not in plan
@@ -1425,7 +1475,7 @@ def test_webchat_tool_sets():
     assert webchat_agent.READ_ONLY_TOOLS == GOLDEN_READ_ONLY_TOOLS
     assert webchat_agent.DATA_READ_TOOLS == GOLDEN_DATA_READ_TOOLS
     assert webchat_agent.DATA_WRITE_TOOLS == GOLDEN_DATA_WRITE_TOOLS
-    assert webchat_agent.AGENT_ONLY_TOOLS == ("screenshot",)
+    assert webchat_agent.AGENT_ONLY_TOOLS == ("screenshot", "web_fetch")
     assert (webchat_agent.ALL_DATA_TOOLS
             == webchat_agent.DATA_READ_TOOLS + webchat_agent.DATA_WRITE_TOOLS)
 
@@ -1463,6 +1513,7 @@ POLICY_PROBES = {
     "git_log": ({"path": "."}, "pass"),
     "process_list": ({}, "pass"),
     "screenshot": ({"url": "https://example.com"}, "pass"),
+    "web_fetch": ({"url": "https://example.com"}, "pass"),
     "confirm_action": ({"token": "x", "approve": True}, "pass"),
     "task_state_set": ({"payload": "{}"}, "pass"),
     "task_state_get": ({}, "pass"),
@@ -1550,6 +1601,7 @@ RUNNER_SAFE_ARGS = {
     "git_log": {"path": "C:/definitely-outside-sandbox-xyz"},
     "process_list": {"limit": 1},
     "screenshot": {"url": "not-a-url"},
+    "web_fetch": {"url": "not-a-url"},
 }
 
 

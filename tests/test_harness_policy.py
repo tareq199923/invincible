@@ -63,8 +63,8 @@ def test_code_search_shares_read_roots(tmp_path, monkeypatch):
 
 def test_non_machine_plane_tools_pass_through():
     for name in (
-        "confirm_action", "process_list", "screenshot",
-        "memory_save", "project_list", "task_state_get",
+        "confirm_action", "process_list", "screenshot", "web_fetch",
+        "memory_save", "project_list", "task_state_get", "todo",
         "some_unknown_tool",
     ):
         before_tool_call(name, {})  # no raise, no check
