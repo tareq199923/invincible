@@ -6,9 +6,10 @@ module adds the three agent modes on top of the SAME pipeline
 (``core/chat_service.py`` preparation + the single
 ``router._iter_attempts`` failover loop - no parallel attempt loop):
 
-- ``plan``   - read-only inspection tools only, offered by construction
-  (the model cannot take a mutating action: the tools are absent from
-  the request, not merely forbidden by prompt). Ends with a plan.
+- ``plan``   - read-only inspection tools plus the todo step-list,
+  offered by construction (the model cannot take a machine-mutating
+  action: those tools are absent from the request, not merely
+  forbidden by prompt). Ends with a plan.
 - ``manual`` - all tools; every ``execute_bash``/``write_file``/``edit_file`` pauses
   for the user's explicit browser approval before running. Reads run
   immediately (same posture as ``POST /mcp``).
@@ -53,6 +54,7 @@ from invincible.core.router import (
     UpstreamClientError,
 )
 from invincible.core.settings import AGENT_JOB_GRACE_SECONDS, settings
+from invincible.core.todos import run_todo
 
 logger = logging.getLogger("invincible.webchat.agent")
 
@@ -63,7 +65,8 @@ READ_ONLY_TOOLS = harness_tools.read_only_names()
 MUTATING_TOOLS = harness_tools.approval_required_names()
 # Data-plane reads (memory/project/continuity) - safe in plan mode.
 DATA_READ_TOOLS = harness_tools.data_read_names()
-# Data-plane writes - manual/auto only, never plan.
+# Data-plane writes - manual/auto only, except todo: plan mode offers
+# the step-list too (a plan IS a step list; it mutates no machine).
 DATA_WRITE_TOOLS = harness_tools.data_write_names()
 # Agent-only read: runs on the paired machine, never on the server host
 # (same SSRF posture as POST /mcp screenshot).
@@ -118,6 +121,7 @@ MODE_SYSTEM_PROMPTS = {
         "inspection tools (read files, list directories, search code, "
         "git info, processes, screenshot) plus read-only memory/project/"
         "task lookups (memory_search/list, project_list, task_state_get) "
+        "and the todo step-list for tracking the plan itself "
         "- use them to ground the plan in reality. "
         "You cannot change anything: no mutating tools are available. "
         "Never claim an action was taken; end with the plan."
@@ -177,7 +181,8 @@ def environment_note(
         "Prefer find_files/code_search/read_file/list_dir over shell reads. "
         "When hunting across many files, search first "
         "(code_search/find_files) and read only the hits. "
-        "For large files, page with read_file offset/limit."
+        "For large files, page with read_file offset/limit. "
+        "Track multi-step work with todo."
     )
     if mode == "plan":
         guidance = read_guidance
@@ -343,6 +348,8 @@ def summarize_call(name: str, args: dict) -> str:
         return f"Get task state {str(args.get('task_key', 'default'))[:50]}"
     if name == "checkpoint_create":
         return f"Checkpoint: {str(args.get('note', ''))[:150]}"
+    if name == "todo":
+        return f"Todo {str(args.get('action', 'list'))[:20]}"
     return f"{name} {json.dumps(args)[:200]}"
 
 
@@ -758,6 +765,44 @@ async def _run_data_tool(
             return {"status": "error", "error": str(e)}, False
         except ValueError as e:
             return {"status": "error", "error": str(e)}, False
+    # -- todo --
+    if name == "todo":
+        if continuity is None or sessions is None:
+            return {
+                "status": "error",
+                "error": "Continuity engine not initialized on this server.",
+            }, False
+        session_id = str(args.get("session_id") or "") or "webchat"
+        action = str(args.get("action") or "").strip()
+        try:
+            if action == "list":
+                session_pk = await sessions.lookup(
+                    session_id, user_id=user_id,
+                    project_id=principal.project_id,
+                )
+            else:
+                session_pk = await sessions.resolve_or_create(
+                    session_id, user_id=user_id,
+                    project_id=principal.project_id,
+                )
+        except Exception:
+            return {
+                "status": "error",
+                "error": "Could not resolve the session for this subject.",
+            }, False
+        result, ok = await run_todo(
+            continuity, session_id=session_id, session_pk=session_pk,
+            action=action, text=str(args.get("text") or ""),
+            todo_id=str(args.get("id") or ""),
+            actor=f"webchat:{user_id}:todo",
+        )
+        if not ok:
+            result = {
+                "status": "error",
+                "error": str(result.get("error", "todo failed"))
+                + harness_tools.expected_args_hint(name),
+            }
+        return result, ok
     valid = ", ".join(
         n for n in harness_tools.webchat_tool_names()
         if n in ALL_DATA_TOOLS + AGENT_ONLY_TOOLS)

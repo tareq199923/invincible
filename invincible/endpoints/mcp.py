@@ -47,6 +47,7 @@ from invincible.core.memory import (
 from invincible.core.oauth_store import OAuthStore
 from invincible.core.principal import Principal
 from invincible.core.settings import AGENT_JOB_GRACE_SECONDS, settings
+from invincible.core.todos import run_todo
 
 router = APIRouter()
 
@@ -751,6 +752,53 @@ async def _dispatch(method, rpc_id, params, request,
                     return _result(rpc_id, _tool_content(str(e), is_error=True))
                 except ValueError as e:
                     return _result(rpc_id, _tool_content(str(e), is_error=True))
+
+            if name == "todo":
+                engine = getattr(request.app.state, "continuity", None)
+                sessions = getattr(request.app.state, "sessions", None)
+                if engine is None:
+                    return _result(rpc_id, _tool_content(
+                        "Continuity engine not initialized on this server.",
+                        is_error=True,
+                    ))
+                if principal is None or sessions is None:
+                    return _result(rpc_id, _tool_content(
+                        "Session identity is not available on this server.",
+                        is_error=True,
+                    ))
+                session_id = args.get("session_id") or "mcp"
+                action = str(args.get("action") or "").strip()
+                try:
+                    if action == "list":
+                        session_pk = await sessions.lookup(
+                            session_id,
+                            user_id=principal.user_id,
+                            project_id=principal.project_id,
+                        )
+                    else:
+                        session_pk = await sessions.resolve_or_create(
+                            session_id,
+                            user_id=principal.user_id,
+                            project_id=principal.project_id,
+                        )
+                except Exception:
+                    return _result(rpc_id, _tool_content(
+                        "Could not resolve the session for this subject.",
+                        is_error=True,
+                    ))
+                result, ok = await run_todo(
+                    engine, session_id=session_id, session_pk=session_pk,
+                    action=action, text=str(args.get("text") or ""),
+                    todo_id=str(args.get("id") or ""),
+                    actor=f"mcp:{principal.user_id}:todo",
+                )
+                if not ok:
+                    return _result(rpc_id, _tool_content(
+                        str(result.get("error", "todo failed"))
+                        + harness_tools.expected_args_hint(name),
+                        is_error=True,
+                    ))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name in ("memory_save", "memory_search", "memory_list"):
                 # Data-plane tools: they read/write the caller's own

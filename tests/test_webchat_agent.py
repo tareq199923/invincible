@@ -134,6 +134,8 @@ async def test_plan_mode_offers_read_only_tools(
     assert "write_file" not in offered_tool_names(bodies)
     assert "edit_file" not in offered_tool_names(bodies)
     assert "read_file" in offered_tool_names(bodies)
+    # The todo step-list is the one plan-mode write: plans are step lists.
+    assert "todo" in offered_tool_names(bodies)
     assert reads == ["a.txt"]
     done = [d for n, d in events if n == "done"]
     assert len(done) == 1

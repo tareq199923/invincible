@@ -868,6 +868,39 @@ There is deliberately **no `memory_delete`** over MCP: deletion stays a
 human, dashboard-only action — an AI should not be able to erase your
 past.
 
+#### `todo`
+
+```json
+"arguments": {"action": "add", "text": "draft the migration plan"}
+```
+
+The model tracks its own steps as a small list in the session's
+continuity store (reserved task key `todos`) — the same versioned
+store as `task_state_*`, so per-session/per-user isolation and restart
+survival come free, with no new tables. `action` is required and one of
+`add` (requires `text`, 1–200 chars) · `list` · `complete` (requires
+`id`) · `clear`. Optional `session_id` scopes the list (defaults to
+the caller surface: `mcp` here, `webchat` on the dashboard).
+
+- **No confirmation gate**: like the memory tools this is data-plane,
+  not machine-plane — the list belongs to the session and is
+  reversible (`clear`), so changes happen immediately. At most 20 open
+  items; over-long text or a full list is a plain error result.
+- **Offered in every mode including plan**: plans are step lists, so
+  plan mode offers `todo` alongside its read-only tools (the only
+  plan-mode write; it touches no machine).
+- Ids are per-list monotonic strings (`"1"`, `"2"`, …) and are never
+  reused after `clear`; every write returns the new `version`.
+
+Success (`add`):
+
+```json
+{"added": {"id": "1", "text": "draft the migration plan", "done": false}, "items": [{"id": "1", "text": "draft the migration plan", "done": false}], "count": 1, "version": 1}
+```
+
+Arg errors (`unknown action`, missing `text`/`id`, unknown `id`) echo
+the expected schema, same convention as the other tools.
+
 #### Where execution happens (Phase 10: agent routing)
 
 With `INVINCIBLE_AGENT_ROUTING` unset (the default, and every local

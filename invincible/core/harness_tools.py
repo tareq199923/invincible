@@ -505,6 +505,34 @@ TOOLS: tuple[HarnessTool, ...] = (
         data_plane=True,
     ),
     HarnessTool(
+        name="todo",
+        description_mcp=(
+            "Track multi-step work as a step list in this session's "
+            "continuity store (reserved task key 'todos'). Actions: add "
+            "(requires text), list, complete (requires id), clear. Same "
+            "per-session isolation and restart survival as task_state_*; "
+            "no confirmation required."
+        ),
+        description_webchat=(
+            "Track multi-step work as a step list for this session "
+            "(add/list/complete/clear). Same store as task state."
+        ),
+        properties={
+            "action": _str(enum=["add", "list", "complete", "clear"]),
+            "text": _str(description="step text for add (1-200 chars)"),
+            "id": _str(description="todo id for complete"),
+            "session_id": _str(),
+        },
+        required=("action",),
+        read_only=False,
+        needs_approval=False,
+        mcp=True,
+        webchat=True,
+        webchat_modes=("plan", "manual", "auto"),
+        router_agents=("triage", "operator"),
+        data_plane=True,
+    ),
+    HarnessTool(
         name="memory_save",
         description_mcp=(
             "Deliberately store a fact about the user or one of their "
@@ -691,6 +719,7 @@ _WEBCHAT_ORDER: tuple[str, ...] = (
     "task_state_set",
     "task_state_get",
     "checkpoint_create",
+    "todo",
 )
 
 

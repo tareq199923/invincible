@@ -171,6 +171,7 @@ def test_policy_passthrough_set_is_exact():
     assert expected_passthrough == {
         "process_list", "screenshot", "confirm_action",
         "task_state_set", "task_state_get", "checkpoint_create",
+        "todo",
         "memory_save", "memory_search", "memory_list",
         "project_create", "project_list", "handoff",
     }
@@ -240,7 +241,7 @@ async def test_mcp_dispatch_covers_every_mcp_tool():
     dispatched = [
         tool.name for tool in harness_tools.TOOLS if tool.mcp
     ]
-    assert len(dispatched) == 21
+    assert len(dispatched) == 22
     hostile = {
         "execute_bash": {"command": "rm -rf /"},
         "write_file": {"path": _OUTSIDE},

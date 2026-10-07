@@ -257,13 +257,14 @@ chat that can run shell commands — so every rule below is load-bearing):
   raise `TypeError` and silently drop these rows (as happened to
   `webchat.approval.*`/`webchat.tool.*` before the fix).
 - **Data-plane parity with `/mcp`:** `memory_save/search/list`,
-  `project_create/list`, `task_state_set/get`, `checkpoint_create`, and
-  agent-only `screenshot` share the MCP validation (ownership
-  predicates, unknown-project errors, `INVINCIBLE_MEMORY` kill-switch on
-  saves, 50-project cap, `screenshot` never runs on the server host).
-  `plan` offers reads only; `confirm_action` is deliberately absent —
-  webchat approvals go through the browser waiter, so the model can
-  never approve its own staged actions.
+  `project_create/list`, `task_state_set/get`, `checkpoint_create`,
+  `todo`, and agent-only `screenshot` share the MCP validation
+  (ownership predicates, unknown-project errors, `INVINCIBLE_MEMORY`
+  kill-switch on saves, 50-project cap, `screenshot` never runs on the
+  server host). `plan` offers reads plus the `todo` step-list (the only
+  plan-mode write; it touches no machine); `confirm_action` is
+  deliberately absent — webchat approvals go through the browser
+  waiter, so the model can never approve its own staged actions.
 
 - Chat completions themselves are not audited (existing posture), but
   every turn persists through the same ownership-predicated
@@ -403,6 +404,25 @@ them safe:
   token discipline as prompt injection.
 - **No deletion**: there is deliberately no `memory_delete` over MCP —
   erasing history stays a human, dashboard-only action.
+
+### 2.0c-bis `todo` step-lists ride the continuity store
+
+`todo` (add/list/complete/clear) is data-plane with **no approval
+gate and no policy pre-check**: it has no filesystem, network, or
+subprocess surface — items live as the payload of the reserved
+`task_key="todos"` chain in the existing versioned `task_states`
+table, so **no migration and no new trust boundary**. What keeps it
+safe:
+
+- **Ownership-scoped**: every read/write carries the owning surrogate
+  `session_pk` resolved under the caller; a foreign user's list is
+  indistinguishable from absent (reads) and unwritable (writes fail
+  closed on unresolved scope) — the same predicates as `task_state_*`.
+- **Bounded**: at most 20 items of 200 chars each, inside the store's
+  4096-char payload cap; over-long text and full lists are plain
+  errors, so a runaway loop cannot bloat the row.
+- **Reversible**: `clear` empties the list; ids are never reused, so a
+  stale `complete` cannot retarget a newer step.
 
 ### 2.0c Policy gate + runtime spine (harness H2)
 

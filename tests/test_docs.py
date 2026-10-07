@@ -102,11 +102,12 @@ async def test_landing_links_docs(docs_client):
 # Parity pass: request-derived snippets, docs chrome, copy buttons, search.
 # ---------------------------------------------------------------------------
 
-# The eight tools whose dispatch branches in endpoints/mcp.py touch only
-# the caller's own rows (memory, task state, projects): they work with no
-# machine online, so they must render in the first table.
+# The nine tools whose dispatch branches in endpoints/mcp.py touch only
+# the caller's own rows (memory, task state, todos, projects): they work
+# with no machine online, so they must render in the first table.
 DATA_PLANE_TOOLS = ("memory_save", "memory_search", "memory_list",
                     "task_state_set", "task_state_get", "checkpoint_create",
+                    "todo",
                     "project_create", "project_list")
 
 

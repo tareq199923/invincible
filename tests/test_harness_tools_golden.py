@@ -438,6 +438,44 @@ GOLDEN_MCP_TOOLS = [
         },
     },
     {
+        'name': 'todo',
+        'description': (
+        "Track multi-step work as a step list in this session's "
+        "continuity store (reserved task key 'todos'). Actions: add "
+        '(requires text), list, complete (requires id), clear. Same '
+        'per-session isolation and restart survival as task_state_*; '
+        'no confirmation required.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'action': {
+                    'type': 'string',
+                    'enum': [
+                        'add',
+                        'list',
+                        'complete',
+                        'clear',
+                    ],
+                },
+                'text': {
+                    'type': 'string',
+                    'description': 'step text for add (1-200 chars)',
+                },
+                'id': {
+                    'type': 'string',
+                    'description': 'todo id for complete',
+                },
+                'session_id': {
+                    'type': 'string',
+                },
+            },
+            'required': [
+                'action',
+            ],
+        },
+    },
+    {
         'name': 'memory_save',
         'description': (
         'Deliberately store a fact about the user or one of their '
@@ -604,6 +642,7 @@ GOLDEN_MCP_TOOL_NAMES = [
     'task_state_set',
     'task_state_get',
     'checkpoint_create',
+    'todo',
     'memory_save',
     'memory_search',
     'memory_list',
@@ -1145,6 +1184,42 @@ GOLDEN_WEBCHAT_SCHEMAS = [
             },
         },
     },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'todo',
+            'description': (
+            'Track multi-step work as a step list for this session '
+            '(add/list/complete/clear). Same store as task state.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'action': {
+                        'type': 'string',
+                        'enum': [
+                            'add',
+                            'list',
+                            'complete',
+                            'clear',
+                        ],
+                    },
+                    'text': {
+                        'type': 'string',
+                    },
+                    'id': {
+                        'type': 'string',
+                    },
+                    'session_id': {
+                        'type': 'string',
+                    },
+                },
+                'required': [
+                    'action',
+                ],
+            },
+        },
+    },
 ]
 
 GOLDEN_WEBCHAT_TOOL_NAMES = [
@@ -1168,6 +1243,7 @@ GOLDEN_WEBCHAT_TOOL_NAMES = [
     'task_state_set',
     'task_state_get',
     'checkpoint_create',
+    'todo',
 ]
 
 GOLDEN_PLAN_TOOLS = [
@@ -1184,6 +1260,7 @@ GOLDEN_PLAN_TOOLS = [
     'memory_list',
     'project_list',
     'task_state_get',
+    'todo',
 ]
 
 GOLDEN_MANUAL_TOOLS = [
@@ -1207,6 +1284,7 @@ GOLDEN_MANUAL_TOOLS = [
     'task_state_set',
     'task_state_get',
     'checkpoint_create',
+    'todo',
 ]
 
 GOLDEN_AUTO_TOOLS = [
@@ -1230,6 +1308,7 @@ GOLDEN_AUTO_TOOLS = [
     'task_state_set',
     'task_state_get',
     'checkpoint_create',
+    'todo',
 ]
 
 GOLDEN_READ_ONLY_TOOLS = (
@@ -1255,11 +1334,13 @@ GOLDEN_DATA_WRITE_TOOLS = (
     'project_create',
     'task_state_set',
     'checkpoint_create',
+    'todo',
 )
 
 GOLDEN_TRIAGE_TOOLS = (
     'read_file',
     'task_state_get',
+    'todo',
     'memory_search',
     'memory_list',
     'handoff',
@@ -1273,6 +1354,7 @@ GOLDEN_OPERATOR_TOOLS = (
     'task_state_set',
     'task_state_get',
     'checkpoint_create',
+    'todo',
 )
 
 GOLDEN_DOCS_DATA_PLANE = [
@@ -1284,6 +1366,7 @@ GOLDEN_DOCS_DATA_PLANE = [
     'project_list',
     'task_state_get',
     'task_state_set',
+    'todo',
 ]
 
 
@@ -1384,6 +1467,7 @@ POLICY_PROBES = {
     "task_state_set": ({"payload": "{}"}, "pass"),
     "task_state_get": ({}, "pass"),
     "checkpoint_create": ({}, "pass"),
+    "todo": ({"action": "list"}, "pass"),
     "memory_save": ({"content": "x"}, "pass"),
     "memory_search": ({"query": "x"}, "pass"),
     "memory_list": ({}, "pass"),
