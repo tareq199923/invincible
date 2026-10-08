@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Invincible landing page mockup</title>
+  <desc id="desc">A dark dashboard-style landing page with the headline Rate limits shouldn't end your session.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#040b18"/>
+      <stop offset="100%" stop-color="#030914"/>
+    </linearGradient>
+    <linearGradient id="purple" x1="0" x2="1">
+      <stop offset="0%" stop-color="#8ea6ff"/>
+      <stop offset="100%" stop-color="#b38dfb"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#1d2940" stroke-width="1"/>
+    </pattern>
+    <style>
+      .nav { fill: rgba(15, 22, 36, 0.88); stroke: rgba(145,170,220,0.16); }
+      .chip { fill: rgba(18, 24, 42, 0.66); stroke: rgba(118,132,170,0.35); }
+      .text { fill: #edf3ff; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; }
+      .muted { fill: #a4acc6; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; }
+      .light { fill: #ecf1ff; }
+      .purple { fill: url(#purple); }
+      .code { fill: #dfe7ff; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; }
+      .code-muted { fill: #8ba3c9; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; }
+      .green { fill: #68f0b0; }
+      .yellow { fill: #ffdf7e; }
+      .red { fill: #ff7b7b; }
+      .button { fill: #7d8bff; }
+      .button-text { fill: #edf3ff; font-weight: 600; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <rect width="1600" height="900" fill="url(#grid)" opacity="0.9"/>
+
+  <rect x="0" y="0" width="1600" height="72" class="nav"/>
+  <line x1="0" y1="72" x2="1600" y2="72" stroke="rgba(145,170,220,0.18)"/>
+
+  <rect x="30" y="18" width="58" height="34" rx="10" fill="#7a6dff" opacity="0.95"/>
+  <text x="58" y="42" text-anchor="middle" class="text" font-size="20" font-weight="700">I/</text>
+
+  <text x="115" y="43" class="text" font-size="18" font-weight="600">Invincible Gateway</text>
+
+  <g font-family="Segoe UI, sans-serif" font-size="14" fill="#dfe7ff" opacity="0.82">
+    <text x="730" y="42">Products</text>
+    <text x="828" y="42">Get started</text>
+    <text x="935" y="42">Models</text>
+    <text x="1000" y="42">Security</text>
+    <text x="1089" y="42">Docs</text>
+    <text x="1142" y="42">FAQ</text>
+  </g>
+
+  <rect x="1362" y="17" width="122" height="38" rx="11" class="button"/>
+  <text x="1423" y="42" text-anchor="middle" class="button-text" font-size="14">Create account</text>
+
+  <g transform="translate(145,120)">
+    <rect x="0" y="0" width="460" height="30" rx="4" class="chip"/>
+    <text x="28" y="20" class="muted" font-size="11" letter-spacing="2.5">FAILOVER • MEMORY • MACHINE ACCESS</text>
+
+    <text x="0" y="140" class="text" font-size="110" font-weight="800" letter-spacing="-5">Rate limits</text>
+    <text x="0" y="260" class="text" font-size="110" font-weight="800" letter-spacing="-5">shouldn't</text>
+    <text x="0" y="380" class="purple" font-size="110" font-weight="800" letter-spacing="-5">end your</text>
+    <text x="0" y="500" class="text" font-size="110" font-weight="800" letter-spacing="-5">session.</text>
+
+    <text x="0" y="610" class="muted" font-size="24" font-weight="400">Point Claude Code, Codex, or any OpenAI-compatible client at</text>
+    <text x="0" y="645" class="muted" font-size="24" font-weight="400">one address. When a provider hits its limit or goes down,</text>
+    <text x="0" y="680" class="muted" font-size="24" font-weight="400">Invincible moves to the next of your own keys. Your session,</text>
+    <text x="0" y="715" class="muted" font-size="24" font-weight="400">memory, and task state stay with your account.</text>
+
+    <g transform="translate(0,740)">
+      <rect x="0" y="0" width="210" height="46" rx="10" class="button"/>
+      <text x="105" y="29" text-anchor="middle" class="button-text" font-size="18">Create your account</text>
+
+      <rect x="235" y="0" width="188" height="46" rx="10" fill="rgba(14,20,35,0.9)" stroke="rgba(146,166,218,0.34)"/>
+      <text x="329" y="29" text-anchor="middle" fill="#e1e9ff" font-size="18">See the hosted setup</text>
+    </g>
+
+    <text x="0" y="830" class="muted" font-size="18">No machine needed to start — connect, memory, and continuity work from your account alone.</text>
+    <text x="0" y="858" class="muted" font-size="18">Pair a machine only when you want AI tools to reach its files and shell.</text>
+
+    <g transform="translate(0,875)">
+      <rect x="0" y="0" width="132" height="32" rx="16" class="chip"/>
+      <circle cx="18" cy="16" r="5" fill="#68f0b0"/>
+      <text x="32" y="21" class="muted" font-size="14">Zero inbound ports</text>
+
+      <rect x="150" y="0" width="132" height="32" rx="16" class="chip"/>
+      <circle cx="168" cy="16" r="5" fill="#7d8bff"/>
+      <text x="182" y="21" class="muted" font-size="14">OAuth 2.1 + MCP</text>
+
+      <rect x="300" y="0" width="168" height="32" rx="16" class="chip"/>
+      <circle cx="318" cy="16" r="5" fill="#8ff4ff"/>
+      <text x="332" y="21" class="muted" font-size="14">Per-user BYOK — no shared pool</text>
+
+      <rect x="484" y="0" width="158" height="32" rx="16" class="chip"/>
+      <circle cx="502" cy="16" r="5" fill="#ffdf7e"/>
+      <text x="516" y="21" class="muted" font-size="14">macOS • Linux • Windows agent</text>
+    </g>
+  </g>
+
+  <g transform="translate(855,165)">
+    <rect x="0" y="50" width="590" height="370" rx="18" fill="rgba(14,18,32,0.9)" stroke="rgba(126,143,240,0.8)" stroke-width="2"/>
+    <rect x="14" y="64" width="562" height="342" rx="12" fill="rgba(11,17,31,0.82)"/>
+
+    <g transform="translate(30,80)">
+      <circle cx="0" cy="0" r="6" fill="#ff6c71"/>
+      <circle cx="20" cy="0" r="6" fill="#ffce5b"/>
+      <circle cx="40" cy="0" r="6" fill="#57dc7b"/>
+      <text x="70" y="5" class="code-muted" font-size="16">invincible / client-config</text>
+    </g>
+
+    <g transform="translate(42,120)">
+      <text x="0" y="0" class="code">$</text>
+      <text x="16" y="0" class="code-muted">pip install invincible-ai</text>
+      <text x="0" y="46" class="code">$</text>
+      <text x="16" y="46" class="code-muted">invincible harness setup</text>
+      <text x="0" y="92" class="code">$</text>
+      <text x="16" y="92" class="code-muted">invincible harness connect</text>
+      <text x="0" y="138" class="green">✔</text>
+      <text x="24" y="138" class="code-muted">Paired — machine tools appear once connected</text>
+      <text x="0" y="184" class="code">base</text>
+      <text x="52" y="184" class="code-muted">https://invincible-ai.me/v1</text>
+      <text x="0" y="230" class="code">key</text>
+      <text x="42" y="230" class="code-muted">inv_…</text>
+      <text x="0" y="276" class="code">tools</text>
+      <text x="50" y="276" class="code-muted">https://invincible-ai.me/mcp</text>
+      <text x="0" y="322" class="code">auth</text>
+      <text x="50" y="322" class="code-muted">OAuth 2.1 + PKCE</text>
+    </g>
+  </g>
+
+  <g transform="translate(0, 892)">
+    <rect x="0" y="0" width="1600" height="8" fill="rgba(122,110,255,0.25)"/>
+  </g>
+</svg>
