@@ -13,6 +13,10 @@
 > [docs/ROADMAP.md](docs/ROADMAP.md) for the direction, what is implemented
 > today, and what is planned.
 
+<p align="center">
+  <img src="docs/images/invincible-landing.svg" alt="Invincible landing page" width="1200" />
+</p>
+
 ---
 
 ## What is Invincible?
@@ -63,15 +67,15 @@ It serves three roles in one process:
 
 | Feature | What it gives you |
 |---|---|
-| **Remote-first, multi-user** | One deployment serves many accounts over HTTPS: browser accounts (email+password or GitHub), per-user projects/API keys/provider credentials, a dashboard, and strict per-user ownership — one account can never read another's data (see [docs/SECURITY.md](docs/SECURITY.md)). The same core self-hosts on a laptop, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers running it on a host. |
-| **BYOK routing** | Every user connects their own provider credentials (dashboard → Providers) and routes only through them: `auto`/`pinned`/`chain` routing per user, 429/5xx → cooldown + next credential, 401/403 → skip, network errors → next. No credentials connected → HTTP 400. All credentials exhausted → HTTP 503. |
+| **Remote-first, multi-user** | One deployment serves many accounts over HTTPS: browser accounts (email+password or GitHub), per-user projects/API keys/provider credentials, a dashboard, and stri[...]
+| **BYOK routing** | Every user connects their own provider credentials (dashboard → Providers) and routes only through them: `auto`/`pinned`/`chain` routing per user, 429/5xx → cooldown + nex[...]
 | **Exponential cooldown** | 30s → 60s → 120s → 240s → capped at 300s; a success resets the counter (in-memory, process-scoped). |
 | **Conversation memory** | PostgreSQL-backed, keyed by the `X-Session-Id` header (default `default`). History is merged into every request and the assistant reply is persisted back. |
-| **Context trimming** | Per-credential `max_context`; system messages always kept; everything else dropped as atomic *turns* (an assistant `tool_calls` is never separated from its tool results); the most recent turn is always sent. |
+| **Context trimming** | Per-credential `max_context`; system messages always kept; everything else dropped as atomic *turns* (an assistant `tool_calls` is never separated from its tool results); [...]
 | **Per-provider timeouts** | Split connect/read/write/pool with sane defaults and per-provider overrides. |
-| **MCP tool server** | `read_file` (no approval), `execute_bash` and `write_file` (staged, then approved via a token round-trip through the `confirm_action` tool), guarded by denylists and an **OAuth 2.1 + PKCE bearer-token** auth layer (account login + per-client consent, tokens don't survive on requests like a shared header does). With `INVINCIBLE_AGENT_ROUTING` on, confirmed actions execute on the **user's own PC** via the paired harness agent (server keeps every security decision; see [§ Run tools on your own PC](#run-tools-on-your-own-pc-the-local-agent)). |
-| **Accounts & projects** (Phase 3) | Sign up / sign in in a browser (email + argon2id passwords, or **GitHub login**), manage your own projects and `inv_` API keys over HTTP, list your sessions — all under ownership predicates so users never see each other's data. Pair a CLI with `invincible login` via device-code approval. |
-| **Protocol-agnostic** | Native **OpenAI**, **Anthropic**, and **Responses** protocols, all translated into one internal message model. Claude Code works with `ANTHROPIC_BASE_URL` pointing at the gateway; Codex CLI works out of the box. |
+| **MCP tool server** | `read_file` (no approval), `execute_bash` and `write_file` (staged, then approved via a token round-trip through the `confirm_action` tool), guarded by denylists and an **O[...]
+| **Accounts & projects** (Phase 3) | Sign up / sign in in a browser (email + argon2id passwords, or **GitHub login**), manage your own projects and `inv_` API keys over HTTP, list your sessions �[...]
+| **Protocol-agnostic** | Native **OpenAI**, **Anthropic**, and **Responses** protocols, all translated into one internal message model. Claude Code works with `ANTHROPIC_BASE_URL` pointing at the[...]
 
 ---
 
@@ -190,13 +194,13 @@ Everything is environment variables plus one YAML file — no other config.
 
 | Variable | Required by | Purpose |
 |---|---|---|
-| `INVINCIBLE_DB_URL` | startup (**required since Phase 16**) | PostgreSQL DSN for all persistent state. Use a **managed/reachable** PostgreSQL on a remote deployment, e.g. `postgresql+asyncpg://invincible_app:***@your-db-host:5432/invincible` (Neon, RDS, Azure Database for PostgreSQL, a container, or your own cluster). `invincible dev-db` (local, dev-only) or the bundled compose pair are the laptop shortcuts. Masked in `doctor` output. |
-| `INVINCIBLE_MIGRATE_DB_URL` | container/platform deploys | Schema-owner DSN used **only** for the one `db upgrade` the image runs at startup (falling back to `INVINCIBLE_DB_URL` when unset), so migrations run as the migrate role while the server serves as the CRUD-only runtime role. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §Database. |
-| `INVINCIBLE_OWNER_SECRET` | account sessions | Signs account browser sessions (dashboard login, OAuth consent). **Not** sent on `/mcp` — requests use short-lived OAuth Bearer tokens. **If unset, browser sessions fail closed (no login, no consent).** The pre-rename `MCP_SHARED_SECRET` alias is retired and inert. Rotating it logs every browser out but does **not** revoke MCP grants — use `invincible oauth revoke <client_id>` for that. |
-| `INVINCIBLE_CREDENTIAL_KEY` | BYOK | Fernet master key encrypting stored provider credentials at rest. Generated by `invincible setup` (or `invincible secret credential-key`); **back it up** — losing it makes every saved provider key undecryptable. Never rotated by `setup --force`. |
-| `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the PostgreSQL database (`pending_actions` table) and survive a server restart. **Off by default** — pending actions are memory-only and a restart orphans them (clean slate). |
-| `INVINCIBLE_AGENT_ROUTING` | startup (**required on public multi-user deployments**) | Routes confirmed tool execution to the caller's paired harness agent (`invincible harness connect`) instead of the server host. Unset/off is the single-user self-host posture (a one-person `invincible start`), where tools run on the server host under the server's privileges — **never acceptable when strangers can register**. Set `1` on every public/hosted deployment: see [docs/SECURITY.md](docs/SECURITY.md) §10 and the checklist in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). |
-| `INVINCIBLE_AGENT_ROOT` | agent | Sandbox root for the local agent (default: the user's home directory). Reads and writes outside it are blocked; `.env*`, `.git`, `.ssh`, SSH keys, `*.pem`, `*credentials*` are blocked by name everywhere. |
+| `INVINCIBLE_DB_URL` | startup (**required since Phase 16**) | PostgreSQL DSN for all persistent state. Use a **managed/reachable** PostgreSQL on a remote deployment, e.g. `postgresql+asyncpg://[...] 
+| `INVINCIBLE_MIGRATE_DB_URL` | container/platform deploys | Schema-owner DSN used **only** for the one `db upgrade` the image runs at startup (falling back to `INVINCIBLE_DB_URL` when unset), so[...]
+| `INVINCIBLE_OWNER_SECRET` | account sessions | Signs account browser sessions (dashboard login, OAuth consent). **Not** sent on `/mcp` — requests use short-lived OAuth Bearer tokens. **If uns[...]
+| `INVINCIBLE_CREDENTIAL_KEY` | BYOK | Fernet master key encrypting stored provider credentials at rest. Generated by `invincible setup` (or `invincible secret credential-key`); **back it up** ��[...]
+| `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the PostgreSQL database (`pending_actions` table) and survive [...]
+| `INVINCIBLE_AGENT_ROUTING` | startup (**required on public multi-user deployments**) | Routes confirmed tool execution to the caller's paired harness agent (`invincible harness connect`) instea[...]
+| `INVINCIBLE_AGENT_ROOT` | agent | Sandbox root for the local agent (default: the user's home directory). Reads and writes outside it are blocked; `.env*`, `.git`, `.ssh`, SSH keys, `*.pem`, `*c[...]
 
 `/v1/*` requests authenticate with **per-user `inv_` API keys** (minted on
 the dashboard's Account page, or by the host with
@@ -231,18 +235,18 @@ server administration:
 
 | Command | Purpose |
 |---|---|
-| `invincible login [--server URL]` | Pair this machine with an Invincible server (device flow): opens the approval page in your browser — click Approve and the command finishes, saving the `inv_` key to `~/.invincible/config.json`. Defaults to the hosted service (`https://invincible-ai.me`); pass `--server` for a self-hosted or local server. URL + code are printed for headless terminals; the Account page also has a "Pair a device" box for typing a code by hand. |
+| `invincible login [--server URL]` | Pair this machine with an Invincible server (device flow): opens the approval page in your browser — click Approve and the command finishes, saving the `in[...]
 | `invincible connect` | Keep this machine online — short spelling of `harness connect` (WS-first relay, long-poll fallback). First run pairs automatically. |
 | `invincible harness setup` | Pair this machine and print its MCP connector config (idempotent — never re-pairs silently). Then `harness connect` brings it online. |
-| `invincible harness connect` | Keep this machine online (WS-first relay, long-poll fallback): executes confirmed tool jobs on **this machine** with your own user privileges — denylist re-checked locally, reads/writes sandboxed to your home. Ctrl+C to stop. First run pairs automatically (device flow); `invincible login` is the explicit pairing/repair tool. |
+| `invincible harness connect` | Keep this machine online (WS-first relay, long-poll fallback): executes confirmed tool jobs on **this machine** with your own user privileges — denylist re-chec[...]
 | `invincible harness status` | Show this account's agent liveness + machine inventory from the terminal. |
 | `invincible harness service install` | Write an always-on service definition (systemd/launchd/schtasks) so the machine stays online across reboots. |
 | `invincible update` | Install the latest `invincible-ai` release from PyPI (`--check` for a dry run). |
-| `invincible setup` | Create/update `.env` (non-interactive, scriptable): generates missing secrets (`token_urlsafe(32)`, never echoed), generates the BYOK credential master key, preserves existing comments/values; provider keys are connected later on the dashboard's Providers page. `--db-url` supplies the DSN on first run (never prompted); `--force` regenerates secrets (the credential master key is never rotated). A stale `MCP_SHARED_SECRET` line is left alone (rename it to `INVINCIBLE_OWNER_SECRET` yourself). |
-| `invincible secret rotate` | Generate a brand-new `INVINCIBLE_OWNER_SECRET` and rewrite it in place — no manual `.env` editing, never echoes the value (unless `--show`). Preserves every other line. Does **not** revoke already-issued OAuth grants (that's `invincible oauth revoke`). |
-| `invincible start` | Start the server. `--host` (default `127.0.0.1`; pass `0.0.0.0` to be reachable from other machines), `--port` (default `8000`), `--reload`, `--log-level`, `--env-file`, `--config` (custom providers.yaml), `--tunnel/--no-tunnel` (local convenience: starts a Cloudflare tunnel named `invincible` by default so a laptop can be reached from the internet), `--tunnel-name` (or `INVINCIBLE_TUNNEL_NAME`). The tunnel is shut down with the server (Ctrl+C or a crash); a dead tunnel is reported as soon as it exits. There is no database flag — `INVINCIBLE_DB_URL` comes from the env/.env. **Hosted platforms do not use this command**: the container command in `Dockerfile`/`railway.json`/`Procfile` binds `0.0.0.0:$PORT` with proxy headers — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). |
-| `invincible doctor` | Environment/config diagnostics: providers.yaml, secrets, and PostgreSQL connectivity + schema revision (DSN always password-masked); loud FAIL on a stale/unmanaged schema. |
-| `invincible dev-db` | Provision or verify a local Postgres **development** database (Docker fallback included) and print/write a working `INVINCIBLE_DB_URL`. Loopback-only and dev-credential by design — never the provisioning path for a remote/hosted database ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)). |
+| `invincible setup` | Create/update `.env` (non-interactive, scriptable): generates missing secrets (`token_urlsafe(32)`, never echoed), generates the BYOK credential master key, preserves exist[...]
+| `invincible secret rotate` | Generate a brand-new `INVINCIBLE_OWNER_SECRET` and rewrite it in place — no manual `.env` editing, never echoes the value (unless `--show`). Preserves every other[...]
+| `invincible start` | Start the server. `--host` (default `127.0.0.1`; pass `0.0.0.0` to be reachable from other machines), `--port` (default `8000`), `--reload`, `--log-level`, `--env-file`, `-[...] 
+| `invincible doctor` | Environment/config diagnostics: providers.yaml, secrets, and PostgreSQL connectivity + schema revision (DSN always password-masked); loud FAIL on a stale/unmanaged schema.[...]
+| `invincible dev-db` | Provision or verify a local Postgres **development** database (Docker fallback included) and print/write a working `INVINCIBLE_DB_URL`. Loopback-only and dev-credential by[...]
 | `invincible db upgrade` | Run the packaged Alembic migrations to head against `INVINCIBLE_DB_URL`. Explicit by design — nothing auto-migrates. |
 | `invincible oauth list` | Show registered OAuth clients, their redirect URIs, and active/revoked grants. |
 | `invincible oauth revoke <client_id>` | Revoke every access/refresh token for a client immediately. |
@@ -251,7 +255,7 @@ server administration:
 | `invincible api-key list` | List API keys by visible prefix (never hashes or raw keys). |
 | `invincible api-key revoke <id-or-prefix>` | Revoke a key immediately. |
 | `invincible users list` | List accounts (host tool; roles are informational only). |
-| `invincible users reset-password <email>` | Reset an account's password (host recovery path — database access is the proof of authority; `--generate` prints a strong password once). Every browser session for the account is signed out; `inv_` keys and MCP tokens are untouched. |
+| `invincible users reset-password <email>` | Reset an account's password (host recovery path — database access is the proof of authority; `--generate` prints a strong password once). Every bro[...]
 
 ```bash
 invincible setup --force
@@ -381,13 +385,13 @@ Full contract — sessions, trimming, timeout semantics:
 `tools/list`, and `tools/call`. Protocol version: `2025-06-18`.
 
 - **Auth**: OAuth 2.1 + PKCE via the built-in authorization server. Clients
-  discover it at `/.well-known/oauth-protected-resource` (RFC 9728), register
-  at `/oauth/register`, get owner approval on the `/oauth/authorize` consent
-  page, then send `Authorization: Bearer <access_token>` on every `/mcp`
-  request. Wrong/missing/expired/revoked token → `401` with a
-  `WWW-Authenticate: Bearer resource_metadata="…"` challenge. (No
-  `X-MCP-Secret` header anymore; the `MCP_SHARED_SECRET` env var is
-  retired and inert.)
+discover it at `/.well-known/oauth-protected-resource` (RFC 9728), register
+at `/oauth/register`, get owner approval on the `/oauth/authorize` consent
+page, then send `Authorization: Bearer <access_token>` on every `/mcp`
+request. Wrong/missing/expired/revoked token → `401` with a
+`WWW-Authenticate: Bearer resource_metadata="…"` challenge. (No
+`X-MCP-Secret` header anymore; the `MCP_SHARED_SECRET` env var is
+retired and inert.)
 - **Notifications**: a request without an `id` still runs its side effect
   but the server replies `204 No Content` with no body.
 
@@ -396,8 +400,8 @@ Full contract — sessions, trimming, timeout semantics:
 | Tool | Arguments | Confirmation | Gate |
 |---|---|---|---|
 | `read_file` | `path` | **No** | Blocks only real secrets/state: `.env*`, `sessions.db`, `.git/`. **Allows** `invincible/`, `tests/`, `providers.yaml`. |
-| `execute_bash` | `command` + a `confirm_action` token round-trip | **Yes** — staged with a token; runs only after `confirm_action(token, approve=true)` (30s execution timeout) | Blocks high-blast-radius commands (`rm -rf /`, fork bombs, `dd of=/dev/`, `mkfs`, `sudo`, `curl \| sh`, `rd /s C:\`, …). |
-| `write_file` | `path`, `content` + a `confirm_action` token round-trip | **Yes** — staged with a token; writes only after `confirm_action(token, approve=true)` | Blocks writes to `.env*`, `providers.yaml`, `sessions.db`, `invincible/`, `tests/`, `.git/`. Creates parent directories. |
+| `execute_bash` | `command` + a `confirm_action` token round-trip | **Yes** — staged with a token; runs only after `confirm_action(token, approve=true)` (30s execution timeout) | Blocks high-b[...]
+| `write_file` | `path`, `content` + a `confirm_action` token round-trip | **Yes** — staged with a token; writes only after `confirm_action(token, approve=true)` | Blocks writes to `.env*`, `pr[...]
 | `confirm_action` | `token`, `approve` | — | Approves/denies a pending `execute_bash`/`write_file`; token is single-use and expires after 10 minutes. |
 
 Security model, full denylist inventory, and known limits:
@@ -636,28 +640,28 @@ More MCP protocol details: [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md).
 
 ```
                          ┌──────────────────────────────────┐
-  OpenAI-compatible      │  invincible/main.py              │
-  agent ─── /v1/chat ──► │  (FastAPI)                        │
-         Claude Code     │              compat/              │
-  (Anthropic) ─ /v1/msg ►│  openai_compat ──────► anthropic │
-         Codex ─ /v1/resp►│  responses_compat                │
-                         │  │ mcp │ dashboard │ agent │     │
-  Cloud AI     ─── /mcp ─►│  │ core/chat_service.py          │
-  (via tunnel)           │  │ core/router.py (BYOK failover)│
-                         │  │ core/tool_executor (denylist) │
-                         └──────┬──────────────┬────────────┘
-                                │              │
-                  ┌─────────────▼──┐   ┌───────▼────────────┐
-                  │ core/router.py │   │ core/tool_executor │
-                  │ tiered failover│   │ (denylist + approval)│
-                  │ + ctx trimming │   └─────────┬──────────┘
-                  └───────┬────────┘             │ confirmed jobs
-                          │          ┌───────────▼────────────┐
-                          │          │ user's paired machine  │
-            ┌─────────────▼──────────▼──────────►│ (agent/runner.py)    │
-            │ PostgreSQL stores                  └────────────────────┘
-            │ (sessions/memory/continuity/BYOK)  │
-            └────────────────────────────────────┘
+   OpenAI-compatible      │  invincible/main.py              │
+   agent ─── /v1/chat ──► │  (FastAPI)                        │
+          Claude Code     │              compat/              │
+   (Anthropic) ─ /v1/msg ►│  openai_compat ──────► anthropic │
+          Codex ─ /v1/resp►│  responses_compat                │
+                          │  │ mcp │ dashboard │ agent │     │
+   Cloud AI     ─── /mcp ─►│  │ core/chat_service.py          │
+   (via tunnel)           │  │ core/router.py (BYOK failover)│
+                          │  │ core/tool_executor (denylist) │
+                          └──────┬──────────────┬────────────┘
+                                 │              │
+                   ┌─────────────▼──┐   ┌───────▼────────────┐
+                   │ core/router.py │   │ core/tool_executor │
+                   │ tiered failover│   │ (denylist + approval)│
+                   │ + ctx trimming │   └─────────┬──────────┘
+                   └───────┬────────┘             │ confirmed jobs
+                           │          ┌───────────▼────────────┐
+                           │          │ user's paired machine  │
+             ┌─────────────▼──────────▼──────────►│ (agent/runner.py)    │
+             │ PostgreSQL stores                  └────────────────────┘
+             │ (sessions/memory/continuity/BYOK)  │
+             └────────────────────────────────────┘
 ```
 
 The compatibility layers (OpenAI, Anthropic, Responses) only translate;
@@ -688,7 +692,7 @@ store, and the trimming logic consume.
 | `invincible/migrations/` | Packaged Alembic environment (`invincible db upgrade`). |
 | `invincible/core/session_store.py` | Conversation memory on PostgreSQL, partitioned by session id. |
 | `invincible/core/tool_executor.py` | Denylists, pending-action approval (`confirm_action`), tool execution. |
-| `invincible/core/chat_service.py` | Shared chat pipeline (history, memory, continuity, routing) used by `/v1/chat/completions` and the dashboard webchat, so API and web sessions share history. |
+| `invincible/core/chat_service.py` | Shared chat pipeline (history, memory, continuity, routing) used by `/v1/chat/completions` and the dashboard webchat, so API and web sessions share history. [...] |
 | `invincible/agent/runner.py` | The local agent on the **user's** machine: pairing config + poll/WS loop + home-confined sandbox. |
 | `invincible/cli.py` | Click CLI: `setup`/`start`(+tunnel)/`login`/`connect`/`harness`/`update`/`doctor`/`dev-db`/`db`/`secret`/`oauth`/`api-key`/`users`. |
 | `invincible/providers.yaml` | Static provider fixture (tests/direct construction; live traffic is BYOK-only). |
@@ -708,7 +712,7 @@ store, and the trimming logic consume.
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, auth realms, denylist inventory, approval flow, known limits. |
 | [docs/TESTING.md](docs/TESTING.md) | How tests work, fixtures, per-file coverage map. |
 | [docs/RELEASING.md](docs/RELEASING.md) | Cutting a release: versioning, the build gate, the tag-triggered PyPI workflow. |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Current platform direction, a verified snapshot of what is implemented, and the phased plan (identity, isolation, accounts, memory/context intelligence, dashboard, deployment). |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Current platform direction, a verified snapshot of what is implemented, and the phased plan (identity, isolation, accounts, memory/context intelligence, das[...]
 
 ---
 
