@@ -1,5 +1,8 @@
 # Invincible gateway container (Phase 16 compose pair).
-FROM python:3.12-slim
+# Base comes from ECR Public's mirror of the official python image, not
+# Docker Hub: anonymous Hub pulls are rate-limited and have broken both
+# CI (run #264) and Railway builds. Same image, no auth, no rate limit.
+FROM public.ecr.aws/docker/library/python:3.12-slim
 
 WORKDIR /app
 
