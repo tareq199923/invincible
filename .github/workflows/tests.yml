@@ -48,21 +48,31 @@ jobs:
 
       # Same postgres:17 the services block used to start (superuser for
       # scratch-DB tests that CREATE/DROP databases; trust auth so the
-      # DSN stays passwordless). Pull retries ride out registry hiccups;
-      # the pg_isready loop replaces the old service health check.
+      # DSN stays passwordless). Primary pull source is AWS ECR Public's
+      # mirror of the official image (no auth, no Docker Hub anonymous
+      # rate limit — the toomanyrequests that killed run #264 attempts
+      # 1-2); Docker Hub stays as fallback. The pg_isready loop replaces
+      # the old service health check.
       - name: Start PostgreSQL
         run: |
-          for i in 1 2 3 4 5 6; do
-            docker pull postgres:17 && break || echo "pull attempt $i failed; retrying"
-            sleep 20
+          IMAGE=""
+          for src in public.ecr.aws/docker/library/postgres:17 postgres:17; do
+            for i in 1 2 3; do
+              if docker pull "$src"; then
+                IMAGE="$src"
+                break 2
+              fi
+              echo "pull $src attempt $i failed; retrying"
+              sleep 20
+            done
           done
-          docker image inspect postgres:17 >/dev/null || { echo "postgres:17 pull failed after retries"; exit 1; }
+          [ -n "$IMAGE" ] || { echo "postgres pull failed from all sources"; exit 1; }
           docker run -d --name invincible-pg \
             -e POSTGRES_USER=invincible \
             -e POSTGRES_DB=invincible_test \
             -e POSTGRES_HOST_AUTH_METHOD=trust \
             -p 5432:5432 \
-            postgres:17
+            "$IMAGE"
           for i in $(seq 1 60); do
             if docker exec invincible-pg pg_isready -U invincible -d invincible_test; then
               break
