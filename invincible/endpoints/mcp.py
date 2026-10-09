@@ -201,7 +201,7 @@ async def _agent_executor(request: Request, subject: int | None):
                 "message": (
                     "No invincible agent is connected for this account. "
                     "Start one on your machine with: "
-                    "invincible harness connect"
+                    "invincible connect"
                 ),
             }
         timeout = float(args.get("timeout", 30.0)) + AGENT_JOB_GRACE_SECONDS
@@ -612,7 +612,7 @@ async def _dispatch(method, rpc_id, params, request,
                         "reason": (
                             "Screenshots run on your paired machine: "
                             "set INVINCIBLE_AGENT_ROUTING=1 and start "
-                            "one with: invincible harness connect"
+                            "one with: invincible connect"
                         ),
                     })))
                 result = await agent_executor(
@@ -637,7 +637,7 @@ async def _dispatch(method, rpc_id, params, request,
                         "reason": (
                             "Web fetches run on your paired machine: "
                             "set INVINCIBLE_AGENT_ROUTING=1 and start "
-                            "one with: invincible harness connect"
+                            "one with: invincible connect"
                         ),
                     })))
                 result = await agent_executor(

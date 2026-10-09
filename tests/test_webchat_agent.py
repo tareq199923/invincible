@@ -230,7 +230,7 @@ async def test_agent_offline_is_a_tool_error(
     events = parse_web_events(resp.text)
     results = [d for n, d in events if n == "tool_result"]
     assert len(results) == 1 and results[0]["ok"] is False
-    assert "harness connect" in results[0]["preview"]
+    assert "invincible connect" in results[0]["preview"]
     done = [d for n, d in events if n == "done"]
     assert done[0]["execution"] == "agent"
 

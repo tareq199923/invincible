@@ -163,7 +163,7 @@ async def test_mcp_web_fetch_unavailable_without_routing(
     assert body["result"]["isError"] is False
     payload = json.loads(body["result"]["content"][0]["text"])
     assert payload["status"] == "unavailable"
-    assert "invincible harness connect" in payload["reason"]
+    assert "invincible connect" in payload["reason"]
     assert "INVINCIBLE_AGENT_ROUTING=1" in payload["reason"]
 
 
@@ -179,7 +179,7 @@ async def test_mcp_web_fetch_offline_matches_screenshot(client, monkeypatch):
         body = result.json()
         assert body["result"]["isError"] is True, name
         text = body["result"]["content"][0]["text"]
-        assert "invincible harness connect" in text, name
+        assert "invincible connect" in text, name
 
 
 async def test_mcp_web_fetch_reaches_agent(client, monkeypatch):
@@ -220,7 +220,7 @@ async def test_webchat_web_fetch_never_fetches_locally():
 
     out = await _run_web_fetch(None, {"url": "https://example.com/"})
     assert out["status"] == "unavailable"
-    assert "invincible harness connect" in out["reason"]
+    assert "invincible connect" in out["reason"]
 
     seen = []
 

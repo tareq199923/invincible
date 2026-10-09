@@ -277,6 +277,8 @@ and server administration (same order as the tool prints it):
 ```
 invincible login [--server URL] [--config PATH]
 invincible connect [--server URL] [--config PATH]
+invincible status [--config PATH]
+invincible dev login | dev connect | dev status (local, default http://127.0.0.1:8000)
 invincible harness setup [--server URL] [--config PATH]
 invincible harness connect [--server URL] [--config PATH]
 invincible harness status [--config PATH]

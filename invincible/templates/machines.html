@@ -2,7 +2,7 @@
 {% block title %}Machines - Invincible{% endblock %}
 {% block content %}
 <h2>Paired machines</h2>
-<p class="muted">PCs running <code>invincible harness connect</code>
+<p class="muted">PCs running <code>invincible connect</code>
 on this account. Confirmed tool actions run
 on the machine they were staged for — a machine only ever sees this
 account's work.</p>
@@ -28,7 +28,7 @@ account's work.</p>
 {% else %}
 <p class="muted empty">No machines seen yet. On the PC you want to reach:
 <code>pip install invincible-ai</code>, then
-<code>invincible harness setup</code> and
-<code>invincible harness connect</code>.</p>
+<code>invincible login</code> and
+<code>invincible connect</code>.</p>
 {% endif %}
 {% endblock content %}

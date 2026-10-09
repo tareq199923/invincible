@@ -33,7 +33,7 @@ async def test_page_empty_state(client):
     page = await client.get("/dashboard/machines")
     assert page.status_code == 200
     assert "No machines seen yet" in page.text
-    assert "harness setup" in page.text
+    assert "invincible login" in page.text
 
 
 async def test_page_lists_own_machines(client):

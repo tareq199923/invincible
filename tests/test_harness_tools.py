@@ -514,7 +514,7 @@ async def test_mcp_screenshot_unavailable_without_routing(
     assert result["isError"] is False
     payload = json.loads(result["content"][0]["text"])
     assert payload["status"] == "unavailable"
-    assert "invincible harness connect" in payload["reason"]
+    assert "invincible connect" in payload["reason"]
 
 
 def _find_tree(tmp_path):

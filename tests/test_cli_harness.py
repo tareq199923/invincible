@@ -41,14 +41,14 @@ def test_connect_alias_delegates_to_harness_connect(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert captured == {"server": "https://selfhost.example",
                         "api_key": "inv_saved"}
-    assert "connecting (WS-first)" in result.output
+    assert "now online" in result.output
 
 
 def test_format_status_empty():
     text = _format_harness_status(
         {"agent_online": False, "machines": []})
     assert "Agent online: no" in text
-    assert "harness connect" in text
+    assert "invincible connect" in text
 
 
 def test_format_status_lists_machines():
@@ -232,4 +232,4 @@ def test_status_command_401_teaches_re_pairing(monkeypatch, tmp_path):
     result = CliRunner().invoke(cli, [
         "harness", "status", "--config", str(_paired_config(tmp_path))])
     assert result.exit_code != 0
-    assert "re-pair" in result.output
+    assert "invincible login" in result.output

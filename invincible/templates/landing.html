@@ -296,8 +296,8 @@
         <div class="terminal" aria-label="Invincible hosted client configuration">
           <div class="bar"><i></i><i></i><i></i><strong>invincible / client-config</strong></div>
           <pre><span class="dim">$</span> <span class="cmd">pip install invincible-ai</span>
-<span class="dim">$</span> <span class="cmd">invincible harness setup</span> <span class="dim"># pair once, prints MCP config</span>
-<span class="dim">$</span> <span class="cmd">invincible harness connect</span> <span class="dim"># this machine goes online</span>
+<span class="dim">$</span> <span class="cmd">invincible login</span> <span class="dim"># pair once (browser opens)</span>
+<span class="dim">$</span> <span class="cmd">invincible connect</span> <span class="dim"># this machine goes online</span>
 <span class="ok">✓ Paired — machine tools appear once connected</span>
 <span class="dim">base</span>  <span class="cmd">{{ base_url }}/v1</span>
 <span class="dim">key</span>   <span class="cmd">inv_…</span> <span class="ok">✓ shown once · revocable</span>
@@ -366,7 +366,7 @@
           <article class="step"><span class="num">01</span><h3>Create an account</h3><p>Register with email and password, or use GitHub when enabled. Your account owns its projects, API keys, provider credentials, conversations, and continuity state.</p><p class="unlocks">Unlocks your dashboard and personal workspace</p><code class="block">/register</code></article>
           <article class="step"><span class="num">02</span><h3>Connect a provider</h3><p>Add a name, public HTTPS base URL, default model, and your key. Upstream providers must support OpenAI-compatible Chat Completions. Provider credentials are encrypted at rest.</p><p class="unlocks">Unlocks models available through your credentials</p><code class="block">dashboard → providers</code></article>
           <article class="step"><span class="num">03</span><h3>Choose how to connect</h3><p>Use the web chat, or create an <code>inv_</code> API key for your own client. The raw key is shown once, stored as a hash, and can be revoked from your account.</p><p class="unlocks">OpenAI Chat · Anthropic Messages · OpenAI Responses</p><code class="block">dashboard → account → API keys</code></article>
-          <article class="step"><span class="num">04</span><h3>Pair a machine (optional)</h3><p>Install the CLI on the computer you want to reach, pair it once, then bring it online. The agent dials out — your machine never opens a port. Hosted deployments must enable agent routing.</p><p class="unlocks">Optional — unlocks remote file, shell, and inspection tools</p><code class="block">harness setup → harness connect</code></article>
+          <article class="step"><span class="num">04</span><h3>Pair a machine (optional)</h3><p>Install the CLI on the computer you want to reach, pair it once, then bring it online. The agent dials out — your machine never opens a port. Hosted deployments must enable agent routing.</p><p class="unlocks">Optional — unlocks remote file, shell, and inspection tools</p><code class="block">login → connect</code></article>
         </div>
       </div>
     </section>
@@ -394,7 +394,7 @@
         </div>
         <div class="journeys">
           <article class="journey"><span class="kicker">No machine needed</span><h3>Chat + continuity</h3><p>Connect your provider credentials, then use the dashboard chat or create an <code>inv_</code> key for an OpenAI, Anthropic, or Responses client. Sessions and account-scoped state stay on the service.</p><div class="actions"><a href="/register">Create an account →</a></div></article>
-          <article class="journey"><span class="kicker">When you need machine access</span><h3>Connect an MCP client</h3><p>Authorize an MCP client with OAuth 2.1 + PKCE. Pair your computer once with <code>invincible harness setup</code>, then keep it online with <code>invincible harness connect</code> to enable machine tools; the agent connects outbound, with no inbound ports to open.</p><div class="actions"><a href="#wire">See the connection →</a></div></article>
+          <article class="journey"><span class="kicker">When you need machine access</span><h3>Connect an MCP client</h3><p>Authorize an MCP client with OAuth 2.1 + PKCE. Pair your computer once with <code>invincible login</code>, then keep it online with <code>invincible connect</code> to enable machine tools; the agent connects outbound, with no inbound ports to open.</p><div class="actions"><a href="#wire">See the connection →</a></div></article>
           <article class="journey"><span class="kicker">Across every client</span><h3>One account, shared context</h3><p>Use compatible clients with your connected models. Review sessions, versioned task state, memory, provider attempts, and usage from the dashboard.</p><div class="actions"><a href="/login">Open the dashboard →</a></div></article>
         </div>
       </div>
@@ -473,7 +473,7 @@
           <p>Short answers with the same semantics the docs pin. Nothing here promises what the code does not do yet.</p>
         </div>
         <div class="faq">
-          <details><summary>Do I need to run a server or a database?</summary><p>No. Create an account on the hosted service and everything — providers, sessions, memory, task state — lives server-side. To reach a machine, install the CLI (<code>pip install invincible-ai</code>), pair it once (<code>invincible harness setup</code>), then keep it online (<code>invincible harness connect</code>). The same code also self-hosts on a laptop backed by PostgreSQL if you prefer to operate it yourself.</p></details>
+          <details><summary>Do I need to run a server or a database?</summary><p>No. Create an account on the hosted service and everything — providers, sessions, memory, task state — lives server-side. To reach a machine, install the CLI (<code>pip install invincible-ai</code>), pair it once (<code>invincible login</code>), then keep it online (<code>invincible connect</code>). The same code also self-hosts on a laptop backed by PostgreSQL if you prefer to operate it yourself.</p></details>
           <details><summary>What happens when a provider rate-limits me?</summary><p>Your agent retries one stable endpoint instead of dying on the first 429. A 429 or 5xx cools that credential down (30s, doubling to a 300s cap) and tries your next credential; a 401 or 403 disables it for the server's life and moves on. When every credential is exhausted the gateway answers 503.</p></details>
           <details><summary>Where do approved tool calls actually execute?</summary><p>On a hosted deployment, on your paired machine; on a single-user self-host without agent routing, on the server host itself. Either way the server keeps every security decision (denylist, staging, single-use confirmation token, audit, per-user routing) and the agent only does the work inside a home-relative sandbox, with denylisted credential paths blocked. An offline agent answers immediately instead of hanging.</p></details>
           <details><summary>What does memory remember?</summary><p>Scoped lexical memories in PostgreSQL — notes, facts, preferences, decisions — ranked by full-text relevance, recency, kind, and confidence under one bounded budget shared with the continuity brief. Say "remember this" to save explicitly, and manage or delete everything from the dashboard. Semantic or vector search is not built yet.</p></details>
@@ -490,8 +490,8 @@
           <h2>Bring a machine online only when you need it.</h2>
           <p>Chat, memory, and continuity need no pairing. When you want your MCP client to reach a computer, pair it once and keep it online — the agent connects outbound, and hosted users never run a server or database.</p>
           <div class="copy-wrap"><pre><span class="c">pip install invincible-ai</span>
-<span class="c">invincible harness setup</span>    <span class="dim" style="color:#747c88;"># pair once, prints MCP config</span>
-<span class="c">invincible harness connect</span>  <span class="dim" style="color:#747c88;"># keep this machine online</span></pre><button class="copy-btn" type="button" aria-label="Copy the install and pairing commands">Copy</button></div>
+<span class="c">invincible login</span>    <span class="dim" style="color:#747c88;"># pair once (browser opens)</span>
+<span class="c">invincible connect</span>  <span class="dim" style="color:#747c88;"># keep this machine online</span></pre><button class="copy-btn" type="button" aria-label="Copy the install and pairing commands">Copy</button></div>
           <div class="actions">
             <a class="btn" href="/register">Create your account</a>
             <a class="btn ghost" href="/login">Sign in</a>

@@ -973,7 +973,7 @@ _CHROME_BINARIES = (
 _CHROME_HINT = (
     "Install Chrome/Chromium/Edge, or point "
     "INVINCIBLE_CHROME_BIN at the browser binary "
-    "and restart `invincible harness connect`."
+    "and restart `invincible connect`."
 )
 
 

@@ -235,11 +235,12 @@ server administration:
 
 | Command | Purpose |
 |---|---|
-| `invincible login [--server URL]` | Pair this machine with an Invincible server (device flow): opens the approval page in your browser — click Approve and the command finishes, saving the `in[...]
-| `invincible connect` | Keep this machine online — short spelling of `harness connect` (WS-first relay, long-poll fallback). First run pairs automatically. |
-| `invincible harness setup` | Pair this machine and print its MCP connector config (idempotent — never re-pairs silently). Then `harness connect` brings it online. |
-| `invincible harness connect` | Keep this machine online (WS-first relay, long-poll fallback): executes confirmed tool jobs on **this machine** with your own user privileges — denylist re-chec[...]
-| `invincible harness status` | Show this account's agent liveness + machine inventory from the terminal. |
+| `invincible login [--server URL]` | Pair this machine with an Invincible server (device flow): opens the approval page in your browser — click Approve and the command finishes, saving the `inv_` key to `~/.invincible/config.json`. Defaults to the hosted service (`https://invincible-ai.me`); pass `--server` for a self-hosted or local server. URL + code are printed for headless terminals; the Account page also has a "Pair a device" box for typing a code by hand. |
+| `invincible connect` | Keep this machine online. First run pairs automatically (browser opens, you click Approve). Runs confirmed jobs on **this machine** with your own account — nothing listens for inbound connections. Ctrl+C to stop. |
+| `invincible status` | Check this machine: account, online state, next step. Same as `harness status`. |
+| `invincible harness setup` | Advanced: pair this machine and print its MCP connector config (idempotent — never re-pairs silently). Most users need only `login` + `connect`. |
+| `invincible harness connect` | Advanced: same as `connect`. |
+| `invincible harness status` | Advanced: same as `status`. |
 | `invincible harness service install` | Write an always-on service definition (systemd/launchd/schtasks) so the machine stays online across reboots. |
 | `invincible update` | Install the latest `invincible-ai` release from PyPI (`--check` for a dry run). |
 | `invincible setup` | Create/update `.env` (non-interactive, scriptable): generates missing secrets (`token_urlsafe(32)`, never echoed), generates the BYOK credential master key, preserves exist[...]

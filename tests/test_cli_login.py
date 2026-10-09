@@ -252,7 +252,7 @@ def test_login_opens_the_approval_page(monkeypatch, tmp_path):
     assert opened == ["https://sv.test/auth/devices/ABCD1234"]
     assert "Approval page: https://sv.test/auth/devices/ABCD1234" \
         in result.output
-    assert "Machine fingerprint: ab12cd34" in result.output
+    assert "Check: ab12cd34" in result.output
 
 
 # --- Phase 11: one-click pairing ------------------------------------------
@@ -527,7 +527,7 @@ def test_agent_pairing_failure_exits_cleanly(monkeypatch, tmp_path):
         harness_command, ["connect", "--config",
                           str(tmp_path / "config.json")])
     assert result.exit_code != 0
-    assert "Device pairing failed" in result.output
+    assert "Pairing didn't finish" in result.output
     assert not ran
 
 
@@ -545,4 +545,4 @@ def test_agent_corrupt_config_errors_instead_of_repairing(monkeypatch,
     result = CliRunner().invoke(
         harness_command, ["connect", "--config", str(config_target)])
     assert result.exit_code != 0
-    assert "Corrupt config" in result.output
+    assert "is corrupt" in result.output

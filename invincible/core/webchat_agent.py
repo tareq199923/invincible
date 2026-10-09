@@ -21,7 +21,7 @@ Execution locality mirrors ``POST /mcp`` exactly: with
 the caller's paired machine via ``AgentRegistry``; otherwise everything
 runs on the server host (which on a self-host IS the user's PC). An
 offline agent is a plain tool error naming
-``invincible harness connect`` - never a silent local fallback.
+``invincible connect`` - never a silent local fallback.
 
 Layering: pure ``core/`` business logic - no FastAPI, no Router import,
 no ``endpoints/`` imports. The router, stores, executor, and approval
@@ -301,7 +301,7 @@ def build_agent_executor(registry, subject: int, routing_on: bool):
                 "message": (
                     "No invincible agent is connected for this account. "
                     "Start one on your machine with: "
-                    "invincible harness connect"
+                    "invincible connect"
                 ),
             }
         timeout = float(args.get("timeout", 30.0)) + AGENT_JOB_GRACE_SECONDS
@@ -520,7 +520,7 @@ async def _run_screenshot(executor, args: dict) -> dict:
             "reason": (
                 "Screenshots run on your paired machine: "
                 "set INVINCIBLE_AGENT_ROUTING=1 and start "
-                "one with: invincible harness connect"
+                "one with: invincible connect"
             ),
         }
     return await executor("screenshot", {"url": str(args.get("url", ""))})
@@ -538,7 +538,7 @@ async def _run_web_fetch(executor, args: dict) -> dict:
             "reason": (
                 "Web fetches run on your paired machine: "
                 "set INVINCIBLE_AGENT_ROUTING=1 and start "
-                "one with: invincible harness connect"
+                "one with: invincible connect"
             ),
         }
     return await executor("web_fetch", {"url": str(args.get("url", ""))})

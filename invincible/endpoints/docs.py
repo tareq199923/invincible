@@ -7,7 +7,7 @@ Unknown slugs 404 — internal repo docs (audits, account transfers,
 workqueues, gap analyses) are never published here.
 
 Content discipline (AGENTS.md): docs follow implementation. CLI commands
-mirror ``cli.py`` (``harness setup`` / ``harness connect``), the MCP tool
+mirror ``cli.py`` (``login`` / ``connect`` / ``status``), the MCP tool
 table is generated from the live ``TOOLS`` list in ``endpoints/mcp.py``,
 and every behavior claim (BYOK-only, lexical memory, failover codes) matches
 the tested semantics. No secrets are rendered.
@@ -117,8 +117,8 @@ continuity. Step 4 is optional pairing for remote tools.
 
 ```bash
 pip install invincible-ai
-invincible harness setup     # pair once, prints MCP config
-invincible harness connect   # this machine goes online
+invincible login     # pair once (browser opens)
+invincible connect   # this machine goes online
 ```
 
 Then authorize an MCP client against `/mcp` (OAuth 2.1 + PKCE in the
@@ -153,16 +153,15 @@ pip install invincible-ai
 
 ```bash
 invincible --version
-invincible harness connect --help
+invincible connect --help
 ```
 
 ## What the CLI is for
 
-- `invincible harness setup` — pair this machine once, prints the MCP
-  connector config for your AI client.
-- `invincible harness connect` — keep this machine online (Ctrl+C to
-  stop). `invincible connect` is a short spelling of the same command.
-- `invincible harness status` — show pairing and machine state.
+- `invincible login` — pair this machine once (browser opens).
+- `invincible connect` — keep this machine online (Ctrl+C to
+  stop). `harness connect` is the same command under the advanced group.
+- `invincible status` — show pairing and machine state.
 - `invincible harness service install` — always-on background service
   (see System Service).
 
@@ -197,8 +196,8 @@ to connect one.
 ## 4. Pair a machine (optional)
 
 ```bash
-invincible harness setup
-invincible harness connect
+invincible login
+invincible connect
 ```
 
 The agent connects outbound — your machine never opens a port.
@@ -216,12 +215,13 @@ below omit the `invincible` prefix, and every row is verified against
 
 | Command | What it does |
 |---------|--------------|
-| `harness setup` | Pair once, print the MCP connector config |
-| `harness connect` | Keep this machine online (Ctrl+C to stop) |
-| `connect` | Short spelling of `harness connect` |
-| `harness status` | Account, agent liveness, machine inventory |
+| `login` | Pair once (browser opens) |
+| `connect` | Keep this machine online (Ctrl+C to stop) |
+| `status` | Account, agent liveness, machine inventory |
+| `harness setup` | Advanced: pair once, print the MCP connector config |
+| `harness connect` | Advanced: same as `connect` |
+| `harness status` | Advanced: same as `status` |
 | `harness service install` | Write the always-on service (`--dry-run` prints) |
-| `login` | Device-flow pairing; `--server` for a self-host |
 
 ## Server administration (self-host)
 
@@ -248,8 +248,8 @@ below omit the `invincible` prefix, and every row is verified against
 | `oauth list` | OAuth clients and their active MCP grants |
 | `oauth revoke` | Revoke every token issued to one client |
 
-Run any command with `--help` for the exact flags. First-time pairing
-lives under `harness setup`; `connect` never re-pairs silently.
+Run any command with `--help` for the exact flags. First run of `connect`
+pairs automatically; `login` is the explicit re-pair tool.
 """
 
 _MCP = """\
@@ -291,7 +291,7 @@ Protocol with OAuth. These are the paths that have been exercised.
 
 **Memory, continuity, and project tools** work as soon as you connect.
 **Machine tools** appear once a paired machine is online
-(`invincible harness connect`) — the two tables at the end of this page
+(`invincible connect`) — the two tables at the end of this page
 list exactly which is which.
 
 ## Authentication
@@ -403,8 +403,8 @@ confirmed machine jobs inside a home-relative sandbox.
 ## Bring it online
 
 ```bash
-invincible harness setup
-invincible harness connect
+invincible login
+invincible connect
 ```
 
 Offline agents answer immediately instead of hanging; reconnects

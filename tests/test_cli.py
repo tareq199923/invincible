@@ -40,21 +40,21 @@ def test_cli_help():
 
 
 def test_cli_help_leads_with_hosted_commands():
-    """Phase 6 client-mode pass: --help leads with login/connect/harness
-    under a hosted-service heading; server administration is a separate
-    section below. Command names and paths are unchanged."""
+    """Fresh hosted pass: --help leads with login/connect/status
+    under a hosted-service heading; advanced + server administration
+    is a separate section below. Command names and paths are unchanged."""
     result = CliRunner().invoke(cli, ["--help"])
     assert result.exit_code == 0
-    assert "Use the hosted service" in result.output
-    assert "Self-host & server administration" in result.output
+    assert "Use the hosted service (just 3)" in result.output
+    assert "Advanced & server administration" in result.output
     hosted_at = result.output.index("Use the hosted service")
-    admin_at = result.output.index("Self-host & server administration")
+    admin_at = result.output.index("Advanced & server administration")
     assert hosted_at < admin_at
     login_at = result.output.index("  login", hosted_at)
     connect_at = result.output.index("  connect", hosted_at)
-    harness_at = result.output.index("  harness", hosted_at)
+    status_at = result.output.index("  status", hosted_at)
     setup_at = result.output.index("  setup", admin_at)
-    assert login_at < connect_at < harness_at < admin_at < setup_at
+    assert login_at < connect_at < status_at < admin_at < setup_at
 
 
 def test_cli_version():
@@ -1084,3 +1084,98 @@ def test_oauth_test_client_requires_db_url(monkeypatch, tmp_path):
     result = CliRunner().invoke(cli, ["oauth", "test-client"])
     assert result.exit_code == 1
     assert "invincible dev-db" in result.output
+
+
+def test_hosted_surface_is_login_connect_status():
+    """Fresh hosted surface: exactly login/connect/status lead --help."""
+    assert set(("login", "connect", "status")) <= set(cli.commands)
+    result = CliRunner().invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    assert "just 3" in result.output
+
+
+def test_unknown_command_suggests_hosted_command():
+    """A typo never dead-ends: did-you-mean points at the 3 commands."""
+    result = CliRunner().invoke(cli, ["connet"])
+    assert result.exit_code != 0
+    assert "Did you mean 'connect'" in result.output
+    assert "login, connect, status" in result.output
+
+
+def test_top_level_status_matches_harness_status(monkeypatch, tmp_path):
+    """`status` is `harness status` with a shorter spelling: same output."""
+    import httpx
+
+    from invincible.cli import _save_client_config
+
+    target = tmp_path / "config.json"
+    _save_client_config(server="https://paired.example",
+                        api_key="inv_saved", path=str(target))
+
+    def _fake_get(url, **kwargs):
+        return httpx.Response(200, request=httpx.Request("GET", url), json={
+            "machines": []})
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    top = CliRunner().invoke(cli, ["status", "--config", str(target)])
+    nested = CliRunner().invoke(
+        cli, ["harness", "status", "--config", str(target)])
+    assert top.exit_code == 0, top.output
+    assert nested.exit_code == 0, nested.output
+    assert top.output == nested.output
+    assert "invincible connect" in top.output
+
+
+def test_dev_namespace_defaults_to_local():
+    """Remote vs local split: top-level is hosted, `dev` is local."""
+    assert "dev" in cli.commands
+    dev_group = cli.commands["dev"]
+    assert set(dev_group.commands) >= {"login", "connect", "status"}
+    assert dev_group.commands["login"].params[0].default == (
+        "http://127.0.0.1:8000")
+    assert dev_group.commands["connect"].params[1].default == (
+        "http://127.0.0.1:8000")
+    result = CliRunner().invoke(cli, ["--help"])
+    assert "invincible dev login" in result.output
+
+
+def test_dev_login_pairs_with_local_by_default(monkeypatch, tmp_path):
+    """`dev login` pairs with the local server without a --server flag."""
+    seen: dict = {}
+
+    async def _fake_pair(base_url, **kwargs):
+        seen["base_url"] = base_url
+        on_code = kwargs.get("on_code")
+        if on_code is not None:
+            result = on_code("http://127.0.0.1:8000/auth/devices/X",
+                             "X", "fp")
+            if hasattr(result, "__await__"):
+                await result
+        return {"access_token": "inv_local", "prefix": "inv_local"}
+
+    monkeypatch.setattr("invincible.cli._pair_device", _fake_pair)
+    monkeypatch.setattr("invincible.cli._open_browser", lambda url: None)
+    result = CliRunner().invoke(
+        cli, ["dev", "login", "--config", str(tmp_path / "c.json")])
+    assert result.exit_code == 0, result.output
+    assert seen["base_url"] == "http://127.0.0.1:8000"
+
+
+def test_dev_connect_uses_local_by_default(monkeypatch, tmp_path):
+    """`dev connect` pairs with local on first run, then runs the loop."""
+    captured: dict = {}
+
+    async def _fake_pair(base_url, **kwargs):
+        captured["base_url"] = base_url
+        return {"access_token": "inv_l", "prefix": "inv_l"}
+
+    async def _fake_run(server, api_key, **kwargs):
+        captured.update(server=server, api_key=api_key)
+
+    monkeypatch.setattr("invincible.cli._pair_device", _fake_pair)
+    monkeypatch.setattr("invincible.agent.runner.run_harness", _fake_run)
+    result = CliRunner().invoke(
+        cli, ["dev", "connect", "--config", str(tmp_path / "c.json")])
+    assert result.exit_code == 0, result.output
+    assert captured["base_url"] == "http://127.0.0.1:8000"
+    assert captured["server"] == "http://127.0.0.1:8000"

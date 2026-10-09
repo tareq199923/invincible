@@ -131,7 +131,7 @@ async def test_docs_chrome_markers(docs_client):
     assert "/static/favicon.svg" in body
     assert "docs.js?v=" in body
     # The index page canonicalizes to /docs, and the header carries the
-    # Dashboard link (flexx-parity nav: Home - Dashboard - search).
+    # Dashboard link (header nav: Home - Dashboard - search).
     index = (await docs_client.get("/docs")).text
     assert 'rel="canonical" href="http://test/docs"' in index
     assert 'href="/dashboard"' in index

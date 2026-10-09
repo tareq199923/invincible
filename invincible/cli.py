@@ -1645,24 +1645,21 @@ DEFAULT_SERVER = "https://invincible-ai.me"
 @click.command("login")
 @click.option("--server", default=DEFAULT_SERVER,
               show_default=True, envvar="INVINCIBLE_SERVER",
-              help="Server to pair with. Default is the hosted service; "
-                   "self-hosters pass their own URL "
-                   "(e.g. --server https://mycompany.ai, or "
-                   "--server http://127.0.0.1:8000 for a local "
-                   "`invincible start`).")
+              help="Hosted server to pair with. Local self-host? Use "
+                   "`invincible dev login` instead of passing --server.")
 @click.option("--config", "config_path",
               type=click.Path(dir_okay=False, path_type=str), default=None,
               help="Where to store the paired credentials "
                    "(default ~/.invincible/config.json).")
 def login(server: str, config_path: str | None):
-    """Pair this machine with an Invincible server (device flow).
+    """Pair with the hosted service (device flow).
 
     Opens the approval page in your browser (one click: Approve); the
     command finishes once approved and stores the minted API key locally.
     The URL + code are printed as a fallback for headless terminals.
     """
     _pair_and_save(server.rstrip("/"), config_path)
-    click.echo("Keep this machine online with: invincible harness connect")
+    click.echo("Next: invincible connect  (keeps this machine online)")
 
 
 def _pair_and_save(server: str, config_path: str | None) -> str:
@@ -1679,8 +1676,8 @@ def _pair_and_save(server: str, config_path: str | None) -> str:
             click.echo(f"Approval page: {url}")
             click.echo(f"Code: {code}  (approve within 10 minutes)")
             click.echo(
-                f"Machine fingerprint: {fingerprint}  (must match the "
-                "fingerprint on the approval page)")
+                f"Check: {fingerprint}  (must match the approval page)")
+            click.echo("No browser opened? Open the URL on your phone.")
             _open_browser(url)
 
         return await _pair_device(server, on_code=_on_code)
@@ -1688,7 +1685,10 @@ def _pair_and_save(server: str, config_path: str | None) -> str:
     try:
         token = run_coro_sync(_run())
     except _DevicePairError as exc:
-        raise click.ClickException(f"Device pairing failed: {exc}") from exc
+        raise click.ClickException(
+            f"Pairing didn't finish: {exc}\n"
+            "Just re-run: invincible login"
+        ) from exc
     path = _save_client_config(
         server=server, api_key=token["access_token"], path=config_path)
     click.echo(f"Paired. API key {token['prefix']} saved to {path}")
@@ -1806,26 +1806,27 @@ def _load_client_config(path: str | None = None) -> dict:
     except FileNotFoundError:
         raise click.ClickException(
             f"This machine isn't paired yet (no {target}).\n"
-            "Pair it first - the browser opens, you click Approve:\n"
-            "  invincible login --server https://your-server"
+            "Run this once - your browser opens, you click Approve:\n"
+            "  invincible login"
         ) from None
     except json.JSONDecodeError as exc:
         raise click.ClickException(
-            f"Corrupt config file {target}: {exc}"
+            f"Config file {target} is corrupt and was left untouched: {exc}\n"
+            "Fix it by re-pairing:\n"
+            "  invincible login"
         ) from exc
     if not config.get("server") or not config.get("api_key"):
         raise click.ClickException(
-            f"Config file {target} is missing server or api_key. "
-            "Re-run `invincible login --server https://your-server`."
+            f"Config file {target} is incomplete (missing server or key) "
+            "and was left untouched. Fix it by re-pairing:\n"
+            "  invincible login"
         )
     return config
 
 
 @click.group("harness")
 def harness():
-    """Machine harness (remote hands): pair this PC, keep it
-    connected, inspect it, and install it as an always-on service.
-    """
+    """Advanced machine controls (most users need only connect/status)."""
 
 
 def _ensure_paired(server: str, config_path: str | None) -> dict:
@@ -1876,9 +1877,7 @@ def harness_setup(config_path: str | None, server: str):
     server = config["server"].rstrip("/")
     click.echo(f"Paired with {server} (machine id: {machine_id()}).")
     _print_mcp_config(server)
-    click.echo("Next: invincible harness connect  (this machine goes "
-               "online; memory tools work immediately, machine tools once "
-               "connected).")
+    click.echo("Next: invincible connect  (this machine goes online).")
 
 
 @harness.command("connect")
@@ -1893,17 +1892,17 @@ def harness_setup(config_path: str | None, server: str):
 def harness_connect(config_path: str | None, server: str):
     """Keep this machine online (Ctrl+C to stop).
 
-    WS-first relay with long-poll fallback: the server pushes confirmed
-    jobs over an outbound-only connection (zero inbound ports). Runs with
-    your own user privileges inside the home sandbox.
+    Confirmed jobs run on this machine with your own user account,
+    inside your home folder. Nothing listens for inbound connections.
     """
+
     from invincible.agent.runner import run_harness
 
     fresh_pair = not os.path.isfile(_client_config_path(config_path))
     config = _ensure_paired(server, config_path)
     server = config["server"].rstrip("/")
-    click.echo(f"Harness for {server} - connecting (WS-first). Ctrl+C "
-               "to stop.")
+    click.echo(f"Connected to {server}. This machine is now online. "
+                "Press Ctrl+C to stop.")
     if fresh_pair:
         # The one remaining setup step, taught at the moment it matters:
         # first run pairs AND shows the MCP block, so `setup` stays an
@@ -1912,7 +1911,7 @@ def harness_connect(config_path: str | None, server: str):
     try:
         run_coro_sync(run_harness(server, config["api_key"]))
     except KeyboardInterrupt:
-        click.echo("\nHarness stopped.")
+        click.echo("\nStopped. Re-run 'invincible connect' to go online again.")
 
 
 @click.command("connect")
@@ -1927,9 +1926,8 @@ def harness_connect(config_path: str | None, server: str):
 def connect(config_path: str | None, server: str):
     """Keep this machine online (Ctrl+C to stop).
 
-    Short spelling of ``invincible harness connect`` — same WS-first
-    relay, same pairing file. (The bare ``setup`` name stays with server
-    provisioning, so first-time pairing lives under ``harness setup``.)
+    Same as `harness connect`. First run pairs this machine
+    automatically (browser opens, you click Approve).
     """
     ctx = click.get_current_context()
     ctx.invoke(harness_connect, config_path=config_path, server=server)
@@ -1957,7 +1955,7 @@ def _format_harness_status(payload: dict) -> str:
     machines = payload.get("machines") or []
     if not machines:
         lines.append("Machines: none seen yet "
-                     "(start one with: invincible harness connect)")
+                      "(start one with: invincible connect)")
         return "\n".join(lines)
     lines.append(f"Machines ({len(machines)}):")
     for m in machines:
@@ -1980,6 +1978,11 @@ def _format_harness_status(payload: dict) -> str:
 def harness_status(config_path: str | None):
     """Show which account this pairing belongs to, plus agent liveness
     and machine inventory."""
+    _show_status(config_path)
+
+
+def _show_status(config_path: str | None) -> None:
+    """Shared body for `status` and `harness status` (one code path)."""
     import httpx
 
     config = _load_client_config(config_path)
@@ -1999,8 +2002,8 @@ def harness_status(config_path: str | None):
                 f"Could not reach {server}: {exc}") from exc
         if response.status_code == 401:
             raise click.ClickException(
-                "Pairing key rejected (401) - re-pair with "
-                "`invincible harness setup`.")
+                "This pairing was rejected (401). Re-pair once with:\n"
+                "  invincible login")
         if response.status_code in (404, 405):
             return None
         try:
@@ -2018,6 +2021,75 @@ def harness_status(config_path: str | None):
             m.get("online") for m in (payload.get("machines") or [])),
         "machines": payload.get("machines"),
     }))
+
+
+@click.command("status")
+@click.option("--config", "config_path",
+              type=click.Path(dir_okay=False, path_type=str), default=None,
+              help="Pairing credentials to use "
+                   "(default ~/.invincible/config.json).")
+def status(config_path: str | None):
+    """Check this machine: account, online state, next step.
+
+    Same as `harness status`. Start here when unsure what to do next.
+    """
+    _show_status(config_path)
+
+
+LOCAL_SERVER = "http://127.0.0.1:8000"
+
+
+@click.group("dev")
+def dev():
+    """Local self-host (your own server on this machine).
+
+    Same 3 commands as the hosted service, but defaulting to your
+    local server instead of https://invincible-ai.me:
+
+    \b
+    invincible dev login    pair with your local server
+    invincible dev connect  keep this machine online (local)
+    invincible dev status   check local pairing
+    """
+
+
+@dev.command("login")
+@click.option("--server", default=LOCAL_SERVER,
+              show_default=True, envvar="INVINCIBLE_DEV_SERVER",
+              help="Local server to pair with "
+                   "(default http://127.0.0.1:8000 from `invincible start`).")
+@click.option("--config", "config_path",
+              type=click.Path(dir_okay=False, path_type=str), default=None,
+              help="Where to store the paired credentials "
+                   "(default ~/.invincible/config.json).")
+def dev_login(server: str, config_path: str | None):
+    """Pair with your local server (same as login, local default)."""
+    _pair_and_save(server.rstrip("/"), config_path)
+    click.echo("Next: invincible dev connect  (keeps this machine online)")
+
+
+@dev.command("connect")
+@click.option("--config", "config_path",
+              type=click.Path(dir_okay=False, path_type=str), default=None,
+              help="Pairing credentials to use "
+                   "(default ~/.invincible/config.json).")
+@click.option("--server", default=LOCAL_SERVER,
+              show_default=True, envvar="INVINCIBLE_DEV_SERVER",
+              help="Local server to pair with on first run.")
+def dev_connect(config_path: str | None, server: str):
+    """Keep this machine online against your local server."""
+    ctx = click.get_current_context()
+    ctx.invoke(harness_connect, config_path=config_path, server=server)
+
+
+@dev.command("status")
+@click.option("--config", "config_path",
+              type=click.Path(dir_okay=False, path_type=str), default=None,
+              help="Pairing credentials to use "
+                   "(default ~/.invincible/config.json).")
+def dev_status(config_path: str | None):
+    """Check local pairing: account, online state, next step."""
+    _show_status(config_path)
 
 
 def _render_agent_service(*, config_path: str | None) -> tuple[str, str]:
@@ -2373,7 +2445,41 @@ def db_upgrade():
 class _RemoteFirstGroup(click.Group):
     """click.Group with a curated two-section command listing."""
 
-    HOSTED_COMMANDS = ("login", "connect", "harness")
+    HOSTED_COMMANDS = ("login", "connect", "status")
+
+    def resolve_command(self, ctx, args):
+        """Resolve with a fresh did-you-mean hint on typos.
+
+        Click's default ``No such command`` leaves new users stuck;
+        suggest the closest top-level, ``harness <sub>``, or ``dev <sub>``
+        spelling so a typo like ``connet`` or ``conect`` still lands.
+        """
+        import difflib
+
+        try:
+            return super().resolve_command(ctx, args)
+        except click.UsageError as exc:
+            if not args:
+                raise
+            typed = args[0]
+            candidates: list[str] = list(self.commands)
+            try:
+                for group_name in ("harness", "dev"):
+                    group = self.commands.get(group_name)
+                    if group is not None and hasattr(group, "commands"):
+                        candidates.extend(
+                            f"{group_name} {sub}" for sub in group.commands
+                        )
+            except Exception:
+                pass
+            guess = difflib.get_close_matches(
+                typed, candidates, n=1, cutoff=0.6)
+            hint = f" Did you mean '{guess[0]}'?" if guess else ""
+            raise click.UsageError(
+                f"No such command '{typed}'.{hint} "
+                "Run 'invincible --help' to see the 3 hosted commands: "
+                "login, connect, status."
+            ) from exc
 
     def format_commands(
         self, ctx: click.Context, formatter: click.HelpFormatter
@@ -2392,8 +2498,8 @@ class _RemoteFirstGroup(click.Group):
             key=lambda row: row[0],
         )
         for title, rows in (
-            ("Use the hosted service", hosted),
-            ("Self-host & server administration", rest),
+            ("Use the hosted service (just 3)", hosted),
+            ("Advanced & server administration", rest),
         ):
             if not rows:
                 continue
@@ -2408,10 +2514,18 @@ class _RemoteFirstGroup(click.Group):
 def cli():
     """Invincible - your AI continuity service.
 
-    Most users only need two commands: login (pair this machine with the
-    hosted service) and connect (run confirmed tool jobs on this
-    machine; full harness surface lives under `harness`). Everything else
-    is self-host and server administration.
+    Just 3 commands to use the hosted service (https://invincible-ai.me):
+
+    \b
+    invincible login    pair this machine once (browser opens)
+    invincible connect  keep this machine online (Ctrl+C to stop)
+    invincible status   check pairing, account, next step
+
+    Local self-host? Use the same 3 under `dev`
+    (defaults to http://127.0.0.1:8000 from `invincible start`):
+
+    \b
+    invincible dev login | dev connect | dev status
     """
 
 
@@ -2419,6 +2533,8 @@ cli.add_command(setup)
 cli.add_command(start)
 cli.add_command(login)
 cli.add_command(connect)
+cli.add_command(status)
+cli.add_command(dev)
 cli.add_command(harness)
 cli.add_command(update)
 cli.add_command(doctor)
