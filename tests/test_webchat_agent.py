@@ -632,6 +632,10 @@ def test_environment_note_static_prompt_first():
         assert composed.startswith(MODE_SYSTEM_PROMPTS[mode])
     assert "edit_file" in MODE_SYSTEM_PROMPTS["manual"]
     assert "edit_file" in MODE_SYSTEM_PROMPTS["auto"]
+    # Step 5 merge pin: verify + file:line evidence folded in from the
+    # deleted harness BASE_PROMPT; live declined/blocked line still wins.
+    for mode in ("plan", "manual", "auto"):
+        assert "file:line" in MODE_SYSTEM_PROMPTS[mode]
 
 
 def test_environment_note_plan_omits_mutating_guidance():

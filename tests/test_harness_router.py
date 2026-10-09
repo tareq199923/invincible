@@ -1,19 +1,21 @@
 # tests/test_harness_router.py
-"""H4: agent routing + handoff interception — hermetic."""
+"""H4: agent routing + handoff interception — hermetic.
+
+Step 5: the duplicate prompt assembly (BASE_PROMPT + overlays,
+classify_task, render_env_block, build_system_prompt) was deleted —
+the live prompt lives in webchat_agent.MODE_SYSTEM_PROMPTS. What
+remains here is agent defs + lateral handoff only.
+"""
 import pytest
 
 from invincible.core.harness_bus import HarnessBus
 from invincible.core.harness_events import HarnessEventType
 from invincible.core.harness_router import (
     AGENTS,
-    BASE_PROMPT,
     OPERATOR_AGENT,
     TRIAGE_AGENT,
     UnknownAgent,
-    build_system_prompt,
-    classify_task,
     handle_tool_call,
-    render_env_block,
     resolve,
 )
 
@@ -73,62 +75,10 @@ def test_handoff_unknown_target_stays_and_reports():
     assert "billing" in result["message"]
 
 
-def test_classify_task_kinds():
-    assert classify_task("why is login slow? find the bug") == "read"
-    assert classify_task("run the migration and verify") == "do"
-    assert classify_task("fix the refund bug") == "do"
-    assert classify_task("write a plan outline for SSO") == "plan"
-    assert classify_task("plan the fix for refunds") == "plan"  # plan wins
-    assert classify_task("") == "read"
-    # Word boundaries: "outlines" in prose is not the planning keyword.
-    assert classify_task("he outlines the facts") == "read"
-    # An interrogative naming a change word wants an explanation, not an
-    # edit — read, so the do-overlay never pushes a mutating loop.
-    assert classify_task("how do I fix the login redirect?") == "read"
-    assert classify_task("should I delete the old index?") == "read"
-    assert classify_task("what does the deploy script do") == "read"
-    # A plan word still wins over the interrogative.
-    assert classify_task("how should we plan the migration?") == "plan"
-    # The same change word in a bare imperative stays "do".
-    assert classify_task("fix the login redirect") == "do"
-
-
-def test_static_prompts_carry_base_and_matching_tools():
-    for agent in (TRIAGE_AGENT, OPERATOR_AGENT):
-        assert agent.system_prompt.startswith(BASE_PROMPT)
-    assert "read_file" in TRIAGE_AGENT.system_prompt
-    assert "handoff" in TRIAGE_AGENT.system_prompt
-    assert "execute_bash" not in TRIAGE_AGENT.system_prompt
-    assert "execute_bash" in OPERATOR_AGENT.system_prompt
-    assert "verify" in OPERATOR_AGENT.system_prompt
-
-
-def test_build_system_prompt_section_order_and_env_last():
-    prompt = build_system_prompt(
-        "triage", "why is checkout slow?",
-        model="m1", cwd="/home/u", date_str="2026-09-26",
-    )
-    assert prompt.startswith(BASE_PROMPT)
-    assert "read_file" in prompt  # read overlay for a read task
-    env = "Environment: model=m1 | cwd=/home/u | date=2026-09-26."
-    assert prompt.endswith(env)
-
-
-def test_build_system_prompt_task_overlays_and_unknown_agent():
-    do_prompt = build_system_prompt(
-        "operator", "restart the worker", date_str="2026-09-26")
-    assert "Inspect, then act, then verify" in do_prompt
-    plan_prompt = build_system_prompt(
-        "triage", "outline the migration steps", date_str="2026-09-26")
-    assert "end with the plan" in plan_prompt
-    generic = build_system_prompt(
-        "ghost", "look around", date_str="2026-09-26")
-    assert "ghost specialist" in generic  # degrades, never raises
-
-
-def test_render_env_block_unknowns_and_defaults():
-    assert render_env_block(date_str="2026-09-26") == (
-        "Environment: model=unknown | cwd=unknown | date=2026-09-26."
-    )
-    # Empty date falls back to today without raising.
-    assert "date=" in render_env_block()
+def test_builtin_agents_tool_membership_matches_capabilities():
+    # Tool subsets are registry-derived (harness_tools.router_tools);
+    # prompt text lives in webchat_agent.MODE_SYSTEM_PROMPTS (Step 5).
+    assert "read_file" in TRIAGE_AGENT.tools
+    assert "handoff" in TRIAGE_AGENT.tools
+    assert "execute_bash" not in TRIAGE_AGENT.tools
+    assert "execute_bash" in OPERATOR_AGENT.tools

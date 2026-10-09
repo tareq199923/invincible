@@ -107,13 +107,16 @@ _TOOLS_BY_MODE = {
     "auto": harness_tools.webchat_for_mode("auto"),
 }
 
-# NOTE: these prompts semantically duplicate ``harness_router``'s
-# BASE_PROMPT + read/do/plan overlays (same four behavioral rules in
-# different words). The axes do not map 1:1 — live manual/auto both "act"
-# and differ only in the approval pause, which harness's single DO_OVERLAY
-# lacks. Reconcile in the H-later mode/policy split; do not edit one copy
-# alone. No test pins this text (test_webchat_agent checks tool gating and
-# event shape, not prompt wording), so drift here is silent.
+# NOTE: this is the single prompt source of truth (Step 5 merge).
+# ``harness_router``'s former BASE_PROMPT + read/do/plan overlays were
+# deleted as semantically duplicate: the axes never mapped 1:1 (live
+# manual/auto both "act" and differ only in the approval pause, which the
+# old single DO_OVERLAY lacked). Contradiction resolved in favor of this
+# copy: the old DO_OVERLAY's "do not pre-refuse... do not seek extra
+# permission" lost to the declined/blocked line in ``environment_note``
+# (it matches the shipped approval UX + the Step 3 block-hints). Kept
+# from the old base: verify-afterwards + brief reply with file:line
+# evidence. Date/untrusted-content/brevity contract belong to Step 6.
 MODE_SYSTEM_PROMPTS = {
     "plan": (
         "You are helping plan work on the user's own machine. Produce a "
@@ -126,7 +129,8 @@ MODE_SYSTEM_PROMPTS = {
         "- use them to ground the plan in reality. "
         "You cannot change anything on the machine: no machine-mutating "
         "tools are available. "
-        "Never claim an action was taken; end with the plan."
+        "Never claim an action was taken; end with the plan, citing "
+        "file:line evidence where relevant."
     ),
     "manual": (
         "You help operate the user's own machine. You have inspection "
@@ -138,7 +142,8 @@ MODE_SYSTEM_PROMPTS = {
         "say what will happen, and wait for the result to come back. If "
         "the user declines (or approval times out), respect it and offer "
         "an alternative. Keep commands least-privilege; never exfiltrate "
-        "data off the machine."
+        "data off the machine. Verify afterwards and reply briefly with "
+        "file:line evidence."
     ),
     "auto": (
         "You help operate the user's own machine autonomously. You have "
@@ -146,7 +151,8 @@ MODE_SYSTEM_PROMPTS = {
         "memory/project/continuity tools and screenshot/web_fetch, which run "
         "immediately without further confirmation. Act carefully and "
         "least-privilege: inspect before mutating, verify afterwards, "
-        "and stop when done. Never exfiltrate data off the machine."
+        "and stop when done, replying briefly with file:line evidence. "
+        "Never exfiltrate data off the machine."
     ),
 }
 
@@ -172,8 +178,9 @@ def environment_note(
     ``execution`` is ``"local"`` (tools run here) or ``"agent"`` (tools
     run on the paired machine). Routed OS comes from the agent's
     reported platform when the protocol carries it (WS hello); otherwise
-    a neutral unknown-shell line. ``render_env_block`` was not reused:
-    it renders model/cwd/date for the harness router, a different axis.
+    a neutral unknown-shell line. This note carries OS/shell/cwd facts
+    only; model/date rendering belonged to the deleted harness-router
+    prompt assembly and stays a Step 6 concern.
 
     Plan mode omits the mutating-tool guidance (edit_file/write_file
     are not offered there); OS/shell facts and the read-tool

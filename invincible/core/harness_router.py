@@ -1,57 +1,32 @@
 # invincible/core/harness_router.py
 """Agent routing + typed handoffs (H4).
 
-An agent is data, not machinery: a name, a system prompt, and the subset
-of tools it may use. The runtime (``harness_runtime.run_workflow``) runs
-ANY agent through the same loop — adding a specialist never adds a loop.
+An agent is data, not machinery: a name and the subset of tools it may
+use. The runtime (``harness_runtime.run_workflow``) runs ANY agent
+through the same loop — adding a specialist never adds a loop.
 
-Deliberate scope guard: this module is NOT wired into ``POST /mcp`` in
-H4, so the twelve-tool contract in ``docs/MCP_PROTOCOL.md`` stays intact
-(protocol compatibility is tested behavior). ``run_workflow`` callers and
-the H-later assistant use ``handle_tool_call`` to intercept ``handoff``;
-MCP exposure of handoff arrives with that assistant, not here.
+Deliberate scope guard: this module is NOT wired into ``POST /mcp``
+(protocol compatibility is tested behavior). ``run_workflow`` callers
+and the H-later assistant use ``handle_tool_call`` to intercept
+``handoff``; MCP exposure of handoff arrives with that assistant, not
+here.
 
 The two built-ins mirror their triage/billing split, adapted to this
 machine-plane: ``triage`` investigates (reads, memory, task state) but
 cannot change anything; ``operator`` owns the privileged verbs.
 
-Prompts are task-aware (MVP): one shared ``BASE_PROMPT`` (identity +
-safety + loop discipline, in opencode's concise style) plus a per-task
-overlay — read / do / plan — chosen by ``classify_task`` and assembled
-by ``build_system_prompt``. The static ``Agent.system_prompt`` values
-are the each-agent defaults (triage→read, operator→do). Section order
-is stable on purpose: identity → role+overlay → env.
-
-NOT WIRED INTO A LIVE CALLER YET (H4, deliberate — see
-``docs/HARNESS_PLAN.md`` H4 follow-up). ``harness_supervisor`` imports
-``AGENTS``/``Agent`` from here, but nothing imports ``harness_supervisor``,
-so no live caller reaches this module: the live webchat path builds
-its prompt in ``webchat_agent.MODE_SYSTEM_PROMPTS``, keyed on the
-*permission* mode (plan/manual/auto), which is a different axis from
-this module's *intent* kind (read/do/plan). Binding the two is not a
-drop-in: ``DO_OVERLAY`` tells the model to act without seeking extra
-permission, which contradicts ``manual`` mode's per-call approval gate,
-so the merge lands with the H-later assistant that owns the mode/policy
-split.
-
-NOTE: ``BASE_PROMPT`` + the read/do/plan overlays semantically duplicate
-the live ``webchat_agent.MODE_SYSTEM_PROMPTS`` (same four rules — no
-false claims, inspect-then-verify, no exfiltration, least-privilege —
-in different words). The overlap is asymmetric under test: the tests
-below pin a couple of overlay substrings ("Inspect, then act, then
-verify"; "end with the plan"), while the live copy has no text coverage
-at all — ``test_webchat_agent`` asserts tool gating and event shape only
-— so a reword there trips nothing and the two can drift silently.
-Reconcile when the mode/policy split lands; do not "fix" one side alone.
-A caller that knows the live facts will pass
-``build_system_prompt(agent, task, model=..., cwd=..., date_str=...)``
-into ``harness_runtime.hydrate_context(system_prompt=...)`` so the model
-also sees the environment line (openclaw's volatile-last section).
+Prompts live in exactly one place (Step 5 merge):
+``webchat_agent.MODE_SYSTEM_PROMPTS`` + ``environment_note``. The former
+BASE_PROMPT + read/do/plan overlays, ``classify_task``,
+``render_env_block``, and ``build_system_prompt`` were deleted here as
+semantically duplicate — the live permission-mode axis (plan/manual/auto)
+never mapped 1:1 onto the old intent-kind axis (read/do/plan), and the old
+DO_OVERLAY ("do not seek extra permission") contradicted manual mode's
+approval gate. A caller that knows the live facts passes the composed
+live prompt into ``harness_runtime.hydrate_context(system_prompt=...)``.
 """
 from __future__ import annotations
 
-import datetime
-import re
 from dataclasses import dataclass, field
 
 from invincible.core import harness_tools
@@ -60,146 +35,12 @@ from invincible.core.harness_events import HarnessEventType
 
 HANDOFF_TOOL = "handoff"
 
-BASE_PROMPT = (
-    "You are an Invincible harness agent running on the user's own "
-    "machine. Be least-privilege: inspect before changing anything, "
-    "and never send machine data off the machine. Work in a tool loop "
-    "until done or blocked, then reply briefly with what you did plus "
-    "file:line evidence. Keep replies concise - a few lines unless "
-    "asked for detail."
-)
-
-_TRIAGE_ROLE = "You are the triage investigator."
-_OPERATOR_ROLE = "You are the machine operator specialist."
-
-READ_OVERLAY = (
-    "Investigate with read_file, memory_search/list, and task_state_get. "
-    "You cannot run commands or write files - those tools are absent, "
-    "not merely forbidden. If the task needs a machine change, hand off "
-    "with handoff({\"to\": \"operator\", \"reason\": \"...\"}) and stop; "
-    "do not draft the change yourself."
-)
-
-DO_OVERLAY = (
-    "Inspect, then act, then verify. Running commands and writing files "
-    "IS your job. Each execute_bash/write_file call is staged for human "
-    "approval and the policy gate still blocks destructive patterns: "
-    "call the tool, briefly say what will happen, and wait for the "
-    "result. Risk is enforced at runtime by those gates - do not "
-    "pre-refuse requested work and do not seek extra permission beyond "
-    "the staged flow. When work arrives via handoff, do it: read state, "
-    "run the command or write the file, verify afterwards, then "
-    "summarize. Never stop after only acknowledging."
-)
-
-PLAN_OVERLAY = (
-    "Produce a concrete step-by-step plan grounded in what you read, "
-    "then stop. Use read-only tools only. Never claim an action was "
-    "taken; end with the plan."
-)
-
-TASK_KINDS = ("read", "do", "plan")
-
-_PLAN_WORDS = (
-    "plan", "outline", "steps", "step-by-step", "design",
-    "proposal", "roadmap", "strategy",
-)
-_DO_WORDS = (
-    "run", "execute", "fix", "write", "create", "delete", "remove",
-    "update", "change", "install", "deploy", "restart", "patch",
-    "implement", "apply", "move", "rename", "build",
-)
-_PLAN_RE = re.compile(
-    r"\b(?:" + "|".join(re.escape(w) for w in _PLAN_WORDS) + r")\b",
-    re.IGNORECASE,
-)
-_DO_RE = re.compile(
-    r"\b(?:" + "|".join(re.escape(w) for w in _DO_WORDS) + r")\b",
-    re.IGNORECASE,
-)
-# An interrogative opener ("how do I fix X?") names a change word but
-# wants an explanation, not an edit — the DO_OVERLAY would push a
-# mutating loop onto a question. Plan words still win over this.
-_QUESTION_RE = re.compile(
-    r"^\s*(?:how|why|what|when|where|who|which|is|are|does|do|did|"
-    r"can|could|should|would|will)\b",
-    re.IGNORECASE,
-)
-
-
-def classify_task(task: str) -> str:
-    """Sniff the task kind: ``plan`` wins over ``do``, else ``read``.
-
-    Keyword-only on purpose (cheap, deterministic, no LLM call): a
-    task mentioning planning words wants a plan even when it also
-    names a change ("plan the fix"); a task naming a change wants
-    action; everything else is investigation. An interrogative opener
-    ("how do I fix login?") is read even when it names a change word,
-    since the ask is an explanation — unless a plan word appears. Pure
-    and hermetic.
-    """
-    text = task or ""
-    if _PLAN_RE.search(text):
-        return "plan"
-    if _QUESTION_RE.search(text):
-        return "read"
-    if _DO_RE.search(text):
-        return "do"
-    return "read"
-
-
-def render_env_block(
-    *, model: str = "", cwd: str = "", date_str: str = ""
-) -> str:
-    """One volatile-last environment line (openclaw temporal-context
-    parity): model, working directory, local date. Empty facts render
-    as ``unknown`` (the server never guesses another machine's cwd);
-    an empty ``date_str`` falls back to today. Pure and hermetic."""
-    day = date_str.strip() or datetime.date.today().isoformat()
-    return (
-        f"Environment: model={model.strip() or 'unknown'} | "
-        f"cwd={cwd.strip() or 'unknown'} | date={day}."
-    )
-
-
-def build_system_prompt(
-    agent_name: str,
-    task: str,
-    *,
-    model: str = "",
-    cwd: str = "",
-    date_str: str = "",
-) -> str:
-    """Assemble the per-turn system prompt: base + role/overlay + env.
-
-    The overlay follows the TASK kind (read/do/plan), the role line
-    follows the agent; unknown agent names degrade to a generic
-    specialist line instead of raising. Section order is fixed
-    (identity → role+overlay → env) so prompt-cache prefixes stay
-    stable across turns. Pure and hermetic.
-    """
-    kind = classify_task(task)
-    overlay = {
-        "read": READ_OVERLAY, "do": DO_OVERLAY, "plan": PLAN_OVERLAY,
-    }[kind]
-    if agent_name == "triage":
-        role = _TRIAGE_ROLE
-    elif agent_name == "operator":
-        role = _OPERATOR_ROLE
-    else:
-        role = f"You are the {agent_name} specialist."
-    return (
-        f"{BASE_PROMPT} {role} {overlay} "
-        f"{render_env_block(model=model, cwd=cwd, date_str=date_str)}"
-    )
-
 
 @dataclass(frozen=True)
 class Agent:
-    """One specialist: prompt + allowed tool subset."""
+    """One specialist: name + allowed tool subset."""
 
     name: str
-    system_prompt: str
     tools: tuple[str, ...] = field(default_factory=tuple)
 
     def allows(self, tool_name: str) -> bool:
@@ -208,13 +49,11 @@ class Agent:
 
 TRIAGE_AGENT = Agent(
     name="triage",
-    system_prompt=f"{BASE_PROMPT} {_TRIAGE_ROLE} {READ_OVERLAY}",
     tools=harness_tools.router_tools("triage"),
 )
 
 OPERATOR_AGENT = Agent(
     name="operator",
-    system_prompt=f"{BASE_PROMPT} {_OPERATOR_ROLE} {DO_OVERLAY}",
     tools=harness_tools.router_tools("operator"),
 )
 

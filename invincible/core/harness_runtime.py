@@ -204,9 +204,10 @@ def hydrate_context(
     second, already budget-fitted) → recent turns verbatim.
 
     The task is pinned, never summarized away. The system prompt, when
-    supplied, is intended to be ``harness_router.build_system_prompt(...)``
-    (base + task overlay + environment line, volatile facts last) — but
-    no live caller does so yet (H4 is unwired; see that module's header).
+    supplied, is intended to be the composed live prompt
+    (``webchat_agent.MODE_SYSTEM_PROMPTS[mode]`` + ``environment_note``,
+    static text first for prompt-cache stability) — but no live caller
+    does so yet (H4 is unwired; see ``harness_router``'s header).
     Pure and hermetic.
     """
     context: list[dict] = []
