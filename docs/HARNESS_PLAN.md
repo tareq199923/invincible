@@ -151,35 +151,35 @@ structure, auth realms, wire protocols, or conventions.
 - Add `core/harness_router.py` (`triage` without unconfirmed-bash vs
   `specialist` with it), `handoff` interception in `_dispatch` (typed
   `{to, reason}`, keeps conversation).
-- Add `core/harness_supervisor.py` (`make_plan`, parallel
-  `registry.dispatch`, `synthesize`, degrade on `SubagentFailed`).
-- Tests: `tests/test_harness_router.py`, `tests/test_harness_supervisor.py`
-  (handoff switch, fan-out isolation per `user_id`, partial failure).
+- ~~Added `core/harness_supervisor.py`~~ — removed in Step 5 (was never
+  wired into a live caller; revisit in Step 8).
+- Tests: `tests/test_harness_router.py` (handoff switch, fan-out
+  isolation per `user_id`, partial failure). `tests/test_harness_supervisor.py`
+  deleted with its module in Step 5.
 
-### H4 follow-up — task-aware system prompts (built, not yet live)
+### H4 follow-up — task-aware system prompts (merged in Step 5)
 
-> "Built" means the code and tests exist. It does **not** mean it runs:
-> nothing in `invincible/` imports `harness_supervisor`, and the router
-> stays off `/mcp` by design (see the last bullet). The prompts here
-> duplicate `webchat_agent.py`'s live ones — reconcile them at merge.
+> Step 5 merged the two prompt bodies: the single source of truth is
+> `webchat_agent.MODE_SYSTEM_PROMPTS` + `environment_note`. The duplicate
+> `BASE_PROMPT` + read/do/plan overlays, `classify_task`,
+> `render_env_block`, and `build_system_prompt` were deleted from
+> `harness_router.py`; `harness_supervisor.py` (+ `PLAN_SYSTEM`,
+> `build_subagent_prompt`) was deleted unwired — revisit in Step 8.
 
-- `harness_router.py`: shared `BASE_PROMPT` (identity + least-privilege +
-  tool-loop discipline) plus read/do/plan overlays. `classify_task()`
-  sniffs the task kind (plan wins over do, else read — keyword-only, no
-  LLM call); `build_system_prompt(agent, task, model/cwd/date)` assembles
-  base → role+overlay → environment line (volatile facts last). The static
-  `TRIAGE_AGENT`/`OPERATOR_AGENT` prompts are the per-agent defaults
-  (triage→read, operator→do); tool tuples unchanged.
-- `harness_supervisor.py`: `PLAN_SYSTEM` demands a JSON-only plan;
-  `build_subagent_prompt(agent, objective)` renders the minimal per-step
-  prompt (role line + bounded objective + findings-only contract) so fan-out
-  stays cheap. `harness_runtime.py` summarizer keeps file paths, tool
-  names, and failures (still terse).
+- `harness_router.py` (before Step 5): shared `BASE_PROMPT` plus
+  read/do/plan overlays, `classify_task()` sniffing, `build_system_prompt()`
+  assembling base → role+overlay → environment line. The static agent
+  prompts were the per-agent defaults (triage→read, operator→do); tool
+  tuples (unchanged, still registry-derived) are all that remains.
+- `harness_supervisor.py` (before Step 5): `PLAN_SYSTEM` demanded a
+  JSON-only plan; `build_subagent_prompt(agent, objective)` rendered the
+  minimal per-step prompt so fan-out stayed cheap. `harness_runtime.py`
+  summarizer keeps file paths, tool names, and failures (still terse).
 - Not wired into a live caller yet: `run_workflow`'s `agent_next` contract
   is still `{task, turns}`, and the router stays off `/mcp` by design —
   binding happens with the H-later assistant.
-- Tests: classify cases, section order (identity first, env last), overlay
-  contents, unknown-agent degrade, minimal-prompt bounds.
+- Tests: handoff cases, unknown-agent degrade, tool-membership pins.
+  Classify/overlay/env-block cases deleted with the duplicate in Step 5.
 
 ### H5 — Durable approvals + durable log (L2+L7)
 
@@ -226,13 +226,18 @@ structure, auth realms, wire protocols, or conventions.
   via `projection.py`). Cookie realm only.
 - Tests: CLI pairing/status hermetic, dashboard realm/ownership pins.
 
-## 6. File-by-file touch list (no renames, no deletions)
+## 6. File-by-file touch list (Step 5 deleted the supervisor + duplicate prompts)
 
 - ADD: `core/harness_events.py`, `core/harness_bus.py`,
   `core/harness_runtime.py`, `core/harness_tools.py`,
   `core/harness_policy.py`, `core/harness_router.py`,
-  `core/harness_supervisor.py`, `core/harness_approvals.py`,
+  `core/harness_approvals.py`,
   `tests/test_harness_*.py`, migrations `0011`, `0012`.
+- DELETE (Step 5): `core/harness_supervisor.py` (+ its test) was never
+  wired into a live caller — revisit in Step 8. The duplicate prompt
+  assembly in `harness_router.py` (`BASE_PROMPT`, overlays,
+  `classify_task`, `render_env_block`, `build_system_prompt`) was
+  deleted; the live prompt is `webchat_agent.MODE_SYSTEM_PROMPTS`.
 - EDIT: `main.py` (lifespan wiring only), `endpoints/agents.py` (add WS
   routes), `core/agent_registry.py` (add WS methods), `agent/runner.py` (add
   WS loop + hello), `endpoints/mcp.py` (add policy call + tools + handoff

@@ -106,11 +106,13 @@ invincible/
     ├── harness_policy.py       Unified pre-execution policy gate (H2; no new patterns)
     ├── harness_runtime.py      Durable agent-loop spine: policy → emit → execute (H2)
     │                           + context hydration/compaction (H3)
-    ├── harness_router.py       Agent defs + lateral handoff interception (H4; not on /mcp)
-    │                           + task-aware prompts: shared base + read/do/plan
-    │                           overlays via classify_task/build_system_prompt
-    ├── harness_supervisor.py   Plan → parallel sub-agents → fan-in → synthesize (H4)
-    │                           + minimal per-step prompts (build_subagent_prompt)
+    ├── harness_router.py       Agent defs (name + registry-derived tool subset)
+    │                           + lateral handoff interception (H4; not on /mcp).
+    │                           Prompts live in webchat_agent.MODE_SYSTEM_PROMPTS
+    │                           (Step 5 merged the duplicate harness overlays away)
+    ├── harness_supervisor.py   REMOVED in Step 5 (was plan → parallel
+    │                           sub-agents → fan-in → synthesize; never wired
+    │                           into a live caller) — revisit Step 8
     ├── harness_approvals.py    Durable suspend/resume approvals over pending_actions (H5)
     ├── credential_store.py     BYOK credential persistence (ciphertext at rest)
     ├── credential_crypto.py    Fernet primitives + the INVINCIBLE_CREDENTIAL_KEY gate
