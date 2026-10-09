@@ -14,7 +14,7 @@ jobs:
     # compose / `invincible dev-db` — do not "align" them). Trust auth and
     # no password keep the DSN shape identical to the laptop default
     # (postgresql+asyncpg://invincible@host/db), so no test helper needs
-    # password handling. The service is ephemeral CI infrastructure.
+    # password handling. The container is ephemeral CI infrastructure.
     env:
       INVINCIBLE_TEST_DATABASE_URL: postgresql+asyncpg://invincible@127.0.0.1:5432/invincible_test
 
@@ -25,21 +25,12 @@ jobs:
         # version is actually tested — against real Postgres, not mocks.
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: invincible          # superuser: scratch-DB tests CREATE/DROP databases
-          POSTGRES_DB: invincible_test       # matches tests/conftest.py default
-          POSTGRES_HOST_AUTH_METHOD: trust   # passwordless by design; POSTGRES_PASSWORD deliberately unset
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U invincible -d invincible_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
+    # No `services:` block by design: the runner pulls service images
+    # with no retry and no log access, so one registry hiccup fails all
+    # five jobs in "Initialize containers" before any step runs (run
+    # #264, attempts 1-2). Starting the identical postgres:17 container
+    # in a step keeps image/env/ports/DSN shape with pull + readiness
+    # retries under our control.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -55,7 +46,32 @@ jobs:
       - name: Install package
         run: pip install -e ".[dev]"
 
-      # Fail fast with one clear message if the service is broken, instead
+      # Same postgres:17 the services block used to start (superuser for
+      # scratch-DB tests that CREATE/DROP databases; trust auth so the
+      # DSN stays passwordless). Pull retries ride out registry hiccups;
+      # the pg_isready loop replaces the old service health check.
+      - name: Start PostgreSQL
+        run: |
+          for i in 1 2 3 4 5 6; do
+            docker pull postgres:17 && break || echo "pull attempt $i failed; retrying"
+            sleep 20
+          done
+          docker image inspect postgres:17 >/dev/null || { echo "postgres:17 pull failed after retries"; exit 1; }
+          docker run -d --name invincible-pg \
+            -e POSTGRES_USER=invincible \
+            -e POSTGRES_DB=invincible_test \
+            -e POSTGRES_HOST_AUTH_METHOD=trust \
+            -p 5432:5432 \
+            postgres:17
+          for i in $(seq 1 60); do
+            if docker exec invincible-pg pg_isready -U invincible -d invincible_test; then
+              break
+            fi
+            sleep 2
+          done
+          docker exec invincible-pg pg_isready -U invincible -d invincible_test
+
+      # Fail fast with one clear message if the database is broken, instead
       # of 500 connection errors from the suite. asyncpg.connect does not
       # accept the SQLAlchemy "+asyncpg" driver suffix, so strip it.
       - name: Verify PostgreSQL connectivity

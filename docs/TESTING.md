@@ -15,7 +15,7 @@ unreachable:
 ```bash
 pip install -e ".[dev]"
 # Default target; override for other ports/hosts — CI sets this itself
-# (service container on 5432, trust auth):
+# (CI starts the container in-step on 5432, trust auth):
 export INVINCIBLE_TEST_DATABASE_URL=postgresql+asyncpg://invincible@127.0.0.1:5433/invincible_test
 pytest
 ```

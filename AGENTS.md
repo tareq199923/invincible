@@ -41,7 +41,7 @@ fallback):
 | Local convention | `postgresql+asyncpg://invincible@127.0.0.1:5433/invincible_test` |
 | Provision locally | `invincible dev-db` (Docker fallback included), or `docker compose up db` |
 | Override | `INVINCIBLE_TEST_DATABASE_URL` env var |
-| CI | postgres:17 service container on port 5432 |
+| CI | postgres:17 container started in-step (pull retries) on port 5432 |
 
 Fixture semantics (`tests/conftest.py`):
 
