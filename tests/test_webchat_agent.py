@@ -594,6 +594,88 @@ async def test_unknown_tool_call_lists_valid_names(
     assert "read_file" in text
 
 
+async def test_repeat_guard_withholds_tools_after_third_identical_call(
+    client, byok_env, router_setter, monkeypatch
+):
+    same = {
+        "id": "c1",
+        "type": "function",
+        "function": {
+            "name": "read_file", "arguments": json.dumps({"path": "loop.txt"})},
+    }
+    _bodies, handler = scripted([
+        tool_body("w1", [same]),
+        tool_body("w1", [same]),
+        tool_body("w1", [same]),
+        provider_body("w1", content="giving up with what I have"),
+    ])
+    bodies = _bodies
+    router_setter({"w1.example.com": handler})
+
+    async def fake_read(path, *args):
+        return {"status": "read", "path": path, "content": "same"}
+
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te, "read_file", fake_read)
+    await agent_user(client, "repeat-guard@example.com")
+    resp = await client.post("/dashboard/chat/stream", json={
+        "session_id": "web-repeat", "message": "read it",
+        "mode": "plan"})
+    assert resp.status_code == 200, resp.text
+    events = parse_web_events(resp.text)
+    assert len([d for n, d in events if n == "tool_call"]) == 3
+    assert [n for n, _ in events].count("done") == 1
+    assert any(b.get("tools") is None for b in bodies)
+
+
+async def test_repeat_guard_resets_on_differing_call(
+    client, byok_env, router_setter, monkeypatch
+):
+    def _call(path):
+        return {
+            "id": "c1",
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "arguments": json.dumps({"path": path})},
+        }
+
+    bodies, handler = scripted([
+        tool_body("w1", [_call("a.txt")]),
+        tool_body("w1", [_call("b.txt")]),
+        tool_body("w1", [_call("a.txt")]),
+        provider_body("w1", content="done reading"),
+    ])
+    router_setter({"w1.example.com": handler})
+
+    async def fake_read(path, *args):
+        return {"status": "read", "path": path, "content": path}
+
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te, "read_file", fake_read)
+    await agent_user(client, "repeat-reset@example.com")
+    resp = await client.post("/dashboard/chat/stream", json={
+        "session_id": "web-repeat-reset", "message": "read both",
+        "mode": "plan"})
+    assert resp.status_code == 200, resp.text
+    events = parse_web_events(resp.text)
+    assert len([d for n, d in events if n == "tool_call"]) == 3
+    assert [n for n, _ in events].count("done") == 1
+    assert all(b.get("tools") for b in bodies)
+
+
+def test_call_key_canonicalizes_args():
+    from invincible.core.webchat_agent import _call_key
+
+    assert _call_key("read_file", {"path": "x", "limit": 1}) == \
+        _call_key("read_file", {"limit": 1, "path": "x"})
+    assert _call_key("read_file", {"path": "x"}) != \
+        _call_key("read_file", {"path": "y"})
+    assert _call_key("read_file", {"path": object()})
+
+
 # --- environment_note: OS/shell guidance after the static prompt -----------
 
 

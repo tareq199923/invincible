@@ -179,6 +179,9 @@ async def run_workflow(
 # lesson). Kept small so compaction engages on short tasks; callers with
 # bigger windows pass explicit budgets.
 MAX_CONTEXT_TOKENS = 3000
+# Unwired spine (Step 7): no live caller reads this — the live budget is
+# settings.injection_budget_tokens (INVINCIBLE_INJECTION_BUDGET_TOKENS).
+# Kept for the day H4 wires up; see harness_router header.
 KEEP_CONTEXT_TOKENS = 1500
 
 SUMMARIZER_SYSTEM = (

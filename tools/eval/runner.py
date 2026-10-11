@@ -28,7 +28,7 @@ except ImportError:  # pragma: no cover - bare checkout without package
 
 # Mirrors core/webchat_agent.py::MAX_TOOL_ITERATIONS (heuristic only:
 # the wire carries no explicit cap flag).
-MAX_TOOL_ITERATIONS = 10
+MAX_TOOL_ITERATIONS = 25
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TASK_DIR = Path(__file__).resolve().parent / "tasks"

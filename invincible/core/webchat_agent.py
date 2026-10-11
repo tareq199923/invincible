@@ -79,7 +79,12 @@ READ_ONLY_BATCH_TOOLS = frozenset(
 # Hard cap on tool iterations per turn: bounds provider spend and keeps
 # a runaway model from looping forever. On exhaustion the loop makes one
 # final no-tools call so the turn still ends with an answer.
-MAX_TOOL_ITERATIONS = 10
+MAX_TOOL_ITERATIONS = 25
+# Step 7 stuck-loop guard: this many consecutive identical dispatched
+# calls ends the tool loop via the same close-out (tools withheld, final
+# no-tools answer). Counted on dispatched calls — including error
+# results — so blocked/denied/malformed retry loops trip it too.
+REPEAT_LIMIT = 3
 READ_BATCH_CONCURRENCY = 4
 # How long one turn holds its SSE stream open waiting for a browser
 # approval (comfortably inside PendingActionStore's 600s TTL; a late
@@ -428,6 +433,19 @@ def _coerce_int(value, default: int) -> int:
         return int(value or default)
     except (TypeError, ValueError):
         return default
+
+
+def _call_key(name: str, args) -> str:
+    """Canonical key for the stuck-loop guard: tool name plus canonical
+    JSON args (sorted keys). Never raises — non-serializable args fall
+    back to repr so counting cannot break the turn."""
+    try:
+        return (
+            f"{name}:"
+            f"{json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)}"
+        )
+    except (TypeError, ValueError):
+        return f"{name}:{args!r}"
 
 
 async def _run_read(executor, name: str, args: dict,
@@ -975,18 +993,33 @@ async def run_agent_turn(
                                "type": "gateway_error"}}
 
     iteration = 0
+    # Step 7 stuck-loop state: trailing dispatched-call key, its run
+    # length, and the trip flag. Turn-local: a text answer ends the turn,
+    # so no cross-turn state is needed.
+    repeat_key: str | None = None
+    repeat_count = 0
+    repeat_tripped = False
+    repeat_name = ""
     # A client disconnect (browser close / proxy idle timeout) closes
     # this generator at the current yield; GeneratorExit is a BaseException,
     # so only a finally commits the partial turn. Without it the whole turn
     # is dropped and the next send restarts from the last committed turn.
     try:
         while True:
-            current_tools = tools if iteration <= MAX_TOOL_ITERATIONS else None
-            if iteration > MAX_TOOL_ITERATIONS:
+            capped = iteration > MAX_TOOL_ITERATIONS
+            current_tools = (
+                tools if not capped and not repeat_tripped else None)
+            if capped or repeat_tripped:
+                if capped:
+                    note = ("Tool budget exhausted - answer the user now "
+                            "with what you have, no more tool calls.")
+                else:
+                    note = (f"Same tool call repeated ({repeat_name}) - "
+                            "answer the user now with what you have, "
+                            "no more tool calls.")
                 full = full + [{
                     "role": "system",
-                    "content": ("Tool budget exhausted - answer the user now "
-                                "with what you have, no more tool calls."),
+                    "content": note,
                 }]
             try:
                 result, info = await router.route_request_detailed(
@@ -1149,6 +1182,14 @@ async def run_agent_turn(
                 call_id = item["call_id"]
                 result_doc, ok = outcome["result"], outcome["ok"]
                 tools_used += 1
+                key = _call_key(fname, item["args"])
+                if key == repeat_key:
+                    repeat_count += 1
+                else:
+                    repeat_key, repeat_count = key, 1
+                if repeat_count >= REPEAT_LIMIT:
+                    repeat_tripped = True
+                    repeat_name = fname
                 tool_message = {
                     "role": "tool",
                     "tool_call_id": call_id,

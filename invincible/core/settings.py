@@ -43,9 +43,10 @@ DEFAULT_MEMORY_TOP_N = 8
 DEFAULT_MEMORY_MIN_SCORE = 0.01
 
 # Shared injection budget (core/context_builder.py, Phase 4): total tokens
-# for memory + continuity injections combined. Conservative enough that a
-# provider with a ~4k-token context still has room for history.
-DEFAULT_INJECTION_BUDGET_TOKENS = 1200
+# for memory + continuity injections combined. Sized for large-window
+# models (Step 7: room for a full continuity brief plus memory hits
+# without crowding history).
+DEFAULT_INJECTION_BUDGET_TOKENS = 3000
 
 # Stored-history RETENTION cap when INVINCIBLE_HISTORY_MAX_TURNS is unset:
 # history past this many turns is DELETED on write.
