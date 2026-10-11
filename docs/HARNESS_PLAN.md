@@ -181,6 +181,25 @@ structure, auth realms, wire protocols, or conventions.
 - Tests: handoff cases, unknown-agent degrade, tool-membership pins.
   Classify/overlay/env-block cases deleted with the duplicate in Step 5.
 
+### Step 8 — explore sub-agent (supervisor-revisit resolution)
+
+- NOT a resurrection of the deleted fan-out: a single read-only
+  delegate (`core/harness_explore.py::run_explore`) with its own
+  context. The main loop (`webchat_agent.run_agent_turn`) delegates the
+  search after `EXPLORE_TRIGGER_CONSECUTIVE_READS = 4` consecutive
+  machine-read calls (once per turn) and injects the returned summary
+  (<= 300 words, code-truncated) as one system message; explorer
+  failures fall back to main-loop-does-it-itself, never aborting.
+- Same failover loop (`router.route_request_detailed` with the turn's
+  BYOK kwargs); own cap (`EXPLORE_MAX_ITERATIONS = 8`) + the shared
+  `harness_tools.call_key` repeat guard; tool view derived from the
+  registry (`explore_names()` = machine reads only — no `web_fetch`/
+  `screenshot`, no data-plane reads).
+- Prerequisite: dispatch bodies moved verbatim to `core/tool_dispatch.py`
+  (both loops import it) and `_call_key` to `harness_tools.call_key`.
+- Tests: `tests/test_harness_explore.py` (read-only enforcement, caps,
+  trigger, fallback, once-per-turn) + pinned `GOLDEN_EXPLORE_NAMES`.
+
 ### H5 — Durable approvals + durable log (L2+L7)
 
 - `core/db.py` metadata + migrations: `0011_workflow_events` (`id,

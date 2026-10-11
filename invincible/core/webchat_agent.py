@@ -37,7 +37,7 @@ import os
 import platform
 
 from invincible.compat.common import upstream_error_detail
-from invincible.core import harness_tools, tool_executor
+from invincible.core import harness_explore, harness_tools, tool_executor
 from invincible.core.chat_service import _persist_new_turns
 from invincible.core.harness_tools import call_key as _call_key
 from invincible.core.principal import Principal
@@ -94,6 +94,12 @@ MAX_TOOL_ITERATIONS = 25
 # no-tools answer). Counted on dispatched calls — including error
 # results — so blocked/denied/malformed retry loops trip it too.
 REPEAT_LIMIT = 3
+# Step 8 explore trigger: this many consecutive dispatched machine-read
+# calls hands the search to the explore sub-agent (once per turn, then
+# the main loop continues with its summary). Below every lean task's
+# profile (find-usage/read-far-line pass at 2-3 calls) and far below
+# the drowning profile (many-files-read at 10-25).
+EXPLORE_TRIGGER_CONSECUTIVE_READS = 4
 READ_BATCH_CONCURRENCY = 4
 # How long one turn holds its SSE stream open waiting for a browser
 # approval (comfortably inside PendingActionStore's 600s TTL; a late
@@ -430,6 +436,22 @@ def _error_text(body: object) -> str:
     return upstream_error_detail(body) or "gateway error"
 
 
+def _user_text(messages: list) -> str:
+    """Latest user turn text: the explore sub-agent's search task.
+
+    Empty when no user text is present (the caller then skips
+    delegation rather than sending a content-free search)."""
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+    return ""
+
+
 async def run_agent_turn(
     prepared,
     *,
@@ -547,6 +569,12 @@ async def run_agent_turn(
     repeat_count = 0
     repeat_tripped = False
     repeat_name = ""
+    # Step 8 explore state: consecutive dispatched machine-read calls,
+    # whether delegation already fired (at most once per turn), and the
+    # explorer's provider-call count for the turn's accounting.
+    explore_reads = 0
+    explored = False
+    explorer_calls = 0
     # A client disconnect (browser close / proxy idle timeout) closes
     # this generator at the current yield; GeneratorExit is a BaseException,
     # so only a finally commits the partial turn. Without it the whole turn
@@ -612,6 +640,7 @@ async def run_agent_turn(
                     "attempts": info["attempts"],
                     "mode": mode,
                     "tools_used": tools_used,
+                    "explorer_calls": explorer_calls,
                     "execution": "agent" if agent_routed else "local",
                 }
                 return
@@ -729,6 +758,10 @@ async def run_agent_turn(
                 call_id = item["call_id"]
                 result_doc, ok = outcome["result"], outcome["ok"]
                 tools_used += 1
+                if fname in harness_tools.explore_names():
+                    explore_reads += 1
+                else:
+                    explore_reads = 0
                 key = _call_key(fname, item["args"])
                 if key == repeat_key:
                     repeat_count += 1
@@ -748,6 +781,38 @@ async def run_agent_turn(
                     "call_id": call_id, "name": fname, "ok": ok,
                     "preview": _preview(result_doc),
                 }
+            if (not explored
+                    and explore_reads >= EXPLORE_TRIGGER_CONSECUTIVE_READS):
+                # Hand the search spiral to the explore sub-agent (once
+                # per turn): its summary lands in context as one system
+                # message and the main loop continues. Any explorer
+                # failure degrades to main-loop-does-it-itself - the
+                # turn never aborts here.
+                explored = True
+                explore_reads = 0
+                task_text = _user_text(full)
+                if task_text:
+                    try:
+                        found = await harness_explore.run_explore(
+                            task_text, router=router, model=model,
+                            session_id=prepared.session_id,
+                            session_pk=prepared.session_pk,
+                            byok_kwargs=prepared.byok_kwargs,
+                            executor=executor,
+                        )
+                    except Exception:  # noqa: BLE001 - fallback below
+                        logger.exception(
+                            "explore sub-agent failed; main loop continues")
+                    else:
+                        explorer_calls += found["calls"]
+                        if found["summary"]:
+                            full.append({
+                                "role": "system",
+                                "content": (
+                                    "Explorer findings (read-only search):\n"
+                                    + found["summary"]
+                                ),
+                            })
             iteration += 1
     finally:
         await _persist_partial()

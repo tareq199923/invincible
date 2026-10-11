@@ -937,6 +937,28 @@ def webchat_names_for_mode(mode: str) -> tuple[str, ...]:
     )
 
 
+def explore_names() -> tuple[str, ...]:
+    """Names the explore sub-agent (Step 8) may call, in webchat order.
+
+    Deliberately the machine-reads subset only (``read_only_names``):
+    context pressure comes from file spirals, not from single
+    memory/continuity lookups, so data-plane reads stay main-loop-only
+    and agent-only tools (``web_fetch``/``screenshot``) stay out for
+    their offline/SSRF failure surface. Separate function (not an
+    alias) so the set can evolve without touching ``read_only_names``
+    and so golden tests can pin it independently.
+    """
+    return read_only_names()
+
+
+def explore_schemas() -> list[dict]:
+    """Webchat-form function schemas for ``explore_names``, in webchat
+    order. Same derivation as :func:`webchat_schemas` (descriptions
+    stripped, ``required`` always emitted); fresh deep copies."""
+    by_name = {s["function"]["name"]: s for s in webchat_schemas()}
+    return [by_name[name] for name in explore_names()]
+
+
 def agent_job_names() -> tuple[str, ...]:
     """Job types the agent runner accepts, in registry order (Step 4:
     unknown-job errors list these)."""

@@ -114,6 +114,16 @@ invincible/
     │                           sub-agents → fan-in → synthesize; never wired
     │                           into a live caller) — revisit Step 8
     ├── harness_approvals.py    Durable suspend/resume approvals over pending_actions (H5)
+    ├── tool_dispatch.py      Shared tool-execution primitives (machine/agent
+    │                           reads, staged mutating calls, MCP-parity data
+    │                           tools) for the main agent loop and the explore
+    │                           sub-agent (Step 8; moved verbatim out of
+    │                           webchat_agent to break the import cycle)
+    ├── harness_explore.py    Read-only explore sub-agent (Step 8): bounded
+    │                           search loop with its own context (own cap,
+    │                           300-word summary) driven through the single
+    │                           router loop; main loop delegates after 4
+    │                           consecutive reads, falls back on failure
     ├── credential_store.py     BYOK credential persistence (ciphertext at rest)
     ├── credential_crypto.py    Fernet primitives + the INVINCIBLE_CREDENTIAL_KEY gate
     ├── user_settings_store.py  Per-user settings (routing mode/order, overrides)
@@ -687,8 +697,9 @@ loudly if you skip one:
 2. **Execution branch** (still hand-written, per surface):
    - `endpoints/mcp.py::_dispatch` branch for `tools/call` (+ confirm
      gate choice: stage via `tool_executor` or run immediately).
-   - `core/webchat_agent.py` execution path (`_run_read` /
-     `_stage_mutating` / `_run_data_tool` / `_run_screenshot`).
+    - `core/tool_dispatch.py` execution primitives (`run_read` /
+      `stage_mutating` / `run_data_tool` / `run_screenshot`, called by
+      `webchat_agent._execute_call` and the explore sub-agent).
    - `invincible/agent/runner.py::execute_job` case, iff the tool runs
      on the paired machine (machine-plane tools only; data-plane tools
      run server-side and have no runner case).
