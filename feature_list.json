@@ -1,0 +1,37 @@
+[
+  {
+    "behavior": "PROGRESS.md + feature_list.json exist at root and AGENTS.md has a Session protocol section; JSON parses and ruff is clean",
+    "id": "F01",
+    "state": "passing",
+    "title": "Step A harness notebook (PROGRESS + feature list + session rules)",
+    "verification": "python -m json.tool feature_list.json && ruff check ."
+  },
+  {
+    "behavior": "Remaining CLI polish lands with tests; --help grouping and hosted defaults stay intact",
+    "id": "F02",
+    "state": "planned",
+    "title": "Phase 6 CLI client experience (remaining polish)",
+    "verification": "ruff check . && pytest tests/test_cli_harness.py"
+  },
+  {
+    "behavior": "expose_port ships alone with token auth, caps, audit and expiry; threat model updated same PR",
+    "id": "F03",
+    "state": "planned",
+    "title": "H6b tunneling (deferred, isolated)",
+    "verification": "ruff check . && pytest tests/test_agent_ws.py"
+  },
+  {
+    "behavior": "Supervisor fan-out returns only if wired to a live caller; no duplicate prompt assembly",
+    "id": "F04",
+    "state": "planned",
+    "title": "Step 8 supervisor revisit",
+    "verification": "ruff check . && pytest tests/test_harness_router.py"
+  },
+  {
+    "behavior": "Semantic retrieval lands behind RetrievalService seam; lexical stays default",
+    "id": "F05",
+    "state": "planned",
+    "title": "Vector/semantic retrieval seam",
+    "verification": "ruff check . && pytest tests/test_memory.py"
+  }
+]

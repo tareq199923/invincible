@@ -54,6 +54,16 @@ Fixture semantics (`tests/conftest.py`):
 
 ---
 
+## Session protocol
+
+- Clock-in: read `PROGRESS.md` + `feature_list.json` before touching code.
+- One active feature: exactly one entry `active`, rest `planned`/`passing`.
+- Clock-out: update `PROGRESS.md` (Current State + Next Steps), run
+  `ruff check .`, commit clean.
+- If low on context: do NOT rush — update `PROGRESS.md`, commit checkpoint.
+
+---
+
 ## Architecture map
 
 | Path | Role |
