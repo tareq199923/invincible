@@ -773,6 +773,22 @@ def expected_args_hint(name: str) -> str:
     )
 
 
+def call_key(name: str, args) -> str:
+    """Canonical key for stuck-loop guards: tool name plus canonical
+    JSON args (sorted keys). Never raises — non-serializable args fall
+    back to repr so counting cannot break the turn. Shared by the main
+    agent loop and the explore sub-agent so both count identically."""
+    import json
+
+    try:
+        return (
+            f"{name}:"
+            f"{json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)}"
+        )
+    except (TypeError, ValueError):
+        return f"{name}:{args!r}"
+
+
 def webchat_properties(properties: dict) -> dict:
     """Derive the webchat property schemas from the ``/mcp`` form.
 

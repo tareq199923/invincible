@@ -17,7 +17,7 @@ keeps ``next_id`` so ids are never reused within a session.
 Layering: pure ``core/`` business logic — both ``endpoints/mcp.py``
 and ``core/webchat_agent.py`` call :func:`run_todo` so the two
 surfaces can never drift. Returns ``(result, ok)`` like
-``webchat_agent._run_data_tool``.
+``tool_dispatch.run_data_tool``.
 """
 from __future__ import annotations
 
