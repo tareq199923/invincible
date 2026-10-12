@@ -233,3 +233,96 @@ def test_status_command_401_teaches_re_pairing(monkeypatch, tmp_path):
         "harness", "status", "--config", str(_paired_config(tmp_path))])
     assert result.exit_code != 0
     assert "invincible login" in result.output
+
+
+def test_status_missing_config_teaches_login(tmp_path):
+    """No pairing file: loud pointer at `invincible login`, no traceback."""
+    missing = tmp_path / "nope" / "config.json"
+    result = CliRunner().invoke(
+        cli, ["harness", "status", "--config", str(missing)])
+    assert result.exit_code != 0
+    assert "isn't paired yet" in result.output
+    assert "invincible login" in result.output
+
+
+def test_status_corrupt_config_left_untouched(tmp_path):
+    """A corrupt file is never overwritten - the message says so and
+    teaches re-pairing."""
+    target = tmp_path / "config.json"
+    target.write_text("{not json", encoding="utf-8")
+    before = target.read_text(encoding="utf-8")
+    result = CliRunner().invoke(
+        cli, ["harness", "status", "--config", str(target)])
+    assert result.exit_code != 0
+    assert "corrupt" in result.output
+    assert "left untouched" in result.output
+    assert "invincible login" in result.output
+    assert target.read_text(encoding="utf-8") == before
+
+
+def test_status_incomplete_config_left_untouched(tmp_path):
+    """Valid JSON missing server/key: same no-silent-overwrite discipline."""
+    import json
+
+    target = tmp_path / "config.json"
+    target.write_text(json.dumps({"server": "https://x.example"}),
+                       encoding="utf-8")
+    result = CliRunner().invoke(
+        cli, ["harness", "status", "--config", str(target)])
+    assert result.exit_code != 0
+    assert "incomplete" in result.output
+    assert "left untouched" in result.output
+    assert "invincible login" in result.output
+
+
+def test_status_network_failure_names_server(monkeypatch, tmp_path):
+    """Unreachable server: the error names the server, no traceback."""
+    import httpx
+
+    def _boom(url, **kwargs):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "get", _boom)
+    result = CliRunner().invoke(cli, [
+        "harness", "status", "--config", str(_paired_config(tmp_path))])
+    assert result.exit_code != 0
+    assert "Could not reach https://paired.example" in result.output
+
+
+def test_status_bad_json_errors_loudly(monkeypatch, tmp_path):
+    """A 200 with a non-JSON body is a loud failure, not a crash."""
+    import httpx
+
+    def _fake_get(url, **kwargs):
+        request = httpx.Request("GET", url)
+        return httpx.Response(200, request=request, content=b"not json")
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    result = CliRunner().invoke(cli, [
+        "harness", "status", "--config", str(_paired_config(tmp_path))])
+    assert result.exit_code != 0
+    assert "Bad status response" in result.output
+
+
+def test_service_install_writes_file(tmp_path, monkeypatch):
+    """Non-dry-run writes the unit under $HOME and prints the enable line
+    (posix/linux; no elevation happens in the command itself)."""
+    import os
+    import sys
+
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(
+        os.path, "expanduser",
+        lambda p: str(tmp_path) if p == "~" else p)
+    config = tmp_path / "config.json"
+    result = CliRunner().invoke(cli, [
+        "harness", "service", "install", "--config", str(config)])
+    assert result.exit_code == 0, result.output
+    target = (tmp_path / ".config" / "systemd" / "user"
+              / "invincible-agent.service")
+    assert target.is_file()
+    content = target.read_text(encoding="utf-8")
+    assert "ExecStart=" in content and "harness" in content
+    assert "systemctl --user enable --now invincible-agent.service" in (
+        result.output)

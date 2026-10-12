@@ -9,7 +9,7 @@
   {
     "behavior": "Remaining CLI polish lands with tests; --help grouping and hosted defaults stay intact",
     "id": "F02",
-    "state": "planned",
+    "state": "passing",
     "title": "Phase 6 CLI client experience (remaining polish)",
     "verification": "ruff check . && pytest tests/test_cli_harness.py"
   },
