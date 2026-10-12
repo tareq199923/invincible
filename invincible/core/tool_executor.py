@@ -845,8 +845,16 @@ async def confirm_action(
         return {"status": "not_found"}
     if not approve:
         return {"status": "declined"}
+    if record["type"] in COMPUTER_TOOLS:
+        # Pack 3 computer-use: agent-only by design — there is no local
+        # execution path (the server has no desktop to click). Without
+        # an agent executor this is unavailability, never a local run.
+        if executor is None:
+            return {"status": "unavailable",
+                    "reason": _COMPUTER_UNAVAILABLE_REASON}
+        return await executor(record["type"], record["args"])
     if (record["type"] in ("execute_bash", "write_file", "edit_file",
-                             "expose_port")
+                           "expose_port")
             and executor is not None):
         return await executor(record["type"], record["args"])
     if record["type"] == "execute_bash":
@@ -2108,3 +2116,659 @@ async def _fetch_url(
     except Exception as e:
         logger.error(f"web_fetch failed: {e}")
         return {"status": "error", "error": str(e)}
+
+
+# --- Pack 3 computer-use (F10): paired-PC input + launch ---
+#
+# Seven agent-side tools (click, type_text, press_keys, scroll, drag,
+# open_app, open_url). Agent-only like screenshot: the server never moves
+# the caller's mouse, so every executor below answers ``unavailable``
+# off-Windows and the real input runs on the paired PC via the agent
+# runner. All seven stage for approval (needs_approval=True): on /mcp
+# through PendingActionStore + confirm_action (which forwards to the
+# agent executor — there is deliberately NO local execution path), on
+# webchat through the staged mutating path (manual approval, auto
+# immediate). Refusals:
+# - press_keys chords that lock/close/kill the session (win+l, alt+f4,
+#   ctrl+alt+del, ctrl+shift+esc) raise ToolBlocked — checked both
+#   server-side (policy Wall 1, pre-stage) and agent-side (runner
+#   Wall 2, pre-execute).
+# - type_text into a focused password field raises ToolBlocked —
+#   agent-side only (the server has no desktop to probe); the approval
+#   gate is the server-side backstop.
+# This section is pure unless marked: normalize_computer_args validates
+# and normalizes, raising ValueError on shape errors (mapped to error
+# results, no token issued) and ToolBlocked on denylist hits (no token).
+# The ctypes input itself (_computer_send_*) runs in-process on the
+# agent machine — SendInput/ShellExecute use no COM, so unlike the UIA
+# walk they need no child-process isolation. Only the two UIA reads
+# (control resolution reuses _look_at_screen; the password probe is
+# _focus_password_main below) cross into a child process.
+
+COMPUTER_GRID_MAX = 1000
+COMPUTER_CLICK_BUTTONS = ("left", "right", "middle")
+COMPUTER_SCROLL_DIRECTIONS = ("up", "down", "left", "right")
+COMPUTER_SCROLL_DEFAULT_AMOUNT = 3
+COMPUTER_SCROLL_MAX_AMOUNT = 10
+COMPUTER_TYPE_MAX_CHARS = 2000
+COMPUTER_APP_NAME_MAX_CHARS = 500
+COMPUTER_TOOLS = ("click", "type_text", "press_keys", "scroll", "drag",
+                  "open_app", "open_url")
+
+_KEY_ALIASES = {
+    "windows": "win", "super": "win", "meta": "win", "cmd": "win",
+    "control": "ctrl", "delete": "del", "escape": "esc",
+    "return": "enter",
+}
+_KEY_MODIFIERS = frozenset({"ctrl", "alt", "shift", "win"})
+# Refused outright: session lock, window close, secure-attention, and
+# task-manager chords. Single keys ("l", "f4") never match — every entry
+# needs its modifiers, so plain typing and function keys stay usable.
+_BLOCKED_CHORDS = frozenset({
+    frozenset({"win", "l"}),
+    frozenset({"alt", "f4"}),
+    frozenset({"ctrl", "alt", "del"}),
+    frozenset({"ctrl", "shift", "esc"}),
+})
+
+
+def parse_keys_chord(text: str) -> frozenset:
+    """Normalize a '+'-joined chord to canonical key names."""
+    parts = set()
+    for raw in str(text or "").split("+"):
+        name = raw.strip().lower()
+        if name:
+            parts.add(_KEY_ALIASES.get(name, name))
+    return frozenset(parts)
+
+
+def check_keys_denylist(keys: str) -> None:
+    """Refuse lock/close-session chords outright (raises ToolBlocked)."""
+    if parse_keys_chord(keys) in _BLOCKED_CHORDS:
+        raise ToolBlocked(
+            "session lock/close chord (win+l, alt+f4, ctrl+alt+del, "
+            "ctrl+shift+esc never run — ask the user to press it)")
+
+
+def _computer_grid_int(value, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"{field} must be a number 0-{COMPUTER_GRID_MAX}")
+    ivalue = int(value)
+    if not 0 <= ivalue <= COMPUTER_GRID_MAX:
+        raise ValueError(
+            f"{field} must be 0-{COMPUTER_GRID_MAX}, got {value!r}")
+    return ivalue
+
+
+def _computer_target(args: dict, *, allow_bare: bool, what: str = "target",
+                     xkey: str = "x", ykey: str = "y",
+                     ckey: str = "control") -> dict:
+    """Resolve one pointing target: a C id wins when present, else x+y.
+
+    ``allow_bare`` permits no target at all (scroll at the cursor,
+    type into the focused field). Raises ValueError on shape errors.
+    """
+    if ckey in args and args[ckey] is not None:
+        control = args[ckey]
+        if not isinstance(control, str) or not control.strip():
+            raise ValueError(
+                f"{what} control must be a C id string like 'C3'")
+        return {"control": control.strip()}
+    x = args.get(xkey)
+    y = args.get(ykey)
+    if x is None and y is None:
+        if allow_bare:
+            return {}
+        raise ValueError(
+            f"{what}: give a control (C id) or {xkey} and {ykey} "
+            f"(0-{COMPUTER_GRID_MAX} grid)")
+    if x is None or y is None:
+        raise ValueError(
+            f"{what}: {xkey} and {ykey} go together "
+            f"(0-{COMPUTER_GRID_MAX} grid)")
+    return {xkey: _computer_grid_int(x, xkey),
+            ykey: _computer_grid_int(y, ykey)}
+
+
+def normalize_computer_args(name: str, args: dict) -> dict:
+    """Validate + normalize Pack 3 args. Pure (no OS calls).
+
+    Raises ValueError on shape errors and ToolBlocked on denylist hits;
+    both surfaces map those to results with no token issued. The runner
+    re-runs this at execution (Wall 2) before touching input.
+    """
+    argv = args or {}
+    if name == "click":
+        target = _computer_target(argv, allow_bare=False)
+        button = str(argv.get("button", "left")).strip().lower()
+        if button not in COMPUTER_CLICK_BUTTONS:
+            raise ValueError(
+                f"button must be one of "
+                f"{', '.join(COMPUTER_CLICK_BUTTONS)}")
+        return {**target, "button": button,
+                "double": argv.get("double") is True}
+    if name == "type_text":
+        text = argv.get("text")
+        if not isinstance(text, str) or not text:
+            raise ValueError("type_text needs non-empty 'text'")
+        if len(text) > COMPUTER_TYPE_MAX_CHARS:
+            raise ValueError(
+                f"type_text holds at most {COMPUTER_TYPE_MAX_CHARS} "
+                "characters per call")
+        target = _computer_target(argv, allow_bare=True)
+        return {**target, "text": text,
+                "submit": argv.get("submit") is True}
+    if name == "press_keys":
+        keys = argv.get("keys")
+        if not isinstance(keys, str) or not keys.strip():
+            raise ValueError(
+                "press_keys needs 'keys' like 'ctrl+s'")
+        check_keys_denylist(keys)  # raises ToolBlocked; no token
+        mains = parse_keys_chord(keys) - _KEY_MODIFIERS
+        if len(mains) != 1:
+            raise ValueError(
+                "press_keys takes one non-modifier key plus modifiers "
+                "(e.g. 'ctrl+s', 'alt+tab', 'f5')")
+        target = _computer_target(argv, allow_bare=True)
+        return {**target, "keys": keys.strip()}
+    if name == "scroll":
+        direction = str(argv.get("direction", "")).strip().lower()
+        if direction not in COMPUTER_SCROLL_DIRECTIONS:
+            raise ValueError(
+                f"direction must be one of "
+                f"{', '.join(COMPUTER_SCROLL_DIRECTIONS)}")
+        try:
+            amount = int(argv.get("amount",
+                                  COMPUTER_SCROLL_DEFAULT_AMOUNT))
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"amount must be 1-{COMPUTER_SCROLL_MAX_AMOUNT}") from None
+        if not 1 <= amount <= COMPUTER_SCROLL_MAX_AMOUNT:
+            raise ValueError(
+                f"amount must be 1-{COMPUTER_SCROLL_MAX_AMOUNT}")
+        target = _computer_target(argv, allow_bare=True)
+        return {**target, "direction": direction, "amount": amount}
+    if name == "drag":
+        src = _computer_target(argv, allow_bare=False, what="drag start",
+                               xkey="x1", ykey="y1",
+                               ckey="control_from")
+        dst = _computer_target(argv, allow_bare=False, what="drag end",
+                               xkey="x2", ykey="y2", ckey="control_to")
+        return {"from": src, "to": dst}
+    if name == "open_app":
+        app = argv.get("name")
+        if not isinstance(app, str) or not app.strip():
+            raise ValueError("open_app needs non-empty 'name'")
+        app = app.strip()
+        if len(app) > COMPUTER_APP_NAME_MAX_CHARS:
+            raise ValueError("open_app name is too long")
+        extra = argv.get("args", "")
+        if extra is not None and not isinstance(extra, str):
+            raise ValueError("open_app 'args' must be a string")
+        return {"name": app, "args": (extra or "").strip()}
+    if name == "open_url":
+        url = argv.get("url")
+        if not isinstance(url, str) or not re.match(
+                r"^https?://", url.strip(), re.I):
+            raise ValueError(
+                "open_url URL must start with http:// or https://")
+        return {"url": url.strip()}
+    raise ValueError(f"Unknown computer tool: {name}")
+
+
+def stage_computer_action(
+    name: str,
+    args: dict,
+    store: PendingActionStore,
+    owner_subject: int | None = None,
+) -> dict:
+    """Validate (ValueError/ToolBlocked — no token either way), then
+    stage a Pack 3 action for approval. Agent-only: confirm forwards to
+    the agent executor; there is deliberately no local execution path
+    (see confirm_action's Pack 3 arm).
+    """
+    normalized = normalize_computer_args(name, args or {})
+    token = store.put(name, normalized, owner_subject=owner_subject)
+    if name == "type_text":
+        summary = f"type_text ({len(normalized['text'])} chars)"
+    else:
+        summary = f"{name} {json.dumps(normalized)[:160]}"
+    print(f"[MCP] Pending {token}: {summary}")
+    return {
+        "status": "pending_confirmation",
+        "token": token,
+        "action": name,
+        "args": normalized,
+        "message": (
+            "Call confirm_action with this token "
+            "(approve=true/false) to proceed."
+        ),
+    }
+
+
+_COMPUTER_UNAVAILABLE_REASON = (
+    "computer-use runs on a paired Windows machine: "
+    "set INVINCIBLE_AGENT_ROUTING=1 and start one with: "
+    "invincible connect")
+
+# Virtual-key codes for press_keys main keys (modifiers are separate).
+_COMPUTER_VK_MODIFIERS = {"shift": 0x10, "ctrl": 0x11, "alt": 0x12,
+                          "win": 0x5B}
+_COMPUTER_VK_NAMED = {
+    "backspace": 0x08, "tab": 0x09, "enter": 0x0D, "esc": 0x1B,
+    "space": 0x20, "pgup": 0x21, "pgdn": 0x22, "end": 0x23,
+    "home": 0x24, "left": 0x25, "up": 0x26, "right": 0x27,
+    "down": 0x28, "insert": 0x2D, "del": 0x2E,
+    **{f"f{i}": 0x6F + i for i in range(1, 25)},
+}
+_UIA_IS_PASSWORD = 30019
+# IUIAutomation vtable index of GetFocusedElement (past IUnknown 0-2;
+# verified live on the dev box like the TreeWalker indices — do not
+# renumber from memory).
+_UIA_GET_FOCUSED = 8
+
+
+def _computer_input_api() -> dict:
+    """Lazy user32 SendInput entry points (Windows only, no COM)."""
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    shell32 = ctypes.windll.shell32
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
+                    ("mouseData", ctypes.c_ulong),
+                    ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
+                    ("dwExtraInfo", ctypes.c_void_p)]
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
+                    ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
+                    ("dwExtraInfo", ctypes.c_void_p)]
+
+    class _U(ctypes.Union):
+        _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT)]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_ulong), ("u", _U)]
+
+    user32.SendInput.argtypes = [ctypes.c_uint, ctypes.c_void_p,
+                                 ctypes.c_int]
+    user32.SendInput.restype = ctypes.c_uint
+    shell32.ShellExecuteW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p,
+                                      ctypes.c_wchar_p, ctypes.c_wchar_p,
+                                      ctypes.c_void_p, ctypes.c_int]
+    shell32.ShellExecuteW.restype = ctypes.c_void_p
+    return {"ctypes": ctypes, "user32": user32, "shell32": shell32,
+            "INPUT": INPUT, "MOUSEINPUT": MOUSEINPUT,
+            "KEYBDINPUT": KEYBDINPUT}
+
+
+def _computer_send(api: dict, inputs: list) -> None:
+    """One SendInput batch; raises OSError unless all events land."""
+    ctypes = api["ctypes"]
+    arr = (api["INPUT"] * len(inputs))(*inputs)
+    sent = api["user32"].SendInput(len(inputs), arr, ctypes.sizeof(
+        api["INPUT"]))
+    if sent != len(inputs):
+        raise OSError(f"SendInput took {sent}/{len(inputs)} events")
+
+
+def _computer_mouse_input(api: dict, *, dx: int = 0, dy: int = 0,
+                          data: int = 0, flags: int = 0):
+    entry = api["INPUT"]()
+    entry.type = 0  # INPUT_MOUSE
+    entry.u.mi.dx = dx
+    entry.u.mi.dy = dy
+    entry.u.mi.mouseData = data
+    entry.u.mi.dwFlags = flags
+    return entry
+
+
+def _computer_key_input(api: dict, *, vk: int = 0, scan: int = 0,
+                        flags: int = 0):
+    entry = api["INPUT"]()
+    entry.type = 1  # INPUT_KEYBOARD
+    entry.u.ki.wVk = vk
+    entry.u.ki.wScan = scan
+    entry.u.ki.dwFlags = flags
+    return entry
+
+
+def _computer_abs(value: int) -> int:
+    """0-1000 grid to SendInput absolute units (0-65535, primary screen
+    — the same screen look_at_screen's grid is measured on)."""
+    return value * 65535 // COMPUTER_GRID_MAX
+
+
+def _computer_move_to(api: dict, x: int, y: int) -> None:
+    _computer_send(api, [_computer_mouse_input(
+        api, dx=_computer_abs(x), dy=_computer_abs(y),
+        flags=0x0001 | 0x8000)])  # MOVE | ABSOLUTE
+
+
+def _computer_click_at(api: dict, x: int, y: int, button: str,
+                       double: bool) -> None:
+    _computer_move_to(api, x, y)
+    down, up = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010),
+                "middle": (0x0020, 0x0040)}[button]
+    _computer_send(api, [_computer_mouse_input(api, flags=down),
+                         _computer_mouse_input(api, flags=up)])
+    if double:
+        time.sleep(0.05)
+        _computer_send(api, [_computer_mouse_input(api, flags=down),
+                             _computer_mouse_input(api, flags=up)])
+
+
+def _computer_scroll_at(api: dict, x: int | None, y: int | None,
+                        direction: str, amount: int) -> None:
+    if x is not None and y is not None:
+        _computer_move_to(api, x, y)  # hover; no click — scroll needs none
+    delta = 120 * amount
+    if direction == "up":
+        flags, data = 0x0800, delta  # WHEEL
+    elif direction == "down":
+        flags, data = 0x0800, -delta & 0xFFFFFFFF
+    elif direction == "right":
+        flags, data = 0x1000, delta  # HWHEEL
+    else:
+        flags, data = 0x1000, -delta & 0xFFFFFFFF
+    _computer_send(api, [_computer_mouse_input(api, data=data,
+                                               flags=flags)])
+
+
+def _computer_drag(api: dict, x1: int, y1: int, x2: int, y2: int) -> None:
+    _computer_move_to(api, x1, y1)
+    _computer_send(api, [_computer_mouse_input(api, flags=0x0002)])
+    time.sleep(0.05)
+    _computer_move_to(api, x2, y2)
+    _computer_send(api, [_computer_mouse_input(api, flags=0x0004)])
+
+
+def _computer_type(api: dict, text: str) -> None:
+    """Layout-independent typing via KEYEVENTF_UNICODE (wScan carries
+    the UTF-16 code unit, so no keyboard layout is involved)."""
+    batch = []
+    encoded = text.encode("utf-16-le")
+    for i in range(0, len(encoded), 2):
+        unit = int.from_bytes(encoded[i:i + 2], "little")
+        batch.append(_computer_key_input(api, scan=unit, flags=0x0004))
+        batch.append(_computer_key_input(api, scan=unit,
+                                         flags=0x0004 | 0x0002))
+    if batch:
+        _computer_send(api, batch)
+
+
+def _computer_press(api: dict, chord: frozenset) -> None:
+    """One main key plus held modifiers (denylist checked upstream)."""
+    mains = sorted(chord - _KEY_MODIFIERS)
+    main = mains[0]
+    batch = []
+    for mod in sorted(chord & _KEY_MODIFIERS):
+        batch.append(_computer_key_input(
+            api, vk=_COMPUTER_VK_MODIFIERS[mod]))
+    if len(main) == 1:
+        for unit in _computer_utf16_units(main):
+            batch.append(_computer_key_input(api, scan=unit,
+                                             flags=0x0004))
+            batch.append(_computer_key_input(api, scan=unit,
+                                             flags=0x0004 | 0x0002))
+    elif main in _COMPUTER_VK_NAMED:
+        vk = _COMPUTER_VK_NAMED[main]
+        batch.append(_computer_key_input(api, vk=vk))
+        batch.append(_computer_key_input(api, vk=vk, flags=0x0002))
+    else:
+        raise ValueError(f"unknown key {main!r} in press_keys chord")
+    for mod in sorted(chord & _KEY_MODIFIERS, reverse=True):
+        batch.append(_computer_key_input(
+            api, vk=_COMPUTER_VK_MODIFIERS[mod], flags=0x0002))
+    _computer_send(api, batch)
+
+
+def _computer_utf16_units(text: str) -> list[int]:
+    encoded = text.encode("utf-16-le")
+    return [int.from_bytes(encoded[i:i + 2], "little")
+            for i in range(0, len(encoded), 2)]
+
+
+def _computer_open(api: dict, name: str, args: str) -> dict:
+    rc = api["shell32"].ShellExecuteW(
+        None, "open", name, args or None, None, 1)  # SW_SHOWNORMAL
+    try:
+        code = int(rc or 0)
+    except (TypeError, ValueError):
+        code = 0
+    if code <= 32:
+        return {"status": "error",
+                "error": f"could not open {name!r} "
+                         f"(ShellExecute code {code})"}
+    return {"status": "ok", "action": "open_app", "name": name}
+
+
+async def _focus_is_password() -> bool | None:
+    """Focused-element IsPassword probe via a child process.
+
+    True/False from the probe; None when the probe itself failed — the
+    caller fails closed (refuses the keystrokes). Same isolation as
+    _look_at_screen: raw UIA COM teardown can fail fatal.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-c",
+            "from invincible.core.tool_executor import "
+            "_focus_password_main; _focus_password_main()",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            out, err = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=LOOK_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return None
+        if proc.returncode != 0:
+            detail = err.decode(errors="replace").strip().splitlines()
+            tail = detail[-1] if detail else f"exit {proc.returncode}"
+            logger.warning("password probe failed: %s", tail[-200:])
+            return None
+        try:
+            payload = json.loads(out.decode())
+        except ValueError:
+            return None
+        password = payload.get("password")
+        return password if isinstance(password, bool) else None
+    except Exception as e:
+        logger.warning("password probe failed: %s", e)
+        return None
+
+
+def _focus_is_password_sync(api: dict) -> bool:
+    """Focused element's IsPassword property. Raises on COM failure."""
+    ctypes = api["ctypes"]
+    ole32 = api["ole32"]
+    oleaut32 = api["oleaut32"]
+    method = api["method"]
+    Variant = api["Variant"]
+
+    release = method(2, ctypes.c_long)
+    held: list = []
+
+    def keep(iface):
+        held.append(iface)
+        return iface
+
+    VT_BOOL = 11
+    hr = ole32.CoInitializeEx(None, 2)
+    if hr < 0:
+        raise OSError(f"CoInitializeEx failed: {hr:#x}")
+    com_init = hr == 0
+    try:
+        auto = ctypes.c_void_p()
+        hr = ole32.CoCreateInstance(
+            ctypes.byref(api["CLSID_UIA"]), None, 1,
+            ctypes.byref(api["IID_UIA"]), ctypes.byref(auto))
+        if hr < 0 or not auto.value:
+            raise OSError(f"UI Automation unavailable: {hr:#x}")
+        keep(auto.value)
+        get_focused = method(_UIA_GET_FOCUSED, ctypes.c_long,
+                             ctypes.POINTER(ctypes.c_void_p))
+        get_prop = method(10, ctypes.c_long, ctypes.c_int,
+                          ctypes.POINTER(Variant))
+        focused = ctypes.c_void_p()
+        if get_focused(auto.value, ctypes.byref(focused)) < 0 \
+                or not focused.value:
+            raise OSError("no focused element")
+        keep(focused.value)
+        var = Variant()
+        if get_prop(focused.value, _UIA_IS_PASSWORD,
+                    ctypes.byref(var)) < 0:
+            raise OSError("IsPassword unreadable")
+        try:
+            if var.vt != VT_BOOL:
+                raise OSError(
+                    f"IsPassword non-bool (vt {var.vt})")
+            return bool(var.boolVal)
+        finally:
+            oleaut32.VariantClear(ctypes.byref(var))
+    finally:
+        for iface in held:
+            with contextlib.suppress(Exception):
+                release(iface)
+        if com_init:
+            with contextlib.suppress(Exception):
+                ole32.CoUninitialize()
+
+
+def _focus_password_main() -> None:
+    """Subprocess entry for :func:`_focus_is_password` (stdout JSON)."""
+    try:
+        payload: dict = {"password": _focus_is_password_sync(
+            _look_uia_interfaces())}
+    except Exception as e:
+        payload = {"error": f"password probe failed: {e}"}
+    sys.stdout.buffer.write(json.dumps(payload).encode("utf-8"))
+
+
+async def _computer_resolve(target: dict) -> tuple[dict, dict]:
+    """Resolve a normalized target to grid x/y plus a result echo.
+
+    Control ids look up against a FRESH _look_at_screen read (same
+    ordering ⇒ same ids); a miss is a stale-id error naming the fix.
+    Returns (point, echo); raises ValueError when unresolvable.
+    """
+    if "control" not in target:
+        point = {"x": target.get("x"), "y": target.get("y")}
+        if point["x"] is None:
+            return {}, {}
+        return point, {"x": point["x"], "y": point["y"]}
+    look = await _look_at_screen()
+    if not isinstance(look, dict) or look.get("status") != "look":
+        raise ValueError(
+            f"could not resolve {target['control']}: screen read failed "
+            "(is the paired agent on a Windows desktop?)")
+    for control in look.get("controls") or []:
+        if isinstance(control, dict) and control.get("id") == target[
+                "control"]:
+            return ({"x": control["x"], "y": control["y"]},
+                    {"x": control["x"], "y": control["y"],
+                     "label": control.get("label") or "",
+                     "kind": control.get("kind") or "control",
+                     "control": target["control"]})
+    raise ValueError(
+        f"unknown control {target['control']!r} — it may be stale; "
+        "re-read with look_at_screen and use the new C id")
+
+
+async def _computer_act(name: str, args: dict) -> dict:
+    """Execute one Pack 3 action on THIS machine (agent-side only).
+
+    ToolBlocked propagates (the runner maps it to a blocked result);
+    ValueError becomes an error result. Only ``unavailable`` answers
+    off-Windows — never raises there.
+    """
+    if os.name != "nt":
+        return {"status": "unavailable",
+                "reason": _COMPUTER_UNAVAILABLE_REASON}
+    try:
+        norm = normalize_computer_args(name, args or {})
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+    api = _computer_input_api()
+    try:
+        if name == "click":
+            point, echo = await _computer_resolve(norm)
+            _computer_click_at(api, point["x"], point["y"],
+                               norm["button"], norm["double"])
+            return {"status": "ok", "action": "click",
+                    "button": norm["button"],
+                    "double": norm["double"], **echo}
+        if name == "type_text":
+            if "control" in norm or "x" in norm:
+                # Click-to-focus first, so the probe below inspects the
+                # field that actually receives the keystrokes (covers
+                # the focus race: probe-then-type would check the
+                # wrong element).
+                point, echo = await _computer_resolve(norm)
+                _computer_click_at(api, point["x"], point["y"],
+                                   "left", False)
+            else:
+                echo = {}
+            password = await _focus_is_password()
+            if password is True:
+                raise ToolBlocked(
+                    "the focused field is a password field — type_text "
+                    "never types into one; ask the user to enter it")
+            if password is None:
+                return {"status": "error",
+                        "error": "could not verify the focused field is "
+                                 "not a password field — refusing"}
+            _computer_type(api, norm["text"])
+            if norm["submit"]:
+                _computer_press(api, frozenset({"enter"}))
+            return {"status": "ok", "action": "type_text",
+                    "chars": len(norm["text"]),
+                    "submit": norm["submit"], **echo}
+        if name == "press_keys":
+            if "control" in norm or "x" in norm:
+                point, echo = await _computer_resolve(norm)
+                _computer_click_at(api, point["x"], point["y"],
+                                   "left", False)
+            else:
+                echo = {}
+            _computer_press(api, parse_keys_chord(norm["keys"]))
+            return {"status": "ok", "action": "press_keys",
+                    "keys": norm["keys"], **echo}
+        if name == "scroll":
+            point, echo = await _computer_resolve(norm)
+            _computer_scroll_at(api, point.get("x"), point.get("y"),
+                                norm["direction"], norm["amount"])
+            return {"status": "ok", "action": "scroll",
+                    "direction": norm["direction"],
+                    "amount": norm["amount"], **echo}
+        if name == "drag":
+            start, echo_from = await _computer_resolve(norm["from"])
+            end, echo_to = await _computer_resolve(norm["to"])
+            _computer_drag(api, start["x"], start["y"],
+                           end["x"], end["y"])
+            return {"status": "ok", "action": "drag",
+                    "from": echo_from, "to": echo_to}
+        if name == "open_app":
+            return _computer_open(api, norm["name"], norm["args"])
+        if name == "open_url":
+            opened = _computer_open(api, norm["url"], "")
+            if opened.get("status") != "ok":
+                return opened
+            return {"status": "ok", "action": "open_url",
+                    "url": norm["url"]}
+    except OSError as e:
+        logger.warning("computer-use %s failed: %s", name, e)
+        return {"status": "error",
+                "error": f"could not perform {name}: {e}"}
+    return {"status": "error",
+            "error": f"Unknown computer tool: {name}"}

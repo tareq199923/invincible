@@ -106,6 +106,8 @@ async def test_mcp_tools_list(client, bearer_headers):
         "confirm_action", "expose_port", "tunnel_close",
                 "code_search", "process_list", "screenshot", "web_fetch",
                 "web_research", "look_at_screen",
+                "click", "type_text", "press_keys", "scroll", "drag",
+                "open_app", "open_url",
         "list_dir", "find_files", "git_status", "git_diff", "git_log",
         "task_state_set", "task_state_get", "checkpoint_create",
         "todo",

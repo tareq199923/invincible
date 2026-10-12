@@ -910,6 +910,118 @@ No confirmation (read-only). Offered in every mode including plan.
 {"status": "look", "app": "...", "controls": [{"id": "C1", "kind": "button", "label": "Save", "x": 940, "y": 27}], "mouse": {"x": 233, "y": 689}, "size": {"w": 1920, "h": 1080}}
 ```
 
+#### `click`
+
+```json
+"arguments": {"control": "C1"}
+"arguments": {"x": 500, "y": 200, "button": "left", "double": false}
+```
+
+Click at a point on the paired machine: a `look_at_screen` control
+id (wins when given) or `x`/`y` on the 0–1000 grid, left/right/middle
+button, optional double-click. **Staged for approval like
+`execute_bash`**: the call returns a token and nothing moves until
+`confirm_action` approves it; **agent-only** (without routing it
+answers `{"status": "unavailable", ...}`). Control ids go stale on
+every re-read — ground each click with a fresh `look_at_screen`;
+results echo the resolved label/kind/coordinates so a stale id is
+visible on the next turn. Manual/auto only (never plan).
+
+```json
+{"status": "ok", "action": "click", "button": "left", "double": false, "x": 940, "y": 27, "label": "Save", "kind": "button", "control": "C1"}
+```
+
+#### `type_text`
+
+```json
+"arguments": {"text": "hello", "control": "C4", "submit": false}
+```
+
+Type text into the focused field on the paired machine (clicks the
+target first when a control id or `x`/`y` is given; `submit` presses
+Enter afterwards). **Refuses password fields outright**: the agent
+probes the focused control over UI Automation and blocks when it is
+one — the probe runs isolated like `look_at_screen`, and an
+unverifiable focus fails closed. Staged for approval, agent-only,
+manual/auto only.
+
+```json
+{"status": "ok", "action": "type_text", "chars": 5, "submit": false}
+```
+
+#### `press_keys`
+
+```json
+"arguments": {"keys": "ctrl+s"}
+```
+
+Press one keyboard chord on the paired machine (one non-modifier key
+plus modifiers). Session lock/close chords (`win+l`, `alt+f4`,
+`ctrl+alt+del`, `ctrl+shift+esc`) are **refused outright** — ask the
+user to press those themselves. Staged for approval, agent-only,
+manual/auto only.
+
+```json
+{"status": "ok", "action": "press_keys", "keys": "ctrl+s"}
+```
+
+#### `scroll`
+
+```json
+"arguments": {"direction": "down", "amount": 3, "x": 500, "y": 400}
+```
+
+Scroll the wheel on the paired machine (`up`/`down`/`left`/`right`,
+1–10 wheel multiples) at the cursor or at a given control id / `x`/`y`
+point — hovered, never clicked. Staged for approval, agent-only,
+manual/auto only.
+
+```json
+{"status": "ok", "action": "scroll", "direction": "down", "amount": 3, "x": 500, "y": 400}
+```
+
+#### `drag`
+
+```json
+"arguments": {"x1": 100, "y1": 100, "x2": 400, "y2": 400}
+"arguments": {"control_from": "C2", "control_to": "C5"}
+```
+
+Drag on the paired machine from one point to another (each end a
+control id or `x`/`y`). Staged for approval, agent-only, manual/auto
+only.
+
+```json
+{"status": "ok", "action": "drag", "from": {"x": 100, "y": 100}, "to": {"x": 400, "y": 400}}
+```
+
+#### `open_app`
+
+```json
+"arguments": {"name": "notepad"}
+```
+
+Open an app or file by name on the paired machine (OS launcher).
+Staged for approval, agent-only, manual/auto only.
+
+```json
+{"status": "ok", "action": "open_app", "name": "notepad"}
+```
+
+#### `open_url`
+
+```json
+"arguments": {"url": "https://example.com/"}
+```
+
+Open an `http(s)` URL in the paired machine's default browser.
+Staged for approval, agent-only (the server never opens
+caller-supplied URLs), manual/auto only.
+
+```json
+{"status": "ok", "action": "open_url", "url": "https://example.com/"}
+```
+
 #### `memory_save`
 
 ```json

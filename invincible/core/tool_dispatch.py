@@ -144,6 +144,12 @@ def stage_mutating(store, name: str, args: dict,
             "" if new_raw is None else str(new_raw),
             store, replace_all=args.get("replace_all", False) is True,
             owner_subject=owner_subject)
+    if name in tool_executor.COMPUTER_TOOLS:
+        # F10: validated + staged for approval (ValueError on shape /
+        # ToolBlocked on denylist — no token either way). Confirm
+        # forwards to the agent executor; no local path exists.
+        return tool_executor.stage_computer_action(
+            name, args, store, owner_subject=owner_subject)
     raise tool_executor.ToolBlocked(
         f"Unknown mutating tool: {name}. Valid tools: "
         f"{', '.join(harness_tools.approval_required_names())}.")

@@ -5,12 +5,31 @@
 
 ## Current State
 
-- Last commit: `27f9892` (main) — F08 web_research committed.
+- F10 done (`passing`, uncommitted): Pack 3 computer-use — click,
+  type_text, press_keys, scroll, drag, open_app, open_url as
+  agent-side tools on the paired PC (SendInput/ShellExecute via
+  ctypes, no COM in-process; control resolution reuses the
+  look_at_screen read, password probe isolated like F09 with
+  GetFocusedElement idx 8 + IsPassword 30019 verified live).
+  needs_approval=True (MUTATING 3→10, manual/auto only),
+  agent-only (MCP 27→34, webchat order 24→31). Two routing traps
+  closed: pre-AGENT_ONLY staged branch + batch-gate MUTATING
+  exclusion (regression test fails without it, fast). Denylist:
+  win+l/alt+f4/ctrl+alt+del/ctrl+shift+esc Wall 1+2; fail-fast
+  staging (no dangling tokens); result-echo of resolved targets.
+  New: `tests/test_computer_use.py` (16 tests); goldens regenerated
+  from code then frozen; drift pins extended (never weakened); docs:
+  MCP_PROTOCOL §7 tools, SECURITY §12, ROADMAP count 34. Vetted
+  plan survived contact: one real find during vetting (the batch
+  trap), confirmed in code before building.
+- Last commit: `062ece5` (main) — F09 look_at_screen committed
+  (reconciled 2026-10-13; prior diary entry naming `27f9892` was stale).
+- F09 done (`passing`): look_at_screen controls grounding
 - F07 done (`passing`): Baymax B0 browser-first (voice + avatar +
   screenshot preview).
 - F08 done (`passing`): web_research tool (Bluey steal pack 1,
   Responses web_search via caller's BYOK credential).
-- F09 done (`passing`, uncommitted): look_at_screen controls grounding
+- F09 done (`passing`, committed as `062ece5`): look_at_screen controls grounding
   (Bluey steal pack 2). `tool_executor._look_at_screen` + UIA walk
   (verified live: 112 controls, menus+buttons on 0-1000 grid); walk runs
   in a child process (raw COM can fail fatal - crash becomes an error
@@ -18,7 +37,7 @@
   all modes incl plan), dispatch trio, summary previews, goldens, drift
   pins (27 tools), `MCP_PROTOCOL.md`. New:
   `tests/test_look_at_screen.py` (6 tests).
-- Ruff/pytest status: `ruff check .` clean; FULL suite 1797 passed,
+- Ruff/pytest status: `ruff check .` clean; FULL suite 1813 passed,
   11 skipped, 1 deselected. Clean-state checklist 5/5 ticked.
   Uncommitted — commit on user's word.
 - F04 done (`passing`): read-only fan-out reframed + built as
@@ -40,8 +59,8 @@
 
 ## In Progress
 
-- None — F09 complete (`passing`). Zero `active`. Next: tool pack 3
-  (computer-use) or F05 vector seam at next clock-in.
+- None — F10 complete (`passing`, uncommitted). Zero `active`.
+  Next: F05 vector seam or B1 head-cursor overlay at next clock-in.
 
 ## Next Steps
 

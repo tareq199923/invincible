@@ -823,6 +823,45 @@ async def _dispatch(method, rpc_id, params, request,
                     ))
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
+            if name in tool_executor.COMPUTER_TOOLS:
+                # F10: staged + confirmed like execute_bash, but
+                # agent-only — there is no server-host fallback. Fail
+                # fast with no token when no agent can take the job;
+                # shape errors (ValueError) answer here, denylist hits
+                # (ToolBlocked) via the outer handler, both untokened.
+                agent_executor = await _agent_executor(
+                    request, owner_subject)
+                if agent_executor is None:
+                    return _result(rpc_id, _tool_content(json.dumps({
+                        "status": "unavailable",
+                        "reason": tool_executor
+                        ._COMPUTER_UNAVAILABLE_REASON,
+                    })))
+                registry = getattr(
+                    request.app.state, "agent_registry", None)
+                if (registry is None or owner_subject is None
+                        or not registry.online(owner_subject)):
+                    await _audit_action(request, name, "agent_offline",
+                                        subject=owner_subject)
+                    return _result(rpc_id, _tool_content(
+                        "No invincible agent is connected for this "
+                        "account. Start one on your machine with: "
+                        "invincible connect", is_error=True,
+                    ))
+                before_tool_call(name, args)
+                try:
+                    result = tool_executor.stage_computer_action(
+                        name, args, pending_actions,
+                        owner_subject=owner_subject,
+                    )
+                except ValueError as e:
+                    return _result(rpc_id, _tool_content(
+                        f"{e}."
+                        f"{harness_tools.expected_args_hint(name)}",
+                        is_error=True,
+                    ))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
+
             if name == "confirm_action":
                 # Only a real JSON boolean can approve - anything else
                 # (absent, string, number) is treated as deny.

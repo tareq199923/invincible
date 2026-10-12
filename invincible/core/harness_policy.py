@@ -62,12 +62,27 @@ def before_tool_call(
             return
         tool_executor.check_read_denylist(str(argv.get("path", "") or "."))
         return
+    if tool_name == "press_keys":
+        # F10: chord denylist only (Wall 1; the agent re-runs it locally
+        # as Wall 2 before pressing). No desktop exists here, so this
+        # pure check is identical on both sides.
+        tool_executor.check_keys_denylist(str(argv.get("keys", "")))
+        return
+    if tool_name in ("click", "type_text", "scroll", "drag",
+                     "open_app", "open_url"):
+        # F10 computer-use: no path/filesystem surface (targets are
+        # grid points or C ids, validated at stage/execution). The
+        # type_text password probe cannot run here — the server has no
+        # desktop — so it is agent-side only, with the approval gate
+        # as the server-side backstop.
+        return
     if tool_name == "expose_port":
         # F03: port policy only (localhost-only is structural — the tool
         # schema carries no host at all). The agent re-runs the same
         # check locally as Wall 2 before dialing.
         check_tunnel_port(argv.get("port", ""))
         return
+    # click, type_text, press_keys, scroll, drag, open_app, open_url,
     # confirm_action, process_list, screenshot, web_fetch, web_research,
     # look_at_screen, memory_*, project_*, task_state_*, todo, unknown:
     # no pre-check here - owned by token resolution / dispatch /

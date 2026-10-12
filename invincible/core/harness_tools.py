@@ -491,6 +491,218 @@ TOOLS: tuple[HarnessTool, ...] = (
         server_executable=False,
     ),
     HarnessTool(
+        name="click",
+        description_mcp=(
+            "Click at a point on the paired machine: a look_at_screen "
+            "control id or x/y on the 0-1000 grid. Left/right/middle "
+            "button, optional double-click. Staged for approval like "
+            "execute_bash: the call returns a token, and nothing moves "
+            "until confirm_action approves it. Runs ONLY on your paired "
+            "machine (agent routing must be on); the server has no "
+            "desktop to click."
+        ),
+        description_webchat=(
+            "Click at a control id or x/y grid point on the paired "
+            "machine. Staged for approval; left/right/middle, "
+            "optional double-click."
+        ),
+        properties={
+            "x": _int(),
+            "y": _int(),
+            "control": _str(
+                description="A look_at_screen C id (wins over x/y)"),
+            "button": _str(
+                description="left, right, or middle (default left)",
+                enum=["left", "right", "middle"]),
+            "double": _bool(
+                description="Double-click (default false)"),
+        },
+        required=(),
+        read_only=False,
+        needs_approval=True,
+        mcp=True,
+        webchat=True,
+        webchat_modes=("manual", "auto"),
+        agent_job="click",
+        server_executable=False,
+    ),
+    HarnessTool(
+        name="type_text",
+        description_mcp=(
+            "Type text into the focused field on the paired machine "
+            "(clicks the target first when a control id or x/y is "
+            "given). Refuses password fields outright: the agent "
+            "probes the focused control and blocks when it is one. "
+            "Staged for approval like execute_bash. Runs ONLY on your "
+            "paired machine (agent routing must be on)."
+        ),
+        description_webchat=(
+            "Type text on the paired machine (focuses the target "
+            "first). Refuses password fields. Staged for approval."
+        ),
+        properties={
+            "text": _str(description="The exact text to type"),
+            "control": _str(
+                description="A look_at_screen C id to focus first"),
+            "x": _int(),
+            "y": _int(),
+            "submit": _bool(
+                description="Press Enter after typing (default false)"),
+        },
+        required=("text",),
+        read_only=False,
+        needs_approval=True,
+        mcp=True,
+        webchat=True,
+        webchat_modes=("manual", "auto"),
+        agent_job="type_text",
+        server_executable=False,
+    ),
+    HarnessTool(
+        name="press_keys",
+        description_mcp=(
+            "Press one keyboard chord on the paired machine (one "
+            "non-modifier key plus modifiers, e.g. 'ctrl+s'). Session "
+            "lock/close chords (win+l, alt+f4, ctrl+alt+del, "
+            "ctrl+shift+esc) are refused outright. Staged for approval "
+            "like execute_bash. Runs ONLY on your paired machine "
+            "(agent routing must be on)."
+        ),
+        description_webchat=(
+            "Press one keyboard chord on the paired machine. "
+            "Lock/close chords refused. Staged for approval."
+        ),
+        properties={
+            "keys": _str(
+                description="The chord, e.g. 'ctrl+s'"),
+            "control": _str(
+                description="A look_at_screen C id to focus first"),
+            "x": _int(),
+            "y": _int(),
+        },
+        required=("keys",),
+        read_only=False,
+        needs_approval=True,
+        mcp=True,
+        webchat=True,
+        webchat_modes=("manual", "auto"),
+        agent_job="press_keys",
+        server_executable=False,
+    ),
+    HarnessTool(
+        name="scroll",
+        description_mcp=(
+            "Scroll the wheel on the paired machine (up/down/left/ "
+            "right, 1-10 wheel multiples) at the cursor or at a given "
+            "control id / x/y point (hovered, never clicked). Staged "
+            "for approval like execute_bash. Runs ONLY on your paired "
+            "machine (agent routing must be on)."
+        ),
+        description_webchat=(
+            "Scroll the wheel on the paired machine (hovered point, "
+            "never clicked). Staged for approval."
+        ),
+        properties={
+            "direction": _str(
+                description="up, down, left, or right",
+                enum=["up", "down", "left", "right"]),
+            "amount": _int(
+                description="Wheel multiples, 1-10 (default 3)"),
+            "x": _int(),
+            "y": _int(),
+            "control": _str(
+                description="A look_at_screen C id to hover over"),
+        },
+        required=("direction",),
+        read_only=False,
+        needs_approval=True,
+        mcp=True,
+        webchat=True,
+        webchat_modes=("manual", "auto"),
+        agent_job="scroll",
+        server_executable=False,
+    ),
+    HarnessTool(
+        name="drag",
+        description_mcp=(
+            "Drag on the paired machine from one point to another: "
+            "each end is a look_at_screen control id or x/y on the "
+            "0-1000 grid. Staged for approval like execute_bash. Runs "
+            "ONLY on your paired machine (agent routing must be on)."
+        ),
+        description_webchat=(
+            "Drag on the paired machine between two control ids or "
+            "grid points. Staged for approval."
+        ),
+        properties={
+            "x1": _int(),
+            "y1": _int(),
+            "x2": _int(),
+            "y2": _int(),
+            "control_from": _str(
+                description="A look_at_screen C id for the drag start"),
+            "control_to": _str(
+                description="A look_at_screen C id for the drag end"),
+        },
+        required=(),
+        read_only=False,
+        needs_approval=True,
+        mcp=True,
+        webchat=True,
+        webchat_modes=("manual", "auto"),
+        agent_job="drag",
+        server_executable=False,
+    ),
+    HarnessTool(
+        name="open_app",
+        description_mcp=(
+            "Open an app or file on the paired machine by name (via "
+            "the OS launcher). Staged for approval like execute_bash. "
+            "Runs ONLY on your paired machine (agent routing must be "
+            "on); nothing on the server opens."
+        ),
+        description_webchat=(
+            "Open an app or file by name on the paired machine. "
+            "Staged for approval."
+        ),
+        properties={
+            "name": _str(description="App or file name to open"),
+            "args": _str(description="Optional launch arguments"),
+        },
+        required=("name",),
+        read_only=False,
+        needs_approval=True,
+        mcp=True,
+        webchat=True,
+        webchat_modes=("manual", "auto"),
+        agent_job="open_app",
+        server_executable=False,
+    ),
+    HarnessTool(
+        name="open_url",
+        description_mcp=(
+            "Open an http(s) URL in the default browser on the paired "
+            "machine. Staged for approval like execute_bash. Runs "
+            "ONLY on your paired machine (agent routing must be on) "
+            "— the server never opens caller-supplied URLs."
+        ),
+        description_webchat=(
+            "Open an http(s) URL in the paired machine's browser. "
+            "Staged for approval."
+        ),
+        properties={
+            "url": _str(description="The http(s) URL to open"),
+        },
+        required=("url",),
+        read_only=False,
+        needs_approval=True,
+        mcp=True,
+        webchat=True,
+        webchat_modes=("manual", "auto"),
+        agent_job="open_url",
+        server_executable=False,
+    ),
+    HarnessTool(
         name="confirm_action",
         description_mcp=(
             "Approve or deny a pending execute_bash/write_file/edit_file "
@@ -843,6 +1055,13 @@ _WEBCHAT_ORDER: tuple[str, ...] = (
     "web_fetch",
     "web_research",
     "look_at_screen",
+    "click",
+    "type_text",
+    "press_keys",
+    "scroll",
+    "drag",
+    "open_app",
+    "open_url",
     "memory_save",
     "memory_search",
     "memory_list",

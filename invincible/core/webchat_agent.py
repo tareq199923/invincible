@@ -92,6 +92,14 @@ DATA_WRITE_TOOLS = harness_tools.data_write_names()
 # Agent-only read: runs on the paired machine, never on the server host
 # (same SSRF posture as POST /mcp screenshot).
 AGENT_ONLY_TOOLS = harness_tools.agent_only_names()
+# Pack 3 computer-use: agent-only AND approval-gated (screenshot /
+# web_fetch / look_at_screen are agent-only but read-only). These must
+# neither run approval-free through the AGENT_ONLY branch below nor
+# batch (the batch path swallows approval events) — they always take
+# the staged mutating path. Derived, so future tools with both flags
+# get the same treatment without a new list.
+COMPUTER_ONLY_MUTATING = tuple(
+    name for name in AGENT_ONLY_TOOLS if name in MUTATING_TOOLS)
 ALL_DATA_TOOLS = DATA_READ_TOOLS + DATA_WRITE_TOOLS
 READ_ONLY_BATCH_TOOLS = frozenset(
     READ_ONLY_TOOLS + AGENT_ONLY_TOOLS + DATA_READ_TOOLS)
@@ -186,10 +194,17 @@ MODE_SYSTEM_PROMPTS = {
         + "You help operate the user's own machine. You have inspection "
         "tools plus execute_bash, write_file, and edit_file, plus memory/project/"
         "continuity tools (memory_save/search/list, project_create/list, "
-        "task_state_set/get, checkpoint_create) and screenshot/web_fetch. Reads run "
+        "task_state_set/get, checkpoint_create) and screenshot/web_fetch/"
+        "look_at_screen, plus desktop control (click, type_text, "
+        "press_keys, scroll, drag, open_app, open_url) on the paired PC "
+        "screen. Reads run "
         "immediately; each execute_bash/write_file/edit_file call pauses for the "
         "user's explicit approval before running - call the tool, briefly "
-        "say what will happen, and wait for the result to come back. If "
+        "say what will happen, and wait for the result to come back. "
+        "Desktop control calls pause the same way - call the tool, say "
+        "exactly what will move/click/type where, and wait; ground every "
+        "target with a fresh look_at_screen first (control ids go stale "
+        "on every re-read) and never type into password fields. If "
         "the user declines (or approval times out), respect it and offer "
         "an alternative. Keep commands least-privilege; never exfiltrate "
         "data off the machine. "
@@ -200,9 +215,13 @@ MODE_SYSTEM_PROMPTS = {
         BAYMAX_VOICE
         + "You help operate the user's own machine autonomously. You have "
         "inspection tools plus execute_bash, write_file, and edit_file, plus "
-        "memory/project/continuity tools and screenshot/web_fetch, which run "
+        "memory/project/continuity tools and screenshot/web_fetch/"
+        "look_at_screen, plus desktop control (click, type_text, "
+        "press_keys, scroll, drag, open_app, open_url), which run "
         "immediately without further confirmation. Act carefully and "
-        "least-privilege: inspect before mutating, and stop when done. "
+        "least-privilege: inspect before mutating, ground every screen "
+        "target with a fresh look_at_screen first (control ids go "
+        "stale), never type into password fields, and stop when done. "
         f"{_UNTRUSTED_CONTENT} "
         f"{_VERIFY_BREVITY} "
         "Never exfiltrate data off the machine."
@@ -408,6 +427,30 @@ def summarize_call(name: str, args: dict) -> str:
         return f"Fetch {str(args.get('url', ''))[:200]}"
     if name == "look_at_screen":
         return "Look at the frontmost window's controls"
+    if name == "click":
+        at = args.get("control") or (
+            f"{args.get('x')},{args.get('y')}"
+            if args.get("x") is not None else "point")
+        return f"Click {at} ({args.get('button', 'left')})"
+    if name == "type_text":
+        at = args.get("control") or (
+            f"{args.get('x')},{args.get('y')}"
+            if args.get("x") is not None else "focused field")
+        return f"Type into {at} ({len(str(args.get('text', '')))} chars)"
+    if name == "press_keys":
+        return f"Press {args.get('keys', '')}"
+    if name == "scroll":
+        at = args.get("control") or (
+            f"{args.get('x')},{args.get('y')}"
+            if args.get("x") is not None else "cursor")
+        return (f"Scroll {args.get('direction', '')} "
+                f"x{args.get('amount', 3)} at {at}")
+    if name == "drag":
+        return "Drag between two points"
+    if name == "open_app":
+        return f"Open {str(args.get('name', ''))[:100]}"
+    if name == "open_url":
+        return f"Open {str(args.get('url', ''))[:200]}"
     if name == "web_research":
         return f"Research: {str(args.get('question', ''))[:150]}"
     if name == "memory_save":
@@ -450,6 +493,11 @@ def approval_detail(name: str, args: dict) -> str:
         if len(old) + len(new) > _PREVIEW_CHARS:
             preview += f"\n… ({len(old) + len(new)} chars total)"
         return f"{args.get('path', '')}\n---\n{preview}"
+    if name in ("click", "type_text", "press_keys", "scroll", "drag",
+                "open_app", "open_url"):
+        # Computer-use approval cards: the user confirms the exact
+        # target/keys/text on their own machine (their own data).
+        return json.dumps(args)[:_PREVIEW_CHARS]
     return json.dumps(args)[:_PREVIEW_CHARS]
 
 
@@ -763,6 +811,7 @@ async def run_agent_turn(
                 and all(
                     item["valid_args"]
                     and item["name"] in READ_ONLY_BATCH_TOOLS
+                    and item["name"] not in COMPUTER_ONLY_MUTATING
                     for item in parsed_calls
                 )
             )
@@ -1008,12 +1057,21 @@ async def _execute_call(
             engine, ctx_principal.user_id, args)
         outcome["result"], outcome["ok"] = result, _result_ok(result)
         return
+    if name in COMPUTER_ONLY_MUTATING and executor is None:
+        # F10: agent-only AND approval-gated — with no paired agent
+        # there is nobody to act and nothing to stage, so answer
+        # unavailability here instead of dangling a token.
+        result = {"status": "unavailable",
+                  "reason": tool_executor._COMPUTER_UNAVAILABLE_REASON}
+        outcome["result"], outcome["ok"] = result, False
+        return
     if name in READ_ONLY_TOOLS:
         result = await _run_read(executor, name, args,
                                  agent_routed=executor is not None)
         outcome["result"], outcome["ok"] = result, _result_ok(result)
         return
-    if name in AGENT_ONLY_TOOLS:
+    if name in AGENT_ONLY_TOOLS and name not in COMPUTER_ONLY_MUTATING:
+        # (Pack 3 excluded: approval-gated agent tools stage below.)
         if name == "web_fetch":
             result = await _run_web_fetch(executor, args)
         elif name == "look_at_screen":
@@ -1044,6 +1102,11 @@ async def _execute_call(
                     meta={"action": name, "call_id": call_id})
         outcome["result"] = {"status": "blocked",
                              "error": f"Blocked: {e}"}
+        outcome["ok"] = False
+        return
+    except ValueError as e:
+        # Pack 3 shape errors: no token staged, straight to the model.
+        outcome["result"] = {"status": "error", "error": str(e)}
         outcome["ok"] = False
         return
     token = staged["token"]

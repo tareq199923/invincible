@@ -1060,3 +1060,52 @@ exists for tunnels on purpose: persisting public byte-routes across
 restarts would be a vulnerability, not a feature.
 
 ---
+
+## 12. Computer-use (`click`/`type_text`/`press_keys`/`scroll`/`drag`/`open_app`/`open_url`, F10)
+
+Seven agent-only, approval-gated input tools on the caller's **paired
+PC**. They extend the §10 three-walls shape with input-specific
+refusals — desktop input is a confused-deputy magnet (a click lands
+wherever the window happens to be), so the model below assumes the
+screen may have changed since the last `look_at_screen`:
+
+- **Wall 1 — server-side checks.** `press_keys` chord denylist
+  (`check_keys_denylist`: `win+l`, `alt+f4`, `ctrl+alt+del`,
+  `ctrl+shift+esc` — session lock/close chords never stage) runs
+  pre-stage in `harness_policy.before_tool_call`; everything else is
+  pathless (grid points / C ids carry no filesystem surface) and
+  passes through to staging. All seven stage through
+  `PendingActionStore` with same-subject binding and confirm forward
+  to the agent executor — with routing off (or no agent online) they
+  fail fast with `unavailable`/`agent_offline` and **no token is
+  issued** (there is deliberately no server-host fallback: the server
+  has no desktop to click).
+- **Wall 2 — the agent re-runs validation locally** (shape +
+  denylist inside `_computer_act` before any `SendInput`) and the
+  `type_text` password probe: the focused control's UI Automation
+  `IsPassword` property is read in an isolated child process (the F09
+  pattern — raw UIA teardown can fail fatal); a password focus, or an
+  unverifiable focus, refuses the keystrokes (`blocked` / fail-closed
+  error, never typed). The target is click-focused first so the probe
+  inspects the field that actually receives input (covers the focus
+  race). `open_url` admits `http(s)` only, mirroring `web_fetch`.
+- **Wall 3 — not applicable, and that is documented rather than
+  missing.** Input has no filesystem surface for home-confinement to
+  gate; the compensating controls are the approval gate (every one of
+  the seven needs it — none is offered in plan mode) and the
+  result-echo (`clicked C3 (Save) @x,y`): the model sees the resolved
+  label/kind/coordinates and can spot a stale-id mismatch next turn.
+
+**Known limits (deliberate).**
+
+- *C-id staleness race.* A control id names a position in one
+  `look_at_screen` read; the window may change before the click. The
+  model convention is re-look before acting (in the manual/auto
+  prompts); the echo is the backstop, not a lock.
+- *The denylist is chords, not intent.* `alt+f4` is refused but a
+  model can still close unsaved work with a plain `click` on a ×
+  button — that is what the per-call approval is for. Denylists catch
+  the obvious; approval is the real boundary (§2.0).
+- *Password probing is focus-deep, not screen-deep.* Only the focused
+  control is probed; a password field elsewhere on screen is none of
+  typing's business until focused.

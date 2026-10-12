@@ -311,6 +311,13 @@ async def execute_job(job: dict) -> dict:
             # window's controls on this machine; no sandbox check
             # applies. Non-Windows answers unavailable, never raises.
             return await tool_executor._look_at_screen()
+        if job_type in tool_executor.COMPUTER_TOOLS:
+            # F10: paired-PC input + launch. Shape + denylist are
+            # re-checked inside _computer_act (Wall 2); ToolBlocked
+            # becomes the job's blocked result via the handler below.
+            # Non-Windows answers unavailable, never raises.
+            return await tool_executor._computer_act(
+                job_type, args if isinstance(args, dict) else {})
         return {
             "status": "error",
             "error": f"Unknown job type: {job_type}. Valid job types: "

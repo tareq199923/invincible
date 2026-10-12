@@ -134,12 +134,16 @@ def test_needs_approval_tools_are_policy_gated():
         tool.name for tool in harness_tools.TOOLS if tool.needs_approval
     }
     assert gated == {"execute_bash", "write_file", "edit_file",
-                     "expose_port"}
+                     "expose_port",
+                     "click", "type_text", "press_keys", "scroll",
+                     "drag", "open_app", "open_url"}
     assert _outcome("execute_bash", {"command": "rm -rf /"}) == "blocked"
     repo_env = os.path.join(tool_executor._REPO_ROOT, ".env")
     assert _outcome("write_file", {"path": repo_env}) == "blocked"
     assert _outcome("edit_file", {"path": repo_env}) == "blocked"
     assert _outcome("expose_port", {"port": 22}) == "blocked"
+    assert _outcome("press_keys", {"keys": "win+l"}) == "blocked"
+    assert _outcome("press_keys", {"keys": "ctrl+s"}) == "pass"
     assert _outcome("execute_bash", {"command": "echo hi"}) == "pass"
     assert _outcome("expose_port", {"port": 3000}) == "pass"
 
@@ -151,7 +155,8 @@ def test_read_gated_set_matches_runner_reads():
         if tool.agent_job
         not in (None, "execute_bash", "write_file", "edit_file",
                 "process_list", "screenshot", "web_fetch",
-                "look_at_screen")
+                "look_at_screen", "click", "type_text", "press_keys",
+                "scroll", "drag", "open_app", "open_url")
     }
     assert runner_reads == {
         "read_file", "code_search", "list_dir", "find_files",
@@ -168,6 +173,7 @@ def test_read_gated_set_matches_runner_reads():
 def test_policy_passthrough_set_is_exact():
     gated = {
         "execute_bash", "write_file", "edit_file", "expose_port",
+        "press_keys",
         "read_file", "code_search", "list_dir", "find_files",
         "git_status", "git_diff", "git_log",
     }
@@ -175,6 +181,8 @@ def test_policy_passthrough_set_is_exact():
     assert expected_passthrough == {
         "process_list", "screenshot", "web_fetch", "web_research",
         "look_at_screen",
+        "click", "type_text", "scroll", "drag", "open_app",
+        "open_url",
         "confirm_action",
         "tunnel_close",
         "task_state_set", "task_state_get", "checkpoint_create",
@@ -206,6 +214,15 @@ _RUNNER_SAFE_ARGS = {
     "screenshot": {"url": "not-a-url"},
     "web_fetch": {"url": "not-a-url"},
     "look_at_screen": {},
+    # Pack 3: refusal-triggering args only — blocks and error results
+    # prove the job type is HANDLED without ever moving real input.
+    "click": {"x": 9999, "y": 0},
+    "type_text": {"text": ""},
+    "press_keys": {"keys": "win+l"},
+    "scroll": {"direction": "sideways"},
+    "drag": {},
+    "open_app": {"name": ""},
+    "open_url": {"url": "not-a-url"},
 }
 
 
@@ -250,7 +267,7 @@ async def test_mcp_dispatch_covers_every_mcp_tool():
     dispatched = [
         tool.name for tool in harness_tools.TOOLS if tool.mcp
     ]
-    assert len(dispatched) == 27
+    assert len(dispatched) == 34
     hostile = {
         "execute_bash": {"command": "rm -rf /"},
         "write_file": {"path": _OUTSIDE},

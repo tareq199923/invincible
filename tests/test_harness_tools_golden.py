@@ -395,6 +395,234 @@ GOLDEN_MCP_TOOLS = [
         },
     },
     {
+        'name': 'click',
+        'description': (
+        'Click at a point on the paired machine: a look_at_screen control id or '
+        'x/y on the 0-1000 grid. Left/right/middle button, optional '
+        'double-click. Staged for approval like execute_bash: the call returns '
+        'a token, and nothing moves until confirm_action approves it. Runs ONLY '
+        'on your paired machine (agent routing must be on); the server has no '
+        'desktop to click.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'x': {
+                    'type': 'integer',
+                },
+                'y': {
+                    'type': 'integer',
+                },
+                'control': {
+                    'type': 'string',
+                    'description': 'A look_at_screen C id (wins over x/y)',
+                },
+                'button': {
+                    'type': 'string',
+                    'description': 'left, right, or middle (default left)',
+                    'enum': [
+                        'left',
+                        'right',
+                        'middle',
+                    ],
+                },
+                'double': {
+                    'type': 'boolean',
+                    'description': 'Double-click (default false)',
+                },
+            },
+        },
+    },
+    {
+        'name': 'type_text',
+        'description': (
+        'Type text into the focused field on the paired machine (clicks the '
+        'target first when a control id or x/y is given). Refuses password '
+        'fields outright: the agent probes the focused control and blocks when '
+        'it is one. Staged for approval like execute_bash. Runs ONLY on your '
+        'paired machine (agent routing must be on).'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'text': {
+                    'type': 'string',
+                    'description': 'The exact text to type',
+                },
+                'control': {
+                    'type': 'string',
+                    'description': 'A look_at_screen C id to focus first',
+                },
+                'x': {
+                    'type': 'integer',
+                },
+                'y': {
+                    'type': 'integer',
+                },
+                'submit': {
+                    'type': 'boolean',
+                    'description': 'Press Enter after typing (default false)',
+                },
+            },
+            'required': [
+                'text',
+            ],
+        },
+    },
+    {
+        'name': 'press_keys',
+        'description': (
+        'Press one keyboard chord on the paired machine (one non-modifier key '
+        "plus modifiers, e.g. 'ctrl+s'). Session lock/close chords (win+l, "
+        'alt+f4, ctrl+alt+del, ctrl+shift+esc) are refused outright. Staged for '
+        'approval like execute_bash. Runs ONLY on your paired machine (agent '
+        'routing must be on).'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'keys': {
+                    'type': 'string',
+                    'description': "The chord, e.g. 'ctrl+s'",
+                },
+                'control': {
+                    'type': 'string',
+                    'description': 'A look_at_screen C id to focus first',
+                },
+                'x': {
+                    'type': 'integer',
+                },
+                'y': {
+                    'type': 'integer',
+                },
+            },
+            'required': [
+                'keys',
+            ],
+        },
+    },
+    {
+        'name': 'scroll',
+        'description': (
+        'Scroll the wheel on the paired machine (up/down/left/ right, 1-10 '
+        'wheel multiples) at the cursor or at a given control id / x/y point '
+        '(hovered, never clicked). Staged for approval like execute_bash. Runs '
+        'ONLY on your paired machine (agent routing must be on).'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'direction': {
+                    'type': 'string',
+                    'description': 'up, down, left, or right',
+                    'enum': [
+                        'up',
+                        'down',
+                        'left',
+                        'right',
+                    ],
+                },
+                'amount': {
+                    'type': 'integer',
+                    'description': 'Wheel multiples, 1-10 (default 3)',
+                },
+                'x': {
+                    'type': 'integer',
+                },
+                'y': {
+                    'type': 'integer',
+                },
+                'control': {
+                    'type': 'string',
+                    'description': 'A look_at_screen C id to hover over',
+                },
+            },
+            'required': [
+                'direction',
+            ],
+        },
+    },
+    {
+        'name': 'drag',
+        'description': (
+        'Drag on the paired machine from one point to another: each end is a '
+        'look_at_screen control id or x/y on the 0-1000 grid. Staged for '
+        'approval like execute_bash. Runs ONLY on your paired machine (agent '
+        'routing must be on).'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'x1': {
+                    'type': 'integer',
+                },
+                'y1': {
+                    'type': 'integer',
+                },
+                'x2': {
+                    'type': 'integer',
+                },
+                'y2': {
+                    'type': 'integer',
+                },
+                'control_from': {
+                    'type': 'string',
+                    'description': 'A look_at_screen C id for the drag start',
+                },
+                'control_to': {
+                    'type': 'string',
+                    'description': 'A look_at_screen C id for the drag end',
+                },
+            },
+        },
+    },
+    {
+        'name': 'open_app',
+        'description': (
+        'Open an app or file on the paired machine by name (via the OS '
+        'launcher). Staged for approval like execute_bash. Runs ONLY on your '
+        'paired machine (agent routing must be on); nothing on the server '
+        'opens.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'name': {
+                    'type': 'string',
+                    'description': 'App or file name to open',
+                },
+                'args': {
+                    'type': 'string',
+                    'description': 'Optional launch arguments',
+                },
+            },
+            'required': [
+                'name',
+            ],
+        },
+    },
+    {
+        'name': 'open_url',
+        'description': (
+        'Open an http(s) URL in the default browser on the paired machine. '
+        'Staged for approval like execute_bash. Runs ONLY on your paired '
+        'machine (agent routing must be on) — the server never opens '
+        'caller-supplied URLs.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'url': {
+                    'type': 'string',
+                    'description': 'The http(s) URL to open',
+                },
+            },
+            'required': [
+                'url',
+            ],
+        },
+    },
+    {
         'name': 'confirm_action',
         'description': (
         'Approve or deny a pending execute_bash/write_file/edit_file '
@@ -765,6 +993,13 @@ GOLDEN_MCP_TOOL_NAMES = [
     'web_fetch',
     'web_research',
     'look_at_screen',
+    'click',
+    'type_text',
+    'press_keys',
+    'scroll',
+    'drag',
+    'open_app',
+    'open_url',
     'confirm_action',
     'expose_port',
     'tunnel_close',
@@ -1154,6 +1389,225 @@ GOLDEN_WEBCHAT_SCHEMAS = [
     {
         'type': 'function',
         'function': {
+            'name': 'click',
+            'description': (
+            'Click at a control id or x/y grid point on the paired machine. Staged '
+            'for approval; left/right/middle, optional double-click.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'x': {
+                        'type': 'integer',
+                    },
+                    'y': {
+                        'type': 'integer',
+                    },
+                    'control': {
+                        'type': 'string',
+                    },
+                    'button': {
+                        'type': 'string',
+                        'enum': [
+                            'left',
+                            'right',
+                            'middle',
+                        ],
+                    },
+                    'double': {
+                        'type': 'boolean',
+                    },
+                },
+                'required': [
+                ],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'type_text',
+            'description': (
+            'Type text on the paired machine (focuses the target first). Refuses '
+            'password fields. Staged for approval.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'text': {
+                        'type': 'string',
+                    },
+                    'control': {
+                        'type': 'string',
+                    },
+                    'x': {
+                        'type': 'integer',
+                    },
+                    'y': {
+                        'type': 'integer',
+                    },
+                    'submit': {
+                        'type': 'boolean',
+                    },
+                },
+                'required': [
+                    'text',
+                ],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'press_keys',
+            'description': (
+            'Press one keyboard chord on the paired machine. Lock/close chords '
+            'refused. Staged for approval.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'keys': {
+                        'type': 'string',
+                    },
+                    'control': {
+                        'type': 'string',
+                    },
+                    'x': {
+                        'type': 'integer',
+                    },
+                    'y': {
+                        'type': 'integer',
+                    },
+                },
+                'required': [
+                    'keys',
+                ],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'scroll',
+            'description': (
+            'Scroll the wheel on the paired machine (hovered point, never clicked). '
+            'Staged for approval.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'direction': {
+                        'type': 'string',
+                        'enum': [
+                            'up',
+                            'down',
+                            'left',
+                            'right',
+                        ],
+                    },
+                    'amount': {
+                        'type': 'integer',
+                    },
+                    'x': {
+                        'type': 'integer',
+                    },
+                    'y': {
+                        'type': 'integer',
+                    },
+                    'control': {
+                        'type': 'string',
+                    },
+                },
+                'required': [
+                    'direction',
+                ],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'drag',
+            'description': (
+            'Drag on the paired machine between two control ids or grid points. '
+            'Staged for approval.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'x1': {
+                        'type': 'integer',
+                    },
+                    'y1': {
+                        'type': 'integer',
+                    },
+                    'x2': {
+                        'type': 'integer',
+                    },
+                    'y2': {
+                        'type': 'integer',
+                    },
+                    'control_from': {
+                        'type': 'string',
+                    },
+                    'control_to': {
+                        'type': 'string',
+                    },
+                },
+                'required': [
+                ],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'open_app',
+            'description': (
+            'Open an app or file by name on the paired machine. Staged for '
+            'approval.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'name': {
+                        'type': 'string',
+                    },
+                    'args': {
+                        'type': 'string',
+                    },
+                },
+                'required': [
+                    'name',
+                ],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'open_url',
+            'description': (
+            "Open an http(s) URL in the paired machine's browser. Staged for "
+            'approval.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'url': {
+                        'type': 'string',
+                    },
+                },
+                'required': [
+                    'url',
+                ],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
             'name': 'memory_save',
             'description': (
             'Deliberately store a fact about the user or one of their '
@@ -1430,6 +1884,13 @@ GOLDEN_WEBCHAT_TOOL_NAMES = [
     'web_fetch',
     'web_research',
     'look_at_screen',
+    'click',
+    'type_text',
+    'press_keys',
+    'scroll',
+    'drag',
+    'open_app',
+    'open_url',
     'memory_save',
     'memory_search',
     'memory_list',
@@ -1477,6 +1938,13 @@ GOLDEN_MANUAL_TOOLS = [
     'web_fetch',
     'web_research',
     'look_at_screen',
+    'click',
+    'type_text',
+    'press_keys',
+    'scroll',
+    'drag',
+    'open_app',
+    'open_url',
     'memory_save',
     'memory_search',
     'memory_list',
@@ -1504,6 +1972,13 @@ GOLDEN_AUTO_TOOLS = [
     'web_fetch',
     'web_research',
     'look_at_screen',
+    'click',
+    'type_text',
+    'press_keys',
+    'scroll',
+    'drag',
+    'open_app',
+    'open_url',
     'memory_save',
     'memory_search',
     'memory_list',
@@ -1614,11 +2089,14 @@ def test_approval_required_set():
     from invincible.core import webchat_agent
 
     assert set(webchat_agent.MUTATING_TOOLS) == {
-        "execute_bash", "write_file", "edit_file"}
+        "execute_bash", "write_file", "edit_file",
+        "click", "type_text", "press_keys", "scroll", "drag",
+        "open_app", "open_url"}
     # Manual mode stages exactly the mutating tools; plan mode offers
     # only reads (+agent-only screenshot/web_fetch/look_at_screen,
     # +server-side web_research, +the todo step-list which mutates no
-    # machine); auto offers everything.
+    # machine; Pack 3 computer-use is agent-only but approval-gated,
+    # so it stays out of plan); auto offers everything.
     plan = {s["function"]["name"]
             for s in webchat_agent._TOOLS_BY_MODE["plan"]}
     assert "execute_bash" not in plan
@@ -1633,7 +2111,11 @@ def test_webchat_tool_sets():
     assert webchat_agent.DATA_READ_TOOLS == GOLDEN_DATA_READ_TOOLS
     assert webchat_agent.DATA_WRITE_TOOLS == GOLDEN_DATA_WRITE_TOOLS
     assert webchat_agent.AGENT_ONLY_TOOLS == ("screenshot", "web_fetch",
-                                                "look_at_screen")
+                                                "look_at_screen",
+                                                "click", "type_text",
+                                                "press_keys", "scroll",
+                                                "drag", "open_app",
+                                                "open_url")
     assert (webchat_agent.ALL_DATA_TOOLS
             == webchat_agent.DATA_READ_TOOLS + webchat_agent.DATA_WRITE_TOOLS)
 
@@ -1674,6 +2156,13 @@ POLICY_PROBES = {
     "web_fetch": ({"url": "https://example.com"}, "pass"),
     "web_research": ({"question": "What is X?"}, "pass"),
     "look_at_screen": ({}, "pass"),
+    "click": ({"x": 500, "y": 500}, "pass"),
+    "type_text": ({"text": "hi"}, "pass"),
+    "press_keys": ({"keys": "ctrl+s"}, "pass"),
+    "scroll": ({"direction": "down"}, "pass"),
+    "drag": ({"x1": 1, "y1": 1, "x2": 2, "y2": 2}, "pass"),
+    "open_app": ({"name": "notepad"}, "pass"),
+    "open_url": ({"url": "https://example.com"}, "pass"),
     "confirm_action": ({"token": "x", "approve": True}, "pass"),
     "expose_port": ({"port": 3000}, "pass"),
     "tunnel_close": ({"token": "x"}, "pass"),
@@ -1767,6 +2256,15 @@ RUNNER_SAFE_ARGS = {
     "screenshot": {"url": "not-a-url"},
     "web_fetch": {"url": "not-a-url"},
     "look_at_screen": {},
+    # Pack 3: refusal-triggering args only — blocks and error results
+    # prove the job type is HANDLED without ever moving real input.
+    "click": {"x": 9999, "y": 0},
+    "type_text": {"text": ""},
+    "press_keys": {"keys": "win+l"},
+    "scroll": {"direction": "sideways"},
+    "drag": {},
+    "open_app": {"name": ""},
+    "open_url": {"url": "not-a-url"},
 }
 
 
