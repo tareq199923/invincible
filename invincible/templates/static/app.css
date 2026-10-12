@@ -518,6 +518,25 @@ main.bare .panel { background: var(--surface); border: 1px solid var(--border); 
 .bubble .meta { display: block; margin-top: 0.4rem; font-size: 0.72rem; color: var(--faint); }
 .bubble.error { color: var(--err); }
 .bubble.pending { color: var(--faint); }
+/* B0.2 Baymax marker: original soft-white dot + name (no image assets,
+   no Disney likeness). Dot eyes use theme ink; ring uses theme accent. */
+.baymax-dot {
+  display: inline-block;
+  width: 1.05rem; height: 1.05rem;
+  margin-right: 0.45rem;
+  vertical-align: -0.18rem;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 42%, var(--ink) 0 0.14rem, transparent 0.15rem),
+    radial-gradient(circle at 65% 42%, var(--ink) 0 0.14rem, transparent 0.15rem),
+    #fff;
+  border: 2px solid var(--accent);
+}
+.baymax-name {
+  margin-right: 0.5rem;
+  font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--faint);
+}
 .tool-line { font-size: 0.82rem; color: var(--muted); }
 .tool-line.ok { color: var(--faint); }
 .tool-line.failed { color: var(--err); }

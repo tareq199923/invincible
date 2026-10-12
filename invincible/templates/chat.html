@@ -24,7 +24,7 @@
 
 <div id="chat-log">
 {% for t in history %}
-  <div class="bubble bubble-{{ t.role }}">{{ t.text }}<!--
+  <div class="bubble bubble-{{ t.role }}{% if t.role == "assistant" %} bubble-baymax{% endif %}">{% if t.role == "assistant" %}<span class="baymax-dot" aria-hidden="true"></span><span class="baymax-name">Baymax</span>{% endif %}{{ t.text }}<!--
    -->{% if t.role == "assistant" %}<span class="meta"></span>{% endif %}</div>
 {% else %}
   <p class="muted empty" id="chat-empty">No messages yet. Say hello below.</p>
@@ -130,12 +130,39 @@
       } catch (e) { /* storage unavailable: sticky default is fine */ }
     }
 
+    // Baymax marker: dot + name header for assistant bubbles. DOM-only
+    // (textContent for the name), never innerHTML — same XSS posture as
+    // bubble(). Re-applied after streaming clears or replaces content.
+    function ensureBaymaxMark(div) {
+      if (!div.classList.contains("bubble-baymax")) return;
+      if (div.querySelector(".baymax-dot")) return;
+      var dot = document.createElement("span");
+      dot.className = "baymax-dot";
+      dot.setAttribute("aria-hidden", "true");
+      var name = document.createElement("span");
+      name.className = "baymax-name";
+      name.textContent = "Baymax";
+      div.insertBefore(name, div.firstChild);
+      div.insertBefore(dot, div.firstChild);
+    }
+
     function bubble(role, text) {
       var empty = document.getElementById("chat-empty");
       if (empty) empty.remove();
       var div = document.createElement("div");
       div.className = "bubble bubble-" + role;
-      div.textContent = text;
+      if (role === "assistant") {
+        div.classList.add("bubble-baymax");
+        var dot = document.createElement("span");
+        dot.className = "baymax-dot";
+        dot.setAttribute("aria-hidden", "true");
+        var name = document.createElement("span");
+        name.className = "baymax-name";
+        name.textContent = "Baymax";
+        div.appendChild(dot);
+        div.appendChild(name);
+      }
+      div.appendChild(document.createTextNode(text));
       log.appendChild(div);
       div.scrollIntoView({block: "nearest"});
       return div;
@@ -371,7 +398,10 @@
               });
               if (name === "token" && payload && payload.text) {
                 if (!started) {
-                  pending.textContent = "";
+                  // Clear the "…" placeholder but keep Baymax marker spans.
+                  Array.prototype.slice.call(pending.childNodes).forEach(function (k) {
+                    if (k.nodeType === 3) pending.removeChild(k);
+                  });
                   pending.classList.remove("pending");
                   started = true;
                 }
@@ -417,6 +447,7 @@
                 }
                 if (payload.bubble_html) {
                   pending.innerHTML = payload.bubble_html;
+                  ensureBaymaxMark(pending);
                 }
                 var metaParts = [];
                 if (payload.provider || payload.model) {

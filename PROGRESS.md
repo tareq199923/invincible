@@ -5,7 +5,16 @@
 
 ## Current State
 
-- Last commit: `bce3a7c` (main) — Dockerfile base from ECR Public mirror.
+- Last commit: `f8fd273` (main) — F03 H6b tunneling committed.
+- F07 active (B0.1+B0.2): Baymax voice prefix (`BAYMAX_VOICE`) prepended to
+  all webchat modes in `core/webchat_agent.py` + `tests/test_baymax_prompt.py`
+  (6 tests). Original wording, no Disney script; existing pins intact.
+  B0.2 avatar: `bubble-baymax` + dot/name marker in `templates/chat.html`
+  (server history + JS `bubble()`/`ensureBaymaxMark`, streaming-safe) +
+  CSS in `templates/static/app.css`. DOM-only, no new innerHTML surface.
+- Ruff/pytest status: `ruff check .` clean; baymax 6 passed;
+  `test_webchat.py` + `test_webchat_agent.py` 58 passed;
+  `test_harness_router.py` 6 passed.
 - F04 done (`passing`): read-only fan-out reframed + built as
   `core/harness_fanout.py` (planner + parallel scout/librarian steps,
   main loop synthesizes; trigger ≥6 reads/≥2 planes, once per turn
@@ -25,8 +34,8 @@
 
 ## In Progress
 
-- None — F03 complete (`passing`). All of F01/F02/F03/F04/F06 passing,
-  zero `active`. Next: F05 or new work at next clock-in.
+- F07 Baymax B0.1+B0.2 done (`active`). Next: B0.3 simulated pointing
+  (screenshot preview in chat log), then tool packs (web_research first).
 
 ## Next Steps
 
