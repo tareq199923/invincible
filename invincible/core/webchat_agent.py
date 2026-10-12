@@ -453,6 +453,37 @@ def _preview(result: dict) -> str:
     return rendered
 
 
+# B0.3 simulated pointing: only screenshots ride the SSE event as an
+# image (allowlisted mime, byte-capped against the capture cap).
+# Everything else keeps the text-only preview shape.
+_SCREENSHOT_MIME_ALLOW = ("image/png",)
+
+
+def _screenshot_image(result: dict) -> dict | None:
+    """Pluck a display-safe image payload out of a screenshot result.
+
+    None for every other shape (errors, unavailable, wrong mime,
+    oversize, empty data): the caller then emits the text preview only.
+    """
+    if not isinstance(result, dict):
+        return None
+    if result.get("status") != "screenshot":
+        return None
+    mime = result.get("mime")
+    data = result.get("data_b64")
+    size = result.get("bytes")
+    if mime not in _SCREENSHOT_MIME_ALLOW:
+        return None
+    if not isinstance(data, str) or not data:
+        return None
+    if not isinstance(size, int) or size <= 0:
+        return None
+    if size > tool_executor.SCREENSHOT_MAX_BYTES:
+        return None
+    return {"mime": mime, "data_b64": data, "bytes": size,
+            "url": str(result.get("url", ""))}
+
+
 def _error_text(body: object) -> str:
     return upstream_error_detail(body) or "gateway error"
 
@@ -812,10 +843,21 @@ async def run_agent_turn(
                 }
                 turn.append(tool_message)
                 full.append(tool_message)
-                yield "tool_result", {
+                image = _screenshot_image(result_doc)
+                if image is not None:
+                    preview = (
+                        f"screenshot of {image['url'] or 'page'} "
+                        f"({image['bytes']} bytes) — image attached"
+                    )
+                else:
+                    preview = _preview(result_doc)
+                event = {
                     "call_id": call_id, "name": fname, "ok": ok,
-                    "preview": _preview(result_doc),
+                    "preview": preview,
                 }
+                if image is not None:
+                    event["image"] = image
+                yield "tool_result", event
             if (not delegated
                     and explore_reads >= EXPLORE_TRIGGER_CONSECUTIVE_READS):
                 # Hand the search spiral to the explore sub-agent (once

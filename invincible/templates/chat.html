@@ -433,6 +433,20 @@
                   out.className = "out";
                   out.textContent = payload.preview || payload.name || "done";
                   item.detail.appendChild(out);
+                  // B0.3 simulated pointing: screenshot rides along as a
+                  // data-URL image (mime pinned client-side too; DOM-built,
+                  // never innerHTML).
+                  if (payload.image && payload.image.mime === "image/png" &&
+                      payload.image.data_b64) {
+                    var shot = document.createElement("img");
+                    shot.className = "shot-preview";
+                    shot.alt = "Screenshot" +
+                      (payload.image.url ? " of " + payload.image.url : "");
+                    shot.loading = "lazy";
+                    shot.src = "data:image/png;base64," +
+                      payload.image.data_b64;
+                    item.detail.appendChild(shot);
+                  }
                   if (!payload.ok) toolGroup.failed += 1;
                   renderToolGroup(toolGroup);
                 }

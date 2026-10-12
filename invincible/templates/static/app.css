@@ -537,6 +537,15 @@ main.bare .panel { background: var(--surface); border: 1px solid var(--border); 
   font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em;
   color: var(--faint);
 }
+/* B0.3 simulated pointing: screenshot preview inside the collapsed tool
+   item detail. Bounded, lazy-loaded, theme-border. */
+.shot-preview {
+  display: block;
+  max-width: 100%;
+  margin-top: 0.4rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-soft);
+}
 .tool-line { font-size: 0.82rem; color: var(--muted); }
 .tool-line.ok { color: var(--faint); }
 .tool-line.failed { color: var(--err); }

@@ -42,10 +42,10 @@
     "verification": "python tools/audit_harness.py . && ruff check . && pytest tests/test_audit_harness.py"
   },
   {
-    "behavior": "Baymax voice prefix prepended to all webchat modes; original wording, existing pins intact",
+    "behavior": "Baymax voice prefix on all webchat modes plus avatar UI plus screenshot image on tool_result events; original wording, existing pins intact",
     "id": "F07",
-    "state": "active",
-    "title": "Baymax B0.1 personality pack (browser-first)",
-    "verification": "ruff check . && pytest tests/test_baymax_prompt.py tests/test_webchat_agent.py"
+    "state": "passing",
+    "title": "Baymax B0 browser-first (voice + avatar + screenshot preview)",
+    "verification": "ruff check . && pytest tests/test_baymax_prompt.py tests/test_baymax_screenshot.py tests/test_webchat_agent.py tests/test_webchat.py"
   }
 ]

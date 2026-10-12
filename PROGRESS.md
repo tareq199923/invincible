@@ -5,16 +5,16 @@
 
 ## Current State
 
-- Last commit: `f8fd273` (main) — F03 H6b tunneling committed.
-- F07 active (B0.1+B0.2): Baymax voice prefix (`BAYMAX_VOICE`) prepended to
-  all webchat modes in `core/webchat_agent.py` + `tests/test_baymax_prompt.py`
-  (6 tests). Original wording, no Disney script; existing pins intact.
-  B0.2 avatar: `bubble-baymax` + dot/name marker in `templates/chat.html`
-  (server history + JS `bubble()`/`ensureBaymaxMark`, streaming-safe) +
-  CSS in `templates/static/app.css`. DOM-only, no new innerHTML surface.
-- Ruff/pytest status: `ruff check .` clean; baymax 6 passed;
-  `test_webchat.py` + `test_webchat_agent.py` 58 passed;
-  `test_harness_router.py` 6 passed.
+- Last commit: `4599a6d` (main) — F07 Baymax B0.1+B0.2 committed.
+- F07 done (`passing`, uncommitted): Baymax B0 browser-first — B0.1 voice
+  prefix (`BAYMAX_VOICE` on all modes) + B0.2 avatar (`bubble-baymax`
+  dot/name, streaming-safe, DOM-only) + B0.3 simulated pointing
+  (`_screenshot_image` allowlist png/cap, `image` on `tool_result`
+  events, `shot-preview` in chat log). New: `tests/test_baymax_prompt.py`
+  (6 tests), `tests/test_baymax_screenshot.py` (6 tests).
+- Ruff/pytest status: `ruff check .` clean; baymax 12 passed;
+  `test_webchat.py` + `test_webchat_agent.py` 58 passed; goldens +
+  registry green (87 total with B0.3).
 - F04 done (`passing`): read-only fan-out reframed + built as
   `core/harness_fanout.py` (planner + parallel scout/librarian steps,
   main loop synthesizes; trigger ≥6 reads/≥2 planes, once per turn
@@ -34,8 +34,8 @@
 
 ## In Progress
 
-- F07 Baymax B0.1+B0.2 done (`active`). Next: B0.3 simulated pointing
-  (screenshot preview in chat log), then tool packs (web_research first).
+- None — F07 complete (`passing`). Zero `active`. Next: tool pack 1
+  (`web_research`) or F05 vector seam at next clock-in.
 
 ## Next Steps
 
