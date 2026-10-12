@@ -103,6 +103,13 @@ jobs:
       - name: Lint with Ruff
         run: ruff check .
 
+      # Notebook gate: the agent-harness files (AGENTS.md, PROGRESS.md,
+      # feature_list.json) must stay green. Stdlib only, no DB, instant —
+      # so it sits here, before the suite, and fails the job with the fix
+      # printed instead of letting notebook rot through silently.
+      - name: Harness audit
+        run: python tools/audit_harness.py .
+
       # Storage fixtures (pg_engine/client) hard-fail — they never skip —
       # so a red job here means the suite genuinely could not reach or use
       # Postgres. Scratch-database tests exercise CREATE/DROP DATABASE on

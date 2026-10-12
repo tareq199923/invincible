@@ -15,7 +15,8 @@
 
 ## In Progress
 
-- None — F06 Step B complete (`passing`). All of F01/F02/F06 passing,
+- None — F06 Step B complete (`passing`) + CI gate landed (harness audit
+  runs in `tests.yml` between lint and pytest). All of F01/F02/F06 passing,
   zero `active`. Next: pick F03–F05 or new work at next clock-in.
 
 ## Next Steps
