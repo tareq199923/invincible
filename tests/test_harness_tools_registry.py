@@ -133,12 +133,15 @@ def test_needs_approval_tools_are_policy_gated():
     gated = {
         tool.name for tool in harness_tools.TOOLS if tool.needs_approval
     }
-    assert gated == {"execute_bash", "write_file", "edit_file"}
+    assert gated == {"execute_bash", "write_file", "edit_file",
+                     "expose_port"}
     assert _outcome("execute_bash", {"command": "rm -rf /"}) == "blocked"
     repo_env = os.path.join(tool_executor._REPO_ROOT, ".env")
     assert _outcome("write_file", {"path": repo_env}) == "blocked"
     assert _outcome("edit_file", {"path": repo_env}) == "blocked"
+    assert _outcome("expose_port", {"port": 22}) == "blocked"
     assert _outcome("execute_bash", {"command": "echo hi"}) == "pass"
+    assert _outcome("expose_port", {"port": 3000}) == "pass"
 
 
 def test_read_gated_set_matches_runner_reads():
@@ -163,13 +166,14 @@ def test_read_gated_set_matches_runner_reads():
 
 def test_policy_passthrough_set_is_exact():
     gated = {
-        "execute_bash", "write_file", "edit_file",
+        "execute_bash", "write_file", "edit_file", "expose_port",
         "read_file", "code_search", "list_dir", "find_files",
         "git_status", "git_diff", "git_log",
     }
     expected_passthrough = _names(harness_tools.TOOLS) - gated
     assert expected_passthrough == {
         "process_list", "screenshot", "web_fetch", "confirm_action",
+        "tunnel_close",
         "task_state_set", "task_state_get", "checkpoint_create",
         "todo",
         "memory_save", "memory_search", "memory_list",
@@ -242,11 +246,12 @@ async def test_mcp_dispatch_covers_every_mcp_tool():
     dispatched = [
         tool.name for tool in harness_tools.TOOLS if tool.mcp
     ]
-    assert len(dispatched) == 23
+    assert len(dispatched) == 25
     hostile = {
         "execute_bash": {"command": "rm -rf /"},
         "write_file": {"path": _OUTSIDE},
         "edit_file": {"path": _OUTSIDE},
+        "expose_port": {"port": 22},
         "read_file": {"path": _OUTSIDE},
         "code_search": {"pattern": "x", "path": _OUTSIDE},
         "list_dir": {"path": _OUTSIDE},

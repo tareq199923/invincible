@@ -452,6 +452,53 @@ TOOLS: tuple[HarnessTool, ...] = (
         mcp=True,
     ),
     HarnessTool(
+        name="expose_port",
+        description_mcp=(
+            "Expose one localhost:PORT dev server on your paired machine "
+            "through a public URL served by this gateway. Staged for "
+            "approval like execute_bash: the call returns a token, and "
+            "nothing is exposed until confirm_action approves it with "
+            "that token. On confirm the gateway asks your paired agent "
+            "(its WebSocket must be connected) to dial localhost:PORT "
+            "and returns the public /t/{token}/ URL (valid 2 hours, "
+            "256KB/s, 100MB total, localhost only). Infrastructure ports "
+            "(22, 3389, databases, SMTP) are refused outright."
+        ),
+        description_webchat=(
+            "Expose one localhost dev-server port on the paired machine "
+            "through a public gateway URL. Staged for approval; "
+            "localhost only, infrastructure ports refused."
+        ),
+        properties={"port": _int(
+            description="The localhost TCP port to expose (1-65535, "
+                        "no infrastructure ports).")},
+        required=("port",),
+        read_only=False,
+        needs_approval=True,
+        mcp=True,
+        server_executable=False,
+    ),
+    HarnessTool(
+        name="tunnel_close",
+        description_mcp=(
+            "Close a tunnel opened by expose_port. Single call, no "
+            "confirmation step (closing is the safe direction); "
+            "owner-bound and idempotent — unknown, expired, or "
+            "another-user tokens answer identically."
+        ),
+        description_webchat=(
+            "Close one of your open tunnels. Safe direction, no "
+            "confirmation needed."
+        ),
+        properties={"token": _str(
+            description="The tunnel capability token from the "
+                        "expose_port confirm result URL.")},
+        required=("token",),
+        read_only=False,
+        needs_approval=False,
+        mcp=True,
+    ),
+    HarnessTool(
         name="task_state_set",
         description_mcp=(
             "Persist canonical task progress into Invincible's shared "

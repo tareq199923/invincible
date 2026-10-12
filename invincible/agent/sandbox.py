@@ -37,6 +37,7 @@ elsewhere; this is the third wall only.
 import os
 import re
 
+from invincible.core.harness_tunnel import check_tunnel_port as _check_port
 from invincible.core.tool_executor import (
     HINT_BLOCKED_OUTSIDE_ROOTS,
     HINT_BLOCKED_PATH,
@@ -119,3 +120,12 @@ def check_agent_read(path: str) -> None:
 
 def check_agent_write(path: str) -> None:
     check_agent_path(path, "write")
+
+
+def check_tunnel_port(port: int | str) -> int:
+    """Wall 2 for tunnels (F03): re-run the SAME port policy the server
+    ran pre-stage (``core/harness_tunnel.check_tunnel_port`` — the single
+    source of truth, aliased here so the agent's walls read in one
+    place). Raises the shared ``ToolBlocked``; the runner maps a block
+    into the ``tunnel_open_ack`` refusal, never a silent drop."""
+    return _check_port(port)

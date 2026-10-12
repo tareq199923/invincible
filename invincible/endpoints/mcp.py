@@ -38,6 +38,11 @@ from invincible.core.accounts import AccountError, ProjectService
 from invincible.core.continuity import ContinuityConflictError
 from invincible.core.harness_events import HarnessEventType
 from invincible.core.harness_policy import before_tool_call
+from invincible.core.harness_tunnel import (
+    TUNNEL_OPEN_TIMEOUT_SECONDS,
+    TunnelCapExceeded,
+    check_tunnel_port,
+)
 from invincible.core.identity import resolve_project_by_name
 from invincible.core.memory import (
     MAX_CONTENT_CHARS,
@@ -195,6 +200,11 @@ async def _agent_executor(request: Request, subject: int | None):
         return None
 
     async def _execute(action_type: str, args: dict) -> dict:
+        if action_type == "expose_port":
+            # F03: tunnel open is not a job dispatch — the agent must ack
+            # over its WS (the data plane needs a live socket; poll-only
+            # agents cannot carry streams).
+            return await _open_tunnel(request, subject, args)
         if subject is None or not registry.online(subject):
             return {
                 "status": "agent_offline",
@@ -209,6 +219,93 @@ async def _agent_executor(request: Request, subject: int | None):
                                        timeout=timeout)
 
     return _execute
+
+
+async def _open_tunnel(request: Request, subject: int | None,
+                       args: dict) -> dict:
+    """Confirm-time tunnel open (F03): mint the capability token, ask the
+    caller's agent to dial localhost:PORT over its WS, await the ack.
+
+    Returns ``tunnel_ready`` + the public URL on success; distinct
+    ``tunnel_unavailable`` (never ``agent_offline``) when routing is off
+    or no WS is attached — there is no server-host fallback for tunnels.
+    Tokens are never logged; audit rows carry metadata only.
+    """
+    if subject is None:
+        return {
+            "status": "tunnel_unavailable",
+            "message": "No owning subject for this tunnel.",
+        }
+    if not settings.agent_routing():
+        return {
+            "status": "tunnel_unavailable",
+            "message": (
+                "Agent routing is off on this server "
+                "(INVINCIBLE_AGENT_ROUTING is unset), so tunnels cannot "
+                "open: confirmed work would have nowhere to go. Set "
+                "INVINCIBLE_AGENT_ROUTING=1 and connect an agent, then "
+                "confirm again."
+            ),
+        }
+    agent_registry = getattr(request.app.state, "agent_registry", None)
+    tunnels = getattr(request.app.state, "tunnel_registry", None)
+    if agent_registry is None or tunnels is None:
+        return {
+            "status": "tunnel_unavailable",
+            "message": "Tunneling is not initialized on this server.",
+        }
+    if not agent_registry.ws_connected(subject):
+        return {
+            "status": "tunnel_unavailable",
+            "message": (
+                "No agent WebSocket is connected for this account. "
+                "Tunnels multiplex bytes over WS /agent/ws — a "
+                "poll-only agent cannot carry streams. Connect with "
+                "WS enabled, then confirm again."
+            ),
+        }
+    try:
+        port = check_tunnel_port((args or {}).get("port", ""))
+    except tool_executor.ToolBlocked as e:
+        return {"status": "tunnel_blocked",
+                "message": f"Blocked: {e.reason}"}
+    try:
+        token = tunnels.open(subject, port)
+    except TunnelCapExceeded as e:
+        return {"status": "tunnel_cap", "message": str(e)}
+    if not await agent_registry.push_ws(
+        subject, {"type": "tunnel_open", "tunnel_id": token, "port": port}
+    ):
+        tunnels.close(token, subject)
+        return {
+            "status": "tunnel_unavailable",
+            "message": "The agent disconnected before the tunnel opened.",
+        }
+    ack = await tunnels.await_ack(token, TUNNEL_OPEN_TIMEOUT_SECONDS)
+    if ack is None:
+        # await_ack already dropped the tunnel on timeout.
+        return {
+            "status": "agent_timeout",
+            "message": (
+                "The agent did not acknowledge the tunnel in time. "
+                "Nothing was exposed; confirm again to retry."
+            ),
+        }
+    if not ack.get("ok"):
+        tunnels.close(token, subject)
+        return {
+            "status": "tunnel_blocked",
+            "message": (
+                ack.get("error") or "The agent refused to open the tunnel."
+            ),
+        }
+    base = str(request.base_url).rstrip("/")
+    return {
+        "status": "tunnel_ready",
+        "url": f"{base}/t/{token}/",
+        "port": port,
+        "expires_in_seconds": settings.tunnel_ttl_seconds(),
+    }
 
 
 async def _mcp_project_id(request: Request, principal: Principal, args: dict):
@@ -368,6 +465,57 @@ async def _dispatch(method, rpc_id, params, request,
                     owner_subject=owner_subject,
                 )
                 return _result(rpc_id, _tool_content(json.dumps(result)))
+
+            if name == "expose_port":
+                # F03: port-rule gate before staging (same denylist-first
+                # posture as execute_bash; raises ToolBlocked with no
+                # token issued — byte-identical wire shape via the outer
+                # handler). Staged + confirmed through PendingActionStore
+                # with same-subject binding; bytes only flow after
+                # confirm (see _open_tunnel).
+                before_tool_call(
+                    "expose_port", {"port": args.get("port", "")})
+                port = check_tunnel_port(args.get("port", ""))
+                token = pending_actions.put(
+                    "expose_port", {"port": port},
+                    owner_subject=owner_subject,
+                )
+                print(f"[MCP] Pending {token}: expose_port {port}")
+                return _result(rpc_id, _tool_content(json.dumps({
+                    "status": "pending_confirmation",
+                    "token": token,
+                    "action": "expose_port",
+                    "port": port,
+                    "message": (
+                        "Call confirm_action with this token "
+                        "(approve=true/false) to proceed."
+                    ),
+                })))
+
+            if name == "tunnel_close":
+                # F03: safe direction — single call, no staging. Owner-
+                # bound and idempotent: unknown/expired/foreign tokens
+                # answer identically (never leaks existence).
+                tunnels = getattr(
+                    request.app.state, "tunnel_registry", None)
+                if tunnels is None:
+                    return _result(rpc_id, _tool_content(
+                        "Tunneling is not initialized on this server.",
+                        is_error=True,
+                    ))
+                closed = tunnels.close(
+                    args.get("token", ""), owner_subject)
+                await _audit_action(
+                    request, name,
+                    "closed" if closed else "not_found",
+                    subject=owner_subject)
+                if not closed:
+                    return _result(rpc_id, _tool_content(
+                        "Unknown or expired tunnel token.", is_error=True
+                    ))
+                return _result(rpc_id, _tool_content(json.dumps({
+                    "status": "closed",
+                })))
 
             if name == "code_search":
                 # H6a: read-only like read_file — sandbox gate, no
@@ -655,12 +803,28 @@ async def _dispatch(method, rpc_id, params, request,
                 # Only a real JSON boolean can approve - anything else
                 # (absent, string, number) is treated as deny.
                 approve = args.get("approve") is True
+                executor = await _agent_executor(request, owner_subject)
+                if executor is None and pending_actions.peek_type(
+                        args.get("token", ""),
+                        requester_subject=owner_subject) == "expose_port":
+                    # F03: tunnel confirms need their executor even with
+                    # routing off — _open_tunnel refuses with
+                    # tunnel_unavailable itself (never server-host
+                    # fallback). Other types keep executor=None so
+                    # execute_bash/write_file/edit_file still run
+                    # locally, byte-identical to before.
+                    async def _tunnel_only(action_type: str,
+                                           action_args: dict) -> dict:
+                        return await _open_tunnel(
+                            request, owner_subject, action_args)
+
+                    executor = _tunnel_only
                 result = await tool_executor.confirm_action(
                     pending_actions, args.get("token", ""), approve,
                     requester_subject=owner_subject,
                     # Phase 10: with routing on, confirmed work travels
                     # to the caller's agent instead of running here.
-                    executor=await _agent_executor(request, owner_subject),
+                    executor=executor,
                 )
                 status = result.get("status")
                 await _audit_action(request, name, status,
@@ -684,7 +848,9 @@ async def _dispatch(method, rpc_id, params, request,
                     ))
                 if status == "declined":
                     return _result(rpc_id, _tool_content("Declined.", is_error=True))
-                if status in ("agent_offline", "agent_timeout"):
+                if status in ("agent_offline", "agent_timeout",
+                              "tunnel_unavailable", "tunnel_cap",
+                              "tunnel_blocked"):
                     return _result(rpc_id, _tool_content(
                         result.get("message", status), is_error=True
                     ))

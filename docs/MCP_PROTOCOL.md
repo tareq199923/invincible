@@ -289,6 +289,24 @@ Phase 15b continuity tools, the memory tools, and the project tools):
         }
       },
       {
+        "name": "expose_port",
+        "description": "Expose one localhost:PORT dev server on the paired machine through a public /t/{token}/ URL; staged + confirmed like execute_bash. ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {"port": {"type": "integer"}},
+          "required": ["port"]
+        }
+      },
+      {
+        "name": "tunnel_close",
+        "description": "Close a tunnel opened by expose_port; single call, owner-bound, idempotent. ...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {"token": {"type": "string"}},
+          "required": ["token"]
+        }
+      },
+      {
         "name": "code_search",
         "description": "Search files for a text pattern under a directory. ...",
         "inputSchema": {
@@ -666,7 +684,7 @@ no protocol version change was needed.
 "arguments": {"token": "bXfQ...9aZt", "approve": true}
 ```
 
-Resolves a pending `execute_bash`/`write_file`/`edit_file` request. `token` must be
+Resolves a pending `execute_bash`/`write_file`/`edit_file`/`expose_port` request. `token` must be
 the exact token from that request; `approve` must be a real JSON boolean
 (a string like `"true"` is treated as deny).
 
@@ -681,6 +699,31 @@ the exact token from that request; `approve` must be a real JSON boolean
 Tokens are valid for **10 minutes** and are **single-use**: the first
 `confirm_action` that resolves a token consumes it, so replaying the same
 token can never execute the action twice.
+
+#### `expose_port` / `tunnel_close`
+
+```json
+"arguments": {"port": 3000}
+```
+
+Exposes one `localhost:PORT` dev server on the paired machine through a
+public `/t/{token}/` URL. Staged + confirmed like `execute_bash`:
+denied ports (22, 3389, databases, SMTP, …) are `Blocked:` with no token;
+otherwise the call returns `pending_confirmation`, and `confirm_action`
+asks the paired agent (its WebSocket must be connected) to dial
+localhost before returning:
+
+```json
+{"status": "tunnel_ready", "url": "https://<host>/t/<token>/",
+ "port": 3000, "expires_in_seconds": 7200}
+```
+
+URLs stay valid 2 hours within 256 KB/s and 100 MB lifetime caps, then
+404 like any unknown token. Confirming with agent routing off refuses
+with `tunnel_unavailable` (never a server-side fallback). `tunnel_close`
+closes one tunnel: single call, no confirmation step, owner-bound and
+idempotent — unknown/expired/foreign tokens answer `Unknown or expired
+tunnel token.` Threat model: [SECURITY.md §11](SECURITY.md).
 
 #### `code_search`
 

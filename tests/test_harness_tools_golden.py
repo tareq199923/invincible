@@ -375,6 +375,59 @@ GOLDEN_MCP_TOOLS = [
         },
     },
     {
+        'name': 'expose_port',
+        'description': (
+        'Expose one localhost:PORT dev server on your paired machine '
+        'through a public URL served by this gateway. Staged for '
+        'approval like execute_bash: the call returns a token, and '
+        'nothing is exposed until confirm_action approves it with that '
+        'token. On confirm the gateway asks your paired agent (its '
+        'WebSocket must be connected) to dial localhost:PORT and '
+        'returns the public /t/{token}/ URL (valid 2 hours, 256KB/s, '
+        '100MB total, localhost only). Infrastructure ports (22, 3389, '
+        'databases, SMTP) are refused outright.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'port': {
+                    'type': 'integer',
+                    'description': (
+                    'The localhost TCP port to expose (1-65535, no '
+                    'infrastructure ports).'
+                    ),
+                },
+            },
+            'required': [
+                'port',
+            ],
+        },
+    },
+    {
+        'name': 'tunnel_close',
+        'description': (
+        'Close a tunnel opened by expose_port. Single call, no '
+        'confirmation step (closing is the safe direction); '
+        'owner-bound and idempotent — unknown, expired, or '
+        'another-user tokens answer identically.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'token': {
+                    'type': 'string',
+                    'description': (
+                    'The tunnel capability token from the expose_port '
+                    'confirm result URL.'
+                    ),
+                },
+            },
+            'required': [
+                'token',
+            ],
+        },
+    },
+    {
         'name': 'task_state_set',
         'description': (
         "Persist canonical task progress into Invincible's shared "
@@ -662,6 +715,8 @@ GOLDEN_MCP_TOOL_NAMES = [
     'screenshot',
     'web_fetch',
     'confirm_action',
+    'expose_port',
+    'tunnel_close',
     'task_state_set',
     'task_state_get',
     'checkpoint_create',
@@ -1515,6 +1570,8 @@ POLICY_PROBES = {
     "screenshot": ({"url": "https://example.com"}, "pass"),
     "web_fetch": ({"url": "https://example.com"}, "pass"),
     "confirm_action": ({"token": "x", "approve": True}, "pass"),
+    "expose_port": ({"port": 3000}, "pass"),
+    "tunnel_close": ({"token": "x"}, "pass"),
     "task_state_set": ({"payload": "{}"}, "pass"),
     "task_state_get": ({}, "pass"),
     "checkpoint_create": ({}, "pass"),
@@ -1563,6 +1620,8 @@ def test_policy_fail_closed_examples():
     for tool, args in (
         ("execute_bash", {"command": "rm -rf /"}),
         ("write_file", {"path": blocked_write}),
+        ("expose_port", {"port": 22}),
+        ("expose_port", {"port": 5432}),
     ):
         try:
             before_tool_call(tool, args)

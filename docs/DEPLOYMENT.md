@@ -120,7 +120,8 @@ These live in **process memory**, by design:
 
 - provider failure counters and cooldowns,
 - staged MCP approvals — unless `INVINCIBLE_PERSIST_PENDING_ACTIONS` is set,
-- the agent registry (which machine belongs to which user).
+- the agent registry (which machine belongs to which user),
+- the tunnel registry (live `expose_port` tunnels + their byte caps).
 
 So: **no horizontal autoscaling, no multiple replicas.** Run one instance
 (min replicas 1) and let clients retry across restarts — the agent's
@@ -136,6 +137,19 @@ middlebox kills quiet WS connections sooner than the heartbeat, lower the
 interval — and know the failure mode is graceful anyway: the agent falls
 back to long-polling, and dispatched jobs route over whichever transport
 is live (WS-first, never both — a confirmed job executes exactly once).
+
+**Tunnel egress (`/t/{token}/...`).** Tunneled streams are long-lived
+streaming responses (idle kill is 60s per stream; tunnels live up to the
+2 h TTL). The reverse proxy in front of the gateway MUST NOT buffer
+`/t/` responses or cap them below the tunnel byte caps, and SHOULD
+minimize access-log retention for `/t/` paths (capability tokens live in
+the URL). A restart hard-closes every live tunnel (in-memory registry —
+same trade-off as the agent registry above): public clients see their
+streams end and retry end-to-end, agents re-hello clean. `expose_port`
+confirm refuses with `tunnel_unavailable` unless `INVINCIBLE_AGENT_ROUTING=1`
+*and* the caller's agent holds a live WS — poll-only agents cannot carry
+streams, so a deployment that breaks WS (see above) also breaks tunnels,
+loudly rather than silently.
 
 ---
 
@@ -199,6 +213,10 @@ this is the operational version.
 - [ ] `code_search` + `process_list` round-trip through `/mcp` against
       the paired machine; `screenshot` answers `unavailable` until an
       agent with Chrome is connected (agent-only by design).
+- [ ] `expose_port` round-trip: stage + confirm a dev-server port, fetch
+      the public `/t/{token}/` URL from outside, then `tunnel_close` it
+      and confirm the URL 404s. Verifies the routing flag, WS streaming,
+      and the proxy's `/t/` no-buffer behavior (§5) in one pass.
 - [ ] `invincible doctor` against the production DSN: secrets present,
       schema at head, DSN masked.
 - [ ] Delete the throwaway account's data if you do not want to keep it.

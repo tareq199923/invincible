@@ -20,6 +20,7 @@ from invincible.core.db import (
     warn_if_schema_stale,
 )
 from invincible.core.harness_bus import HarnessBus
+from invincible.core.harness_tunnel import TunnelRegistry
 from invincible.core.identity import ApiKeyStore, AuditLog
 from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore
@@ -45,6 +46,7 @@ from invincible.endpoints.oauth import router as oauth_router
 from invincible.endpoints.openai_compat import router as openai_router
 from invincible.endpoints.responses_compat import router as responses_router
 from invincible.endpoints.template_filters import register_template_filters
+from invincible.endpoints.tunnel import router as tunnel_router
 
 # R5 (rehearsal): bare load_dotenv() resolves the .env by walking up from
 # THIS FILE's directory, not the working directory - so on a source/editable
@@ -140,6 +142,12 @@ async def lifespan(app: FastAPI):
     # migration; INVINCIBLE_AGENT_ROUTING decides whether the mcp
     # endpoint ever dispatches to it.
     app.state.agent_registry = AgentRegistry()
+    # F03: tunnel + stream table. In-memory on purpose (same trade-off
+    # as the agent registry above) — a restart hard-closes live tunnels
+    # and every capability token becomes unresolvable. No engine, no
+    # migration; INVINCIBLE_AGENT_ROUTING decides whether confirm ever
+    # opens one (refused with tunnel_unavailable when off).
+    app.state.tunnel_registry = TunnelRegistry()
     # H0: harness event bus. In-memory on purpose (same trade-off as the
     # default PendingActionStore and AgentRegistry) - restart drops history,
     # subscribers re-attach. H5: workflow-scoped events additionally persist
@@ -237,6 +245,11 @@ templates = Jinja2Templates(
     directory=str(Path(__file__).resolve().parent / "templates"))
 register_template_filters(templates)
 app.include_router(graph_router)
+# F03 public tunnel egress (/t/{token}/...). Registered LAST on purpose:
+# the /{path:path} tail must never shadow a real route (defense in depth
+# alongside the /t/ prefix). No auth dependency — the capability token in
+# the path IS the auth (indistinguishable 404s for unknown/expired).
+app.include_router(tunnel_router)
 
 @app.head("/mcp")
 async def mcp_head():

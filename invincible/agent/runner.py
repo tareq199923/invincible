@@ -34,6 +34,7 @@ rejected/duplicate results (job already timed out, not ours) are the
 server's business - the agent just logs and moves on.
 """
 import asyncio
+import contextlib
 import json
 import os
 import platform
@@ -45,9 +46,49 @@ import httpx
 
 from invincible.agent import sandbox
 from invincible.core import harness_tools, tool_executor
+from invincible.core.harness_tunnel import (
+    MAX_FRAME_BYTES,
+    STREAM_IDLE_SECONDS,
+    FrameError,
+    decode_data_frame,
+    encode_data_frame,
+    validate_request_head,
+)
 from invincible.core.settings import AGENT_POLL_HOLD_SECONDS, settings
 
 POLL_BACKOFF_SECONDS = 2.0
+
+# Agent-side tunnel state (F03). _TUNNELS maps tunnel_id -> port for
+# tunnels THIS agent acked (bytes for other machines' tunnels never
+# arrive — the server pins sends to the acking socket — and stale ids
+# are ignored). _STREAMS maps (tunnel_id, stream_id) -> pump task;
+# _INBOUND maps the same key -> bounded queue of request-body chunks.
+_TUNNELS: dict[str, int] = {}
+_STREAMS: dict[tuple[str, str], asyncio.Task] = {}
+_INBOUND: dict[tuple[str, str], asyncio.Queue] = {}
+_STREAM_SEQ: dict[tuple[str, str], int] = {}
+
+_TUNNEL_INBOUND = frozenset({
+    "tunnel_open",
+    "tunnel_request_head",
+    "tunnel_data",
+    "tunnel_half_close",
+    "tunnel_close",
+})
+
+_TUNNEL_ACK_ERROR_MAX = 200
+
+
+def _silence(task: asyncio.Task) -> None:
+    """Swallow a background task's exception on completion (stream pumps
+    report failure by closing the stream, never by raising into the WS
+    loop — an unretrieved exception would log noise per stream)."""
+    def _cb(done: asyncio.Task) -> None:
+        if not done.cancelled():
+            with contextlib.suppress(Exception):
+                done.exception()
+
+    task.add_done_callback(_cb)
 
 
 def machine_id() -> str:
@@ -118,24 +159,40 @@ async def run_agent_ws(
     stop = stop or asyncio.Event()
     url = ws_url_for(base_url) + f"?api_key={api_key}"
     heartbeat = settings.harness_ws_heartbeat_seconds()
+
+    async def _one_ws_message(ws) -> None:
+        raw = await asyncio.wait_for(ws.recv(), timeout=heartbeat * 3)
+        try:
+            message = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return
+        if not isinstance(message, dict):
+            return
+        if message.get("type") in _TUNNEL_INBOUND:
+            # F03: tunnel frames ride the same relay; jobs and byte
+            # streams interleave by type key (neither carries the
+            # other's keys, so neither parser can misroute).
+            await _handle_tunnel_frame(ws, message)
+            return
+        job = (message.get("job")
+               if message.get("type") == "job" else None)
+        if job is None:
+            return
+        print(f"[agent] job {job.get('job_id')}: {job.get('type')} (ws)")
+        result = await execute_job(job)
+        await ws.send(json.dumps(
+            {"job_id": job["job_id"], "result": result}))
+
     async with websockets.connect(
         url, ping_interval=heartbeat, ping_timeout=heartbeat,
     ) as ws:
         await ws.send(json.dumps(hello_frame()))
-        while not stop.is_set():
-            raw = await asyncio.wait_for(ws.recv(), timeout=heartbeat * 3)
-            try:
-                message = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            job = (message.get("job")
-                   if message.get("type") == "job" else None)
-            if job is None:
-                continue
-            print(f"[agent] job {job.get('job_id')}: {job.get('type')} (ws)")
-            result = await execute_job(job)
-            await ws.send(json.dumps(
-                {"job_id": job["job_id"], "result": result}))
+        try:
+            while not stop.is_set():
+                await _one_ws_message(ws)
+        finally:
+            # C2, agent side: every TCP dial dies with the relay.
+            await _teardown_tunnels(ws)
 
 
 async def execute_job(job: dict) -> dict:
@@ -256,6 +313,322 @@ async def execute_job(job: dict) -> dict:
         }
     except tool_executor.ToolBlocked as e:
         return {"status": "blocked", "reason": e.reason}
+
+
+async def _tunnel_send(ws, frame: dict) -> bool:
+    """Best-effort tunnel frame send (False when the relay is gone —
+    the caller kills the stream; the WS loop owns reconnect)."""
+    try:
+        await ws.send(json.dumps(frame))
+    except Exception:
+        return False
+    return True
+
+
+async def _tunnel_close_stream(ws, tunnel_id: str, stream_id: str) -> None:
+    """Idempotent stream teardown: cancel the pump, drop bookkeeping,
+    tell the server (its unknown-stream handling ignores dupes)."""
+    key = (tunnel_id, stream_id)
+    task = _STREAMS.pop(key, None)
+    if task is not None:
+        task.cancel()
+    _INBOUND.pop(key, None)
+    _STREAM_SEQ.pop(key, None)
+    await _tunnel_send(ws, {
+        "type": "tunnel_close",
+        "tunnel_id": tunnel_id,
+        "stream_id": stream_id,
+    })
+
+
+async def _teardown_tunnels(ws) -> None:
+    """C2, agent side: on WS exit close every TCP dial and forget every
+    tunnel. The server hard-closes its side independently; both ends
+    converge on closed with no resume attempt."""
+    for task in list(_STREAMS.values()):
+        task.cancel()
+    _STREAMS.clear()
+    _INBOUND.clear()
+    _STREAM_SEQ.clear()
+    _TUNNELS.clear()
+    if ws is not None:
+        await _tunnel_send(ws, {"type": "tunnel_close", "tunnel_id": ""})
+
+
+async def _handle_tunnel_open(ws, message: dict) -> None:
+    """Wall 2 + liveness probe: re-check the port, verify something
+    actually listens on 127.0.0.1:port, then claim the tunnel and ack.
+    A refusal is the ack's result, never an exception."""
+    tunnel_id = str(message.get("tunnel_id", ""))
+    if not tunnel_id:
+        return
+    try:
+        port = sandbox.check_tunnel_port(message.get("port", ""))
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection("127.0.0.1", port), timeout=10)
+    except Exception as e:
+        await _tunnel_send(ws, {
+            "type": "tunnel_open_ack",
+            "tunnel_id": tunnel_id,
+            "ok": False,
+            "error": f"{e.__class__.__name__}: {e}"[:_TUNNEL_ACK_ERROR_MAX],
+        })
+        return
+    try:
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+    except Exception:
+        pass
+    _TUNNELS[tunnel_id] = port
+    await _tunnel_send(ws, {
+        "type": "tunnel_open_ack",
+        "tunnel_id": tunnel_id,
+        "ok": True,
+    })
+
+
+def _parse_response_head(raw: bytes) -> tuple[int, dict, bytes]:
+    """Split one origin response into (status, headers, body_prefix).
+
+    Raises on any shape violation — the caller kills the stream, fail
+    closed. Header names/values decode latin-1 (HTTP field octets);
+    count capped (100) like the server-side validator.
+    """
+    head, _, rest = raw.partition(b"\r\n\r\n")
+    lines = head.split(b"\r\n")
+    if not lines or not lines[0]:
+        raise ValueError("empty response head")
+    parts = lines[0].decode("latin-1").split(" ", 2)
+    status = int(parts[1])
+    if not 100 <= status <= 599:
+        raise ValueError(f"bad status {parts[1]!r}")
+    headers: dict[str, str] = {}
+    for line in lines[1:101]:
+        name, _, value = line.decode("latin-1").partition(":")
+        if name.strip():
+            headers[name.strip()] = value.strip()
+    return status, headers, rest
+
+
+async def _serve_stream(ws, tunnel_id: str, stream_id: str,
+                        method: str, path: str, headers: dict) -> None:
+    """One tunneled HTTP exchange: dial localhost, forward the request,
+    de-chunk + relay the response. Any violation kills the stream (the
+    server 502s that stream); the tunnel and relay stay up."""
+    key = (tunnel_id, stream_id)
+    port = _TUNNELS.get(tunnel_id)
+    if port is None:
+        return
+    send_headers = {
+        k: v for k, v in headers.items()
+        if k.lower() not in (
+            # Rebuilt by the agent (Host) or forced safe (Connection,
+            # Accept-Encoding); Content-Length re-added from the frame
+            # when present. Authorization/Cookie are stripped at BOTH
+            # ends (the server filters first; this is the backstop so
+            # the tunnel can never become a credential-forwarding
+            # oracle against local services).
+            "host", "connection", "accept-encoding", "content-length",
+            "authorization", "cookie")
+    }
+    if method in ("POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
+        inbound = _INBOUND.get(key)
+        if inbound is not None:
+            with contextlib.suppress(Exception):
+                length = int(headers.get("Content-Length")
+                             or headers.get("content-length") or 0)
+                if length > 0:
+                    send_headers["Content-Length"] = str(length)
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection("127.0.0.1", port), timeout=10)
+    except Exception:
+        await _tunnel_close_stream(ws, tunnel_id, stream_id)
+        return
+    try:
+        head_lines = [
+            f"{method} {path} HTTP/1.1",
+            f"Host: 127.0.0.1:{port}",
+            "Connection: close",
+            "Accept-Encoding: identity",
+        ]
+        head_lines += [f"{k}: {v}" for k, v in send_headers.items()]
+        writer.write(("\r\n".join(head_lines) + "\r\n\r\n").encode(
+            "latin-1"))
+        await writer.drain()
+
+        async def _forward_body() -> None:
+            inbound = _INBOUND.get(key)
+            if inbound is None:
+                return
+            while True:
+                chunk = await inbound.get()
+                if chunk is None:  # half-close sentinel: end write side
+                    with contextlib.suppress(Exception):
+                        writer.write_eof()
+                    return
+                writer.write(chunk)
+                await writer.drain()
+
+        body_task = asyncio.ensure_future(_forward_body())
+        _silence(body_task)
+        try:
+            raw_head = await asyncio.wait_for(
+                reader.readuntil(b"\r\n\r\n"),
+                timeout=STREAM_IDLE_SECONDS)
+        except (asyncio.LimitOverrunError, asyncio.TimeoutError,
+                asyncio.IncompleteReadError, Exception):
+            body_task.cancel()
+            await _tunnel_close_stream(ws, tunnel_id, stream_id)
+            return
+        try:
+            status, resp_headers, prefix = _parse_response_head(raw_head)
+        except (ValueError, IndexError):
+            body_task.cancel()
+            await _tunnel_close_stream(ws, tunnel_id, stream_id)
+            return
+        chunked = "chunked" in resp_headers.get(
+            "Transfer-Encoding", resp_headers.get(
+                "transfer-encoding", "")).lower()
+        resp_headers.pop("Transfer-Encoding", None)
+        resp_headers.pop("transfer-encoding", None)
+        if chunked:
+            # De-chunked below, so any origin framing headers go.
+            resp_headers.pop("Content-Length", None)
+            resp_headers.pop("content-length", None)
+        if not await _tunnel_send(ws, {
+            "type": "tunnel_response_head",
+            "tunnel_id": tunnel_id,
+            "stream_id": stream_id,
+            "status": status,
+            "headers": resp_headers,
+        }):
+            body_task.cancel()
+            await _tunnel_close_stream(ws, tunnel_id, stream_id)
+            return
+        seq = 0
+
+        async def _emit(raw: bytes) -> bool:
+            nonlocal seq
+            if not raw:
+                return True
+            try:
+                frame = encode_data_frame(
+                    tunnel_id, stream_id, seq, raw)
+            except FrameError:
+                return False
+            seq += 1
+            return await _tunnel_send(ws, frame)
+
+        if prefix and not await _emit(prefix):
+            body_task.cancel()
+            await _tunnel_close_stream(ws, tunnel_id, stream_id)
+            return
+        while True:
+            try:
+                if chunked:
+                    size_line = await asyncio.wait_for(
+                        reader.readuntil(b"\r\n"),
+                        timeout=STREAM_IDLE_SECONDS)
+                    size = int(size_line.split(b";")[0].strip(), 16)
+                    if size == 0:
+                        break
+                    if size > MAX_FRAME_BYTES * 64:
+                        break  # absurd chunk: end, fail closed
+                    data = await asyncio.wait_for(
+                        reader.readexactly(size),
+                        timeout=STREAM_IDLE_SECONDS)
+                    await asyncio.wait_for(
+                        reader.readexactly(2),
+                        timeout=STREAM_IDLE_SECONDS)
+                    ok = await _emit(data)
+                else:
+                    data = await asyncio.wait_for(
+                        reader.read(MAX_FRAME_BYTES),
+                        timeout=STREAM_IDLE_SECONDS)
+                    if not data:
+                        break  # origin EOF (Connection: close)
+                    ok = await _emit(data)
+            except (asyncio.TimeoutError, asyncio.IncompleteReadError,
+                    ValueError, Exception):
+                break  # idle/ragged close: end the stream, not the relay
+            if not ok:
+                break
+        body_task.cancel()
+    except Exception:
+        # Unexpected pump failure (never the relay's problem): the
+        # stream dies here; _silence keeps the task quiet.
+        pass
+    finally:
+        with contextlib.suppress(Exception):
+            writer.close()
+    await _tunnel_close_stream(ws, tunnel_id, stream_id)
+
+
+async def _handle_tunnel_frame(ws, message: dict) -> None:
+    """Route one server→agent tunnel frame (called from the WS loop)."""
+    kind = message.get("type")
+    if kind == "tunnel_open":
+        await _handle_tunnel_open(ws, message)
+        return
+    tunnel_id = str(message.get("tunnel_id", ""))
+    stream_id = str(message.get("stream_id", ""))
+    key = (tunnel_id, stream_id)
+    if kind == "tunnel_close" and not stream_id:
+        # Whole-tunnel teardown: drop ownership + every stream.
+        _TUNNELS.pop(tunnel_id, None)
+        for (tid, sid) in [k for k in _STREAMS if k[0] == tunnel_id]:
+            await _tunnel_close_stream(ws, tid, sid)
+        return
+    if kind == "tunnel_close":
+        await _tunnel_close_stream(ws, tunnel_id, stream_id)
+        return
+    if tunnel_id not in _TUNNELS:
+        return  # not ours (stale or another machine's): ignore
+    if kind == "tunnel_request_head":
+        try:
+            method, path, headers = validate_request_head(message)
+        except FrameError:
+            return
+        if key in _STREAMS:
+            return  # duplicate head: ignore, fail closed
+        _INBOUND[key] = asyncio.Queue(maxsize=64)
+        _STREAM_SEQ[key] = 0
+        task = asyncio.ensure_future(
+            _serve_stream(ws, tunnel_id, stream_id,
+                          method, path, headers))
+        _silence(task)
+        _STREAMS[key] = task
+        return
+    if kind == "tunnel_data":
+        # Request-body bytes for a live stream (seq-checked: the relay
+        # is FIFO, so a break means corruption — kill the stream).
+        try:
+            chunk = decode_data_frame(message)
+        except FrameError:
+            await _tunnel_close_stream(ws, tunnel_id, stream_id)
+            return
+        try:
+            seq = int(message.get("seq", -1))
+        except (TypeError, ValueError):
+            seq = -1
+        inbound = _INBOUND.get(key)
+        if inbound is None or seq != _STREAM_SEQ.get(key, 0):
+            await _tunnel_close_stream(ws, tunnel_id, stream_id)
+            return
+        _STREAM_SEQ[key] = seq + 1
+        try:
+            inbound.put_nowait(chunk)
+        except asyncio.QueueFull:
+            await _tunnel_close_stream(ws, tunnel_id, stream_id)
+        return
+    if kind == "tunnel_half_close":
+        inbound = _INBOUND.get(key)
+        if inbound is not None:
+            with contextlib.suppress(asyncio.QueueFull):
+                inbound.put_nowait(None)  # write-side EOF sentinel
+        return
 
 
 async def _read_local(path: str, offset=None, limit=None) -> dict:

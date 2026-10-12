@@ -70,6 +70,16 @@ DEFAULT_RELAY_THRESHOLD_TOKENS = 12000
 DEFAULT_RELAY_KEEP_TURNS = 3
 DEFAULT_RELAY_DIGEST_MAX_ENTRIES = 20
 
+# Tunneling caps (core/harness_tunnel.py, F03/H6b): tunnel lifetime, the
+# per-tunnel downstream token-bucket rate, the per-tunnel lifetime total
+# (both directions), and per-user concurrency. Sized for dev-server demos
+# (HTML/JS/HMR over localhost) while bounding exfiltration through one
+# approval and socket fan-out on the single-instance deployment.
+DEFAULT_TUNNEL_TTL_SECONDS = 7200
+DEFAULT_TUNNEL_BYTES_PER_SECOND = 256 * 1024
+DEFAULT_TUNNEL_TOTAL_BYTES = 100 * 1024 * 1024
+DEFAULT_TUNNEL_MAX_PER_USER = 3
+
 # Off-switch vocabulary shared by every INVINCIBLE_* boolean toggle.
 _OFF_VALUES = ("0", "false", "off")
 
@@ -316,6 +326,43 @@ class Settings:
     def provider_api_key(self, api_key_env: str) -> str | None:
         """Resolve one provider's API key via its configured env-var name."""
         return os.getenv(api_key_env)
+
+    def tunnel_ttl_seconds(self) -> int:
+        """How long a confirmed tunnel's capability token stays valid."""
+        try:
+            return max(
+                1, int(os.getenv("INVINCIBLE_TUNNEL_TTL_SECONDS", ""))
+            )
+        except ValueError:
+            return DEFAULT_TUNNEL_TTL_SECONDS
+
+    def tunnel_bytes_per_second(self) -> int:
+        """Per-tunnel downstream token-bucket rate (decoded bytes/sec)."""
+        try:
+            return max(
+                1, int(os.getenv("INVINCIBLE_TUNNEL_BYTES_PER_SECOND", ""))
+            )
+        except ValueError:
+            return DEFAULT_TUNNEL_BYTES_PER_SECOND
+
+    def tunnel_total_bytes(self) -> int:
+        """Per-tunnel lifetime byte total (both directions); past this
+        the tunnel's streams close."""
+        try:
+            return max(
+                1, int(os.getenv("INVINCIBLE_TUNNEL_TOTAL_BYTES", ""))
+            )
+        except ValueError:
+            return DEFAULT_TUNNEL_TOTAL_BYTES
+
+    def tunnel_max_per_user(self) -> int:
+        """Max concurrent live tunnels per user."""
+        try:
+            return max(
+                1, int(os.getenv("INVINCIBLE_TUNNEL_MAX_PER_USER", ""))
+            )
+        except ValueError:
+            return DEFAULT_TUNNEL_MAX_PER_USER
 
     def chrome_bin(self) -> str | None:
         """Explicit browser binary for agent-side screenshots

@@ -42,6 +42,11 @@ from fastapi import (
 
 from invincible.core.accounts import UserService, resolve_session
 from invincible.core.agent_registry import PollCapacityExceeded
+from invincible.core.harness_tunnel import (
+    FrameError,
+    decode_data_frame,
+    validate_response_head,
+)
 from invincible.core.identity import ensure_default_project
 from invincible.core.settings import AGENT_POLL_HOLD_SECONDS, settings
 
@@ -51,6 +56,40 @@ router = APIRouter()
 _WS_AUTH_CLOSE = 4401
 _WS_DISABLED_CLOSE = 4400
 _WS_CAP_CLOSE = 4402
+
+
+def _route_tunnel_frame(tunnels, message: dict) -> None:
+    """Deliver one agent→server tunnel frame to its stream queue.
+
+    ``tunnel_data`` is base64-validated before enqueue (caps count
+    decoded bytes); ``tunnel_response_head`` is shape-validated here and
+    re-validated by the ``/t/`` route before touching the public
+    response (the agent is user-controlled — validate at the trust
+    boundary). A full queue or a bad frame drops the stream, fail
+    closed. Never raises (the caller wraps in suppress).
+    """
+    token = str(message.get("tunnel_id", ""))
+    stream_id = str(message.get("stream_id", ""))
+    if message.get("type") == "tunnel_data":
+        try:
+            chunk = decode_data_frame(message)
+        except FrameError:
+            tunnels.drop_stream(token, stream_id)
+            return
+        if not tunnels.push_to_stream(token, stream_id, chunk):
+            tunnels.drop_stream(token, stream_id)
+        return
+    try:
+        status, headers = validate_response_head(message)
+    except FrameError:
+        tunnels.drop_stream(token, stream_id)
+        return
+    if not tunnels.push_to_stream(token, stream_id, {
+        "type": "tunnel_response_head",
+        "status": status,
+        "headers": headers,
+    }):
+        tunnels.drop_stream(token, stream_id)
 
 
 async def _resolve_ws_key(websocket: WebSocket) -> int | None:
@@ -268,6 +307,49 @@ async def agent_ws(websocket: WebSocket) -> None:
                 with contextlib.suppress(Exception):
                     await websocket.send_json({"type": "hello_ack"})
                 continue
+            if message.get("type") == "tunnel_open_ack":
+                # F03: the agent dialed localhost:PORT for a confirmed
+                # tunnel and reports back on the SAME socket — the
+                # registry pins tunnel sends to this connection
+                # (affinity), resolving the confirm-time ack future.
+                # Unknown/shape-bad frames are dropped, never answered:
+                # the ack carries no secret worth confirming.
+                with contextlib.suppress(Exception):
+                    tunnels = getattr(
+                        websocket.app.state, "tunnel_registry", None)
+                    if tunnels is not None:
+                        tunnels.resolve_ack(
+                            str(message.get("tunnel_id", "")),
+                            websocket,
+                            message.get("ok") is True,
+                            str(message.get("error", "")),
+                        )
+                continue
+            if message.get("type") in ("tunnel_data",
+                                       "tunnel_response_head"):
+                # F03 data plane: agent→server stream bytes / response
+                # heads land in the stream's queue for the holding /t/
+                # request. Anything malformed drops the stream (fail
+                # closed) — never the tunnel, never the relay.
+                with contextlib.suppress(Exception):
+                    tunnels = getattr(
+                        websocket.app.state, "tunnel_registry", None)
+                    if tunnels is not None:
+                        _route_tunnel_frame(tunnels, message)
+                continue
+            if message.get("type") in ("tunnel_half_close",
+                                       "tunnel_close"):
+                # Agent finished (half: body done; full: teardown) —
+                # seal the stream; the holding /t/ request drains it.
+                with contextlib.suppress(Exception):
+                    tunnels = getattr(
+                        websocket.app.state, "tunnel_registry", None)
+                    if tunnels is not None:
+                        tunnels.drop_stream(
+                            str(message.get("tunnel_id", "")),
+                            str(message.get("stream_id", "")),
+                        )
+                continue
             job_id = message.get("job_id")
             result = message.get("result")
             if job_id and isinstance(result, dict):
@@ -276,6 +358,12 @@ async def agent_ws(websocket: WebSocket) -> None:
                     await websocket.send_json({"accepted": bool(accepted)})
     finally:
         registry.detach_ws(user_id, websocket)
+        # F03/C2: a dead socket hard-closes its tunnels — streams seal,
+        # tokens drop, public clients retry end-to-end. Never raises.
+        with contextlib.suppress(Exception):
+            tunnels = getattr(websocket.app.state, "tunnel_registry", None)
+            if tunnels is not None:
+                tunnels.detach_ws(websocket)
 
 
 @router.websocket("/harness/events")

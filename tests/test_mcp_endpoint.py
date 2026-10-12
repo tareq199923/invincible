@@ -98,10 +98,12 @@ async def test_mcp_tools_list(client, bearer_headers):
     # project_create/project_list feed the memory tools valid names; the
     # harness H6a read-only machine tools (search/process/screenshot) need
     # no confirmation gate, like read_file; list_dir and the git
-    # inspection tools extend the same read-only posture.
+    # inspection tools extend the same read-only posture; H6b/F03 adds
+    # the staged expose_port tunnel opener alongside confirm_action and
+    # the single-call, owner-bound tunnel_close.
     assert names == {
         "read_file", "execute_bash", "write_file", "edit_file",
-        "confirm_action",
+        "confirm_action", "expose_port", "tunnel_close",
         "code_search", "process_list", "screenshot", "web_fetch",
         "list_dir", "find_files", "git_status", "git_diff", "git_log",
         "task_state_set", "task_state_get", "checkpoint_create",

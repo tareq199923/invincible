@@ -411,6 +411,29 @@ class PendingActionStore:
         )
         return record
 
+    def peek_type(self, token: str, *,
+                  requester_subject: int | None = None) -> str | None:
+        """Non-consuming type check with the exact subject semantics of
+        :meth:`take` (unknown/expired/mismatched-subject reads as None).
+
+        Lets a dispatcher pick a type-specific executor without popping
+        the record — e.g. tunnel confirms need their executor even when
+        agent routing is off (the executor itself refuses), while
+        execute_bash must still fall through to local execution.
+        """
+        self._sweep()
+        record = self._pending.get(token or "")
+        if record is None:
+            return None
+        if time.time() - record["created_at"] > self.TTL_SECONDS:
+            return None
+        owner = record.get("owner_subject")
+        if owner is None and requester_subject is not None:
+            return None
+        if owner is not None and requester_subject != owner:
+            return None
+        return record["type"]
+
     def __len__(self) -> int:
         return len(self._pending)
 
@@ -821,7 +844,8 @@ async def confirm_action(
         return {"status": "not_found"}
     if not approve:
         return {"status": "declined"}
-    if (record["type"] in ("execute_bash", "write_file", "edit_file")
+    if (record["type"] in ("execute_bash", "write_file", "edit_file",
+                             "expose_port")
             and executor is not None):
         return await executor(record["type"], record["args"])
     if record["type"] == "execute_bash":

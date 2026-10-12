@@ -24,6 +24,7 @@ owns those) and ``confirm_action`` (token resolution owns that).
 from __future__ import annotations
 
 from invincible.core import tool_executor
+from invincible.core.harness_tunnel import check_tunnel_port
 
 
 def before_tool_call(
@@ -60,6 +61,12 @@ def before_tool_call(
         if agent_routed:
             return
         tool_executor.check_read_denylist(str(argv.get("path", "") or "."))
+        return
+    if tool_name == "expose_port":
+        # F03: port policy only (localhost-only is structural — the tool
+        # schema carries no host at all). The agent re-runs the same
+        # check locally as Wall 2 before dialing.
+        check_tunnel_port(argv.get("port", ""))
         return
     # confirm_action, process_list, screenshot, web_fetch, memory_*,
     # project_*, task_state_*, todo, unknown: no pre-check here — owned

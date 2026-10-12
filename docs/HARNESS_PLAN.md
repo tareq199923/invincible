@@ -1,9 +1,10 @@
 # Harness Plan — outbound-only harness behavior (additive, non-breaking)
 
-> Status 2026-09-25: H0 (events/bus), H1 (WS relay), H2 (policy+spine),
+> Status 2026-10-12: H0 (events/bus), H1 (WS relay), H2 (policy+spine),
 > H3 (hydration), H4 (router/supervisor), H5 (durable approvals, revs
-> 0011/0012), H6a (search/process/screenshot), H6c (machine inventory,
-> CLI, dashboard) shipped. H6b (tunneling) deliberately deferred.
+> 0011/0012), H6a (search/process/screenshot), H6b (tunneling: expose_port
+> staged + confirmed, WS-multiplexed bytes, /t/ capability URLs, caps +
+> audit), H6c (machine inventory, CLI, dashboard) shipped.
 
 ## 1. Goal
 
@@ -94,10 +95,11 @@ structure, auth realms, wire protocols, or conventions.
    `StructuredTool.from_function()` works downstream, but `core/` never imports
    `langchain`. Optional extra `harness-langchain` only if ever needed.
    Rationale: avoids heavy tree + 3.10–3.14 risk + Phase 10 no-new-deps rule.
-4. **Tunneling: deferred to H6b.** H6a ships `code_search`, `process_list`,
-   `screenshot` first. `expose_port` tunneling ships alone with its own
-   threat-model + caps + audit. Rationale: tunneling needs a new multiplex
-   route + public URL surface; isolate its risk.
+4. **Tunneling: shipped as H6b (F03).** H6a shipped `code_search`,
+   `process_list`, `screenshot` first; `expose_port` tunneling then
+   landed alone with its own threat-model (SECURITY.md §11) + caps +
+   audit. Rationale: tunneling needed a new multiplex route + public
+   URL surface; isolating its risk was the point of deferring it.
 
 ## 5. Phases (each green: `ruff check . && pytest`)
 
@@ -259,13 +261,22 @@ structure, auth realms, wire protocols, or conventions.
 - Tests per tool (shapes, caps, blocks, offline/timeout).
   `docs/MCP_PROTOCOL.md` entries after landing.
 
-### H6b — Tunneling (deferred, isolated)
+### H6b — Tunneling (shipped, F03)
 
-- `expose_port{port}` staged + confirmed; agent multiplexes TCP over
-  `WS /agent/ws`; server exposes `/{tunnel_token}/...` reverse route with
-  per-user token auth, byte-per-second caps, audit rows, auto-expiry.
-- Tests: auth, caps, expiry, cross-user denial. `docs/SECURITY.md` threat
-  model + `docs/DEPLOYMENT.md` posture same PR.
+- `expose_port{port}` staged + confirmed through `PendingActionStore`
+  (same-subject binding); on confirm the agent dials localhost:PORT over
+  `WS /agent/ws` (ack-pinned socket affinity) and the server exposes the
+  `/t/{tunnel_token}/...` reverse route with per-user token auth,
+  byte-per-second + lifetime caps, audit rows, auto-expiry, and hard-close
+  orphans. `tunnel_close` is single-call, owner-bound, idempotent.
+- Core: `core/harness_tunnel.py` (registry, token bucket, framing);
+  knobs in `core/settings.py` (TTL 2 h, 256 KB/s, 100 MB, 3/user);
+  port policy in `harness_policy` + agent Wall-2 re-check; public route
+  `endpoints/tunnel.py` (indistinguishable 404s, header strip).
+- Tests: `tests/test_tunnel_registry.py` (25 hermetic) +
+  `tests/test_tunnel_route.py` (18 full-app: the four isolation walls,
+  caps, expiry, cross-user denial, audit). `docs/SECURITY.md` §11 threat
+  model + `docs/DEPLOYMENT.md` posture in the same PR.
 
 ### H6c — CLI + dashboard harness UX
 

@@ -16,7 +16,7 @@
   {
     "behavior": "expose_port ships alone with token auth, caps, audit and expiry; threat model updated same PR",
     "id": "F03",
-    "state": "planned",
+    "state": "passing",
     "title": "H6b tunneling (deferred, isolated)",
     "verification": "ruff check . && pytest tests/test_agent_ws.py"
   },

@@ -989,3 +989,74 @@ platform or account ownership transfer via the deploy checklist:
 per-user agents online.
 
 ---
+
+## 11. Tunneling (`expose_port`): a public byte-route with the same three walls
+
+`expose_port{port}` (F03/H6b) exposes one `localhost:PORT` dev server on
+the caller's **paired machine** through a public `/t/{token}/...` URL
+served by the gateway. It ships alone (its own threat model, caps, and
+audit — this section) because it is the only tool whose confirm step
+opens a public ingress route instead of running a command.
+
+- **Wall 1 — server-side checks (unchanged shape).** Port-rule gate
+  before staging (`check_tunnel_port`: localhost-only by construction —
+  the schema carries no host — plus the infrastructure denylist: 22,
+  3389, 5432/5433, 3306, 1433, 6379, 27017, 25/587), staged +
+  confirmed through `PendingActionStore` with same-subject binding, and
+  confirm refuses with `tunnel_unavailable` when `INVINCIBLE_AGENT_ROUTING`
+  is off — there is deliberately no server-host fallback (there is no
+  local port to expose *to*).
+- **Wall 2 — the agent re-runs the same port policy locally**
+  (`agent/sandbox.py::check_tunnel_port`, the single source in
+  `core/harness_tunnel.py`) and dials loopback literals only — no DNS
+  resolution at all (DNS would admit rebinding/SSRF against intranet
+  hosts), no LAN IPs. A refusal is the `tunnel_open_ack` result, never
+  a silent drop. The agent also probes the port before acking, so
+  confirming against a dead port fails fast with nothing exposed.
+- **Wall 3 — not applicable, and that is documented rather than
+  missing.** Tunnels move bytes, not files; the home-confinement
+  sandbox has no filesystem surface here. The compensating control is
+  header hygiene: `Authorization`, `Cookie`, `Host`, and hop-by-hop
+  headers are stripped server-side *and* agent-side before anything
+  touches localhost, so the tunnel can never become a
+  credential-forwarding oracle against the user's own local services
+  (tunneled apps lose their browser auth by design — safe default).
+
+**Why `/t/{token}` is not a fourth auth realm.** The token is a
+bearer capability (`secrets.token_urlsafe(24)`, 192-bit, unguessable),
+TTL-bound (2 h default), scoped to one port + one user, revocable
+(`tunnel_close`, owner-bound, idempotent), unlistable (listings carry
+metadata only — tokens never appear), and probed tokens answer one
+identical 404 whether unknown, expired, or already closed. It authenticates
+*the bytes*, not a user — exactly like a signed download URL, not a login.
+
+**Abuse catalogue (what the caps are for).**
+
+- *Exfiltration through one's own tunnel* — bounded by 256 KB/s
+  downstream and 100 MB lifetime per tunnel (both directions count),
+  3 concurrent tunnels per user. These are approvals-bounded, not
+  account-bounded: each approval buys at most one tunnel's budget.
+- *Token log-leak* — path tokens land in proxy access logs. Mitigated
+  by TTL + unlistability + revocation; operators should still minimize
+  `/t/` access-log retention (see [DEPLOYMENT.md](DEPLOYMENT.md)).
+- *Protocol confusion* (browser fetching an SSH banner, HTTP fed to a
+  DB wire protocol) — the infrastructure-port denylist plus the agent's
+  response-head validation (status 100–599, bounded headers, de-chunked
+  bodies, idle kill).
+- *Cross-user routing* — structural: tunnel records pin to the socket
+  that acked the open (never first-attached), queues are per-tunnel,
+  and management (`tunnel_close`) is owner-bound. Pinned by
+  `tests/test_tunnel_route.py` (cross-user close denial + bytes-never-
+  routed) mirroring the `test_agent_ws.py` isolation test.
+
+**Audit, expiry, orphans.** Audit rows are metadata only (open/ready,
+close, total-cap truncation — never tokens, never bytes); per-stream
+200s are *not* logged (a page load would flood the table). TTL sweep is
+lazy (the `PendingActionStore._sweep` pattern, no background task).
+Orphans hard-close by design (C2): server restart drops the in-memory
+registry (every token 404s), agent disconnect seals every stream —
+clients retry end-to-end against the still-valid token. No migration
+exists for tunnels on purpose: persisting public byte-routes across
+restarts would be a vulnerability, not a feature.
+
+---

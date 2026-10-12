@@ -23,6 +23,7 @@ from invincible.core.db import (
     metadata as db_metadata,
 )
 from invincible.core.harness_bus import HarnessBus
+from invincible.core.harness_tunnel import TunnelRegistry
 from invincible.core.identity import ApiKeyStore, AuditLog
 from invincible.core.memory import MemoryStore
 from invincible.core.oauth_store import OAuthStore, _s256_challenge
@@ -281,6 +282,9 @@ async def client(pg_engine, router_setter, monkeypatch):
     # job dispatch); a leaked one would cross-pollute poll/dispatch
     # assertions exactly like a leaked router would.
     app.state.agent_registry = AgentRegistry()
+    # F03: fresh in-memory tunnel registry per test (same leak
+    # discipline as the agent registry above).
+    app.state.tunnel_registry = TunnelRegistry()
     # H0: fresh in-memory harness bus per test (same leak discipline as
     # the agent registry above). H5: attached to the test engine so
     # workflow-scoped emits persist to workflow_events like production.
@@ -306,6 +310,7 @@ async def client(pg_engine, router_setter, monkeypatch):
     app.state.oauth_store = None
     app.state.byok_http_client = None
     app.state.agent_registry = None
+    app.state.tunnel_registry = None
     app.state.harness_bus = None
     app.state.webchat_approvals = None
 
