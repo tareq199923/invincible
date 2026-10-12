@@ -805,6 +805,10 @@ async def run_agent_turn(
                             "explore sub-agent failed; main loop continues")
                     else:
                         explorer_calls += found["calls"]
+                        logger.info(
+                            "explore sub-agent returned %d calls, "
+                            "%d summary chars", found["calls"],
+                            len(found["summary"] or ""))
                         if found["summary"]:
                             full.append({
                                 "role": "system",

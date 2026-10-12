@@ -401,7 +401,7 @@ async def run_once(
                         done_info = {
                             k: data.get(k) for k in (
                                 "provider", "model", "attempts",
-                                "tools_used", "execution")
+                                "tools_used", "explorer_calls", "execution")
                         }
                     elif name == "error":
                         error_event = data
