@@ -104,8 +104,8 @@ async def test_mcp_tools_list(client, bearer_headers):
     assert names == {
         "read_file", "execute_bash", "write_file", "edit_file",
         "confirm_action", "expose_port", "tunnel_close",
-            "code_search", "process_list", "screenshot", "web_fetch",
-            "web_research",
+                "code_search", "process_list", "screenshot", "web_fetch",
+                "web_research", "look_at_screen",
         "list_dir", "find_files", "git_status", "git_diff", "git_log",
         "task_state_set", "task_state_get", "checkpoint_create",
         "todo",

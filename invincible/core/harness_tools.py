@@ -466,6 +466,31 @@ TOOLS: tuple[HarnessTool, ...] = (
         webchat_modes=("plan", "manual", "auto"),
     ),
     HarnessTool(
+        name="look_at_screen",
+        description_mcp=(
+            "Look at the frontmost window on the paired machine and get "
+            "back its app title plus clickable controls as C ids with "
+            "kinds, labels, and 0-1000 grid positions (like pointing "
+            "coordinates for a later click). Runs ONLY on your paired "
+            "machine (agent routing must be on) - Windows UI Automation, "
+            "unavailable elsewhere. No confirmation required."
+        ),
+        description_webchat=(
+            "Look at the frontmost window on the paired machine: app "
+            "title plus controls as C ids on a 0-1000 grid. Runs ONLY "
+            "on your paired machine."
+        ),
+        properties={},
+        required=(),
+        read_only=True,
+        needs_approval=False,
+        mcp=True,
+        webchat=True,
+        webchat_modes=("plan", "manual", "auto"),
+        agent_job="look_at_screen",
+        server_executable=False,
+    ),
+    HarnessTool(
         name="confirm_action",
         description_mcp=(
             "Approve or deny a pending execute_bash/write_file/edit_file "
@@ -817,6 +842,7 @@ _WEBCHAT_ORDER: tuple[str, ...] = (
     "screenshot",
     "web_fetch",
     "web_research",
+    "look_at_screen",
     "memory_save",
     "memory_search",
     "memory_list",

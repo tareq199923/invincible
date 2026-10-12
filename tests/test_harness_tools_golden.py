@@ -380,6 +380,21 @@ GOLDEN_MCP_TOOLS = [
         },
     },
     {
+        'name': 'look_at_screen',
+        'description': (
+        'Look at the frontmost window on the paired machine and get '
+        'back its app title plus clickable controls as C ids with '
+        'kinds, labels, and 0-1000 grid positions (like pointing '
+        'coordinates for a later click). Runs ONLY on your paired '
+        'machine (agent routing must be on) - Windows UI Automation, '
+        'unavailable elsewhere. No confirmation required.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {},
+        },
+    },
+    {
         'name': 'confirm_action',
         'description': (
         'Approve or deny a pending execute_bash/write_file/edit_file '
@@ -749,6 +764,7 @@ GOLDEN_MCP_TOOL_NAMES = [
     'screenshot',
     'web_fetch',
     'web_research',
+    'look_at_screen',
     'confirm_action',
     'expose_port',
     'tunnel_close',
@@ -1122,6 +1138,22 @@ GOLDEN_WEBCHAT_SCHEMAS = [
     {
         'type': 'function',
         'function': {
+            'name': 'look_at_screen',
+            'description': (
+            'Look at the frontmost window on the paired machine: app '
+            'title plus controls as C ids on a 0-1000 grid. Runs ONLY '
+            'on your paired machine.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {},
+                'required': [],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
             'name': 'memory_save',
             'description': (
             'Deliberately store a fact about the user or one of their '
@@ -1397,6 +1429,7 @@ GOLDEN_WEBCHAT_TOOL_NAMES = [
     'screenshot',
     'web_fetch',
     'web_research',
+    'look_at_screen',
     'memory_save',
     'memory_search',
     'memory_list',
@@ -1420,6 +1453,7 @@ GOLDEN_PLAN_TOOLS = [
     'screenshot',
     'web_fetch',
     'web_research',
+    'look_at_screen',
     'memory_search',
     'memory_list',
     'project_list',
@@ -1442,6 +1476,7 @@ GOLDEN_MANUAL_TOOLS = [
     'screenshot',
     'web_fetch',
     'web_research',
+    'look_at_screen',
     'memory_save',
     'memory_search',
     'memory_list',
@@ -1468,6 +1503,7 @@ GOLDEN_AUTO_TOOLS = [
     'screenshot',
     'web_fetch',
     'web_research',
+    'look_at_screen',
     'memory_save',
     'memory_search',
     'memory_list',
@@ -1580,9 +1616,9 @@ def test_approval_required_set():
     assert set(webchat_agent.MUTATING_TOOLS) == {
         "execute_bash", "write_file", "edit_file"}
     # Manual mode stages exactly the mutating tools; plan mode offers
-    # only reads (+agent-only screenshot/web_fetch, +server-side
-    # web_research, +the todo step-list which mutates no machine);
-    # auto offers everything.
+    # only reads (+agent-only screenshot/web_fetch/look_at_screen,
+    # +server-side web_research, +the todo step-list which mutates no
+    # machine); auto offers everything.
     plan = {s["function"]["name"]
             for s in webchat_agent._TOOLS_BY_MODE["plan"]}
     assert "execute_bash" not in plan
@@ -1596,7 +1632,8 @@ def test_webchat_tool_sets():
     assert webchat_agent.READ_ONLY_TOOLS == GOLDEN_READ_ONLY_TOOLS
     assert webchat_agent.DATA_READ_TOOLS == GOLDEN_DATA_READ_TOOLS
     assert webchat_agent.DATA_WRITE_TOOLS == GOLDEN_DATA_WRITE_TOOLS
-    assert webchat_agent.AGENT_ONLY_TOOLS == ("screenshot", "web_fetch")
+    assert webchat_agent.AGENT_ONLY_TOOLS == ("screenshot", "web_fetch",
+                                                "look_at_screen")
     assert (webchat_agent.ALL_DATA_TOOLS
             == webchat_agent.DATA_READ_TOOLS + webchat_agent.DATA_WRITE_TOOLS)
 
@@ -1636,6 +1673,7 @@ POLICY_PROBES = {
     "screenshot": ({"url": "https://example.com"}, "pass"),
     "web_fetch": ({"url": "https://example.com"}, "pass"),
     "web_research": ({"question": "What is X?"}, "pass"),
+    "look_at_screen": ({}, "pass"),
     "confirm_action": ({"token": "x", "approve": True}, "pass"),
     "expose_port": ({"port": 3000}, "pass"),
     "tunnel_close": ({"token": "x"}, "pass"),
@@ -1728,6 +1766,7 @@ RUNNER_SAFE_ARGS = {
     "process_list": {"limit": 1},
     "screenshot": {"url": "not-a-url"},
     "web_fetch": {"url": "not-a-url"},
+    "look_at_screen": {},
 }
 
 

@@ -306,6 +306,11 @@ async def execute_job(job: dict) -> dict:
                 args.get("url", ""),
                 float(args.get("timeout", 30.0)),
             )
+        if job_type == "look_at_screen":
+            # F09: no args, no paths, no URLs - reads the frontmost
+            # window's controls on this machine; no sandbox check
+            # applies. Non-Windows answers unavailable, never raises.
+            return await tool_executor._look_at_screen()
         return {
             "status": "error",
             "error": f"Unknown job type: {job_type}. Valid job types: "

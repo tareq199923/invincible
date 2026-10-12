@@ -83,6 +83,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -1650,6 +1651,411 @@ async def _take_screenshot(url: str, timeout: float) -> dict:
         if tmp:
             with contextlib.suppress(OSError):
                 os.unlink(tmp)
+
+
+# --- look_at_screen (Windows UI Automation, Bluey steal pack 2) ---
+
+# Walk budget mirrors Bluey's ControlsReader (0.45s / 5000 nodes);
+# UIA COM calls cost more per node here, so fewer nodes, same wall time.
+LOOK_NODE_BUDGET = 2000
+LOOK_TIME_BUDGET_SECONDS = 0.5
+LOOK_MAX_CONTROLS = 140
+LOOK_MAX_CHILDREN_PER_NODE = 400
+# Child-process wall clock for one screen read (walk budgets itself;
+# this is the backstop that also covers interpreter startup).
+LOOK_SUBPROCESS_TIMEOUT_SECONDS = 30.0
+
+# UIA control type ids (UIAutomationCore) worth naming; everything else
+# is reported as a plain "control".
+_LOOK_KINDS = {
+    50000: "button", 50031: "button", 50001: "calendar",
+    50002: "checkbox", 50003: "combo box", 50030: "document",
+    50004: "text field", 50005: "link", 50007: "list item",
+    50008: "list", 50009: "menu", 50010: "menu bar",
+    50011: "menu item", 50013: "option", 50012: "progress",
+    50015: "slider", 50016: "spinner", 50018: "tab",
+    50019: "tab item", 50020: "text", 50021: "toolbar",
+    50022: "tooltip", 50023: "tree", 50024: "tree item",
+    50026: "group", 50028: "grid", 50029: "item",
+    50034: "header", 50036: "table", 50006: "image",
+}
+# Structural containers: walked into, never reported.
+_LOOK_SKIP_TYPES = frozenset({50032, 50033, 50037, 50014, 50017})
+# Unlabeled controls are noise, except fields (Bluey keeps those too).
+_LOOK_FIELD_TYPES = frozenset({50004, 50003, 50030})
+
+_UIA_NAME = 30005
+_UIA_RECT = 30001
+_UIA_TYPE = 30003
+_UIA_OFFSCREEN = 30022
+
+
+def look_kind_name(type_id: int) -> str:
+    """Human kind for a UIA control type id (pure, hermetic)."""
+    return _LOOK_KINDS.get(type_id, "control")
+
+
+def look_grid(rect: tuple, width: float, height: float) -> tuple[int, int]:
+    """Midpoint of a pixel rect on the 0-1000 grid (pure, hermetic)."""
+    left, top, w, h = rect
+    if width <= 0 or height <= 0:
+        return (0, 0)
+    gx = int((left + w / 2) / width * 1000)
+    gy = int((top + h / 2) / height * 1000)
+    return (min(max(gx, 0), 1000), min(max(gy, 0), 1000))
+
+
+def _look_uia_interfaces() -> dict:
+    """Load UIAutomationCore entry points (Windows only, lazy)."""
+    import ctypes
+    from ctypes import wintypes
+
+    ole32 = ctypes.windll.ole32
+    oleaut32 = ctypes.windll.oleaut32
+    user32 = ctypes.windll.user32
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", wintypes.DWORD),
+                    ("Data2", wintypes.WORD),
+                    ("Data3", wintypes.WORD),
+                    ("Data4", ctypes.c_ubyte * 8)]
+
+    def guid(text: str) -> GUID:
+        parts = text.split("-")
+        tail = bytes.fromhex(parts[3] + parts[4])
+        return GUID(int(parts[0], 16), int(parts[1], 16),
+                    int(parts[2], 16), (ctypes.c_ubyte * 8)(*tail))
+
+    class Variant(ctypes.Structure):
+        class _U(ctypes.Union):
+            _fields_ = [("llVal", ctypes.c_longlong),
+                        ("lVal", ctypes.c_long),
+                        ("boolVal", ctypes.c_short),
+                        ("bstrVal", ctypes.c_void_p),
+                        ("parray", ctypes.c_void_p)]
+
+        _fields_ = [("vt", ctypes.c_ushort),
+                    ("wReserved1", ctypes.c_ushort),
+                    ("wReserved2", ctypes.c_ushort),
+                    ("wReserved3", ctypes.c_ushort),
+                    ("u", _U)]
+        _anonymous_ = ("u",)
+
+    def method(index: int, restype, *argtypes):
+        proto = ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)
+
+        def call(iface, *args):
+            table = ctypes.cast(iface, ctypes.POINTER(
+                ctypes.POINTER(ctypes.c_void_p))).contents
+            return ctypes.cast(table[index], proto)(iface, *args)
+
+        return call
+
+    ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    ole32.CoInitializeEx.restype = ctypes.c_long
+    ole32.CoCreateInstance.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                                       ctypes.c_ulong, ctypes.c_void_p,
+                                       ctypes.c_void_p]
+    ole32.CoCreateInstance.restype = ctypes.c_long
+    ole32.CoUninitialize.argtypes = []
+    ole32.CoUninitialize.restype = None
+    oleaut32.VariantClear.argtypes = [ctypes.c_void_p]
+    oleaut32.VariantClear.restype = ctypes.c_long
+    oleaut32.SafeArrayGetLBound.argtypes = [ctypes.c_void_p,
+                                            ctypes.c_uint,
+                                            ctypes.c_void_p]
+    oleaut32.SafeArrayGetLBound.restype = ctypes.c_long
+    oleaut32.SafeArrayGetUBound.argtypes = [ctypes.c_void_p,
+                                            ctypes.c_uint,
+                                            ctypes.c_void_p]
+    oleaut32.SafeArrayGetUBound.restype = ctypes.c_long
+    oleaut32.SafeArrayAccessData.argtypes = [ctypes.c_void_p,
+                                             ctypes.c_void_p]
+    oleaut32.SafeArrayAccessData.restype = ctypes.c_long
+    oleaut32.SafeArrayUnaccessData.argtypes = [ctypes.c_void_p]
+    oleaut32.SafeArrayUnaccessData.restype = ctypes.c_long
+    user32.GetForegroundWindow.argtypes = []
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    user32.GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                                      ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
+    user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+    user32.GetSystemMetrics.restype = ctypes.c_int
+    user32.GetCursorPos.argtypes = [ctypes.c_void_p]
+    user32.GetCursorPos.restype = ctypes.c_int
+
+    return {
+        "ctypes": ctypes, "ole32": ole32, "oleaut32": oleaut32,
+        "user32": user32, "Variant": Variant, "method": method,
+        "CLSID_UIA": guid("FF48DBA4-60EF-4201-AA87-54103EEF594E"),
+        "IID_UIA": guid("30CBE57D-D9D0-452A-AB13-7AC5AC4825EE"),
+    }
+
+
+def _look_walk(api: dict) -> dict:
+    """Foreground-window control walk. Raises on COM failure."""
+    ctypes = api["ctypes"]
+    ole32 = api["ole32"]
+    oleaut32 = api["oleaut32"]
+    user32 = api["user32"]
+    method = api["method"]
+    Variant = api["Variant"]
+
+    release = method(2, ctypes.c_long)
+    held: list = []
+
+    def keep(iface):
+        held.append(iface)
+        return iface
+
+    VT_BSTR, VT_I4, VT_BOOL, VT_R8, VT_ARRAY = 8, 3, 11, 5, 0x2000
+    hr = ole32.CoInitializeEx(None, 2)
+    if hr < 0:
+        raise OSError(f"CoInitializeEx failed: {hr:#x}")
+    com_init = hr == 0
+    try:
+        auto = ctypes.c_void_p()
+        hr = ole32.CoCreateInstance(
+            ctypes.byref(api["CLSID_UIA"]), None, 1,
+            ctypes.byref(api["IID_UIA"]), ctypes.byref(auto))
+        if hr < 0 or not auto.value:
+            raise OSError(f"UI Automation unavailable: {hr:#x}")
+        keep(auto.value)
+        from_handle = method(6, ctypes.c_long,
+                             ctypes.c_void_p,
+                             ctypes.POINTER(ctypes.c_void_p))
+        get_walker = method(14, ctypes.c_long,
+                            ctypes.POINTER(ctypes.c_void_p))
+        # IUIAutomationTreeWalker vtable (past IUnknown 0-2), verified
+        # live: 5 GetFirstChildElement, 6 GetLastChildElement,
+        # 7 GetNextSiblingElement. (6 is NOT NextSibling.)
+        first_child = method(5, ctypes.c_long,
+                             ctypes.c_void_p,
+                             ctypes.POINTER(ctypes.c_void_p))
+        next_sibling = method(7, ctypes.c_long,
+                              ctypes.c_void_p,
+                              ctypes.POINTER(ctypes.c_void_p))
+        get_prop = method(10, ctypes.c_long, ctypes.c_int,
+                          ctypes.POINTER(Variant))
+
+        walker = ctypes.c_void_p()
+        if get_walker(auto.value, ctypes.byref(walker)) < 0 \
+                or not walker.value:
+            raise OSError("ControlViewWalker unavailable")
+        keep(walker.value)
+
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            raise OSError("no foreground window")
+        root = ctypes.c_void_p()
+        if from_handle(auto.value, hwnd, ctypes.byref(root)) < 0 \
+                or not root.value:
+            raise OSError("foreground window not automatable")
+        keep(root.value)
+
+        def prop_text(element, prop) -> str | None:
+            var = Variant()
+            if get_prop(element, prop, ctypes.byref(var)) < 0:
+                return None
+            try:
+                if var.vt != VT_BSTR or not var.bstrVal:
+                    return None
+                return ctypes.wstring_at(var.bstrVal)
+            finally:
+                oleaut32.VariantClear(ctypes.byref(var))
+
+        def prop_int(element, prop) -> int | None:
+            var = Variant()
+            if get_prop(element, prop, ctypes.byref(var)) < 0:
+                return None
+            try:
+                if var.vt == VT_I4:
+                    return int(var.lVal)
+                if var.vt == VT_BOOL:
+                    return 1 if var.boolVal else 0
+                return None
+            finally:
+                oleaut32.VariantClear(ctypes.byref(var))
+
+        def prop_rect(element) -> tuple | None:
+            var = Variant()
+            if get_prop(element, _UIA_RECT, ctypes.byref(var)) < 0:
+                return None
+            try:
+                if var.vt != (VT_ARRAY | VT_R8) or not var.parray:
+                    return None
+                low = ctypes.c_long()
+                high = ctypes.c_long()
+                oleaut32.SafeArrayGetLBound(var.parray, 1,
+                                            ctypes.byref(low))
+                oleaut32.SafeArrayGetUBound(var.parray, 1,
+                                            ctypes.byref(high))
+                if high.value - low.value + 1 != 4:
+                    return None
+                data = ctypes.c_void_p()
+                if oleaut32.SafeArrayAccessData(var.parray,
+                                                ctypes.byref(data)) < 0:
+                    return None
+                try:
+                    vals = ctypes.cast(
+                        data, ctypes.POINTER(ctypes.c_double * 4)
+                    ).contents
+                    return (vals[0], vals[1], vals[2], vals[3])
+                finally:
+                    oleaut32.SafeArrayUnaccessData(var.parray)
+            finally:
+                oleaut32.VariantClear(ctypes.byref(var))
+
+        sw = user32.GetSystemMetrics(0) or 1
+        sh = user32.GetSystemMetrics(1) or 1
+        length = user32.GetWindowTextLengthW(hwnd)
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        app = buf.value.strip() or None
+
+        found: list = []
+        deadline = time.monotonic() + LOOK_TIME_BUDGET_SECONDS
+        visited = 0
+        stack = [root.value]
+        while stack and visited < LOOK_NODE_BUDGET:
+            if time.monotonic() > deadline:
+                break
+            element = stack.pop()
+            visited += 1
+            type_id = prop_int(element, _UIA_TYPE)
+            if type_id is None:
+                type_id = -1
+            rect = prop_rect(element)
+            if (type_id not in _LOOK_SKIP_TYPES and rect is not None
+                    and rect[2] > 3 and rect[3] > 3
+                    and rect[0] < sw and rect[1] < sh
+                    and rect[0] + rect[2] > 0
+                    and rect[1] + rect[3] > 0
+                    and prop_int(element, _UIA_OFFSCREEN) != 1):
+                label = (prop_text(element, _UIA_NAME) or "").strip()
+                label = " ".join(label.split())
+                if label or type_id in _LOOK_FIELD_TYPES:
+                    found.append({
+                        "kind": look_kind_name(type_id),
+                        "label": label,
+                        "rect": rect,
+                    })
+            child = ctypes.c_void_p()
+            if first_child(walker.value, element,
+                           ctypes.byref(child)) == 0 and child.value:
+                keep(child.value)
+                siblings = [child.value]
+                while len(siblings) < LOOK_MAX_CHILDREN_PER_NODE:
+                    nxt = ctypes.c_void_p()
+                    if next_sibling(walker.value, siblings[-1],
+                                    ctypes.byref(nxt)) != 0 \
+                            or not nxt.value:
+                        break
+                    keep(nxt.value)
+                    siblings.append(nxt.value)
+                stack.extend(reversed(siblings))
+
+        found.sort(key=lambda c: (
+            round(c["rect"][1] / 6), round(c["rect"][0] / 6)))
+        controls = []
+        for i, item in enumerate(found[:LOOK_MAX_CONTROLS]):
+            gx, gy = look_grid(item["rect"], sw, sh)
+            controls.append({
+                "id": f"C{i + 1}", "kind": item["kind"],
+                "label": item["label"], "x": gx, "y": gy,
+            })
+
+        point = ctypes.create_string_buffer(8)
+        if user32.GetCursorPos(point):
+            mx, my = ctypes.cast(
+                point, ctypes.POINTER(ctypes.c_long * 2)).contents
+            mx, my = int(mx), int(my)
+        else:
+            mx, my = 0, 0
+        return {"app": app, "controls": controls,
+                "mouse": {"x": min(max(int(mx / sw * 1000), 0), 1000),
+                          "y": min(max(int(my / sh * 1000), 0), 1000)},
+                "size": {"w": sw, "h": sh}}
+    finally:
+        for iface in held:
+            with contextlib.suppress(Exception):
+                release(iface)
+        if com_init:
+            with contextlib.suppress(Exception):
+                ole32.CoUninitialize()
+
+
+async def _look_at_screen() -> dict:
+    """Frontmost-window controls via Windows UI Automation.
+
+    Agent-only shape (no paths, no URLs, no sandbox surface): the
+    runner calls this on the user's own machine. The walk itself runs
+    in a child process - raw UIA COM calls can fail fatal
+    (RPC_E_DISCONNECTED during teardown takes down the whole
+    interpreter, uncatchable), so a crash surfaces as a non-zero exit
+    mapped to an error result instead of killing the agent loop.
+    Anywhere non-Windows answers ``unavailable`` - never raises.
+    """
+    if os.name != "nt":
+        return {"status": "unavailable",
+                "reason": "look_at_screen runs on a paired Windows "
+                          "machine: set INVINCIBLE_AGENT_ROUTING=1 and "
+                          "start one with: invincible connect"}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-c",
+            "from invincible.core.tool_executor import _look_main; "
+            "_look_main()",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            out, err = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=LOOK_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return {"status": "error",
+                    "error": "screen read timed out"}
+        if proc.returncode != 0:
+            detail = err.decode(errors="replace").strip().splitlines()
+            tail = detail[-1] if detail else f"exit {proc.returncode}"
+            logger.warning("look_at_screen reader failed: %s", tail[-200:])
+            return {"status": "error",
+                    "error": "Could not read the screen (reader crashed)"}
+        try:
+            result = json.loads(out.decode())
+        except ValueError:
+            return {"status": "error",
+                    "error": "screen reader returned unreadable output"}
+        if not isinstance(result, dict) or "status" not in result:
+            return {"status": "error",
+                    "error": "screen reader returned unreadable output"}
+        return result
+    except Exception as e:
+        logger.warning("look_at_screen failed: %s", e)
+        return {"status": "error",
+                "error": f"Could not read the screen: {e}"}
+
+
+def _look_main() -> None:
+    """Subprocess entry for :func:`_look_at_screen` (stdout JSON).
+
+    Bytes, not print(): the Windows console codec cannot encode the
+    private-use icon glyphs control labels carry (e.g. Segoe MDL2).
+    """
+    try:
+        payload = {"status": "look",
+                   **_look_walk(_look_uia_interfaces())}
+    except Exception as e:
+        payload = {"status": "error",
+                   "error": f"Could not read the screen: {e}"}
+    sys.stdout.buffer.write(
+        json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
 
 async def _fetch_url(

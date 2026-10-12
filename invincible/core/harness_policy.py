@@ -69,9 +69,10 @@ def before_tool_call(
         check_tunnel_port(argv.get("port", ""))
         return
     # confirm_action, process_list, screenshot, web_fetch, web_research,
-    # memory_*, project_*, task_state_*, todo, unknown: no pre-check here
-    # - owned by token resolution / dispatch / data-plane (screenshot and
-    # web_fetch are agent-only, web_research is server-side provider
+    # look_at_screen, memory_*, project_*, task_state_*, todo, unknown:
+    # no pre-check here - owned by token resolution / dispatch /
+    # data-plane (screenshot, web_fetch and look_at_screen are
+    # agent-only, web_research is server-side provider
     # research with no filesystem or caller-URL surface, process_list
     # carries no path, todo lives in the continuity store under a
     # reserved key with no filesystem surface).

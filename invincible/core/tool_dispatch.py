@@ -218,6 +218,24 @@ async def run_web_research(engine, user_id: int, args: dict) -> dict:
     return await web_research.run_research(engine, user_id, args or {})
 
 
+async def run_look_at_screen(executor) -> dict:
+    """Agent-only controls readout: never falls back to local.
+
+    Mirrors screenshot/web_fetch: without routing, report
+    unavailability instead of touching the server host's desktop.
+    """
+    if executor is None:
+        return {
+            "status": "unavailable",
+            "reason": (
+                "Screen reads run on your paired machine: "
+                "set INVINCIBLE_AGENT_ROUTING=1 and start "
+                "one with: invincible connect"
+            ),
+        }
+    return await executor("look_at_screen", {})
+
+
 async def run_data_tool(
     name: str,
     args: dict,

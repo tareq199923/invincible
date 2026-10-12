@@ -150,7 +150,8 @@ def test_read_gated_set_matches_runner_reads():
         for tool in harness_tools.TOOLS
         if tool.agent_job
         not in (None, "execute_bash", "write_file", "edit_file",
-                "process_list", "screenshot", "web_fetch")
+                "process_list", "screenshot", "web_fetch",
+                "look_at_screen")
     }
     assert runner_reads == {
         "read_file", "code_search", "list_dir", "find_files",
@@ -173,6 +174,7 @@ def test_policy_passthrough_set_is_exact():
     expected_passthrough = _names(harness_tools.TOOLS) - gated
     assert expected_passthrough == {
         "process_list", "screenshot", "web_fetch", "web_research",
+        "look_at_screen",
         "confirm_action",
         "tunnel_close",
         "task_state_set", "task_state_get", "checkpoint_create",
@@ -203,6 +205,7 @@ _RUNNER_SAFE_ARGS = {
     "process_list": {"limit": 1},
     "screenshot": {"url": "not-a-url"},
     "web_fetch": {"url": "not-a-url"},
+    "look_at_screen": {},
 }
 
 
@@ -247,7 +250,7 @@ async def test_mcp_dispatch_covers_every_mcp_tool():
     dispatched = [
         tool.name for tool in harness_tools.TOOLS if tool.mcp
     ]
-    assert len(dispatched) == 26
+    assert len(dispatched) == 27
     hostile = {
         "execute_bash": {"command": "rm -rf /"},
         "write_file": {"path": _OUTSIDE},

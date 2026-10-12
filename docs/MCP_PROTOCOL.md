@@ -891,6 +891,25 @@ answers `{"status": "unavailable", ...}`; providers without a
 {"status": "research", "question": "...", "title": "...", "paragraphs": ["..."], "sources": [{"title": "...", "url": "..."}]}
 ```
 
+#### `look_at_screen`
+
+```json
+"arguments": {}
+```
+
+Read the frontmost window on the paired machine: app title plus
+clickable controls as `C` ids with kinds, labels, and 0–1000 grid
+positions (pointing coordinates for a later `click`). **Agent-only
+by design, same posture as `screenshot`**: without routing it
+answers `{"status": "unavailable", ...}` — the server never touches
+its own desktop. Windows UI Automation (unavailable elsewhere); the
+read runs isolated so a dying window cannot take down the agent.
+No confirmation (read-only). Offered in every mode including plan.
+
+```json
+{"status": "look", "app": "...", "controls": [{"id": "C1", "kind": "button", "label": "Save", "x": 940, "y": 27}], "mouse": {"x": 233, "y": 689}, "size": {"w": 1920, "h": 1080}}
+```
+
 #### `memory_save`
 
 ```json

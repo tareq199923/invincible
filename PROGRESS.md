@@ -5,18 +5,20 @@
 
 ## Current State
 
-- Last commit: `fe9b04b` (main) — F07 Baymax B0.3 committed.
+- Last commit: `27f9892` (main) — F08 web_research committed.
 - F07 done (`passing`): Baymax B0 browser-first (voice + avatar +
   screenshot preview).
-- F08 done (`passing`, uncommitted): web_research tool (Bluey steal pack
-  1). New: `core/web_research.py` (Responses web_search via caller's own
-  BYOK credential, question-text-only, SSRF-safe; soft unavailable),
-  `tests/test_web_research.py` (11 tests). Edited: registry + order (all
-  modes incl plan), `tool_dispatch` + `webchat_agent` pre-read-only
-  branch + summary, `endpoints/mcp.py` branch, goldens, drift pins
-  (26 tools, passthrough), explore exclusion, `MCP_PROTOCOL.md`.
-  Server-side always; never agent-routed.
-- Ruff/pytest status: `ruff check .` clean; FULL suite 1791 passed,
+- F08 done (`passing`): web_research tool (Bluey steal pack 1,
+  Responses web_search via caller's BYOK credential).
+- F09 done (`passing`, uncommitted): look_at_screen controls grounding
+  (Bluey steal pack 2). `tool_executor._look_at_screen` + UIA walk
+  (verified live: 112 controls, menus+buttons on 0-1000 grid); walk runs
+  in a child process (raw COM can fail fatal - crash becomes an error
+  result, agent survives); runner case, registry + order (agent-only,
+  all modes incl plan), dispatch trio, summary previews, goldens, drift
+  pins (27 tools), `MCP_PROTOCOL.md`. New:
+  `tests/test_look_at_screen.py` (6 tests).
+- Ruff/pytest status: `ruff check .` clean; FULL suite 1797 passed,
   11 skipped, 1 deselected. Clean-state checklist 5/5 ticked.
   Uncommitted — commit on user's word.
 - F04 done (`passing`): read-only fan-out reframed + built as
@@ -38,12 +40,12 @@
 
 ## In Progress
 
-- None — F08 complete (`passing`). Zero `active`. Next: tool pack 2
-  (`look_at_screen` grounding) or F05 vector seam at next clock-in.
+- None — F09 complete (`passing`). Zero `active`. Next: tool pack 3
+  (computer-use) or F05 vector seam at next clock-in.
 
 ## Next Steps
 
-1. Commit F08 on user's word; verify `git status` shows only the
+1. Commit F09 on user's word; verify `git status` shows only the
    intended files first.
 2. F05 vector seam remains `planned` — next candidate; set `active`
    only at next clock-in.

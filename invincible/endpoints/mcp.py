@@ -53,7 +53,7 @@ from invincible.core.oauth_store import OAuthStore
 from invincible.core.principal import Principal
 from invincible.core.settings import AGENT_JOB_GRACE_SECONDS, settings
 from invincible.core.todos import run_todo
-from invincible.core.tool_dispatch import run_web_research
+from invincible.core.tool_dispatch import run_look_at_screen, run_web_research
 
 router = APIRouter()
 
@@ -806,6 +806,21 @@ async def _dispatch(method, rpc_id, params, request,
                 # the question is free text.
                 result = await run_web_research(
                     request.app.state.engine, owner_subject, args)
+                return _result(rpc_id, _tool_content(json.dumps(result)))
+
+            if name == "look_at_screen":
+                # F09: agent-only like screenshot - the server never
+                # touches its own desktop. Without routing, report
+                # unavailability instead of failing the call shape.
+                result = await run_look_at_screen(
+                    await _agent_executor(request, owner_subject))
+                status = result.get("status")
+                if status in ("agent_offline", "agent_timeout"):
+                    await _audit_action(request, name, status,
+                                        subject=owner_subject)
+                    return _result(rpc_id, _tool_content(
+                        result.get("message", status), is_error=True
+                    ))
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "confirm_action":

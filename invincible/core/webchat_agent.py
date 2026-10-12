@@ -59,6 +59,9 @@ from invincible.core.tool_dispatch import (
     run_data_tool as _run_data_tool,
 )
 from invincible.core.tool_dispatch import (
+    run_look_at_screen as _run_look_at_screen,
+)
+from invincible.core.tool_dispatch import (
     run_read as _run_read,
 )
 from invincible.core.tool_dispatch import (
@@ -403,6 +406,8 @@ def summarize_call(name: str, args: dict) -> str:
         return f"Screenshot {str(args.get('url', ''))[:200]}"
     if name == "web_fetch":
         return f"Fetch {str(args.get('url', ''))[:200]}"
+    if name == "look_at_screen":
+        return "Look at the frontmost window's controls"
     if name == "web_research":
         return f"Research: {str(args.get('question', ''))[:150]}"
     if name == "memory_save":
@@ -487,6 +492,30 @@ def _screenshot_image(result: dict) -> dict | None:
         return None
     return {"mime": mime, "data_b64": data, "bytes": size,
             "url": str(result.get("url", ""))}
+
+
+def _preview_look(result: dict) -> str:
+    """Compact one-line summary of a look_at_screen result (F09).
+
+    Raw control lists run to ~8KB (truncated to garbage by the generic
+    preview); the summary keeps app + count + the first entries under
+    the preview budget. Anything else falls back to ``_preview``.
+    """
+    if not isinstance(result, dict) or result.get("status") != "look":
+        return _preview(result)
+    controls = result.get("controls") or []
+    head = "; ".join(
+        f"{c.get('id')} {c.get('kind')} "
+        f"\"{(c.get('label') or '')[:60]}\" @{c.get('x')},{c.get('y')}"
+        for c in controls[:40]
+        if isinstance(c, dict)
+    )
+    text = f"{result.get('app') or 'screen'} ({len(controls)} controls)"
+    if head:
+        text += f": {head}"
+    if len(text) > _PREVIEW_CHARS:
+        return text[:_PREVIEW_CHARS] + "…"
+    return text
 
 
 def _error_text(body: object) -> str:
@@ -854,6 +883,8 @@ async def run_agent_turn(
                         f"screenshot of {image['url'] or 'page'} "
                         f"({image['bytes']} bytes) — image attached"
                     )
+                elif fname == "look_at_screen":
+                    preview = _preview_look(result_doc)
                 else:
                     preview = _preview(result_doc)
                 event = {
@@ -985,6 +1016,8 @@ async def _execute_call(
     if name in AGENT_ONLY_TOOLS:
         if name == "web_fetch":
             result = await _run_web_fetch(executor, args)
+        elif name == "look_at_screen":
+            result = await _run_look_at_screen(executor)
         else:
             result = await _run_screenshot(executor, args)
         outcome["result"], outcome["ok"] = result, _result_ok(result)
