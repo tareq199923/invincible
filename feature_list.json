@@ -23,9 +23,9 @@
   {
     "behavior": "Supervisor fan-out returns only if wired to a live caller; no duplicate prompt assembly",
     "id": "F04",
-    "state": "planned",
+    "state": "passing",
     "title": "Step 8 supervisor revisit",
-    "verification": "ruff check . && pytest tests/test_harness_router.py"
+    "verification": "ruff check . && pytest tests/test_harness_fanout.py tests/test_harness_router.py tests/test_harness_explore.py"
   },
   {
     "behavior": "Semantic retrieval lands behind RetrievalService seam; lexical stays default",

@@ -37,7 +37,12 @@ import os
 import platform
 
 from invincible.compat.common import upstream_error_detail
-from invincible.core import harness_explore, harness_tools, tool_executor
+from invincible.core import (
+    harness_explore,
+    harness_fanout,
+    harness_tools,
+    tool_executor,
+)
 from invincible.core.chat_service import _persist_new_turns
 from invincible.core.harness_tools import call_key as _call_key
 from invincible.core.principal import Principal
@@ -470,6 +475,7 @@ async def run_agent_turn(
     continuity=None,
     engine=None,
     agent_platform: str | None = None,
+    bus=None,
 ):
     """Run one agentic turn, yielding ``(event, data)`` pairs.
 
@@ -569,12 +575,17 @@ async def run_agent_turn(
     repeat_count = 0
     repeat_tripped = False
     repeat_name = ""
-    # Step 8 explore state: consecutive dispatched machine-read calls,
-    # whether delegation already fired (at most once per turn), and the
-    # explorer's provider-call count for the turn's accounting.
+    # Step 8 explore state + F04 fan-out state: consecutive dispatched
+    # machine-read calls (explore depth) and cross-plane dispatched
+    # reads (fan-out breadth, reset on any non-read dispatch). One
+    # delegation per turn at most (first trigger wins), each with its
+    # provider-call count for the turn's accounting.
     explore_reads = 0
-    explored = False
+    fanout_reads = 0
+    fanout_planes: set = set()
+    delegated = False
     explorer_calls = 0
+    fanout_calls = 0
     # A client disconnect (browser close / proxy idle timeout) closes
     # this generator at the current yield; GeneratorExit is a BaseException,
     # so only a finally commits the partial turn. Without it the whole turn
@@ -641,6 +652,7 @@ async def run_agent_turn(
                     "mode": mode,
                     "tools_used": tools_used,
                     "explorer_calls": explorer_calls,
+                    "fanout_calls": fanout_calls,
                     "execution": "agent" if agent_routed else "local",
                 }
                 return
@@ -762,6 +774,13 @@ async def run_agent_turn(
                     explore_reads += 1
                 else:
                     explore_reads = 0
+                plane = harness_fanout.plane_of(fname)
+                if plane is not None:
+                    fanout_reads += 1
+                    fanout_planes.add(plane)
+                else:
+                    fanout_reads = 0
+                    fanout_planes = set()
                 key = _call_key(fname, item["args"])
                 if key == repeat_key:
                     repeat_count += 1
@@ -781,14 +800,14 @@ async def run_agent_turn(
                     "call_id": call_id, "name": fname, "ok": ok,
                     "preview": _preview(result_doc),
                 }
-            if (not explored
+            if (not delegated
                     and explore_reads >= EXPLORE_TRIGGER_CONSECUTIVE_READS):
                 # Hand the search spiral to the explore sub-agent (once
                 # per turn): its summary lands in context as one system
                 # message and the main loop continues. Any explorer
                 # failure degrades to main-loop-does-it-itself - the
                 # turn never aborts here.
-                explored = True
+                delegated = True
                 explore_reads = 0
                 task_text = _user_text(full)
                 if task_text:
@@ -815,6 +834,56 @@ async def run_agent_turn(
                                 "content": (
                                     "Explorer findings (read-only search):\n"
                                     + found["summary"]
+                                ),
+                            })
+            if (not delegated
+                    and fanout_reads >= harness_fanout.FANOUT_TRIGGER_READS
+                    and len(fanout_planes)
+                    >= harness_fanout.FANOUT_TRIGGER_PLANES):
+                # Hand the multi-plane investigation to the fan-out
+                # (once per turn, first trigger wins with explore):
+                # one planner call splits it across bounded read-only
+                # specialists, their merged findings land in context
+                # as one system message, and the main loop continues
+                # as the synthesizer. Any fan-out failure degrades to
+                # main-loop-does-it-itself - the turn never aborts.
+                delegated = True
+                fanout_reads = 0
+                fanout_planes = set()
+                task_text = _user_text(full)
+                if task_text:
+                    try:
+                        found = await harness_fanout.run_fanout(
+                            task_text, router=router, model=model,
+                            session_id=prepared.session_id,
+                            session_pk=prepared.session_pk,
+                            byok_kwargs=prepared.byok_kwargs,
+                            executor=executor,
+                            data_ctx={
+                                "principal": principal, "mode": mode,
+                                "memory": memory, "retrieval": retrieval,
+                                "continuity": continuity,
+                                "sessions": sessions, "engine": engine,
+                            },
+                            bus=bus,
+                            workflow_id=prepared.session_id,
+                        )
+                    except Exception:  # noqa: BLE001 - fallback below
+                        logger.exception(
+                            "fan-out failed; main loop continues")
+                    else:
+                        fanout_calls += found["calls"]
+                        logger.info(
+                            "fan-out returned %d calls, "
+                            "%d findings chars", found["calls"],
+                            len(found["findings"] or ""))
+                        if found["findings"]:
+                            full.append({
+                                "role": "system",
+                                "content": (
+                                    "Supervisor findings "
+                                    "(read-only fan-out):\n"
+                                    + found["findings"]
                                 ),
                             })
             iteration += 1

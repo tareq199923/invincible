@@ -389,6 +389,7 @@ async def chat_stream(
     pending_store = _state(request, "pending_actions")
     waiter = _state(request, "webchat_approvals")
     registry = getattr(request.app.state, "agent_registry", None)
+    harness_bus = getattr(request.app.state, "harness_bus", None)
     routing_on = settings.agent_routing()
     executor = build_agent_executor(
         registry, principal.user_id, routing_on)
@@ -444,6 +445,7 @@ async def chat_stream(
                 waiter=waiter, audit=_audit_tool,
                 retrieval=retrieval, continuity=continuity,
                 engine=engine, agent_platform=agent_platform,
+                bus=harness_bus,
             ):
                 if ev_name == "approval":
                     waited.append(ev_data["token"])

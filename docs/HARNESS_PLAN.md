@@ -200,6 +200,39 @@ structure, auth realms, wire protocols, or conventions.
 - Tests: `tests/test_harness_explore.py` (read-only enforcement, caps,
   trigger, fallback, once-per-turn) + pinned `GOLDEN_EXPLORE_NAMES`.
 
+### Step 8b — read-only fan-out (F04 supervisor-revisit resolution)
+
+- The general N-parallel case as a generalized explorer
+  (`core/harness_fanout.py::run_fanout`), NOT a resurrection of the
+  deleted supervisor: one planner call (JSON-only plan, validated,
+  width-capped at 4) → bounded per-step loops (`asyncio.gather`,
+  ≤4 provider calls + 150-word findings each) → merged findings
+  injected as one system message. The main loop
+  (`webchat_agent.run_agent_turn`) is the sole caller AND the
+  synthesizer — there is no `synthesize` provider call, and an empty
+  plan is a no-op costing exactly one call.
+- Read-only by construction: the only specialists are `scout`
+  (machine reads, the explore set) and `librarian` (data-plane
+  reads). Mutating, data-write, and agent-only tools are unoffered
+  AND refused at execution. No `operator` steps: manual-mode
+  approvals are sequential browser gates, so parallel mutating
+  fan-out is excluded on purpose.
+- Trigger (the whole ballgame): ≥6 dispatched reads spanning ≥2
+  planes (`FANOUT_TRIGGER_READS`/`FANOUT_TRIGGER_PLANES`), reset on
+  any non-read dispatch, once per turn on a flag shared with explore
+  (first trigger wins — pure spirals stay explore). Same failover
+  loop (`router.route_request_detailed` with the turn's BYOK kwargs);
+  failures degrade to main-loop-does-it-itself. Per-step timeout is
+  iteration caps, not a wall clock (avoids cancel-mid-dispatch
+  orphans, same posture as the main loop).
+- Plan is transient per turn (turn-local only); durability rides the
+  existing bus log (`PLAN_CREATED` + `SUBAGENT_*` → `workflow_events`,
+  no `WORKFLOW_*` nesting, no migration, no `task_states` writes).
+- Tests: `tests/test_harness_fanout.py` (golden specialist sets,
+  validation, empty-plan no-op, gather interleave order, partial
+  failure, width cap, read-only refusal, caps, trigger
+  fires/quiet/spiral/once/garbage-plan).
+
 ### H5 — Durable approvals + durable log (L2+L7)
 
 - `core/db.py` metadata + migrations: `0011_workflow_events` (`id,
