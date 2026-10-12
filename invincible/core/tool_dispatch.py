@@ -206,6 +206,18 @@ async def run_web_fetch(executor, args: dict) -> dict:
     return await executor("web_fetch", {"url": str(args.get("url", ""))})
 
 
+async def run_web_research(engine, user_id: int, args: dict) -> dict:
+    """Server-side research through the caller's own provider.
+
+    Unlike agent-only reads this never touches the paired machine:
+    the question is free text and the provider host comes from the
+    user's stored credential (see ``core/web_research.py``).
+    """
+    from invincible.core import web_research
+
+    return await web_research.run_research(engine, user_id, args or {})
+
+
 async def run_data_tool(
     name: str,
     args: dict,

@@ -346,6 +346,40 @@ GOLDEN_MCP_TOOLS = [
         },
     },
     {
+        'name': 'web_research',
+        'description': (
+        'Research a question on the web and get back a short report '
+        '(title plus up to four paragraphs) with sources. Runs on '
+        'this server through your own connected provider (Responses '
+        'API with the web_search tool) - the question is free text, '
+        'never a fetched URL, and the provider host comes from your '
+        'stored credential, so this path cannot become an SSRF '
+        'primitive. Providers without a /responses surface answer '
+        'unavailable. No confirmation required.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'question': {
+                    'type': 'string',
+                    'description': (
+                    'What to research, as a clear, self-contained '
+                    'question.'
+                    ),
+                },
+                'context': {
+                    'type': 'string',
+                    'description': (
+                    'Optional on-screen context for the researcher.'
+                    ),
+                },
+            },
+            'required': [
+                'question',
+            ],
+        },
+    },
+    {
         'name': 'confirm_action',
         'description': (
         'Approve or deny a pending execute_bash/write_file/edit_file '
@@ -714,6 +748,7 @@ GOLDEN_MCP_TOOL_NAMES = [
     'process_list',
     'screenshot',
     'web_fetch',
+    'web_research',
     'confirm_action',
     'expose_port',
     'tunnel_close',
@@ -1062,6 +1097,31 @@ GOLDEN_WEBCHAT_SCHEMAS = [
     {
         'type': 'function',
         'function': {
+            'name': 'web_research',
+            'description': (
+            'Research a question on the web via your own connected '
+            'provider; returns a short sourced report. Server-side, '
+            'no paired machine needed.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'question': {
+                        'type': 'string',
+                    },
+                    'context': {
+                        'type': 'string',
+                    },
+                },
+                'required': [
+                    'question',
+                ],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
             'name': 'memory_save',
             'description': (
             'Deliberately store a fact about the user or one of their '
@@ -1336,6 +1396,7 @@ GOLDEN_WEBCHAT_TOOL_NAMES = [
     'edit_file',
     'screenshot',
     'web_fetch',
+    'web_research',
     'memory_save',
     'memory_search',
     'memory_list',
@@ -1358,6 +1419,7 @@ GOLDEN_PLAN_TOOLS = [
     'process_list',
     'screenshot',
     'web_fetch',
+    'web_research',
     'memory_search',
     'memory_list',
     'project_list',
@@ -1379,6 +1441,7 @@ GOLDEN_MANUAL_TOOLS = [
     'edit_file',
     'screenshot',
     'web_fetch',
+    'web_research',
     'memory_save',
     'memory_search',
     'memory_list',
@@ -1404,6 +1467,7 @@ GOLDEN_AUTO_TOOLS = [
     'edit_file',
     'screenshot',
     'web_fetch',
+    'web_research',
     'memory_save',
     'memory_search',
     'memory_list',
@@ -1424,6 +1488,7 @@ GOLDEN_READ_ONLY_TOOLS = (
     'git_diff',
     'git_log',
     'process_list',
+    'web_research',
 )
 
 GOLDEN_DATA_READ_TOOLS = (
@@ -1515,8 +1580,9 @@ def test_approval_required_set():
     assert set(webchat_agent.MUTATING_TOOLS) == {
         "execute_bash", "write_file", "edit_file"}
     # Manual mode stages exactly the mutating tools; plan mode offers
-    # only reads (+agent-only screenshot/web_fetch, +the todo step-list
-    # which mutates no machine); auto offers everything.
+    # only reads (+agent-only screenshot/web_fetch, +server-side
+    # web_research, +the todo step-list which mutates no machine);
+    # auto offers everything.
     plan = {s["function"]["name"]
             for s in webchat_agent._TOOLS_BY_MODE["plan"]}
     assert "execute_bash" not in plan
@@ -1569,6 +1635,7 @@ POLICY_PROBES = {
     "process_list": ({}, "pass"),
     "screenshot": ({"url": "https://example.com"}, "pass"),
     "web_fetch": ({"url": "https://example.com"}, "pass"),
+    "web_research": ({"question": "What is X?"}, "pass"),
     "confirm_action": ({"token": "x", "approve": True}, "pass"),
     "expose_port": ({"port": 3000}, "pass"),
     "tunnel_close": ({"token": "x"}, "pass"),

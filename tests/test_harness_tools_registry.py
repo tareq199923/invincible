@@ -172,7 +172,8 @@ def test_policy_passthrough_set_is_exact():
     }
     expected_passthrough = _names(harness_tools.TOOLS) - gated
     assert expected_passthrough == {
-        "process_list", "screenshot", "web_fetch", "confirm_action",
+        "process_list", "screenshot", "web_fetch", "web_research",
+        "confirm_action",
         "tunnel_close",
         "task_state_set", "task_state_get", "checkpoint_create",
         "todo",
@@ -246,7 +247,7 @@ async def test_mcp_dispatch_covers_every_mcp_tool():
     dispatched = [
         tool.name for tool in harness_tools.TOOLS if tool.mcp
     ]
-    assert len(dispatched) == 25
+    assert len(dispatched) == 26
     hostile = {
         "execute_bash": {"command": "rm -rf /"},
         "write_file": {"path": _OUTSIDE},

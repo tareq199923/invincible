@@ -53,6 +53,7 @@ from invincible.core.oauth_store import OAuthStore
 from invincible.core.principal import Principal
 from invincible.core.settings import AGENT_JOB_GRACE_SECONDS, settings
 from invincible.core.todos import run_todo
+from invincible.core.tool_dispatch import run_web_research
 
 router = APIRouter()
 
@@ -797,6 +798,14 @@ async def _dispatch(method, rpc_id, params, request,
                     return _result(rpc_id, _tool_content(
                         result.get("message", status), is_error=True
                     ))
+                return _result(rpc_id, _tool_content(json.dumps(result)))
+
+            if name == "web_research":
+                # F08: server-side through the caller's own provider
+                # (Responses web_search). No caller URLs are fetched;
+                # the question is free text.
+                result = await run_web_research(
+                    request.app.state.engine, owner_subject, args)
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "confirm_action":

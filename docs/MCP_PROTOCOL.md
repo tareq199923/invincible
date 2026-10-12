@@ -870,6 +870,27 @@ including plan.
 {"status": "web_fetch", "content_text": "...", "content_type": "text/html; charset=utf-8", "bytes": 48210, "url": "..."}
 ```
 
+#### `web_research`
+
+```json
+"arguments": {"question": "Who won the 2026 Berlin marathon?", "context": "optional on-screen context"}
+```
+
+Live web research returning a short sourced report (title plus up
+to four paragraphs, up to five sources). **Server-side through your
+own connected provider** (Responses API with the `web_search`
+tool) — unlike `web_fetch`, no paired machine is needed and no
+caller URL is ever fetched: the question is free text and the
+provider host comes from your stored credential (SSRF-guarded at
+connect and re-checked per call). With no usable credential it
+answers `{"status": "unavailable", ...}`; providers without a
+`/responses` surface answer `unavailable` too. No confirmation
+(read-only). Offered in every mode including plan.
+
+```json
+{"status": "research", "question": "...", "title": "...", "paragraphs": ["..."], "sources": [{"title": "...", "url": "..."}]}
+```
+
 #### `memory_save`
 
 ```json
@@ -993,6 +1014,8 @@ With routing on, no code path executes a tool on the server host —
 which is what makes self-service consent safe: every account approves
 its own MCP clients, and approving exposes only the approver's own
 machine (Phase 2; the old operator-only consent gate is gone).
+`web_research` never routes: it always runs on the server through the
+caller's own provider credential, with or without a paired machine.
 
 ---
 

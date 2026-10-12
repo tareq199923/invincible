@@ -47,5 +47,12 @@
     "state": "passing",
     "title": "Baymax B0 browser-first (voice + avatar + screenshot preview)",
     "verification": "ruff check . && pytest tests/test_baymax_prompt.py tests/test_baymax_screenshot.py tests/test_webchat_agent.py tests/test_webchat.py"
+  },
+  {
+    "behavior": "web_research tool ships on /mcp + webchat (all modes) with BYOK Responses web_search, goldens extended, docs updated same PR",
+    "id": "F08",
+    "state": "passing",
+    "title": "web_research tool (Bluey steal pack 1)",
+    "verification": "ruff check . && pytest tests/test_web_research.py tests/test_harness_tools_golden.py tests/test_harness_tools_registry.py"
   }
 ]

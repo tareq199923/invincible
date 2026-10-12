@@ -68,6 +68,9 @@ from invincible.core.tool_dispatch import (
     run_web_fetch as _run_web_fetch,
 )
 from invincible.core.tool_dispatch import (
+    run_web_research as _run_web_research,
+)
+from invincible.core.tool_dispatch import (
     stage_mutating as _stage_mutating,
 )
 
@@ -400,6 +403,8 @@ def summarize_call(name: str, args: dict) -> str:
         return f"Screenshot {str(args.get('url', ''))[:200]}"
     if name == "web_fetch":
         return f"Fetch {str(args.get('url', ''))[:200]}"
+    if name == "web_research":
+        return f"Research: {str(args.get('question', ''))[:150]}"
     if name == "memory_save":
         return f"Save memory ({len(str(args.get('content', '')))} chars)"
     if name == "memory_search":
@@ -963,6 +968,15 @@ async def _execute_call(
     then records ``outcome["result"]`` / ``outcome["ok"]`` (fed back to
     the model) and returns.
     """
+    if name == "web_research":
+        # F08: server-side through the caller's own provider - never
+        # the paired machine, never the read sandbox (no path/URL args).
+        # Before the READ_ONLY branch: read_only metadata must not route
+        # this to the agent runner (which has no such job type).
+        result = await _run_web_research(
+            engine, ctx_principal.user_id, args)
+        outcome["result"], outcome["ok"] = result, _result_ok(result)
+        return
     if name in READ_ONLY_TOOLS:
         result = await _run_read(executor, name, args,
                                  agent_routed=executor is not None)

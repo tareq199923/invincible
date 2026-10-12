@@ -434,6 +434,38 @@ TOOLS: tuple[HarnessTool, ...] = (
         server_executable=False,
     ),
     HarnessTool(
+        name="web_research",
+        description_mcp=(
+            "Research a question on the web and get back a short report "
+            "(title plus up to four paragraphs) with sources. Runs on "
+            "this server through your own connected provider (Responses "
+            "API with the web_search tool) - the question is free text, "
+            "never a fetched URL, and the provider host comes from your "
+            "stored credential, so this path cannot become an SSRF "
+            "primitive. Providers without a /responses surface answer "
+            "unavailable. No confirmation required."
+        ),
+        description_webchat=(
+            "Research a question on the web via your own connected "
+            "provider; returns a short sourced report. Server-side, no "
+            "paired machine needed."
+        ),
+        properties={
+            "question": _str(
+                description="What to research, as a clear, "
+                            "self-contained question."),
+            "context": _str(
+                description="Optional on-screen context for the "
+                            "researcher."),
+        },
+        required=("question",),
+        read_only=True,
+        needs_approval=False,
+        mcp=True,
+        webchat=True,
+        webchat_modes=("plan", "manual", "auto"),
+    ),
+    HarnessTool(
         name="confirm_action",
         description_mcp=(
             "Approve or deny a pending execute_bash/write_file/edit_file "
@@ -784,6 +816,7 @@ _WEBCHAT_ORDER: tuple[str, ...] = (
     "edit_file",
     "screenshot",
     "web_fetch",
+    "web_research",
     "memory_save",
     "memory_search",
     "memory_list",
@@ -991,11 +1024,16 @@ def explore_names() -> tuple[str, ...]:
     context pressure comes from file spirals, not from single
     memory/continuity lookups, so data-plane reads stay main-loop-only
     and agent-only tools (``web_fetch``/``screenshot``) stay out for
-    their offline/SSRF failure surface. Separate function (not an
-    alias) so the set can evolve without touching ``read_only_names``
-    and so golden tests can pin it independently.
+    their offline/SSRF failure surface. ``web_research`` stays out too:
+    it is a network call to the user's provider (cost, credentials,
+    4xx surface), not a machine read - the bounded explore loop must
+    never spend it. Separate function (not an alias) so the set can
+    evolve without touching ``read_only_names`` and so golden tests
+    can pin it independently.
     """
-    return read_only_names()
+    return tuple(
+        name for name in read_only_names() if name != "web_research"
+    )
 
 
 def explore_schemas() -> list[dict]:

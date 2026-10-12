@@ -108,10 +108,11 @@ def parse_web_events(text):
 
 def test_explore_names_pinned():
     assert harness_tools.explore_names() == GOLDEN_EXPLORE_NAMES
-    assert harness_tools.explore_names() == harness_tools.read_only_names()
+    assert set(harness_tools.explore_names()) == (
+        set(harness_tools.read_only_names()) - {"web_research"})
     for banned in ("execute_bash", "write_file", "edit_file", "todo",
                    "memory_save", "memory_search", "screenshot",
-                   "web_fetch", "task_state_set"):
+                   "web_fetch", "web_research", "task_state_set"):
         assert banned not in harness_tools.explore_names()
 
 
