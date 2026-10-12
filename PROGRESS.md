@@ -10,14 +10,13 @@
   `invincible/core/harness_runtime.py`, `invincible/core/settings.py`,
   `invincible/core/webchat_agent.py`, `tests/test_webchat_agent.py`,
   `tools/eval/runner.py`) + untracked `.vscode/`.
-- Ruff/pytest status: F02 gate green — `test_cli_harness.py` 20 passed,
-  `test_cli/login/agent` 95 passed, `ruff check .` clean. Docs already in
-  sync (CONFIGURATION.md §4 matches `--help`; no text churn needed).
+- Ruff/pytest status: F06 gate green — audit self-scores 5/5 critical +
+  6/6 recommended, `test_audit_harness.py` 5 passed, `ruff check .` clean.
 
 ## In Progress
 
-- None — F02 Phase 6 CLI polish complete (`passing`). Next candidate: F03
-  H6b tunneling (deferred, needs isolated threat-model PR) or new work.
+- None — F06 Step B complete (`passing`). All of F01/F02/F06 passing,
+  zero `active`. Next: pick F03–F05 or new work at next clock-in.
 
 ## Next Steps
 

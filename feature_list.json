@@ -33,5 +33,12 @@
     "state": "planned",
     "title": "Vector/semantic retrieval seam",
     "verification": "ruff check . && pytest tests/test_memory.py"
+  },
+  {
+    "behavior": "tools/audit_harness.py scores the five subsystems and templates/clean-state-checklist.md gates clock-out; hermetic tests pin pass/fail",
+    "id": "F06",
+    "state": "passing",
+    "title": "Step B audit + clean-state checklist",
+    "verification": "python tools/audit_harness.py . && ruff check . && pytest tests/test_audit_harness.py"
   }
 ]

@@ -59,7 +59,8 @@ Fixture semantics (`tests/conftest.py`):
 - Clock-in: read `PROGRESS.md` + `feature_list.json` before touching code.
 - One active feature: exactly one entry `active`, rest `planned`/`passing`.
 - Clock-out: update `PROGRESS.md` (Current State + Next Steps), run
-  `ruff check .`, commit clean.
+  `ruff check .`, tick all 5 boxes in
+  `templates/clean-state-checklist.md`, commit clean.
 - If low on context: do NOT rush — update `PROGRESS.md`, commit checkpoint.
 
 ---
