@@ -89,5 +89,12 @@
     "state": "passing",
     "title": "Phone app + handoff (Hey Baymax hops phone → PC)",
     "verification": "ruff check . && pytest tests/test_handoff.py tests/test_agent_registry.py tests/test_agent_ws.py tests/test_agent_endpoints.py tests/test_agent_routing.py"
+  },
+  {
+    "behavior": "in-app PTT mic (PWA + webchat, explicit press only) transcribes server-side through the caller's BYOK credential into the existing chat pipeline; assistant replies render as text bubbles with server-synthesized spoken Bmax (text stays source of truth); short-lived scope-bound voice tokens mint in-realm with owner binding and theft/cross-user refused; real provider keys never reach the client; voice off/muted leaves text chat unchanged; zero new tools",
+    "id": "B3",
+    "state": "passing",
+    "title": "B3 voice (mic in + spoken Bmax, ephemeral tokens)",
+    "verification": "ruff check . && pytest tests/test_voice.py tests/test_webchat.py tests/test_webchat_agent.py tests/test_agent_endpoints.py tests/test_baymax_prompt.py tests/test_harness_tools_golden.py tests/test_harness_tools_registry.py"
   }
 ]

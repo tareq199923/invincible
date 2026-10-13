@@ -101,6 +101,31 @@ Compat matrix (fail-closed — flip to `true` only after a live test):
 | `nvidia_nim`, `groq`, `openrouter`, `gemini` | off | Unverified or strict shapes (e.g. NIM/DeepSeek pairing); text summaries until proven. |
 | Custom BYOK rows | off | No flag to inherit; static YAML covers self-hosts. |
 
+## Voice audio (B3)
+
+Mic clips upload as raw request bodies to `/v1/audio/transcriptions`
+(`inv_` realm) or `/dashboard/voice/transcribe` (session-cookie
+realm); the server forwards them as `multipart/form-data` to the
+caller's own credential at `{base_url}/audio/transcriptions` and
+returns `{"text": "…"}` for the client to send as a normal chat turn.
+Assistant speech posts `{"input": "…"}` to `/v1/audio/speech` (or
+`/dashboard/voice/synthesize`) and streams the provider's
+`{base_url}/audio/speech` bytes back. Nothing audio is persisted;
+text stays the source of truth.
+
+Compat matrix (fail-closed — a provider without the surface yields
+502 and the client keeps the text bubble, never a retry storm):
+
+| Provider | STT / TTS | Notes |
+|---|---|---|
+| `openai` catalog | served when the credential succeeds | Reference `/audio/*` shapes. |
+| `nvidia_nim`, `groq`, `openrouter`, `gemini`, custom rows | 502 text-only fallback until proven | Unverified audio surfaces; transcription/synthesis refuse cleanly. |
+
+Ephemeral voice tokens (`POST /v1/voice/token`,
+`POST /dashboard/voice/token`) are realm-bound, scope-bound
+(`stt`/`tts`), device-bound, 5-minute HMAC tokens — never provider
+keys. Threat model: [SECURITY.md](SECURITY.md) §14.
+
 ## Validation
 
 `load_providers_config` validates the whole file after YAML parsing, so

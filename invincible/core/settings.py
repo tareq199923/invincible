@@ -163,6 +163,14 @@ class Settings:
         or tool-registry behavior changes."""
         return _env_flag("INVINCIBLE_HANDOFF")
 
+    def voice_enabled(self) -> bool:
+        """In-app voice (B3: mic PTT in + spoken Bmax out). Default on:
+        the voice transcribe/synthesize/token surfaces run against the
+        caller's own BYOK credentials. Set INVINCIBLE_VOICE=0/off/false
+        to refuse voice fail-closed (503, text chat unchanged).
+        Kill-switch only — no routing or tool-registry changes."""
+        return _env_flag("INVINCIBLE_VOICE")
+
     def harness_ws_heartbeat_seconds(self) -> float:
         """WS keepalive pings from the agent (H1)."""
         try:

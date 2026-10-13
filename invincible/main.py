@@ -47,6 +47,7 @@ from invincible.endpoints.openai_compat import router as openai_router
 from invincible.endpoints.responses_compat import router as responses_router
 from invincible.endpoints.template_filters import register_template_filters
 from invincible.endpoints.tunnel import router as tunnel_router
+from invincible.endpoints.voice import router as voice_router
 
 # R5 (rehearsal): bare load_dotenv() resolves the .env by walking up from
 # THIS FILE's directory, not the working directory - so on a source/editable
@@ -231,6 +232,9 @@ app.include_router(chat_router)
 # Phase 9 BYOK surface: same cookie realm as the dashboard (its own
 # fail-closed INVINCIBLE_CREDENTIAL_KEY gate lives in the router).
 app.include_router(byok_router)
+# B3 in-app voice: per-route realm dependencies live in the module
+# (/v1/* = inv_ keys or voice tokens, /dashboard/* = session cookies).
+app.include_router(voice_router)
 # Vendored browser assets for the dashboard (templates/static ships in the
 # wheel via package-data; the minified file is never edited in place).
 app.mount(

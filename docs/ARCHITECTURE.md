@@ -709,6 +709,42 @@ Single-instance, in-memory by design (same trade-off as jobs): a
 restart orphans queued handoffs — documented, not fixed here; the
 phone retries end-to-end. Threat model: [SECURITY.md](SECURITY.md) §13.
 
+## 6c. In-app voice (B3, BYOK audio — no new tools)
+
+Voice reuses the chat pipeline instead of branching it: mic audio
+becomes a text turn, and speech renders an already-persisted reply.
+Zero registry surface (golden/drift suites frozen).
+
+```
+PWA phone (inv_ key)                    dashboard webchat (session cookie)
+  │  tap mic → MediaRecorder clip         │  tap mic → MediaRecorder clip
+  │  POST /v1/audio/transcriptions        │  POST /dashboard/voice/transcribe
+  │    (raw body; inv_ key OR stt token)  │  (raw body; cookie realm ONLY —
+  │                                         │   voice bearers buy nothing here)
+  ▼                                       ▼
+core/voice.transcribe_audio(candidates, key_resolver, …)
+  │  multipart POST {base_url}/audio/transcriptions on the caller's
+  │  own credential (first usable wins; 4xx passthrough, 5xx next)
+  ▼
+{"text": "…"} → client POSTs it as a normal chat turn
+  (/v1/chat/completions or /dashboard/chat/stream: history, memory,
+  continuity, persistence all unchanged)
+  ▼
+assistant reply persists as text, then optionally:
+  POST /v1/audio/speech {"input": persisted text}  (inv_ or tts token)
+  POST /dashboard/voice/synthesize                 (cookie realm)
+  → core/voice.synthesize_audio → {base_url}/audio/speech bytes
+  → client plays them; 502 = keep the text bubble (fail-closed)
+```
+
+Ephemeral tokens: `mint_voice_token(user, device, scope)` /
+`verify_voice_token` in `core/voice.py` — stateless HMAC
+(`INVINCIBLE_OWNER_SECRET`, 5-minute TTL, `stt`/`tts` scope,
+device-bound, zero tables). `settings.voice_enabled()`
+(`INVINCIBLE_VOICE`) + the per-user `voice` override gate every
+route (503 when off); client mute is localStorage rendering state.
+Threat model: [SECURITY.md](SECURITY.md) §14.
+
 ---
 
 ## 7. Tool execution layer (`core/tool_executor.py`)

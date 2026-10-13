@@ -679,6 +679,7 @@ async def settings_page(
         ("Memory writes", settings.memory_enabled()),
         ("Continuity engine", settings.continuity_enabled()),
         ("Send-time compression", settings.compression_enabled()),
+        ("In-app voice", settings.voice_enabled()),
     ]
     # Phase 1 self-service: the user's own request-shaping overrides plus
     # the server defaults they fall through to (shown as hints).
@@ -700,6 +701,7 @@ async def settings_page(
             "compression": settings.compression_enabled(),
             "relay": settings.relay_enabled(),
             "history_max_turns": settings.history_max_turns(),
+            "voice": settings.voice_enabled(),
         },
         settings_saved=request.query_params.get("saved") == "1",
     )
@@ -719,7 +721,7 @@ async def save_request_settings(
     defensively."""
     body = await _payload(request)
     overrides = {}
-    for key in ("memory", "continuity", "compression", "relay"):
+    for key in ("memory", "continuity", "compression", "relay", "voice"):
         value = str(body.get(key) or "").strip().lower()
         if value == "on":
             overrides[key] = True

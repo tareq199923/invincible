@@ -1142,3 +1142,53 @@ B1 overlay wakes) for the user's own next turn. The walls that matter:
   and the relay (503, nothing queued). Restart orphans queued
   handoffs (in-memory, single-instance — same disclosure as §10
   limit 17); the phone retries end-to-end.
+
+## 14. In-app voice (B3): mic PTT in, spoken Bmax out, ephemeral tokens
+
+Voice is **rendering, not a new privilege**: the mic produces text
+that enters the normal chat pipeline, and speech renders
+already-persisted assistant text. Text bubbles stay the source of
+truth; the threat surface is the audio path plus the short-lived
+tokens that authorize it.
+
+- **Explicit press-to-talk only.** Recording starts on a tap and stops
+  on the next tap (PWA + webchat alike); the always-listening
+  `create_response:false`-style realtime pattern is out of scope by
+  design. There is no hotword, no background capture, and no
+  system-wide listener — leaving the page stops everything (the
+  MediaRecorder tracks are cut on stop). Mic consent is the browser's
+  own getUserMedia gate per press.
+- **Audio retention = meeting-notes policy only.** Recorded clips are
+  held in memory for one transcription call and never written to disk
+  or any table; transcripts persist as ordinary user turns (same
+  ownership triple, same retention as typed text). Synthesized audio is
+  streamed back and never stored.
+- **BYOK-only audio.** Transcription (`/audio/transcriptions`) and
+  synthesis (`/audio/speech`) run server-side against the caller's OWN
+  connected credentials — audio is never shipped to any third party
+  except that user's provider, and provider keys never enter a
+  response (pinned by `tests/test_voice.py` key-material scans).
+  A provider with no audio surface fails closed with 502 and the
+  client keeps the text bubble (see the compat matrix in
+  [PROVIDERS.md](PROVIDERS.md)).
+- **Ephemeral tokens (minutes, single purpose).** `POST /v1/voice/token`
+  (`inv_` realm, owner-bound — the token always names the caller, so
+  cross-user mint is impossible) and `POST /dashboard/voice/token`
+  (session-cookie realm) mint stateless HMAC-signed
+  `vv1.{user}.{scope}.{expiry}.{device}` tokens (TTL 5 minutes,
+  `INVINCIBLE_OWNER_SECRET`-signed, fail closed when unset — no new
+  tables, no migration). Scope binds `stt` vs `tts` (a transcription
+  token is 401 on the speech route and vice versa); tampered,
+  expired, or foreign tokens are 401, indistinguishable from a missing
+  credential. Dashboard audio routes honor the session cookie only —
+  a victim's voice bearer buys nothing in another user's session
+  (no confused deputy across realms). Theft window is the TTL:
+  a stolen token speaks or transcribes as its owner for minutes, the
+  same blast radius as a stolen 5-minute OAuth token, and it can never
+  mint, list credentials, or run tools.
+- **Kill-switch + mute fail safe.** `INVINCIBLE_VOICE=0/off/false`
+  refuses every voice route with 503 (mint included); the per-user
+  `voice` override (dashboard Settings, default = follow server)
+  refuses per user the same way. Either off leaves text chat
+  byte-identical (pinned by the fail-safe test). Client mute is
+  localStorage-only rendering state.

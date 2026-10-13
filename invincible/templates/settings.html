@@ -63,6 +63,13 @@
         value="{{ user_overrides.history_max_turns if user_overrides.history_max_turns is number else '' }}"
         aria-label="History turn cap"></td>
       <td class="muted">Empty = server default ({{ defaults.history_max_turns if defaults.history_max_turns is number else "no cap" }}); 0 = no cap</td></tr>
+    <tr><th>Spoken Bmax voice</th>
+      <td><select name="voice">
+        <option value="default" {% if user_overrides.voice is not boolean %}selected{% endif %}>Server default</option>
+        <option value="on" {% if user_overrides.voice is true %}selected{% endif %}>On</option>
+        <option value="off" {% if user_overrides.voice is false %}selected{% endif %}>Off</option>
+      </select></td>
+      <td class="muted">Server default: {{ "on" if defaults.voice else "off" }} — text bubbles stay the source of truth; off leaves chat text-only</td></tr>
   </table>
   <button type="submit">Save settings</button>
 </form>

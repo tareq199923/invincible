@@ -5,6 +5,28 @@
 
 ## Current State
 
+- B3 done (`passing`, uncommitted): in-app voice — mic PTT in + spoken
+  Bmax out + ephemeral tokens. New `core/voice.py` (stateless HMAC
+  `vv1.{user}.{scope}.{expiry}.{device}` tokens, 5-min TTL, `stt`/`tts`
+  scope + device binding, fail closed without `INVINCIBLE_OWNER_SECRET`;
+  BYOK-only `transcribe_audio`/`synthesize_audio` with caps + 502
+  text-only fallback; `voice_allowed()` = kill-switch AND per-user
+  `voice` override) + `endpoints/voice.py` (`/v1/voice/token`,
+  `/v1/audio/transcriptions` raw-body upload, `/v1/audio/speech` in the
+  inv_ realm with matching-scope token auth, `/dashboard/voice/*`
+  triplets in the session-cookie realm — realms never mix, dashboard
+  ignores voice bearers). `settings.voice_enabled()` (`INVINCIBLE_VOICE`,
+  no raw env reads) + `voice` in `OVERRIDABLE_KEYS` + Settings page
+  toggle. PWA `phone.html` (tap-record → upload → send, spoken replies
+  + mute) + webchat `chat.html` (mic → transcribe → auto-submit, speak
+  on done + mute) — text bubbles stay the source of truth, all inserts
+  textContent-only, JS node-checked. Zero tools (goldens/drift frozen);
+  no migration (no new tables); no python-multipart (raw-body upload).
+  New: `tests/test_voice.py` (33 hermetic tests: mint/verify,
+  tamper/expiry/scope theft refused, cross-user + cross-realm refused,
+  key-material scans, kill-switch/mute fail-safe with text chat green).
+  Docs same PR: SECURITY §14, ARCHITECTURE §6c, PROVIDERS voice matrix,
+  CONFIGURATION row. F05 vector seam still deferred.
 - B2 done (`passing`, committed as `2d1248b`, pushed): phone app + Hey Baymax hop phone → PC.
   Presence reuses hello/machines (zero new tables — phone hellos with
   `platform: *-pwa` + `capabilities: {phone}` read via
@@ -94,8 +116,8 @@
   all modes incl plan), dispatch trio, summary previews, goldens, drift
   pins (27 tools), `MCP_PROTOCOL.md`. New:
   `tests/test_look_at_screen.py` (6 tests).
-- Ruff/pytest status: `ruff check .` clean; FULL suite 1873 passed
-  (1852 baseline + 21 handoff), 11 skipped, 1 deselected.
+- Ruff/pytest status: `ruff check .` clean; FULL suite 1906 passed
+  (1873 baseline + 33 voice), 11 skipped, 1 deselected.
   Clean-state checklist 5/5 ticked. Uncommitted — commit on user's word.
 - F04 done (`passing`): read-only fan-out reframed + built as
   `core/harness_fanout.py` (planner + parallel scout/librarian steps,
@@ -116,8 +138,8 @@
 
 ## In Progress
 
-- None — B2 complete (`passing`, committed as `2d1248b`, pushed).
-  Zero `active`. Next: F05 vector seam at next clock-in.
+- None — B3 complete (`passing`, uncommitted). Zero `active`.
+  Next: F05 vector seam at next clock-in.
 
 ## Next Steps
 

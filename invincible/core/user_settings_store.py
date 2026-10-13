@@ -16,7 +16,7 @@ The routing JSON references the user's own
     {"mode": "auto"}
 
 ``overrides`` keys (memory, continuity, compression, relay,
-history_max_turns) each mean "fall through to the env default" when
+history_max_turns, voice) each mean "fall through to the env default" when
 absent - server-level secrets and config stay env-only by construction.
 """
 import time
@@ -45,6 +45,7 @@ OVERRIDABLE_KEYS = (
     "compression",
     "relay",
     "history_max_turns",
+    "voice",
 )
 
 

@@ -309,6 +309,7 @@ async def client(pg_engine, router_setter, monkeypatch):
     # attribute tests assign directly.
     app.state.oauth_store = None
     app.state.byok_http_client = None
+    app.state.voice_http_client = None
     app.state.agent_registry = None
     app.state.tunnel_registry = None
     app.state.harness_bus = None
