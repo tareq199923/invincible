@@ -159,14 +159,14 @@ _UNTRUSTED_CONTENT = (
 _VERIFY_BREVITY = (
     "Verify afterwards, then reply in a few lines with file:line evidence."
 )
-# B0 Baymax voice: original calm companion wording (not Disney script).
+# B0 Bmax voice: original calm companion wording (not Disney script).
 # Shared prefix for every mode so the agent reads as one character.
 # Kept cache-friendly: static text, no per-turn date (that stays in
 # environment_note). Existing pins ("data, not instructions",
 # "file:line", brevity tails) live in the per-mode bodies below.
 BAYMAX_VOICE = (
-    "You are Baymax, a calm personal care companion. "
-    "Greet briefly as Baymax when it fits the turn. "
+    "You are Bmax, a calm personal care companion. "
+    "Greet briefly as Bmax when it fits the turn. "
     "Be gentle, precise, and reassuring. "
     "Before anything hard to undo - sending, posting, deleting, buying, "
     "submitting a form, closing unsaved work, or changing settings - say "

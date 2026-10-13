@@ -2655,17 +2655,23 @@ def _focus_password_main() -> None:
     sys.stdout.buffer.write(json.dumps(payload).encode("utf-8"))
 
 
-async def _computer_resolve(target: dict) -> tuple[dict, dict]:
+async def _computer_resolve(target: dict, *,
+                          on_point=None) -> tuple[dict, dict]:
     """Resolve a normalized target to grid x/y plus a result echo.
 
     Control ids look up against a FRESH _look_at_screen read (same
     ordering ⇒ same ids); a miss is a stale-id error naming the fix.
     Returns (point, echo); raises ValueError when unresolvable.
+
+    ``on_point`` is the F11 overlay announce hook: every resolved grid
+    point is offered to it (drag offers both ends). It must never
+    break the job - exceptions are swallowed here.
     """
     if "control" not in target:
         point = {"x": target.get("x"), "y": target.get("y")}
         if point["x"] is None:
             return {}, {}
+        _notify_point(on_point, point)
         return point, {"x": point["x"], "y": point["y"]}
     look = await _look_at_screen()
     if not isinstance(look, dict) or look.get("status") != "look":
@@ -2675,7 +2681,9 @@ async def _computer_resolve(target: dict) -> tuple[dict, dict]:
     for control in look.get("controls") or []:
         if isinstance(control, dict) and control.get("id") == target[
                 "control"]:
-            return ({"x": control["x"], "y": control["y"]},
+            resolved = {"x": control["x"], "y": control["y"]}
+            _notify_point(on_point, resolved)
+            return (resolved,
                     {"x": control["x"], "y": control["y"],
                      "label": control.get("label") or "",
                      "kind": control.get("kind") or "control",
@@ -2685,12 +2693,40 @@ async def _computer_resolve(target: dict) -> tuple[dict, dict]:
         "re-read with look_at_screen and use the new C id")
 
 
-async def _computer_act(name: str, args: dict) -> dict:
+def _notify_point(on_point, point: dict) -> None:
+    """Offer one resolved grid point to the overlay hook (never raises)."""
+    if on_point is None:
+        return
+    with contextlib.suppress(Exception):
+        on_point(point)
+
+
+async def _computer_dwell(seconds: float) -> None:
+    """Pre-action pause so the overlay glide lands first (0 skips it).
+
+    The runner only passes a nonzero delay when an overlay is alive,
+    so headless jobs pay zero added latency.
+    """
+    try:
+        delay = float(seconds or 0)
+    except (TypeError, ValueError):
+        return
+    if delay > 0:
+        await asyncio.sleep(delay)
+
+
+async def _computer_act(name: str, args: dict, *,
+                      on_point=None,
+                      pre_action_delay: float = 0.0) -> dict:
     """Execute one Pack 3 action on THIS machine (agent-side only).
 
     ToolBlocked propagates (the runner maps it to a blocked result);
     ValueError becomes an error result. Only ``unavailable`` answers
     off-Windows — never raises there.
+
+    ``on_point`` announces each resolved grid point to the F11 overlay
+    (never breaks the job); ``pre_action_delay`` pauses once before
+    the terminal physical action so the overlay glide lands first.
     """
     if os.name != "nt":
         return {"status": "unavailable",
@@ -2702,7 +2738,9 @@ async def _computer_act(name: str, args: dict) -> dict:
     api = _computer_input_api()
     try:
         if name == "click":
-            point, echo = await _computer_resolve(norm)
+            point, echo = await _computer_resolve(norm,
+                                                  on_point=on_point)
+            await _computer_dwell(pre_action_delay)
             _computer_click_at(api, point["x"], point["y"],
                                norm["button"], norm["double"])
             return {"status": "ok", "action": "click",
@@ -2714,11 +2752,14 @@ async def _computer_act(name: str, args: dict) -> dict:
                 # field that actually receives the keystrokes (covers
                 # the focus race: probe-then-type would check the
                 # wrong element).
-                point, echo = await _computer_resolve(norm)
+                point, echo = await _computer_resolve(norm,
+                                                      on_point=on_point)
+                await _computer_dwell(pre_action_delay)
                 _computer_click_at(api, point["x"], point["y"],
                                    "left", False)
             else:
                 echo = {}
+                await _computer_dwell(pre_action_delay)
             password = await _focus_is_password()
             if password is True:
                 raise ToolBlocked(
@@ -2736,24 +2777,32 @@ async def _computer_act(name: str, args: dict) -> dict:
                     "submit": norm["submit"], **echo}
         if name == "press_keys":
             if "control" in norm or "x" in norm:
-                point, echo = await _computer_resolve(norm)
+                point, echo = await _computer_resolve(norm,
+                                                      on_point=on_point)
+                await _computer_dwell(pre_action_delay)
                 _computer_click_at(api, point["x"], point["y"],
                                    "left", False)
             else:
                 echo = {}
+                await _computer_dwell(pre_action_delay)
             _computer_press(api, parse_keys_chord(norm["keys"]))
             return {"status": "ok", "action": "press_keys",
                     "keys": norm["keys"], **echo}
         if name == "scroll":
-            point, echo = await _computer_resolve(norm)
+            point, echo = await _computer_resolve(norm,
+                                                  on_point=on_point)
+            await _computer_dwell(pre_action_delay)
             _computer_scroll_at(api, point.get("x"), point.get("y"),
                                 norm["direction"], norm["amount"])
             return {"status": "ok", "action": "scroll",
                     "direction": norm["direction"],
                     "amount": norm["amount"], **echo}
         if name == "drag":
-            start, echo_from = await _computer_resolve(norm["from"])
-            end, echo_to = await _computer_resolve(norm["to"])
+            start, echo_from = await _computer_resolve(norm["from"],
+                                                       on_point=on_point)
+            end, echo_to = await _computer_resolve(norm["to"],
+                                                   on_point=on_point)
+            await _computer_dwell(pre_action_delay)
             _computer_drag(api, start["x"], start["y"],
                            end["x"], end["y"])
             return {"status": "ok", "action": "drag",

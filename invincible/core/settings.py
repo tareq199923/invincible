@@ -147,6 +147,13 @@ class Settings:
         (useful behind proxies that break WS)."""
         return _env_flag("INVINCIBLE_HARNESS_WS")
 
+    def overlay_enabled(self) -> bool:
+        """B1 head-cursor overlay on the paired Windows machine. Default
+        on: the agent auto-starts the overlay child process on Windows.
+        Set INVINCIBLE_OVERLAY=0/off/false to run headless (useful on
+        servers or when no desktop session is visible)."""
+        return _env_flag("INVINCIBLE_OVERLAY")
+
     def harness_ws_heartbeat_seconds(self) -> float:
         """WS keepalive pings from the agent (H1)."""
         try:

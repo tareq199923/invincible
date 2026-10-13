@@ -518,7 +518,7 @@ main.bare .panel { background: var(--surface); border: 1px solid var(--border); 
 .bubble .meta { display: block; margin-top: 0.4rem; font-size: 0.72rem; color: var(--faint); }
 .bubble.error { color: var(--err); }
 .bubble.pending { color: var(--faint); }
-/* B0.2 Baymax marker: original soft-white dot + name (no image assets,
+/* B0.2 Bmax marker: original soft-white dot + name (no image assets,
    no Disney likeness). Dot eyes use theme ink; ring uses theme accent. */
 .baymax-dot {
   display: inline-block;

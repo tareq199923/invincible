@@ -42,10 +42,10 @@
     "verification": "python tools/audit_harness.py . && ruff check . && pytest tests/test_audit_harness.py"
   },
   {
-    "behavior": "Baymax voice prefix on all webchat modes plus avatar UI plus screenshot image on tool_result events; original wording, existing pins intact",
+    "behavior": "Bmax voice prefix on all webchat modes plus avatar UI plus screenshot image on tool_result events; original wording, existing pins intact",
     "id": "F07",
     "state": "passing",
-    "title": "Baymax B0 browser-first (voice + avatar + screenshot preview)",
+    "title": "Bmax B0 browser-first (voice + avatar + screenshot preview)",
     "verification": "ruff check . && pytest tests/test_baymax_prompt.py tests/test_baymax_screenshot.py tests/test_webchat_agent.py tests/test_webchat.py"
   },
   {
@@ -68,5 +68,12 @@
     "state": "passing",
     "title": "Pack 3 computer-use (paired-PC input + launch)",
     "verification": "ruff check . && pytest tests/test_computer_use.py tests/test_harness_tools_golden.py tests/test_harness_tools_registry.py"
+  },
+  {
+    "behavior": "transparent click-through always-on-top Bmax-head cursor overlay on the paired Windows machine follows Pack 3 target points (pre-action glide, idle dock, eyes track real mouse); child-process isolated so a dead overlay never breaks jobs; zero registry surface",
+    "id": "F11",
+    "state": "passing",
+    "title": "B1 head-cursor overlay (Bmax eyes on PC)",
+    "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py tests/test_webchat_agent.py tests/test_webchat.py"
   }
 ]

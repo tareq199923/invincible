@@ -22,10 +22,30 @@
   MCP_PROTOCOL §7 tools, SECURITY §12, ROADMAP count 34. Vetted
   plan survived contact: one real find during vetting (the batch
   trap), confirmed in code before building.
-- Last commit: `062ece5` (main) — F09 look_at_screen committed
-  (reconciled 2026-10-13; prior diary entry naming `27f9892` was stale).
+- Last commit: `feab66e` (main, pushed) — F10 Pack 3 computer-use.
+- F11 done (`passing`, uncommitted): B1 head-cursor overlay — Bmax-head
+  cursor on the paired Windows machine (new stdlib-only
+  `invincible/agent/overlay.py`: pure grid/ease/eye/dock helpers +
+  Tk click-through window + child-process `Overlay` handle with
+  stdin-pipe IPC; original soft-white head + two ink eyes, no Disney
+  likeness). Runner announces every resolved Pack 3 point via
+  `_computer_resolve(..., on_point=)` with a ~350ms pre-action dwell
+  ONLY when an overlay is alive (headless jobs pay zero latency);
+  settle-to-dock after each job; autostart on connect (Windows),
+  `INVINCIBLE_OVERLAY=0` kill-switch via `settings.overlay_enabled()`,
+  dead-overlay retry cooldown 60s. Isolation: hook exceptions
+  swallowed in `_notify_point`, all sends best-effort, Tk closes
+  whenever click-through fails to stick. Zero registry surface
+  (goldens/drift untouched). New: `tests/test_overlay.py` (22 tests:
+  hermetic geometry/easing/eye/dock/round-trip + handle/wiring +
+  Windows-gated live metrics proving the SM_* constants). Docs:
+  CONFIGURATION `INVINCIBLE_OVERLAY` row.
+- Rename (uncommitted): Baymax → Bmax everywhere user-visible (webchat
+  voice prefix, avatar label, overlay docs/ticket text). Internal
+  identifiers kept (`BAYMAX_VOICE`, `.baymax-dot`, `ensureBaymaxMark`,
+  test/file names) — zero churn; pins updated, suites green.
 - F09 done (`passing`): look_at_screen controls grounding
-- F07 done (`passing`): Baymax B0 browser-first (voice + avatar +
+- F07 done (`passing`): Bmax B0 browser-first (voice + avatar +
   screenshot preview).
 - F08 done (`passing`): web_research tool (Bluey steal pack 1,
   Responses web_search via caller's BYOK credential).
@@ -37,9 +57,9 @@
   all modes incl plan), dispatch trio, summary previews, goldens, drift
   pins (27 tools), `MCP_PROTOCOL.md`. New:
   `tests/test_look_at_screen.py` (6 tests).
-- Ruff/pytest status: `ruff check .` clean; FULL suite 1813 passed,
-  11 skipped, 1 deselected. Clean-state checklist 5/5 ticked.
-  Uncommitted — commit on user's word.
+- Ruff/pytest status: `ruff check .` clean; FULL suite 1835 passed
+  (1813 baseline + 22 overlay), 11 skipped, 1 deselected.
+  Clean-state checklist 5/5 ticked. Uncommitted — commit on user's word.
 - F04 done (`passing`): read-only fan-out reframed + built as
   `core/harness_fanout.py` (planner + parallel scout/librarian steps,
   main loop synthesizes; trigger ≥6 reads/≥2 planes, once per turn
@@ -59,15 +79,18 @@
 
 ## In Progress
 
-- None — F10 complete (`passing`, uncommitted). Zero `active`.
-  Next: F05 vector seam or B1 head-cursor overlay at next clock-in.
+- None — F11 complete (`passing`, uncommitted). Zero `active`.
+  Next: F05 vector seam at next clock-in.
 
 ## Next Steps
 
-1. Commit F09 on user's word; verify `git status` shows only the
+1. Commit F10+F11 on user's word; verify `git status` shows only the
    intended files first.
 2. F05 vector seam remains `planned` — next candidate; set `active`
    only at next clock-in.
+3. Live Tk window (glide/dock/click-through visuals) still unverified —
+   needs a visible Windows desktop session; hermetic + read-only live
+   metrics are green.
 3. F04 fan-out (`harness_fanout.py` + 18 tests) stays green, untouched.
 
 ## Blockers

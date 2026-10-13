@@ -39,12 +39,13 @@ import json
 import os
 import platform
 import shutil
+import time
 import uuid
 from urllib.parse import urlparse, urlunparse
 
 import httpx
 
-from invincible.agent import sandbox
+from invincible.agent import overlay, sandbox
 from invincible.core import harness_tools, tool_executor
 from invincible.core.harness_tunnel import (
     MAX_FRAME_BYTES,
@@ -77,6 +78,45 @@ _TUNNEL_INBOUND = frozenset({
 })
 
 _TUNNEL_ACK_ERROR_MAX = 200
+
+# F11 overlay handle (child process, best-effort). ``None`` until the
+# first ensure; a dead overlay retries at most once a minute so a
+# machine without a desktop never pays a spawn per job.
+_OVERLAY: overlay.Overlay | None = None
+_OVERLAY_RETRY_AT = 0.0
+OVERLAY_RETRY_COOLDOWN_SECONDS = 60.0
+
+
+def ensure_overlay() -> overlay.Overlay | None:
+    """Live overlay handle, or None when headless. Never raises.
+
+    Headless covers: off-Windows, INVINCIBLE_OVERLAY=0, spawn failure,
+    or a dead child inside its retry cooldown. Callers skip the
+    pre-action dwell when this returns None.
+    """
+    global _OVERLAY, _OVERLAY_RETRY_AT
+    if os.name != "nt" or not settings.overlay_enabled():
+        return None
+    if _OVERLAY is None:
+        _OVERLAY = overlay.Overlay()
+    if _OVERLAY.alive:
+        return _OVERLAY
+    if time.monotonic() < _OVERLAY_RETRY_AT:
+        return None
+    if _OVERLAY.start():
+        return _OVERLAY
+    _OVERLAY_RETRY_AT = (
+        time.monotonic() + OVERLAY_RETRY_COOLDOWN_SECONDS)
+    return None
+
+
+def stop_overlay() -> None:
+    """Terminate the overlay child. Never raises; safe to call twice."""
+    global _OVERLAY
+    current, _OVERLAY = _OVERLAY, None
+    if current is not None:
+        with contextlib.suppress(Exception):
+            current.stop()
 
 
 def _silence(task: asyncio.Task) -> None:
@@ -187,12 +227,15 @@ async def run_agent_ws(
         url, ping_interval=heartbeat, ping_timeout=heartbeat,
     ) as ws:
         await ws.send(json.dumps(hello_frame()))
+        ensure_overlay()  # F11: Bmax arrives with the agent (no-op
+        # off-Windows / headless / INVINCIBLE_OVERLAY=0)
         try:
             while not stop.is_set():
                 await _one_ws_message(ws)
         finally:
             # C2, agent side: every TCP dial dies with the relay.
             await _teardown_tunnels(ws)
+            stop_overlay()
 
 
 async def execute_job(job: dict) -> dict:
@@ -316,8 +359,22 @@ async def execute_job(job: dict) -> dict:
             # re-checked inside _computer_act (Wall 2); ToolBlocked
             # becomes the job's blocked result via the handler below.
             # Non-Windows answers unavailable, never raises.
-            return await tool_executor._computer_act(
-                job_type, args if isinstance(args, dict) else {})
+            # F11: resolved points glide the overlay BEFORE the action
+            # (pre-action dwell only when an overlay is alive); the
+            # head settles back to its dock corner after. Every overlay
+            # call is best-effort - a dead overlay never breaks a job.
+            seen = ensure_overlay()
+            sink = seen.announce if seen is not None else None
+            dwell = (overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS
+                     if seen is not None and seen.alive else 0.0)
+            try:
+                return await tool_executor._computer_act(
+                    job_type, args if isinstance(args, dict) else {},
+                    on_point=sink, pre_action_delay=dwell)
+            finally:
+                if seen is not None:
+                    with contextlib.suppress(Exception):
+                        seen.settle()
         return {
             "status": "error",
             "error": f"Unknown job type: {job_type}. Valid job types: "
@@ -668,6 +725,8 @@ async def run_agent(base_url: str, api_key: str,
     headers = {"Authorization": f"Bearer {api_key}"}
     stop = stop or asyncio.Event()
     announced = False  # one-time "connected" after the first good poll
+    ensure_overlay()  # F11: Bmax arrives with the agent (no-op
+    # off-Windows / headless / INVINCIBLE_OVERLAY=0)
 
     async def _one_cycle() -> None:
         nonlocal announced
@@ -723,6 +782,7 @@ async def run_agent(base_url: str, api_key: str,
             except asyncio.CancelledError:
                 raise
     finally:
+        stop_overlay()
         if owns_client:
             await http.aclose()
 

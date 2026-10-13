@@ -1,5 +1,5 @@
 # tests/test_baymax_prompt.py
-"""B0.1 Baymax voice prefix pins (browser-first Baymax, no overlay yet).
+"""B0.1 Bmax voice prefix pins (browser-first Bmax, no overlay yet).
 
 Original calm-companion wording only - no Disney script quotes.
 Prepend-only so every pre-existing prompt pin stays intact.
@@ -10,7 +10,7 @@ from invincible.core.webchat_agent import BAYMAX_VOICE, MODE_SYSTEM_PROMPTS
 
 def test_baymax_voice_constant_original_wording():
     assert isinstance(BAYMAX_VOICE, str) and BAYMAX_VOICE.strip()
-    assert "Baymax" in BAYMAX_VOICE
+    assert "Bmax" in BAYMAX_VOICE
     assert "hard to undo" in BAYMAX_VOICE
     assert "wait for confirmation" in BAYMAX_VOICE
     # Disney film line must never ship verbatim.
@@ -57,7 +57,7 @@ def test_baymax_avatar_markup_present():
     assert "baymax-name" in html
     assert "ensureBaymaxMark" in html
     # Name is DOM text (XSS-safe), never an innerHTML string.
-    assert 'name.textContent = "Baymax"' in html
+    assert 'name.textContent = "Bmax"' in html
 
 
 def test_baymax_avatar_css_present():
