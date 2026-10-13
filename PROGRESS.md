@@ -5,7 +5,7 @@
 
 ## Current State
 
-- B3 done (`passing`, uncommitted): in-app voice — mic PTT in + spoken
+- B3 done (`passing`, committed as `ff46c9e`, pushed): in-app voice — mic PTT in + spoken
   Bmax out + ephemeral tokens. New `core/voice.py` (stateless HMAC
   `vv1.{user}.{scope}.{expiry}.{device}` tokens, 5-min TTL, `stt`/`tts`
   scope + device binding, fail closed without `INVINCIBLE_OWNER_SECRET`;
@@ -138,8 +138,8 @@
 
 ## In Progress
 
-- None — B3 complete (`passing`, uncommitted). Zero `active`.
-  Next: F05 vector seam at next clock-in.
+- None — B3 complete (`passing`, committed as `ff46c9e`, pushed).
+  Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps
 
