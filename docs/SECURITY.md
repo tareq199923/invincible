@@ -1109,3 +1109,36 @@ screen may have changed since the last `look_at_screen`:
 - *Password probing is focus-deep, not screen-deep.* Only the focused
   control is probed; a password field elsewhere on screen is none of
   typing's business until focused.
+
+---
+
+## 13. Phone→PC handoff (B2): routed text, not execution
+
+`POST /agent/handoff` moves a **task description** from the caller's
+phone to their own paired PC. It grants nothing by itself: the PC does
+not execute on receipt — the text lands in front of the user (and the
+B1 overlay wakes) for the user's own next turn. The walls that matter:
+
+- **Owner binding is structural.** The `inv_` key resolves to exactly
+  one user; the handoff lands only in that user's queue. There is no
+  target-user field, so there is nothing to forge — cross-user
+  handoffs are refused the same way cross-user jobs are (no code path
+  addresses another user's queue, sockets, or machines). A leaked key
+  exposes only its owner's PC queue, same scope as a leaked key's
+  chat history.
+- **No LAN trust.** Unlike Bluey's Bonjour-style local discovery (any
+  device on the LAN can find and talk to any other), handoff never
+  trusts the network: every hop is authenticated (per-user `inv_` key),
+  server-routed (no peer-to-peer, no multicast), and fail-closed
+  (unknown/revoked key → 401, handoff disabled → 503, blank/overlong
+  task → 400). A hostile LAN sees only TLS to the gateway.
+- **No execution surface.** The payload is display text (task ≤4000
+  chars, context ≤16000 chars, per-user depth 10 oldest-first). It is
+  never staged, never approved, never run, and never injected into a
+  model prompt by the server — prompt-injection scope is exactly the
+  user's own next turn on their own PC, the same trust level as typing
+  the text there directly.
+- **Kill-switch.** `INVINCIBLE_HANDOFF=0/off/false` refuses the POST
+  and the relay (503, nothing queued). Restart orphans queued
+  handoffs (in-memory, single-instance — same disclosure as §10
+  limit 17); the phone retries end-to-end.

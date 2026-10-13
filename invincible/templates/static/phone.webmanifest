@@ -1,0 +1,11 @@
+{
+  "name": "Baymax Phone",
+  "short_name": "Bmax",
+  "description": "Hey Baymax phone shell: push-to-talk plus hop to PC.",
+  "start_url": "/dashboard/phone",
+  "scope": "/dashboard/phone",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": []
+}

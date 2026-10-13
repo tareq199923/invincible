@@ -119,6 +119,24 @@ def stop_overlay() -> None:
             current.stop()
 
 
+def handle_handoff(handoff: dict | None) -> None:
+    """B2 arrival: wake the B1 overlay so Bmax visibly hops to the PC.
+
+    Best-effort and never raises (same isolation as every overlay
+    call): headless/off-Windows/kill-switched machines just log.
+    ``handoff`` is display data only — malformed shapes are ignored.
+    """
+    if not isinstance(handoff, dict):
+        return
+    task = handoff.get("task", "")
+    shown = str(task)[:200] if isinstance(task, str) else ""
+    print(f"[agent] handoff arrived{(': ' + shown) if shown else ''}")
+    with contextlib.suppress(Exception):
+        seen = ensure_overlay()
+        if seen is not None and seen.alive:
+            seen.settle()
+
+
 def _silence(task: asyncio.Task) -> None:
     """Swallow a background task's exception on completion (stream pumps
     report failure by closing the stream, never by raising into the WS
@@ -213,6 +231,13 @@ async def run_agent_ws(
             # streams interleave by type key (neither carries the
             # other's keys, so neither parser can misroute).
             await _handle_tunnel_frame(ws, message)
+            return
+        if message.get("type") == "handoff":
+            # B2: fire-and-forget phone→PC task (control-plane, not a
+            # tool job — no result is posted back). Wakes the overlay
+            # so the hop is visible, then the loop keeps waiting.
+            with contextlib.suppress(Exception):
+                handle_handoff(message.get("handoff"))
             return
         job = (message.get("job")
                if message.get("type") == "job" else None)
@@ -744,6 +769,13 @@ async def run_agent(base_url: str, api_key: str,
             announced = True
             print("[agent] connected - waiting for jobs from your AI")
         job = polled.json().get("job")
+        handoff = polled.json().get("handoff")
+        if handoff is not None:
+            # B2 poll fallback: WS-less PCs hop here. Fire-and-forget
+            # (no result posts back); a dead overlay never breaks jobs.
+            with contextlib.suppress(Exception):
+                handle_handoff(handoff.get("handoff")
+                               if isinstance(handoff, dict) else None)
         if job is None:
             return
         print(f"[agent] job {job.get('job_id')}: {job.get('type')}")

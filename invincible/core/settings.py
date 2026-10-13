@@ -154,6 +154,15 @@ class Settings:
         servers or when no desktop session is visible)."""
         return _env_flag("INVINCIBLE_OVERLAY")
 
+    def handoff_enabled(self) -> bool:
+        """Phone→PC handoff control messages (B2). Default on:
+        POST /agent/handoff relays a fire-and-forget task to the
+        caller's paired PC (WS-first, poll fallback). Set
+        INVINCIBLE_HANDOFF=0/off/false to refuse handoffs fail-closed
+        (both the POST and the relay). Kill-switch only — no routing
+        or tool-registry behavior changes."""
+        return _env_flag("INVINCIBLE_HANDOFF")
+
     def harness_ws_heartbeat_seconds(self) -> float:
         """WS keepalive pings from the agent (H1)."""
         try:

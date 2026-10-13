@@ -82,5 +82,12 @@
     "state": "passing",
     "title": "Multimodal image parts (model truly sees screenshots)",
     "verification": "ruff check . && pytest tests/test_vision.py tests/test_router.py tests/test_webchat_agent.py tests/test_webchat.py"
+  },
+  {
+    "behavior": "phone presence reuses hello/machines plus owner-scoped POST /agent/handoff relayed WS-first with poll fallback to the user's paired PC (fire-and-forget control message, not a tool); PWA push-to-talk + Bmax face + bubbles over /v1/chat/completions; kill-switch INVINCIBLE_HANDOFF; threat note + routing docs same PR",
+    "id": "B2",
+    "state": "passing",
+    "title": "Phone app + handoff (Hey Baymax hops phone → PC)",
+    "verification": "ruff check . && pytest tests/test_handoff.py tests/test_agent_registry.py tests/test_agent_ws.py tests/test_agent_endpoints.py tests/test_agent_routing.py"
   }
 ]

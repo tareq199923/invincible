@@ -1254,3 +1254,17 @@ Security notes for this setup:
   a valid bearer token is the approver — there is no terminal prompt to
   gate it.
 - See [docs/SECURITY.md](SECURITY.md) for the full threat model.
+
+---
+
+## 8. Phone→PC handoff (agent control plane — not MCP)
+
+Handoff (`POST /agent/handoff`, B2) is documented here so nobody goes
+looking for it in `tools/list`: it is **not a tool** and never appears
+in the 34-tool registry. A phone sends `{task, context}` under its own
+`inv_` key; the server relays it to that same user's paired PC
+(WS-first, poll fallback) as a fire-and-forget control message. No
+staging, no approval, no result. Kill-switch `INVINCIBLE_HANDOFF`
+(fail-closed 503 when off). Routing detail:
+[ARCHITECTURE.md](ARCHITECTURE.md) §6b; threat model:
+[SECURITY.md](SECURITY.md) §13.

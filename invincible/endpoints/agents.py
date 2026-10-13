@@ -1,12 +1,14 @@
 # invincible/endpoints/agents.py
 """Agent-facing endpoints: long-poll + WebSocket relay + result submission
-(Phase 10, extended H1).
++ phone→PC handoff (Phase 10, extended H1, B2 handoff).
 
 Transport for confirmed MCP tool jobs between the server and the
 user's paired harness (``invincible harness connect`` on their own machine). Two
 realms meet here, and they never mix:
 
 - ``POST /agent/poll`` + ``POST /agent/result`` + ``WS /agent/ws``
+  + ``POST /agent/handoff`` (B2: fire-and-forget phone→PC task,
+  WS-first with poll fallback, control-plane — not a tool job)
   authenticate with an inv_ API key (the same credential
   ``invincible login`` persists to ~/.invincible/config.json) via
   ``require_agent_auth`` - a deliberately narrow dependency, NOT
@@ -41,7 +43,12 @@ from fastapi import (
 )
 
 from invincible.core.accounts import UserService, resolve_session
-from invincible.core.agent_registry import PollCapacityExceeded
+from invincible.core.agent_registry import (
+    HANDOFF_CONTEXT_MAX_CHARS,
+    HANDOFF_FROM_DEVICE_MAX_CHARS,
+    HANDOFF_TASK_MAX_CHARS,
+    PollCapacityExceeded,
+)
 from invincible.core.harness_tunnel import (
     FrameError,
     decode_data_frame,
@@ -156,6 +163,11 @@ async def agent_poll(request: Request,
     Over-cap concurrent polls (LOW-5) get a 429 - the agent runner
     treats any non-200 like a network hiccup (2s backoff), so the
     excess connection sheds without hot-looping.
+
+    B2: a queued phone→PC handoff rides along additively (``"handoff"``
+    key present ONLY when one is waiting) so WS-less PCs still hop.
+    Job-only consumers keep their exact ``{"job": ...}`` shape when no
+    handoff waits.
     """
     registry = request.app.state.agent_registry
     try:
@@ -166,9 +178,90 @@ async def agent_poll(request: Request,
             detail="Too many concurrent polls for this account",
             headers={"Retry-After": "5"},
         ) from None
+    handoff = registry.take_handoff(user_id)
+    if handoff is None:
+        if job is None:
+            return {"job": None}
+        return {"job": job}
     if job is None:
-        return {"job": None}
-    return {"job": job}
+        return {"job": None, "handoff": handoff}
+    return {"job": job, "handoff": handoff}
+
+
+@router.post("/agent/handoff")
+async def agent_handoff(request: Request,
+                        user_id: int = Depends(require_agent_auth)) -> dict:
+    """Phone→PC handoff (B2): queue a fire-and-forget task for this key's
+    own paired PC, WS-first with poll fallback.
+
+    Owner-scoped by construction: the inv_ key resolves to exactly one
+    user and the handoff lands only in that user's queue — cross-user
+    handoffs are refused the same structural way cross-user jobs are
+    (there is no target-user field to forge). The phone's "hopping to
+    PC…" state resolves from this response (``relayed`` vs queued).
+
+    Fail-closed when ``INVINCIBLE_HANDOFF`` is off (503, nothing
+    queued). Restart orphans queued handoffs (in-memory by design, same
+    trade-off as jobs) — the phone retries end-to-end.
+    """
+    if not settings.handoff_enabled():
+        raise HTTPException(
+            status_code=503, detail="Handoff is disabled on this server")
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400,
+                            detail="Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400,
+                            detail="Body must be {task, context?}")
+    task = body.get("task")
+    context = body.get("context", "")
+    from_device = body.get("from_device", "")
+    if not isinstance(task, str) or not task.strip():
+        raise HTTPException(status_code=400,
+                            detail="task must be a non-empty string")
+    if len(task) > HANDOFF_TASK_MAX_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"task must be at most {HANDOFF_TASK_MAX_CHARS} "
+                   "characters",
+        )
+    if context is None:
+        context = ""
+    if not isinstance(context, str):
+        raise HTTPException(status_code=400,
+                            detail="context must be a string")
+    if len(context) > HANDOFF_CONTEXT_MAX_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"context must be at most {HANDOFF_CONTEXT_MAX_CHARS} "
+                   "characters",
+        )
+    if from_device is None:
+        from_device = ""
+    if not isinstance(from_device, str):
+        raise HTTPException(status_code=400,
+                            detail="from_device must be a string")
+    from_device = from_device.strip()[:HANDOFF_FROM_DEVICE_MAX_CHARS]
+    registry = request.app.state.agent_registry
+    envelope = registry.post_handoff(
+        user_id, task.strip(), context, from_device)
+    relayed = False
+    if settings.handoff_enabled():
+        # WS-first: exactly one socket, like jobs. On success drop the
+        # queued copy so a concurrent poll can't deliver twice; on
+        # failure the queue copy stays for poll fallback.
+        with contextlib.suppress(Exception):
+            relayed = await registry.push_ws(
+                user_id,
+                {"type": "handoff", "handoff": envelope["handoff"],
+                 "handoff_id": envelope["handoff_id"]},
+            )
+        if relayed:
+            registry.drop_handoff(user_id, envelope["handoff_id"])
+    return {"queued": True, "relayed": bool(relayed),
+            "handoff_id": envelope["handoff_id"]}
 
 
 @router.post("/agent/result")

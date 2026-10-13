@@ -5,6 +5,28 @@
 
 ## Current State
 
+- B2 done (`passing`, uncommitted): phone app + Hey Baymax hop phone → PC.
+  Presence reuses hello/machines (zero new tables — phone hellos with
+  `platform: *-pwa` + `capabilities: {phone}` read via
+  `GET /agent/machines|status` as `{online, device}`). Handoff is a
+  fire-and-forget control message (NOT a tool job — 34-tool
+  goldens/drift frozen): `POST /agent/handoff` (inv_ realm, no
+  target-user field, 400 on blank/overlong, 503 kill-switch) →
+  per-user `_handoffs` queue (bounded 10, oldest-first, prune-aware) →
+  WS-first `push_ws` (drop queued copy on relay) with poll fallback
+  (`"handoff"` key additive-only so `{"job": null}` shape is intact).
+  PC runner `handle_handoff()` wakes the B1 overlay best-effort, never
+  breaks jobs. PWA-first `GET /dashboard/phone` (cookie page, inv_ key
+  in localStorage only): big mic + in-app "Hey Baymax" (Web Speech,
+  PTT fallback), Bmax face (`.baymax-dot` reuse), bubbles over
+  `POST /v1/chat/completions`, Hop-to-PC with "hopping to PC…" →
+  ack. Kill-switch `INVINCIBLE_HANDOFF` via
+  `settings.handoff_enabled()` (no raw env reads). Restart orphans
+  queued handoffs — documented in ARCHITECTURE §6b + SECURITY §13,
+  not fixed. Docs same PR: SECURITY §13 (owner binding, no LAN trust
+  vs Bluey Bonjour, fail-closed), MCP_PROTOCOL §8, ARCHITECTURE §6b,
+  CONFIGURATION row. New: `tests/test_handoff.py` (21 tests).
+  Meeting-notes reuse deferred to follow-up per lock.
 - F10 done (`passing`, uncommitted): Pack 3 computer-use — click,
   type_text, press_keys, scroll, drag, open_app, open_url as
   agent-side tools on the paired PC (SendInput/ShellExecute via
@@ -22,7 +44,7 @@
   MCP_PROTOCOL §7 tools, SECURITY §12, ROADMAP count 34. Vetted
   plan survived contact: one real find during vetting (the batch
   trap), confirmed in code before building.
-- Last commit: `9e5eac2` (main, pushed) — F11 B1 overlay + Bmax rename.
+- Last commit: `61473d6` (main, pushed) — F12 multimodal image parts.
 - F12 done (`passing`, uncommitted): multimodal image parts — the model
   truly sees screenshots (new pure `invincible/core/vision.py`:
   extract/attach around trim, PNG-IHDR token estimates, 4-image +
@@ -72,8 +94,8 @@
   all modes incl plan), dispatch trio, summary previews, goldens, drift
   pins (27 tools), `MCP_PROTOCOL.md`. New:
   `tests/test_look_at_screen.py` (6 tests).
-- Ruff/pytest status: `ruff check .` clean; FULL suite 1852 passed
-  (1835 baseline + 17 vision), 11 skipped, 1 deselected.
+- Ruff/pytest status: `ruff check .` clean; FULL suite 1873 passed
+  (1852 baseline + 21 handoff), 11 skipped, 1 deselected.
   Clean-state checklist 5/5 ticked. Uncommitted — commit on user's word.
 - F04 done (`passing`): read-only fan-out reframed + built as
   `core/harness_fanout.py` (planner + parallel scout/librarian steps,
@@ -94,13 +116,13 @@
 
 ## In Progress
 
-- None — F12 complete (`passing`, uncommitted). Zero `active`.
+- None — B2 complete (`passing`, uncommitted). Zero `active`.
   Next: F05 vector seam at next clock-in.
 
 ## Next Steps
 
-1. Commit F12 on user's word; verify `git status` shows only the
-   intended files first.
+1. Commit B2 on user's word; verify `git status` shows only the
+   intended files first (never `.vscode/` or secrets).
 2. F05 vector seam remains `planned` — next candidate; set `active`
    only at next clock-in.
 3. Live Tk window (glide/dock/click-through visuals) still unverified —

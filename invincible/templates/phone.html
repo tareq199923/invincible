@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+{% block title %}Phone - Invincible{% endblock %}
+{% block head_extra %}
+<link rel="manifest" href="/static/phone.webmanifest">
+<meta name="theme-color" content="#ffffff">
+{% endblock %}
+{% block content %}
+<div class="phone-wrap">
+  <div class="phone-face" aria-hidden="true">
+    <span class="baymax-dot baymax-dot-lg"></span>
+    <span class="baymax-name">Bmax</span>
+  </div>
+  <h2>Hey Baymax</h2>
+  <p class="muted">In-app voice + text over your own providers.
+  Paste one <code>inv_</code> key once — it stays in this phone's
+  local storage and is sent only to this server.</p>
+
+  <label class="pick" for="phone-key">inv_ key
+    <input id="phone-key" type="password" autocomplete="off"
+           placeholder="inv_…" aria-label="API key">
+  </label>
+  <label class="pick" for="phone-model">model
+    <input id="phone-model" type="text" autocomplete="off"
+           placeholder="model-id from /v1/models" aria-label="Model">
+  </label>
+
+  <div id="phone-log" aria-live="polite"></div>
+
+  <div id="phone-composer">
+    <button type="button" id="phone-mic" class="mic-btn"
+            title="Push to talk / Hey Baymax" aria-label="Push to talk">
+      &#127908;
+    </button>
+    <textarea id="phone-input" placeholder="Message Baymax&hellip;"
+              aria-label="Message"></textarea>
+    <button type="button" id="phone-send" title="Send"
+            aria-label="Send">&uarr;</button>
+  </div>
+  <div class="composer-row">
+    <button type="button" id="phone-hop" title="Hop to PC"
+            aria-label="Hop to PC">&#10142; Hop to PC</button>
+    <span id="phone-status" aria-live="polite"></span>
+  </div>
+  <p class="muted" id="phone-voice-hint">Voice: tap the mic, or say
+  "Hey Baymax" inside this page after tapping once.</p>
+</div>
+
+<script>
+  // B2 phone shell (PWA-first): push-to-talk + face + bubbles over the
+  // SAME chat pipeline (/v1/chat/completions with your inv_ key) and
+  // Hop-to-PC over POST /agent/handoff. No assets, no framework.
+  // All inserts are textContent-only (same XSS posture as chat.html).
+  (function () {
+    var keyInput = document.getElementById("phone-key");
+    var modelInput = document.getElementById("phone-model");
+    var log = document.getElementById("phone-log");
+    var input = document.getElementById("phone-input");
+    var sendBtn = document.getElementById("phone-send");
+    var micBtn = document.getElementById("phone-mic");
+    var hopBtn = document.getElementById("phone-hop");
+    var status = document.getElementById("phone-status");
+    if (!log || !input || !sendBtn) return;
+
+    var history = [];
+    var sessionId = null;
+    try {
+      sessionId = window.localStorage.getItem("phone-session");
+      if (!sessionId) {
+        sessionId = "phone-" + Math.random().toString(36).slice(2) +
+          Date.now().toString(36);
+        window.localStorage.setItem("phone-session", sessionId);
+      }
+      var savedKey = window.localStorage.getItem("phone-key");
+      if (savedKey && keyInput) keyInput.value = savedKey;
+      var savedModel = window.localStorage.getItem("phone-model");
+      if (savedModel && modelInput) modelInput.value = savedModel;
+    } catch (e) { /* private mode: session-only */ }
+
+    function persist() {
+      try {
+        if (keyInput) window.localStorage.setItem("phone-key", keyInput.value.trim());
+        if (modelInput) window.localStorage.setItem("phone-model", modelInput.value.trim());
+      } catch (e) { /* ignore */ }
+    }
+    if (keyInput) keyInput.addEventListener("change", persist);
+    if (modelInput) modelInput.addEventListener("change", persist);
+
+    function bubble(role, text) {
+      var div = document.createElement("div");
+      div.className = "bubble bubble-" + role;
+      if (role === "assistant") {
+        div.classList.add("bubble-baymax");
+        var dot = document.createElement("span");
+        dot.className = "baymax-dot";
+        dot.setAttribute("aria-hidden", "true");
+        var name = document.createElement("span");
+        name.className = "baymax-name";
+        name.textContent = "Bmax";
+        div.appendChild(dot);
+        div.appendChild(name);
+      }
+      div.appendChild(document.createTextNode(text));
+      log.appendChild(div);
+      div.scrollIntoView({block: "nearest"});
+      return div;
+    }
+
+    function creds() {
+      var key = keyInput ? keyInput.value.trim() : "";
+      var model = modelInput ? modelInput.value.trim() : "";
+      return {key: key, model: model};
+    }
+
+    function send(text) {
+      var c = creds();
+      text = (text || "").trim();
+      if (!text || sendBtn.disabled) return;
+      if (!c.key) {
+        if (status) status.textContent = "paste your inv_ key first.";
+        return;
+      }
+      if (!c.model) {
+        if (status) status.textContent = "enter a model id (see /v1/models).";
+        return;
+      }
+      persist();
+      bubble("user", text);
+      history.push({role: "user", content: text});
+      input.value = "";
+      sendBtn.disabled = true;
+      var pending = bubble("assistant", "…");
+      pending.classList.add("pending");
+      if (status) status.textContent = "thinking…";
+      fetch("/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + c.key,
+          "X-Session-Id": sessionId || "phone"
+        },
+        body: JSON.stringify({model: c.model, messages: history})
+      }).then(function (resp) {
+        return resp.json().then(function (j) { return {ok: resp.ok, body: j}; });
+      }).then(function (out) {
+        var answer = out.body && out.body.choices && out.body.choices[0] &&
+          out.body.choices[0].message && out.body.choices[0].message.content;
+        if (out.ok && answer) {
+          pending.textContent = "";
+          var dot = document.createElement("span");
+          dot.className = "baymax-dot";
+          dot.setAttribute("aria-hidden", "true");
+          var name = document.createElement("span");
+          name.className = "baymax-name";
+          name.textContent = "Bmax";
+          pending.appendChild(dot);
+          pending.appendChild(name);
+          pending.appendChild(document.createTextNode(answer));
+          history.push({role: "assistant", content: answer});
+          if (status) status.textContent = "";
+        } else {
+          var msg = (out.body && out.body.error && out.body.error.message) ||
+            "request failed";
+          pending.textContent = "error: " + msg;
+          pending.classList.add("error");
+          if (status) status.textContent = "";
+        }
+        sendBtn.disabled = false;
+      }).catch(function () {
+        pending.textContent = "error: request failed";
+        pending.classList.add("error");
+        sendBtn.disabled = false;
+        if (status) status.textContent = "";
+      });
+    }
+
+    sendBtn.addEventListener("click", function () { send(input.value); });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        send(input.value);
+      }
+    });
+
+    // In-app wake only: Web Speech API behind the mic button
+    // (push-to-talk when unsupported). Saying "Hey Baymax" in the
+    // transcript sends immediately; anything else fills the composer.
+    var recog = null;
+    function wakeWordHit(s) {
+      return /(hey[, ]?\s*(baymax|bmax))/i.test(s || "");
+    }
+    function startVoice() {
+      var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) {
+        if (status) status.textContent = "voice not supported here — type instead.";
+        input.focus();
+        return;
+      }
+      try {
+        recog = new SR();
+        recog.lang = "en-US";
+        recog.interimResults = true;
+        recog.maxAlternatives = 1;
+        if (status) status.textContent = "listening… tap mic to stop.";
+        micBtn.classList.add("live");
+        recog.onresult = function (ev) {
+          var transcript = "";
+          for (var i = 0; i < ev.results.length; i++) {
+            transcript += ev.results[i][0].transcript;
+          }
+          input.value = transcript;
+          if (wakeWordHit(transcript)) {
+            var cleaned = transcript.replace(
+              /hey[, ]?\s*(baymax|bmax)/i, "").trim();
+            if (cleaned) send(corrected(cleaned));
+            else if (status) status.textContent = "yes? (say more)";
+          }
+        };
+        recog.onend = function () {
+          micBtn.classList.remove("live");
+          // Final transcript without the wake word: send it like PTT.
+          var t = input.value.trim();
+          if (t && !sendBtn.disabled && !wakeWordHit(t)) {
+            if (status) status.textContent = "";
+          }
+          recog = null;
+        };
+        recog.onerror = function () {
+          micBtn.classList.remove("live");
+          if (status) status.textContent = "mic error — type instead.";
+          recog = null;
+        };
+        recog.start();
+      } catch (e) {
+        if (status) status.textContent = "mic unavailable — type instead.";
+      }
+    }
+    function corrected(s) { return s; }
+    micBtn.addEventListener("click", function () {
+      if (recog) {
+        try { recog.stop(); } catch (e) { /* ignore */ }
+        return;
+      }
+      startVoice();
+    });
+
+    // Hop to PC: the current composer text (or the last user turn)
+    // becomes the handoff task; recent turns ride as context.
+    hopBtn.addEventListener("click", function () {
+      var c = creds();
+      if (!c.key) {
+        if (status) status.textContent = "paste your inv_ key first.";
+        return;
+      }
+      var task = input.value.trim() ||
+        (history.length ? history[history.length - 1].content : "");
+      if (!task) {
+        if (status) status.textContent = "type a task to hop first.";
+        return;
+      }
+      var ctx = history.slice(-6).map(function (m) {
+        return m.role + ": " + m.content;
+      }).join("\n").slice(0, 8000);
+      hopBtn.disabled = true;
+      if (status) status.textContent = "hopping to PC…";
+      fetch("/agent/handoff", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + c.key
+        },
+        body: JSON.stringify({
+          task: task,
+          context: ctx,
+          from_device: (navigator.platform || "phone").slice(0, 128)
+        })
+      }).then(function (resp) {
+        return resp.json().then(function (j) { return {ok: resp.ok, body: j}; });
+      }).then(function (out) {
+        if (out.ok && out.body && out.body.queued) {
+          bubble("assistant", out.body.relayed
+            ? "Hopped to your PC — Bmax is on it."
+            : "Queued for your PC — it will pick this up on its next poll.");
+          if (status) status.textContent = "";
+          input.value = "";
+        } else {
+          if (status) status.textContent = "hop failed — is handoff on?";
+        }
+        hopBtn.disabled = false;
+      }).catch(function () {
+        if (status) status.textContent = "hop failed — network?";
+        hopBtn.disabled = false;
+      });
+    });
+  })();
+</script>
+{% endblock content %}

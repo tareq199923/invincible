@@ -39,6 +39,7 @@ invincible/
 │   │                           (/.well-known/oauth-*, /oauth/register|authorize|token|revoke;
 │   │                           self-service consent since Phase 2)
 │   ├── agents.py               Phase 10 agent surface: POST /agent/poll + /agent/result
+│   │                           + POST /agent/handoff (B2 phone→PC, fire-and-forget)
 │   │                           (inv_ key realm), GET /agent/machines + /agent/whoami
 │   │                           (inv_ key realm, read-only), GET /agent/status (session realm)
 │   ├── graph.py                GET /api/v1/sessions/{id}/graph (continuity projection, owner-scoped)
@@ -100,7 +101,8 @@ invincible/
     │                           + reactive failover checkpoints (Phase 4)
     ├── tool_executor.py        MCP tool execution + denylists + approval
     ├── agent_registry.py       Per-user agent queues/futures (in-memory; long-poll
-    │                           + WS relay transports since harness H1)
+    │                           + WS relay transports since harness H1;
+    │                           B2 adds a per-user handoff queue, same keying)
     ├── harness_events.py       Harness event contract (H0)
     ├── harness_bus.py          In-memory harness event bus: emit/subscribe/history (H0)
     ├── harness_policy.py       Unified pre-execution policy gate (H2; no new patterns)
@@ -665,6 +667,47 @@ _dispatch(method, rpc_id, params, request)
 Tool results are wrapped with `{"content": [{"type": "text", "text":
 json.dumps(result)}], "isError": bool}` — MCP shape. The text field is
 valid JSON; everything else is text.
+
+---
+
+## 6b. Phone→PC handoff routing (B2, agent control plane — not MCP)
+
+Handoff is a **fire-and-forget routed user message**, not tool
+execution: it never stages, never seeks approval, never posts a result,
+and adds zero entries to the 34-tool registry (golden/drift suites stay
+frozen — the carve-out is load-bearing, not convenience).
+
+```
+phone (PWA, inv_ key)
+  │  POST /agent/handoff {task ≤4000ch, context ≤16000ch, from_device}
+  │    inv_ realm (require_agent_auth) — the key resolves to exactly
+  │    one user; there is NO target-user field to forge. Fail-closed
+  │    503 when INVINCIBLE_HANDOFF is off; 400 on blank/overlong task.
+  ▼
+registry.post_handoff(user_id, …)   // per-user _handoffs queue (bounded 10,
+  │                                  // oldest-first; wakes held polls via the
+  │                                  // shared event; prune-aware like _queues)
+  ├── WS-first: push_ws(user_id, {"type": "handoff", …}) to exactly one
+  │             socket → on success drop the queued copy (never deliver twice)
+  └── poll fallback: next POST /agent/poll returns {"job": …, "handoff": …}
+                     ("handoff" key present ONLY when one waits — job-only
+                     consumers keep their exact shape)
+  ▼
+paired PC runner: WS "handoff" branch (or poll "handoff" branch) →
+  handle_handoff() → B1 overlay wake (best-effort settle) + log.
+  No result posts back; a dead overlay never breaks jobs.
+```
+
+Presence reuses the existing hello/machines path (zero new tables):
+the phone's WS `hello` advertises `platform: ios-pwa/android-pwa` +
+`capabilities: {"phone": true}`, and `GET /agent/machines` /
+`GET /agent/status` already report `{online, device}`. The phone's
+"hopping to PC…" is local optimistic UI resolved by the POST response
+(`relayed` vs queued), not by presence.
+
+Single-instance, in-memory by design (same trade-off as jobs): a
+restart orphans queued handoffs — documented, not fixed here; the
+phone retries end-to-end. Threat model: [SECURITY.md](SECURITY.md) §13.
 
 ---
 

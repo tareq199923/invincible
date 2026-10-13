@@ -760,3 +760,15 @@ label:focus-visible, [tabindex]:focus-visible {
   /* No hover on touch: the per-chat ⋮ stays visible in the drawer. */
   .chat-menu-btn { opacity: 1; }
 }
+
+/* B2 phone shell: thumb-first PWA layout reusing the chat bubbles +
+   the Bmax marker (no new assets, no Disney likeness). */
+.phone-wrap { max-width: 34rem; margin: 0 auto; padding-bottom: 2rem; }
+.phone-face { display: flex; align-items: center; gap: 0.2rem; margin: 0.6rem 0 0; }
+.baymax-dot-lg { width: 2.2rem; height: 2.2rem; }
+#phone-log { display: flex; flex-direction: column; gap: 0.6rem; margin: 1rem 0; }
+#phone-composer { display: flex; gap: 0.5rem; align-items: flex-end; }
+#phone-input { flex: 1; min-height: 2.6rem; }
+.mic-btn { width: 3.4rem; height: 3.4rem; font-size: 1.5rem; border-radius: 50%;
+  border: 2px solid var(--accent); background: var(--surface); cursor: pointer; }
+.mic-btn.live { background: var(--accent-dim); }

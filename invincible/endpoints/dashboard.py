@@ -844,6 +844,25 @@ async def mcp_page(
     )
 
 
+@router.get("/dashboard/phone")
+async def phone_page(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    """B2 phone shell (PWA-first, cookie realm for the page only).
+
+    The page itself is session-gated like every dashboard page, but
+    the API calls it makes use the phone owner's own inv_ key
+    (localStorage, Bearer header) — realms never merge: page auth
+    proves nothing for /v1/* or /agent/*, the key does.
+    Meeting-notes reuse is a follow-up, not this page.
+    """
+    return _page(
+        "phone.html", request,
+        user_email=await _email(_engine(request), principal),
+    )
+
+
 @router.get("/dashboard/machines")
 async def machines_page(
     request: Request,

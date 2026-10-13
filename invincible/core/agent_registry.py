@@ -64,6 +64,16 @@ MAX_WS_PER_USER = 5
 # the STALE_USER_SECONDS sweep below).
 MAX_MACHINES_PER_USER = 20
 
+# B2: bounds on the phone→PC handoff control plane. Handoffs are
+# fire-and-forget routed user messages (NOT tool jobs: no futures, no
+# results, no golden/drift surface). Caps keep one chatty phone from
+# growing the table unbounded; per-user depth keeps a stuck PC from
+# accumulating stale tasks.
+HANDOFF_TASK_MAX_CHARS = 4000
+HANDOFF_CONTEXT_MAX_CHARS = 16000
+HANDOFF_FROM_DEVICE_MAX_CHARS = 128
+MAX_HANDOFFS_PER_USER = 10
+
 
 class AgentRegistry:
     """Liveness + dispatch table for paired agents.
@@ -81,6 +91,10 @@ class AgentRegistry:
       awaits; ``submit_result`` resolves it.
     - ``_jobs`` - job_id -> owner user_id, for the single-use/owner
       checks in submit_result. Entries live until resolved or swept.
+    - ``_handoffs`` - B2 phone→PC control messages waiting for pickup
+      by WS push or the next poll. Fire-and-forget: no futures, no
+      results, no golden/drift surface. Keyed by user_id like every
+      other table (structural isolation falls out of the keying).
 
     Events are created lazily and *kept* (not popped after a wake) so
     concurrent dispatches and the next held poll can share one event;
@@ -105,6 +119,8 @@ class AgentRegistry:
         # disconnect (entries go stale → reported offline) so the
         # dashboard lists machines that were seen, not just connected ones.
         self._machines: dict[int, dict[str, dict]] = {}
+        # B2: user_id -> queued handoff envelopes (fire-and-forget).
+        self._handoffs: dict[int, deque] = {}
         self._last_prune = 0.0
         self._clock = clock
 
@@ -148,13 +164,15 @@ class AgentRegistry:
                     or self._queues.get(user_id)
                     or self._futures.get(user_id)
                     or self._ws.get(user_id)
-                    or self._machines.get(user_id)):
+                    or self._machines.get(user_id)
+                    or self._handoffs.get(user_id)):
                 continue
             self._last_seen.pop(user_id, None)
             self._events.pop(user_id, None)
             self._queues.pop(user_id, None)
             self._ws.pop(user_id, None)
             self._machines.pop(user_id, None)
+            self._handoffs.pop(user_id, None)
 
     def online(self, user_id: int) -> bool:
         last = self._last_seen.get(user_id)
@@ -256,6 +274,75 @@ class AgentRegistry:
             self.heartbeat(user_id)
             return True
         return False
+
+    # --- handoff control plane (B2) -------------------------------------
+    # Fire-and-forget routed user messages (phone → paired PC). NOT tool
+    # jobs: no futures, no results, no dispatch timeouts, no golden/drift
+    # surface. Isolation is structural like everything else here: tables
+    # are keyed by user_id, a key resolves to exactly one user, and no
+    # code path addresses another user's queue. Delivery is WS-first
+    # (the POST endpoint pushes to one socket and drops the queued copy)
+    # with poll fallback (the queued copy rides the next poll).
+    #
+    # Single-instance, in-memory by design (same trade-off as jobs): a
+    # restart orphans queued handoffs and the phone retries end-to-end.
+
+    def post_handoff(self, user_id: int, task: str, context: str = "",
+                     from_device: str = "") -> dict:
+        """Queue one handoff for this user's paired PC. Returns the
+        stored envelope (``{"handoff_id", "handoff": {...}}``).
+
+        Validation is the endpoint's job (400s there); this method only
+        bounds (oldest-first past MAX_HANDOFFS_PER_USER) and wakes any
+        held poll via the shared event so a waiting PC answers fast.
+        Never raises on content — callers pass already-validated text.
+        """
+        handoff_id = secrets.token_urlsafe(12)
+        envelope = {
+            "handoff_id": handoff_id,
+            "handoff": {
+                "task": task,
+                "context": context,
+                "from_device": from_device,
+            },
+            "at": self._clock(),
+        }
+        queue = self._handoffs.setdefault(user_id, deque())
+        queue.append(envelope)
+        while len(queue) > MAX_HANDOFFS_PER_USER:
+            queue.popleft()
+        event = self._events.get(user_id)
+        if event is not None:
+            event.set()
+        return envelope
+
+    def take_handoff(self, user_id: int) -> dict | None:
+        """Pop the oldest queued handoff for this user, or None."""
+        queue = self._handoffs.get(user_id)
+        if not queue:
+            return None
+        envelope = queue.popleft()
+        if not queue:
+            self._handoffs.pop(user_id, None)
+        return envelope
+
+    def drop_handoff(self, user_id: int, handoff_id: str) -> None:
+        """Remove one queued handoff (WS-first relayed it, so the poll
+        copy must never deliver twice). Never raises."""
+        queue = self._handoffs.get(user_id)
+        if not queue:
+            return
+        kept = deque(
+            item for item in queue
+            if item.get("handoff_id") != handoff_id
+        )
+        if kept:
+            self._handoffs[user_id] = kept
+        else:
+            self._handoffs.pop(user_id, None)
+
+    def pending_handoffs(self, user_id: int) -> int:
+        return len(self._handoffs.get(user_id) or ())
 
     # --- long-poll ------------------------------------------------------
 
