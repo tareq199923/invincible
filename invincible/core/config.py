@@ -22,7 +22,7 @@ _AUTH_TYPES = ("bearer", "query")
 # Extra keys a provider entry may carry (all optional).
 _OPTIONAL_PROVIDER_FIELDS = {
     "max_context", "timeout", "aliases", "auth_type", "auth_param", "chat_path",
-    "failover_on_400", "enabled", "extra_headers",
+    "failover_on_400", "enabled", "extra_headers", "vision",
 }
 
 _ROUTING_MODES = ("auto", "pinned", "chain")
@@ -154,6 +154,12 @@ def validate_providers_config(config: dict) -> None:
         if failover_on_400 is not None and not isinstance(failover_on_400, bool):
             raise ValueError(
                 f"Provider '{name}': 'failover_on_400' must be a boolean"
+            )
+
+        vision = provider.get("vision")
+        if vision is not None and not isinstance(vision, bool):
+            raise ValueError(
+                f"Provider '{name}': 'vision' must be a boolean"
             )
 
         enabled = provider.get("enabled")

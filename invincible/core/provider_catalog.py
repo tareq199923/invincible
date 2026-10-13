@@ -22,11 +22,16 @@ storable verbatim via the exemption.
 import copy
 
 CATALOG: dict[str, dict] = {
+    # ``vision`` (F12 multimodal): only entries verified to accept OpenAI
+    # ``image_url`` content parts carry ``True``. Absent means False
+    # (fail-closed: text-only summaries). Custom/edited rows are always
+    # text-only — the static YAML ``vision`` key covers self-hosts.
     "openai": {
         "label": "OpenAI",
         "base_url": "https://api.openai.com/v1",
         "model_id": "gpt-4o-mini",
         "max_context": 128_000,
+        "vision": True,
     },
     "nvidia_nim": {
         "label": "NVIDIA NIM",

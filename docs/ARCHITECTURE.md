@@ -532,6 +532,15 @@ contexts in the one way `trim_messages` cannot prevent. Default budget:
 Every attempt funnels one payload-preparation pipeline, in order:
 
 ```
+vision-extract    (vision.py)         FIRST: pluck allowlisted PNG
+                                      screenshots out of tool-message
+                                      content (matched by tool_call_id
+                                      later, so drops/reorders are safe),
+                                      replacing each multi-MB base64 blob
+                                      with a compact text summary.
+                                      Must precede compression, whose
+                                      4000-char tool cap would otherwise
+                                      slice blobs into corrupt garbage.
 compress_messages   (compression.py)   shrink individual contents:
                                         truncate every "tool"-role result,
                                         collapse 3+ newline runs
@@ -546,7 +555,23 @@ relay_messages      (relay.py)          if non-system history exceeds
                                         injections) are extracted first and
                                         never digested
 trim_messages       (trimming.py)       per-provider budget: drop oldest
-                                        whole turns (section 4)
+                                        whole turns (section 4).
+                                        Budgets on the vision summaries,
+                                        never the blobs — screenshot turns
+                                        no longer evict real history on
+                                        hundreds of thousands of phantom
+                                        tokens. `estimate_tokens` counts
+                                        `image_url` parts from the image
+                                        (dimension tile formula), not the
+                                        base64 chars
+vision-attach     (vision.py)         per provider, after trimming: held
+                                      images re-attached as OpenAI
+                                      `image_url` content parts inside
+                                      their own tool messages iff the
+                                      provider sets `vision: true`
+                                      (fail-closed default off); otherwise
+                                      the text summaries stand as-is.
+                                      Pairing-neutral by construction
 compress_tools      (tool_compression.py) cap tool/property descriptions,
                                         strip non-semantic JSON Schema keys
                                         (title/examples/$schema/$id/$comment)
@@ -556,9 +581,11 @@ Why this order: compression and relay run *before* trimming so the budget
 check sees post-compression sizes (otherwise trimming over-drops), and
 relay emits its digest as a system message — placed after the client's own
 system messages — precisely so trim's "keep every system message" rule
-preserves it. `compress_messages` truncates tool results per-message while
+preserves it. Vision extraction runs *before* compression because the
+4000-char tool cap would otherwise corrupt image blobs before they are
+held aside. `compress_messages` truncates tool results per-message while
 relay removes whole old turns; the two attack different cost layers. All
-four stages are send-time only (stored history stays verbatim), degrade
+five stages are send-time only (stored history stays verbatim), degrade
 independently (a stage that raises is skipped with a warning, the rest
 still apply), and are individually toggleable via env. Tool-schema
 compression is memoized on the canonical serialization of the tools list —

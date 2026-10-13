@@ -32,6 +32,16 @@ def test_remaining_entries_are_openai_compatible_https():
         assert entry["max_context"] >= 1, key
 
 
+def test_vision_flag_fail_closed_by_default():
+    # F12 multimodal: only verified entries carry True; absent means
+    # text-only (provider_vision is strict ``is True``).
+    assert CATALOG["openai"].get("vision") is True
+    for key, entry in CATALOG.items():
+        if key == "openai":
+            continue
+        assert entry.get("vision", False) is False, key
+
+
 def test_unknown_key_returns_none():
     assert catalog_entry(None) is None
     assert catalog_entry("") is None

@@ -75,5 +75,12 @@
     "state": "passing",
     "title": "B1 head-cursor overlay (Bmax eyes on PC)",
     "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py tests/test_webchat_agent.py tests/test_webchat.py"
+  },
+  {
+    "behavior": "screenshot tool results ride follow-up turns as provider image_url content parts inside tool messages (vision-flagged providers only, text summary otherwise); extract-before-trim fixes base64 context destruction; byte/count caps with drop-with-note; persisted history shapes unchanged; zero registry surface",
+    "id": "F12",
+    "state": "passing",
+    "title": "Multimodal image parts (model truly sees screenshots)",
+    "verification": "ruff check . && pytest tests/test_vision.py tests/test_router.py tests/test_webchat_agent.py tests/test_webchat.py"
   }
 ]

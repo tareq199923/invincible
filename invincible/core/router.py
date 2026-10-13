@@ -39,6 +39,11 @@ from invincible.core.trimming import (  # noqa: F401 - re-exports
     trim_messages,
 )
 from invincible.core.user_settings_store import override_flag
+from invincible.core.vision import (
+    attach_images,
+    extract_images,
+    provider_vision,
+)
 
 logger = logging.getLogger("invincible.router")
 
@@ -813,13 +818,27 @@ class Router:
                 continue
 
             headers = self._request_headers(provider, api_key)
-            # Pipeline: compress → relay → trim, then compress tool
-            # schemas. Every stage is send-time only (the caller's
-            # `messages`/`tools` stay verbatim for session persistence) and
-            # degrades independently: a stage that raises is skipped with a
-            # warning and the remaining stages still apply. Compress and
-            # relay run before trimming so the budget check sees
-            # post-compression sizes (otherwise trimming over-drops).
+            # Pipeline: vision-extract → compress → relay → trim →
+            # vision-attach, then compress tool schemas. Every stage is
+            # send-time only (the caller's `messages`/`tools` stay verbatim
+            # for session persistence) and degrades independently: a stage
+            # that raises is skipped with a warning and the remaining
+            # stages still apply. Vision extraction runs FIRST because
+            # compression truncates tool results to 4000 chars (a base64
+            # blob would be sliced into corrupt garbage); trim still sees
+            # the placeholder summaries, never the blob, so screenshot
+            # turns stop evicting real history on phantom tokens. Attach
+            # runs after trimming, per provider, matching held images by
+            # tool_call_id (trim-safe: ids survive drops and reordering;
+            # a relay-digested turn simply has no message to attach to).
+            try:
+                send_messages, pending_images = extract_images(messages)
+            except Exception:
+                logger.warning(
+                    "Image extraction failed; sending text history",
+                    exc_info=True,
+                )
+                send_messages, pending_images = messages, {}
             tools_bytes = (
                 len(json.dumps(tools, ensure_ascii=False)) if tools else 0
             )
@@ -831,16 +850,13 @@ class Router:
             )
             if override_flag(overrides, "compression", compression_enabled):
                 try:
-                    send_messages = compress_messages(messages)
+                    send_messages = compress_messages(send_messages)
                 except Exception:
                     logger.warning(
                         "compress_messages failed; sending uncompressed "
                         "history",
                         exc_info=True,
                     )
-                    send_messages = messages
-            else:
-                send_messages = messages
             relay_applied = False
             if override_flag(overrides, "relay", relay_enabled):
                 try:
@@ -854,6 +870,15 @@ class Router:
             trimmed_messages = trim_messages(
                 send_messages, provider.get("max_context", DEFAULT_MAX_CONTEXT)
             )
+            try:
+                trimmed_messages = attach_images(
+                    trimmed_messages, pending_images,
+                    capable=provider_vision(provider))
+            except Exception:
+                logger.warning(
+                    "Image attach failed; sending text-only history",
+                    exc_info=True,
+                )
             payload = {
                 "model": provider["model_id"],
                 "messages": trimmed_messages,

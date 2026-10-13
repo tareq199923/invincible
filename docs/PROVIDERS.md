@@ -68,9 +68,38 @@ Every provider entry supports:
 | `auth_type` | no | `bearer` \| `query` | Default `bearer` (`Authorization: Bearer`). `query` puts the key in the URL. |
 | `auth_param` | no | string | Query parameter name for `auth_type: query` (default `key`). |
 | `chat_path` | no | string | Endpoint suffix (default `/chat/completions`); must start with `/`. |
+| `vision` | no | boolean | Default off (fail-closed): when `true`, screenshot tool results ride follow-up turns as OpenAI `image_url` content parts inside their tool messages; when absent/`false` the provider gets a compact text summary instead. Must be a boolean — anything else fails startup validation. |
 
 **Unknown fields are rejected at startup** — a typo like `base_urll` fails
 loudly instead of silently producing an unreachable provider.
+
+## Vision / multimodal input (F12)
+
+Screenshot captures persist in history as tool-result JSON carrying a
+`data_b64` blob — but the blob never reaches the wire as text. Each
+attempt's send-time pipeline extracts allowlisted PNG screenshots up
+front (compression would otherwise slice the blob into corrupt
+garbage at its 4000-char tool cap), budgets and trims on a compact
+summary, then re-attaches the held images as
+`{"type": "image_url", "image_url": {"url": "data:image/png;base64,…"}}`
+parts **iff** the attempt's provider sets `vision: true`. Pairing is
+untouched (same tool message, same position); stored history stays
+verbatim; token estimates count the image (PNG-dimension tile formula),
+not the base64 chars.
+
+Caps (per payload, newest wins): 4 images max, 512KB per image — over
+either cap the image is dropped with a `note` in its summary, never
+truncated. BYOK rows inherit `vision` from their `catalog_key` entry;
+custom/edited rows are always text-only (self-hosts use the static
+YAML `vision` key instead).
+
+Compat matrix (fail-closed — flip to `true` only after a live test):
+
+| Provider | `vision` default | Notes |
+|---|---|---|
+| `openai` catalog / static entries you flag | `true` (catalog) | Reference `image_url` shape. |
+| `nvidia_nim`, `groq`, `openrouter`, `gemini` | off | Unverified or strict shapes (e.g. NIM/DeepSeek pairing); text summaries until proven. |
+| Custom BYOK rows | off | No flag to inherit; static YAML covers self-hosts. |
 
 ## Validation
 

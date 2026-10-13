@@ -22,7 +22,22 @@
   MCP_PROTOCOL §7 tools, SECURITY §12, ROADMAP count 34. Vetted
   plan survived contact: one real find during vetting (the batch
   trap), confirmed in code before building.
-- Last commit: `feab66e` (main, pushed) — F10 Pack 3 computer-use.
+- Last commit: `9e5eac2` (main, pushed) — F11 B1 overlay + Bmax rename.
+- F12 done (`passing`, uncommitted): multimodal image parts — the model
+  truly sees screenshots (new pure `invincible/core/vision.py`:
+  extract/attach around trim, PNG-IHDR token estimates, 4-image +
+  512KB caps with drop-with-note). Router pipeline is now
+  vision-extract → compress → relay → trim → vision-attach, per
+  attempt; attach matches by tool_call_id (pairing-neutral, same
+  message). Gating: `vision` bool in providers.yaml schema +
+  catalog (openai true, rest fail-closed false) + BYOK candidates.
+  Two live finds during build: (1) compression's 4000-char tool cap
+  would slice blobs into garbage — extraction runs FIRST; (2) the
+  wiring itself needed the same care (send_messages clobber).
+  `estimate_tokens` counts image parts from the image, not base64.
+  New: `tests/test_vision.py` (16 tests incl. byte-exact large-blob
+  wire test) + catalog pin; docs: ARCHITECTURE §4b, PROVIDERS schema
+  + compat matrix. Zero registry surface; persisted shapes unchanged.
 - F11 done (`passing`, uncommitted): B1 head-cursor overlay — Bmax-head
   cursor on the paired Windows machine (new stdlib-only
   `invincible/agent/overlay.py`: pure grid/ease/eye/dock helpers +
@@ -57,8 +72,8 @@
   all modes incl plan), dispatch trio, summary previews, goldens, drift
   pins (27 tools), `MCP_PROTOCOL.md`. New:
   `tests/test_look_at_screen.py` (6 tests).
-- Ruff/pytest status: `ruff check .` clean; FULL suite 1835 passed
-  (1813 baseline + 22 overlay), 11 skipped, 1 deselected.
+- Ruff/pytest status: `ruff check .` clean; FULL suite 1852 passed
+  (1835 baseline + 17 vision), 11 skipped, 1 deselected.
   Clean-state checklist 5/5 ticked. Uncommitted — commit on user's word.
 - F04 done (`passing`): read-only fan-out reframed + built as
   `core/harness_fanout.py` (planner + parallel scout/librarian steps,
@@ -79,12 +94,12 @@
 
 ## In Progress
 
-- None — F11 complete (`passing`, uncommitted). Zero `active`.
+- None — F12 complete (`passing`, uncommitted). Zero `active`.
   Next: F05 vector seam at next clock-in.
 
 ## Next Steps
 
-1. Commit F10+F11 on user's word; verify `git status` shows only the
+1. Commit F12 on user's word; verify `git status` shows only the
    intended files first.
 2. F05 vector seam remains `planned` — next candidate; set `active`
    only at next clock-in.

@@ -6,12 +6,16 @@ Pure functions over the internal message model:
 
     [{"role": "system" | "user" | "assistant", "content": str}, …]
 
-plus the OpenAI tool shapes when a conversation uses tools. Nothing here
-performs I/O or knows about providers; having them in their own module lets
-the session store and compat layer import them without depending on the
+plus the OpenAI tool shapes when a conversation uses tools. Send-time
+vision content lists (``core/vision.py`` ``image_url`` parts) estimate
+from the image, not the base64 text. Nothing here performs I/O or
+knows about providers; having them in their own module lets the
+session store and compat layer import them without depending on the
 Router.
 """
 import json
+
+from invincible.core.vision import image_url_token_estimate
 
 DEFAULT_MAX_CONTEXT = 32000
 RESERVE_TOKENS = 1000  # headroom left for the provider's own response
@@ -20,7 +24,26 @@ RESERVE_TOKENS = 1000  # headroom left for the provider's own response
 def estimate_tokens(message: dict) -> int:
     """Rough token estimate: ~4 chars per token. This is a heuristic, not an
     exact tokenizer match - it will over/under-count on code-heavy content,
-    but it's cheap and good enough to decide what to drop, not to bill by."""
+    but it's cheap and good enough to decide what to drop, not to bill by.
+
+    Send-time ``image_url`` content parts estimate from the image
+    payload (dimensions when readable, flat fallback otherwise) instead
+    of the base64 text - counting raw chars would report hundreds of
+    thousands of phantom tokens per screenshot.
+    """
+    if isinstance(message, dict) and isinstance(
+            message.get("content"), list):
+        total = 0
+        for part in message["content"]:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                image = part.get("image_url")
+                url = image.get("url", "") if isinstance(
+                    image, dict) else ""
+                total += image_url_token_estimate(url)
+            else:
+                total += max(1, len(json.dumps(part)) // 4)
+        rest = {k: v for k, v in message.items() if k != "content"}
+        return max(1, total + len(json.dumps(rest)) // 4)
     return max(1, len(json.dumps(message)) // 4)
 
 

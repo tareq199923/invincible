@@ -176,6 +176,7 @@ async def byok_attempt_source(
             "model_id": row["model_id"],
             "max_context": (
                 entry["max_context"] if entry else DEFAULT_MAX_CONTEXT),
+            "vision": bool(entry.get("vision")) if entry else False,
             "enabled": True,
             "health_id": f"byok:{row['id']}",
             "byok_credential_id": row["id"],
