@@ -5,7 +5,7 @@
 
 ## Current State
 
-- B2 done (`passing`, uncommitted): phone app + Hey Baymax hop phone → PC.
+- B2 done (`passing`, committed as `2d1248b`, pushed): phone app + Hey Baymax hop phone → PC.
   Presence reuses hello/machines (zero new tables — phone hellos with
   `platform: *-pwa` + `capabilities: {phone}` read via
   `GET /agent/machines|status` as `{online, device}`). Handoff is a
@@ -116,13 +116,13 @@
 
 ## In Progress
 
-- None — B2 complete (`passing`, uncommitted). Zero `active`.
-  Next: F05 vector seam at next clock-in.
+- None — B2 complete (`passing`, committed as `2d1248b`, pushed).
+  Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps
 
-1. Commit B2 on user's word; verify `git status` shows only the
-   intended files first (never `.vscode/` or secrets).
+1. F05 vector seam remains `planned` — next candidate; set `active`
+   only at next clock-in.
 2. F05 vector seam remains `planned` — next candidate; set `active`
    only at next clock-in.
 3. Live Tk window (glide/dock/click-through visuals) still unverified —
