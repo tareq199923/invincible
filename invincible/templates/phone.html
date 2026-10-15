@@ -140,7 +140,9 @@
       voiceNext = false;
       persist();
       bubble("user", text);
-      history.push({role: "user", content: text});
+      var outMsg = {role: "user", content: text};
+      if (turnShouldSpeak) outMsg.asked = true;
+      history.push(outMsg);
       input.value = "";
       sendBtn.disabled = true;
       var pending = bubble("assistant", "…");

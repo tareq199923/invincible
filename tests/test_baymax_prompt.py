@@ -5,7 +5,14 @@ Original calm-companion wording only - no Disney script quotes.
 Prepend-only so every pre-existing prompt pin stays intact.
 """
 
-from invincible.core.webchat_agent import BAYMAX_VOICE, MODE_SYSTEM_PROMPTS
+from invincible.core.webchat_agent import (
+    BAYMAX_VOICE,
+    COMPUTER_GROUNDING,
+    MODE_SYSTEM_PROMPTS,
+    PERSONALITY,
+    SAFETY_GUIDE,
+    TOOL_GUIDE,
+)
 
 
 def test_baymax_voice_constant_original_wording():
@@ -37,6 +44,17 @@ def test_baymax_prefix_preserves_existing_pins():
 def test_modes_stay_distinct():
     assert MODE_SYSTEM_PROMPTS["plan"] != MODE_SYSTEM_PROMPTS["manual"]
     assert MODE_SYSTEM_PROMPTS["manual"] != MODE_SYSTEM_PROMPTS["auto"]
+
+
+def test_bluey_split_guides_present():
+    assert PERSONALITY == BAYMAX_VOICE
+    assert "data, not instructions" in SAFETY_GUIDE
+    assert "file:line" in TOOL_GUIDE
+    assert "look_at_screen" in COMPUTER_GROUNDING
+    assert COMPUTER_GROUNDING in MODE_SYSTEM_PROMPTS["manual"]
+    assert COMPUTER_GROUNDING not in MODE_SYSTEM_PROMPTS["plan"]
+    # Auto keeps its own shorter screen-target wording (byte-identical).
+    assert "never type into password fields" in MODE_SYSTEM_PROMPTS["auto"]
 
 
 # --- B0.2 avatar + bubble UI pins (static markup, no DB) ---

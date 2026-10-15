@@ -409,6 +409,7 @@
         body: JSON.stringify({
           session_id: SESSION_ID,
           message: text,
+          asked: turnShouldSpeak,
           model: picker && picker.value ? picker.value : null,
           mode: modePicker && modePicker.value ? modePicker.value : "manual"
         })

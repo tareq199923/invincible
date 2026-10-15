@@ -58,6 +58,23 @@ logger = logging.getLogger("invincible.webchat")
 
 router = APIRouter()
 
+
+def _user_message(text: str, raw: dict) -> dict:
+    """User message preserving the mic flag as Bluey's asked tag.
+
+    The orb sets voiceNext before submitting; the client forwards it as
+    asked/mic. Persisted in JSONB (no migration); stripped before upstream
+    routing in chat_service._sanitize_for_routing.
+    """
+    message: dict = {"role": "user", "content": text}
+    try:
+        asked = raw.get("asked") is True or raw.get("mic") is True
+    except AttributeError:
+        asked = False
+    if asked:
+        message["asked"] = True
+    return message
+
 # Sidebar cap and display/validation bounds for web-supplied fields. The
 # sidebar's titles come from ONE bounded query (SessionStore.sidebar_rows),
 # not a load() per listed session.
@@ -422,7 +439,7 @@ async def chat_stream(
         byok = await byok_attempt_source(request, principal, model=model)
         try:
             prepared = await prepare_chat(
-                [{"role": "user", "content": text}],
+                [_user_message(text, raw)],
                 principal=principal,
                 session_id=session_id,
                 model=model,

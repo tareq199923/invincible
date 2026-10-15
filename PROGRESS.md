@@ -5,6 +5,15 @@
 
 ## Current State
 
+- Bluey steal pack 4 done (`passing`, uncommitted): prompt split + asked flag —
+  `PERSONALITY/SAFETY_GUIDE/TOOL_GUIDE/COMPUTER_GROUNDING` split in
+  `core/webchat_agent.py` (manual uses shared grounding, byte-identical);
+  `asked:true` mic flag persisted in message JSONB (no migration), stripped
+  before upstream in `core/chat_service.py`, rendered as `You asked:` by
+  `core/projection.py:format_agent_prompt()`; webchat `chat.html` sends
+  `asked`, PWA `phone.html` pushes it into `/v1` history; dashboard
+  `chat.py:_user_message()` accepts it. New: `tests/test_agent_prompt.py`
+  (6 tests). Full gate: `ruff` clean, 1922 passed, 11 skipped, 1 deselected.
 - B9 done (`passing`, committed as `3ae6c82`, pushed): Gemini-style composer bar — mic orb
   + send live inside one rounded row (`composer-actions`) on webchat +
   PWA; orb is a quiet `currentColor` mic glyph on theme vars with

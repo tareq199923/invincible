@@ -253,6 +253,22 @@ def models_from_providers(providers: list) -> list[dict]:
     return entries
 
 
+def _sanitize_for_routing(messages: list) -> list:
+    """Strip local-only keys (asked/mic) before upstream routing.
+
+    Persisted payloads keep the flag (JSONB, no migration); providers
+    must never see it. Unknown keys would break strict providers and
+    leak client UX state upstream.
+    """
+    clean = []
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        stripped = {k: v for k, v in message.items() if k not in ("asked", "mic")}
+        clean.append(stripped)
+    return clean
+
+
 async def prepare_chat(
     messages: list[dict[str, Any]],
     *,
@@ -307,7 +323,7 @@ async def prepare_chat(
         session_pk=session_pk,
         new_messages=messages,
     )
-    full_messages = history + injections + messages
+    full_messages = history + injections + _sanitize_for_routing(messages)
     try:
         # Persisted history + the client's replayed messages must satisfy
         # the provider's tool-call pairing invariant before routing; a

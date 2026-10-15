@@ -244,3 +244,60 @@ async def build_session_projection(
         "timeline": timeline_ids,
         "summary": summary,
     }
+
+
+# Bluey-style agent prompt: plain-text session export an agent can read.
+# Pure projection, no I/O, no secrets: text roles only, capped length.
+AGENT_PROMPT_MAX_CHARS = 6000
+
+
+def _message_text(message: dict) -> str:
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+            elif isinstance(part, str):
+                parts.append(part)
+        return "\n".join(parts).strip()
+    return str(content).strip()
+
+
+def format_agent_prompt(session_id: str, messages: list) -> str:
+    """One text block pointing an agent at this session's transcript.
+
+    Mirrors Bluey's "Copy prompt for agent": session id + turns in time
+    order as `User:` / `Assistant:` lines, suffix-truncated to
+    AGENT_PROMPT_MAX_CHARS. Image/base64 parts are skipped (text stays
+    source of truth, same as voice). Never raises on malformed input.
+    """
+    lines = [f"Session {session_id} transcript (oldest first):", ""]
+    try:
+        items = list(messages or [])
+    except TypeError:
+        items = []
+    for message in items:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role", "unknown"))
+        if role == "user" and message.get("asked") is True:
+            who = "You asked"
+        elif role == "user":
+            who = "User"
+        elif role == "assistant":
+            who = "Assistant"
+        else:
+            who = role
+        text = _message_text(message)
+        if not text:
+            continue
+        if len(text) > 1000:
+            text = text[:1000] + "…"
+        lines.append(f"{who}: {text}")
+    out = "\n".join(lines).strip()
+    if len(out) > AGENT_PROMPT_MAX_CHARS:
+        out = "…" + out[-AGENT_PROMPT_MAX_CHARS:]
+    return out
