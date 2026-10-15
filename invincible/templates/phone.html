@@ -29,19 +29,21 @@
   <div id="phone-log" aria-live="polite"></div>
 
   <div id="phone-composer">
-    <button type="button" id="phone-orb" class="voice-orb"
-            title="Talk" aria-label="Talk"></button>
     <textarea id="phone-input" placeholder="Message Baymax&hellip;"
               aria-label="Message"></textarea>
+    <div class="composer-actions">
+    <button type="button" id="phone-orb" class="voice-orb"
+            title="Talk" aria-label="Talk"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M17 11a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg></button>
     <button type="button" id="phone-send" title="Send"
             aria-label="Send">&uarr;</button>
+    </div>
   </div>
   <div class="composer-row">
     <button type="button" id="phone-hop" title="Hop to PC"
             aria-label="Hop to PC">&#10142; Hop to PC</button>
     <span id="phone-status" aria-live="polite"></span>
   </div>
-  <p class="muted" id="phone-voice-hint">Voice: tap the circle to talk,
+  <p class="muted" id="phone-voice-hint">Voice: tap the mic in the bar to talk,
   tap again to send. With no audio provider it uses free browser voice
   on this phone — text is the record.</p>
 </div>

@@ -652,6 +652,25 @@ def test_speak_only_on_mic_turns():
     assert "if (turnShouldSpeak) speak(answer);" in phone
 
 
+def test_gemini_style_composer_bar():
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    chat = (repo / "invincible" / "templates" / "chat.html").read_text(
+        encoding="utf-8")
+    phone = (repo / "invincible" / "templates" / "phone.html").read_text(
+        encoding="utf-8")
+    css = (repo / "invincible" / "templates" / "static" /
+           "voice-orb.css").read_text(encoding="utf-8")
+    # B9: mic + send live inside one bar row, quiet glyph, theme vars.
+    for html in (chat, phone):
+        assert "composer-actions" in html
+        assert "<svg viewBox=\"0 0 24 24\"" in html
+    assert "radial-gradient" not in css
+    assert "hue-rotate" not in css
+    assert "currentColor" in css or "var(--muted)" in css
+
+
 async def test_transcribe_402_surfaces_billing_excerpt():
     from invincible.core.voice import VoiceUpstreamError, transcribe_audio
 

@@ -1,90 +1,102 @@
-/* B4 voice orb: one talking circle replacing mic + mute buttons.
-   States are classes on the button: .is-listening / .is-working /
-   .is-speaking. Mic loudness drives --level (0..1) for a live pulse.
-   No framework, no assets. */
+/* B9 voice orb skin: quiet Gemini-style mic glyph inside the composer
+   bar. Uses theme vars (light default + data-theme dark overrides come
+   free); flat fills only. States are ring pulses only.
+   Mic loudness drives --level (0..1) for a live scale while listening. */
 
 .voice-orb {
-  position: relative;
-  width: 40px;
-  height: 40px;
-  border: 0;
-  border-radius: 999px;
-  cursor: pointer;
+  display: inline-grid;
+  place-items: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  padding: 0;
   flex: 0 0 auto;
-  background: radial-gradient(circle at 35% 30%, #8fb3ff 0%, #4f8bff 38%, #7a5cff 72%, #c86bff 100%);
-  box-shadow: 0 0 0 1px rgba(79, 139, 255, 0.35), 0 2px 10px rgba(79, 139, 255, 0.35);
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: transform 0.12s ease, color 0.12s ease,
+    border-color 0.12s ease, box-shadow 0.12s ease,
+    background-color 0.12s ease;
 }
 
-.voice-orb::before {
-  content: "";
-  position: absolute;
-  inset: 14px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.92);
-  transition: inset 0.12s ease;
-}
-
-.voice-orb::after {
-  content: "";
-  position: absolute;
-  inset: 17px;
-  border-radius: 999px;
-  background: #1b2340;
-  transition: inset 0.12s ease;
+.voice-orb svg {
+  width: 1.2rem;
+  height: 1.2rem;
+  fill: currentColor;
 }
 
 .voice-orb:hover {
-  transform: scale(1.05);
+  color: var(--ink);
+  background: var(--accent-dim);
 }
 
 .voice-orb:focus-visible {
-  outline: 2px solid #4f8bff;
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
 .voice-orb.is-listening {
-  animation: voice-orb-ring 1.1s ease-in-out infinite;
-  transform: scale(calc(1 + var(--level, 0) * 0.18));
-}
-
-.voice-orb.is-listening::before {
-  inset: calc(14px - var(--level, 0) * 5px);
+  color: var(--accent);
+  border-color: var(--accent);
+  transform: scale(calc(1 + var(--level, 0) * 0.12));
+  animation: voice-orb-ring 1.2s ease-in-out infinite;
 }
 
 .voice-orb.is-speaking {
-  animation: voice-orb-speak 0.9s ease-in-out infinite;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  animation: voice-orb-speak 1s ease-in-out infinite;
 }
 
 .voice-orb.is-working {
+  color: var(--faint);
+  border-color: var(--border);
   animation: voice-orb-spin 0.9s linear infinite;
 }
 
 .voice-orb:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: default;
   animation: none;
 }
 
 @keyframes voice-orb-ring {
   0%, 100% {
-    box-shadow: 0 0 0 3px rgba(79, 139, 255, 0.45), 0 2px 10px rgba(79, 139, 255, 0.35);
+    box-shadow: 0 0 0 2px var(--accent-dim);
   }
   50% {
-    box-shadow: 0 0 0 9px rgba(79, 139, 255, 0.12), 0 2px 10px rgba(79, 139, 255, 0.35);
+    box-shadow: 0 0 0 7px var(--accent-dim);
   }
 }
 
 @keyframes voice-orb-speak {
   0%, 100% {
-    box-shadow: 0 0 0 3px rgba(200, 107, 255, 0.5), 0 2px 10px rgba(200, 107, 255, 0.4);
+    box-shadow: 0 0 0 2px var(--accent-dim);
   }
   50% {
-    box-shadow: 0 0 0 10px rgba(200, 107, 255, 0.14), 0 2px 10px rgba(200, 107, 255, 0.4);
+    box-shadow: 0 0 0 8px var(--accent-dim);
   }
 }
 
 @keyframes voice-orb-spin {
-  0% { filter: hue-rotate(0deg); }
-  100% { filter: hue-rotate(360deg); }
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Gemini-style bar: input + mic + send in one row inside the pill. */
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-orb, .voice-orb.is-listening, .voice-orb.is-speaking,
+  .voice-orb.is-working {
+    animation: none;
+    transform: none;
+  }
 }

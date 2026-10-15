@@ -5,6 +5,11 @@
 
 ## Current State
 
+- B9 done (`passing`, committed as `1fa98d9`, unpushed): Gemini-style composer bar — mic orb
+  + send live inside one rounded row (`composer-actions`) on webchat +
+  PWA; orb is a quiet `currentColor` mic glyph on theme vars with
+  ring-pulse states only; mic moved right of the input like Gemini.
+  Behavior/realms/ids unchanged. Static test pins the bar + skin.
 - B8 done (`passing`, committed as `394edcc`, pushed): speak only on mic turns — orb sets
   a per-turn flag consumed at submit; typed turns stay text-only on
   webchat + PWA. Static test pins the gating; `ruff` clean; 91
@@ -171,7 +176,7 @@
 
 ## In Progress
 
-- None — B8 complete (`passing`, uncommitted).
+- None — B9 complete (`passing`, uncommitted).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

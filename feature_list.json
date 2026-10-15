@@ -131,5 +131,12 @@
     "state": "passing",
     "title": "B8 speak only on mic turns (typed stays silent)",
     "verification": "ruff check . && pytest tests/test_voice.py tests/test_webchat.py tests/test_handoff.py"
+  },
+  {
+    "behavior": "webchat + PWA composers render as one Gemini-style rounded bar with the mic orb and send button inside; orb is a quiet currentColor mic glyph with ring-pulse states (no gradient blob); behavior, realms, ids unchanged",
+    "id": "B9",
+    "state": "passing",
+    "title": "B9 Gemini-style composer bar (orb inside)",
+    "verification": "ruff check . && pytest tests/test_voice.py tests/test_webchat.py tests/test_handoff.py"
   }
 ]
