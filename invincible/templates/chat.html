@@ -139,7 +139,11 @@
     // B4 voice orb: one talking circle (GPT/Gemini feel). Tap to talk,
     // tap to send, tap while speaking to interrupt. Text bubbles stay
     // the source of truth; speech is rendering-only and silent on fail.
+    // B8: replies speak ONLY on orb-initiated (mic) turns — typed turns
+    // stay text-only. The orb sets voiceNext before submitting; the
+    // submit handler consumes it per turn.
     var voiceOrb = null;
+    var voiceNext = false;
     function speak(text) {
       if (voiceOrb) voiceOrb.speak(text);
     }
@@ -150,6 +154,7 @@
         status: status,
         onText: function (text) {
           input.value = text;
+          voiceNext = true;
           form.requestSubmit();
         },
         transcribe: function (blob) {
@@ -384,7 +389,9 @@
     form.addEventListener("submit", function (e) {
       e.preventDefault();
       var text = input.value.trim();
-      if (!text || send.disabled) return;
+      if (!text || send.disabled) { voiceNext = false; return; }
+      var turnShouldSpeak = voiceNext;
+      voiceNext = false;
       bubble("user", text);
       input.value = "";
       send.disabled = true;
@@ -503,9 +510,12 @@
                 if (status) status.textContent = "working…";
               } else if (name === "done" && payload) {
                 pending.classList.remove("pending");
-                // Spoken Bmax renders the streamed text (voice off/muted
-                // or any failure stays silent — the bubble is the record).
+                // B8: speak only orb-initiated (mic) turns; typed turns
+                // stay text-only. Any failure stays silent — the bubble
+                // is the record.
                 var finalText = pending.textContent;
+                var shouldSpeak = turnShouldSpeak;
+                turnShouldSpeak = false;
                 if (toolGroup) {
                   if (payload.tools_used) toolGroup.total = payload.tools_used;
                   toolGroup.running = false;
@@ -529,7 +539,7 @@
                   meta.textContent = metaParts.join(" · ");
                   pending.appendChild(meta);
                 }
-                speak(finalText);
+                if (shouldSpeak) speak(finalText);
                 send.disabled = false;
                 if (status) status.textContent = "";
               } else if (name === "error" && payload) {

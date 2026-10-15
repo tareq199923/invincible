@@ -636,6 +636,22 @@ def test_voice_orb_replaces_mic_mute_buttons():
     assert "Free mode" in orb_js
 
 
+def test_speak_only_on_mic_turns():
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    chat = (repo / "invincible" / "templates" / "chat.html").read_text(
+        encoding="utf-8")
+    phone = (repo / "invincible" / "templates" / "phone.html").read_text(
+        encoding="utf-8")
+    # B8: typed turns stay silent; only orb-initiated turns speak.
+    for html in (chat, phone):
+        assert "voiceNext" in html
+        assert "turnShouldSpeak" in html
+    assert "if (shouldSpeak) speak(finalText);" in chat
+    assert "if (turnShouldSpeak) speak(answer);" in phone
+
+
 async def test_transcribe_402_surfaces_billing_excerpt():
     from invincible.core.voice import VoiceUpstreamError, transcribe_audio
 

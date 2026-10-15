@@ -5,6 +5,10 @@
 
 ## Current State
 
+- B8 done (`passing`, committed as `2204696`, unpushed): speak only on mic turns — orb sets
+  a per-turn flag consumed at submit; typed turns stay text-only on
+  webchat + PWA. Static test pins the gating; `ruff` clean; 91
+  voice+webchat+handoff passed.
 - B7 done (`passing`, committed as `49d4139`, pushed): free browser voice fallback — orb
   uses device-local Web Speech recognition + speechSynthesis when the
   server has no audio surface; no fetch, no keys, tap-to-stop covers
@@ -167,7 +171,7 @@
 
 ## In Progress
 
-- None — B7 complete (`passing`, uncommitted).
+- None — B8 complete (`passing`, uncommitted).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

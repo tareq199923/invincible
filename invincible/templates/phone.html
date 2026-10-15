@@ -63,6 +63,8 @@
     if (!log || !input || !sendBtn) return;
 
     var voiceOrb = null;
+    // B8: speak only orb (mic) turns; typed send stays silent.
+    var voiceNext = false;
 
     var history = [];
     var sessionId = null;
@@ -121,15 +123,19 @@
     function send(text) {
       var c = creds();
       text = (text || "").trim();
-      if (!text || sendBtn.disabled) return;
+      if (!text || sendBtn.disabled) { voiceNext = false; return; }
       if (!c.key) {
         if (status) status.textContent = "paste your inv_ key first.";
+        voiceNext = false;
         return;
       }
       if (!c.model) {
         if (status) status.textContent = "enter a model id (see /v1/models).";
+        voiceNext = false;
         return;
       }
+      var turnShouldSpeak = voiceNext;
+      voiceNext = false;
       persist();
       bubble("user", text);
       history.push({role: "user", content: text});
@@ -164,7 +170,7 @@
           pending.appendChild(document.createTextNode(answer));
           history.push({role: "assistant", content: answer});
           if (status) status.textContent = "";
-          speak(answer);
+          if (turnShouldSpeak) speak(answer);
         } else {
           var msg = (out.body && out.body.error && out.body.error.message) ||
             "request failed";
@@ -197,7 +203,7 @@
       voiceOrb = window.VoiceOrb.create({
         orb: orbEl,
         status: status,
-        onText: function (text) { send(text); },
+        onText: function (text) { voiceNext = true; send(text); },
         transcribe: function (blob) {
           var c = creds();
           if (!c.key) return Promise.reject(new Error("paste your inv_ key first"));
