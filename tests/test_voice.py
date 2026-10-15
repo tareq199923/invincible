@@ -609,6 +609,29 @@ def test_voice_orb_replaces_mic_mute_buttons():
             "voice-orb.css").exists()
 
 
+async def test_transcribe_402_surfaces_billing_excerpt():
+    from invincible.core.voice import VoiceUpstreamError, transcribe_audio
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            402, json={"error": {"message": "Insufficient credits."}})
+
+    client = _client_for(handler)
+    try:
+        try:
+            await transcribe_audio(
+                _candidates("https://api.openai.com/v1"), _resolver,
+                b"audio-bytes", client=client)
+        except VoiceUpstreamError as e:
+            assert e.status_code == 402
+            assert "Insufficient credits" in str(e.body)
+            assert "test-key-" not in str(e.body)
+        else:
+            raise AssertionError("expected VoiceUpstreamError")
+    finally:
+        await client.aclose()
+
+
 # --- fail-safe: voice off leaves text chat unchanged -------------------------
 
 

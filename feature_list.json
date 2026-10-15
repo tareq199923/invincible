@@ -103,5 +103,12 @@
     "state": "passing",
     "title": "B4 voice reliability + orb (audio failover + talking circle)",
     "verification": "ruff check . && pytest tests/test_voice.py tests/test_handoff.py tests/test_baymax_prompt.py tests/test_webchat.py"
+  },
+  {
+    "behavior": "voice 4xx passthrough carries the provider's short error excerpt (e.g. billing/quota for HTTP 402) instead of bare Transcription refused (HTTP NNN); no key material ever enters the message",
+    "id": "B5",
+    "state": "passing",
+    "title": "B5 voice upstream errors (surface billing reason)",
+    "verification": "ruff check . && pytest tests/test_voice.py"
   }
 ]

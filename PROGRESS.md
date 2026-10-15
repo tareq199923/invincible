@@ -5,7 +5,12 @@
 
 ## Current State
 
-- B4 done (`passing`, committed as `bde3ac2`, unpushed): voice reliability + orb — OpenAI-base
+- B5 done (`passing`, committed as `b663a68`, pushed): voice 402 now shows the provider's
+  reason (e.g. `Transcription refused (HTTP 402: Insufficient
+  credits.)`) via safe body excerpt in `core/voice.py`; no keys in
+  messages. New test pins it. `ruff` clean; voice+webchat+handoff 89
+  passed.
+- B4 done (`passing`, committed as `bb3bee9`, pushed): voice reliability + orb — OpenAI-base
   credentials tried first, 404 skips to next (all-404 is a clear 502
   "no transcription/speech surface; connect OpenAI", never
   "Transcription refused HTTP 404"); audio models pinned to
@@ -152,7 +157,7 @@
 
 ## In Progress
 
-- None — B4 complete (`passing`, uncommitted).
+- None — B5 complete (`passing`, uncommitted).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

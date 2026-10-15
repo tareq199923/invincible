@@ -211,6 +211,35 @@ def _http_client(owned_state_client):
     return httpx.AsyncClient(), True
 
 
+def _upstream_excerpt(resp) -> str:
+    """Short safe provider error excerpt for 4xx passthrough (no headers,
+    no keys — response bodies only, truncated). Lets billing/quota 402s
+    explain themselves instead of a bare HTTP number."""
+    try:
+        body = resp.json() if hasattr(resp, "json") else None
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict) and err.get("message"):
+                return str(err["message"])[:200].strip()
+            if isinstance(err, str) and err.strip():
+                return err.strip()[:200]
+            for key in ("message", "detail"):
+                if isinstance(body.get(key), str) and body[key].strip():
+                    return str(body[key])[:200].strip()
+    except Exception:
+        pass
+    try:
+        text = resp.text if isinstance(getattr(resp, "text", ""), str) else ""
+    except Exception:
+        text = ""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if len(text) > 200:
+        text = text[:200].strip() + "…"
+    return text
+
+
 async def transcribe_audio(candidates, key_resolver, audio: bytes, *,
                            filename: str = "audio.webm",
                            model: str | None = None,
@@ -278,9 +307,11 @@ async def transcribe_audio(candidates, key_resolver, audio: bytes, *,
                                "trying next", base_url)
                 continue
             if 400 <= resp.status_code < 500:
-                raise VoiceUpstreamError(
-                    resp.status_code,
-                    f"Transcription refused (HTTP {resp.status_code}).")
+                excerpt = _upstream_excerpt(resp)
+                detail = (f"Transcription refused (HTTP {resp.status_code}"
+                          f": {excerpt})." if excerpt else
+                          f"Transcription refused (HTTP {resp.status_code}).")
+                raise VoiceUpstreamError(resp.status_code, detail)
             logger.warning("Voice transcription HTTP %s; trying next",
                            resp.status_code)
         if not tried:
@@ -368,9 +399,11 @@ async def synthesize_audio(candidates, key_resolver, text: str, *,
                                "trying next", base_url)
                 continue
             if 400 <= resp.status_code < 500:
-                raise VoiceUpstreamError(
-                    resp.status_code,
-                    f"Speech refused (HTTP {resp.status_code}).")
+                excerpt = _upstream_excerpt(resp)
+                detail = (f"Speech refused (HTTP {resp.status_code}"
+                          f": {excerpt})." if excerpt else
+                          f"Speech refused (HTTP {resp.status_code}).")
+                raise VoiceUpstreamError(resp.status_code, detail)
             logger.warning("Voice synthesis HTTP %s; trying next",
                            resp.status_code)
         if not tried:
