@@ -5,7 +5,7 @@
 
 ## Current State
 
-- B9 done (`passing`, committed as `1fa98d9`, unpushed): Gemini-style composer bar — mic orb
+- B9 done (`passing`, committed as `3ae6c82`, pushed): Gemini-style composer bar — mic orb
   + send live inside one rounded row (`composer-actions`) on webchat +
   PWA; orb is a quiet `currentColor` mic glyph on theme vars with
   ring-pulse states only; mic moved right of the input like Gemini.
