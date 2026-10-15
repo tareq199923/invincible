@@ -55,6 +55,44 @@ MAX_DEVICE_CHARS = 128
 # token splits unambiguously on "." (mint sanitizes anything else).
 _DEVICE_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
+# B4: audio surfaces exist on OpenAI only. Chat credentials carry a
+# chat model_id (e.g. gpt-4o-mini, gemini-2.5-flash) that must never be
+# sent as the audio model, and the legacy "baymax" voice name is not a
+# valid OpenAI voice. Pin the audio models and map the voice name here
+# so every caller (v1 + dashboard, STT + TTS) shares one rule.
+VOICE_STT_MODEL = "whisper-1"
+VOICE_TTS_MODEL = "tts-1"
+DEFAULT_TTS_VOICE = "alloy"
+OPENAI_AUDIO_BASE = "https://api.openai.com/v1"
+
+
+def _ordered_voice_candidates(candidates) -> list:
+    """OpenAI-base credentials first, everything else after.
+
+    The order preserves routing inside each group. Non-OpenAI bases
+    (groq/gemini/openrouter/nim/custom) usually 404 on ``/audio/*`` —
+    trying OpenAI first avoids a spurious passthrough 404 when the user
+    has both connected. Custom OpenAI-compatible hosts that do serve
+    audio still get tried as fallback (their 404 is skipped, not fatal).
+    """
+    openai_first: list = []
+    rest: list = []
+    for candidate in candidates or []:
+        base = str((candidate or {}).get("base_url", "")).rstrip("/").lower()
+        if base == OPENAI_AUDIO_BASE:
+            openai_first.append(candidate)
+        else:
+            rest.append(candidate)
+    return openai_first + rest
+
+
+def _normalize_tts_voice(voice: object) -> str:
+    """Map legacy/UI voice names onto real OpenAI voices."""
+    name = str(voice or "").strip()[:MAX_VOICE_NAME_CHARS] or "baymax"
+    if name.lower() == "baymax":
+        return DEFAULT_TTS_VOICE
+    return name
+
 
 class VoiceError(Exception):
     """Already-mapped voice failure (status_code + OpenAI-style body)."""
@@ -196,7 +234,8 @@ async def transcribe_audio(candidates, key_resolver, audio: bytes, *,
     http, owns = _http_client(client)
     try:
         tried = 0
-        for candidate in candidates or []:
+        saw_404 = False
+        for candidate in _ordered_voice_candidates(candidates):
             try:
                 api_key = await key_resolver(candidate)
             except Exception:
@@ -207,7 +246,8 @@ async def transcribe_audio(candidates, key_resolver, audio: bytes, *,
             tried += 1
             base_url = str(candidate.get("base_url", "")).rstrip("/")
             url = f"{base_url}/audio/transcriptions"
-            body_model = model or candidate.get("model_id") or "whisper-1"
+            body_model = (str(model).strip() or VOICE_STT_MODEL
+                          if model is not None else VOICE_STT_MODEL)
             try:
                 resp = await http.post(
                     url,
@@ -229,6 +269,14 @@ async def transcribe_audio(candidates, key_resolver, audio: bytes, *,
                     return text
                 raise VoiceError(400, "Transcription returned no text.",
                                  "invalid_request_error")
+            if resp.status_code == 404:
+                # No audio surface on this provider (groq/gemini/
+                # openrouter/nim/custom): try the next credential instead
+                # of aborting with "Transcription refused (HTTP 404)".
+                saw_404 = True
+                logger.warning("Voice transcription HTTP 404 on %s; "
+                               "trying next", base_url)
+                continue
             if 400 <= resp.status_code < 500:
                 raise VoiceUpstreamError(
                     resp.status_code,
@@ -236,9 +284,19 @@ async def transcribe_audio(candidates, key_resolver, audio: bytes, *,
             logger.warning("Voice transcription HTTP %s; trying next",
                            resp.status_code)
         if not tried:
+            if saw_404:
+                raise VoiceGatewayError(
+                    502, "This provider has no transcription surface; "
+                         "connect OpenAI for mic (text chat is unchanged).",
+                    "gateway_error")
             raise VoiceError(400, "No connected provider credential can "
                                   "transcribe audio.",
                              "invalid_request_error")
+        if saw_404:
+            raise VoiceGatewayError(
+                502, "This provider has no transcription surface; "
+                     "connect OpenAI for mic (text chat is unchanged).",
+                "gateway_error")
         raise VoiceGatewayError(
             502, "Transcription failed upstream; type instead "
                  "(text chat is unchanged).", "gateway_error")
@@ -267,12 +325,12 @@ async def synthesize_audio(candidates, key_resolver, text: str, *,
     if len(clean) > MAX_TTS_CHARS:
         raise VoiceError(400, f"Text must be at most {MAX_TTS_CHARS} "
                               "characters.", "invalid_request_error")
-    voice_name = str(voice or "baymax").strip()[:MAX_VOICE_NAME_CHARS] or \
-        "baymax"
+    voice_name = _normalize_tts_voice(voice)
     http, owns = _http_client(client)
     try:
         tried = 0
-        for candidate in candidates or []:
+        saw_404 = False
+        for candidate in _ordered_voice_candidates(candidates):
             try:
                 api_key = await key_resolver(candidate)
             except Exception:
@@ -283,7 +341,8 @@ async def synthesize_audio(candidates, key_resolver, text: str, *,
             tried += 1
             base_url = str(candidate.get("base_url", "")).rstrip("/")
             url = f"{base_url}/audio/speech"
-            body_model = model or candidate.get("model_id") or "tts-1"
+            body_model = (str(model).strip() or VOICE_TTS_MODEL
+                          if model is not None else VOICE_TTS_MODEL)
             try:
                 resp = await http.post(
                     url,
@@ -303,9 +362,11 @@ async def synthesize_audio(candidates, key_resolver, text: str, *,
                 # only the bytes + a generic content type leave the server.
                 return bytes(resp.content), ctype
             if resp.status_code == 404:
-                raise VoiceGatewayError(
-                    502, "This provider has no speech surface; text chat "
-                         "is unchanged.", "gateway_error")
+                # No speech surface here: try the next credential.
+                saw_404 = True
+                logger.warning("Voice synthesis HTTP 404 on %s; "
+                               "trying next", base_url)
+                continue
             if 400 <= resp.status_code < 500:
                 raise VoiceUpstreamError(
                     resp.status_code,
@@ -313,9 +374,17 @@ async def synthesize_audio(candidates, key_resolver, text: str, *,
             logger.warning("Voice synthesis HTTP %s; trying next",
                            resp.status_code)
         if not tried:
+            if saw_404:
+                raise VoiceGatewayError(
+                    502, "This provider has no speech surface; text chat "
+                         "is unchanged.", "gateway_error")
             raise VoiceError(400, "No connected provider credential can "
                                   "synthesize speech.",
                              "invalid_request_error")
+        if saw_404:
+            raise VoiceGatewayError(
+                502, "This provider has no speech surface; text chat "
+                     "is unchanged.", "gateway_error")
         raise VoiceGatewayError(
             502, "Speech failed upstream; the text reply stands.",
             "gateway_error")

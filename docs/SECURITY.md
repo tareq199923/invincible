@@ -1168,9 +1168,13 @@ tokens that authorize it.
   connected credentials — audio is never shipped to any third party
   except that user's provider, and provider keys never enter a
   response (pinned by `tests/test_voice.py` key-material scans).
-  A provider with no audio surface fails closed with 502 and the
-  client keeps the text bubble (see the compat matrix in
-  [PROVIDERS.md](PROVIDERS.md)).
+  OpenAI-base credentials are tried first; a 404 (no `/audio/*`
+  surface, e.g. groq/gemini/openrouter/nim) skips to the next
+  credential instead of aborting, and audio models are pinned to
+  `whisper-1`/`tts-1` (never the chat `model_id`; legacy voice
+  `baymax` maps to `alloy`). A provider with no audio surface fails
+  closed with 502 and the client keeps the text bubble (see the compat
+  matrix in [PROVIDERS.md](PROVIDERS.md)).
 - **Ephemeral tokens (minutes, single purpose).** `POST /v1/voice/token`
   (`inv_` realm, owner-bound — the token always names the caller, so
   cross-user mint is impossible) and `POST /dashboard/voice/token`
@@ -1186,9 +1190,9 @@ tokens that authorize it.
   a stolen token speaks or transcribes as its owner for minutes, the
   same blast radius as a stolen 5-minute OAuth token, and it can never
   mint, list credentials, or run tools.
-- **Kill-switch + mute fail safe.** `INVINCIBLE_VOICE=0/off/false`
+- **Kill-switch + tap-to-stop fail safe.** `INVINCIBLE_VOICE=0/off/false`
   refuses every voice route with 503 (mint included); the per-user
   `voice` override (dashboard Settings, default = follow server)
   refuses per user the same way. Either off leaves text chat
-  byte-identical (pinned by the fail-safe test). Client mute is
-  localStorage-only rendering state.
+  byte-identical (pinned by the fail-safe test). Tapping the orb while
+  it speaks stops playback locally; there is no separate mute button.

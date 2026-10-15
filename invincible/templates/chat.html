@@ -1,5 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Chat - Invincible{% endblock %}
+{% block head_extra %}
+<link rel="stylesheet" href="/static/voice-orb.css?v={{ asset_rev('voice-orb.css') }}">
+<script src="/static/voice-orb.js?v={{ asset_rev('voice-orb.js') }}" defer></script>
+{% endblock %}
 {% block content %}
 <div class="chat-topbar">
   <button type="button" class="theme-btn" id="theme-toggle" title="Toggle light / dark" aria-label="Toggle light and dark theme">💡</button>
@@ -55,8 +59,7 @@
       {% endif %}
       <span id="chat-status"></span>
     </div>
-    <button type="button" id="chat-mic" title="Push to talk" aria-label="Push to talk">🎙️</button>
-    <button type="button" id="chat-mute" title="Mute spoken replies" aria-label="Mute spoken replies">🔊</button>
+    <button type="button" id="voice-orb" class="voice-orb" title="Talk" aria-label="Talk"></button>
     <button type="submit" id="chat-send" title="Send" aria-label="Send">&uarr;</button>
   </div>
   <div class="mode-hint muted" id="mode-hint" aria-live="polite"></div>
@@ -100,8 +103,7 @@
     var status = document.getElementById("chat-status");
     var picker = document.getElementById("chat-model");
     var modePicker = document.getElementById("chat-mode");
-    var micBtn = document.getElementById("chat-mic");
-    var muteBtn = document.getElementById("chat-mute");
+    var orbEl = document.getElementById("voice-orb");
     // Per-turn tool-activity group. One group accumulates every tool call in
     // the turn (across agent-loop iterations); each tool is tracked by
     // call_id so parallel/interleaved results land on the right entry.
@@ -134,115 +136,50 @@
       } catch (e) { /* storage unavailable: sticky default is fine */ }
     }
 
-    // B3 voice: explicit press-to-talk in, spoken Bmax out. Mute is
-    // rendering-only and persisted on this browser; the text bubbles
-    // stay the source of truth. Any voice failure stays silent.
-    var voiceMuted = false;
-    try {
-      voiceMuted = window.localStorage.getItem("webchat-voice-muted") === "1";
-    } catch (e) { /* private mode: default on */ }
-    function renderVoiceMute() {
-      if (muteBtn) muteBtn.textContent = voiceMuted ? "🔇" : "🔊";
-    }
-    renderVoiceMute();
-    if (muteBtn) muteBtn.addEventListener("click", function () {
-      voiceMuted = !voiceMuted;
-      try { window.localStorage.setItem("webchat-voice-muted", voiceMuted ? "1" : "0"); }
-      catch (e) { /* ignore */ }
-      renderVoiceMute();
-    });
+    // B4 voice orb: one talking circle (GPT/Gemini feel). Tap to talk,
+    // tap to send, tap while speaking to interrupt. Text bubbles stay
+    // the source of truth; speech is rendering-only and silent on fail.
+    var voiceOrb = null;
     function speak(text) {
-      if (voiceMuted) return;
-      text = (text || "").trim().slice(0, 4000);
-      if (!text) return;
-      fetch("/dashboard/voice/synthesize", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({input: text})
-      }).then(function (resp) {
-        if (!resp.ok) return null;
-        return resp.blob();
-      }).then(function (blob) {
-        if (!blob) return;
-        try {
-          var url = URL.createObjectURL(blob);
-          var audio = new Audio(url);
-          audio.onended = function () { URL.revokeObjectURL(url); };
-          audio.play().catch(function () { /* autoplay gate: stay silent */ });
-        } catch (e) { /* no audio element: stay silent */ }
-      }).catch(function () { /* rendering-only: never an error */ });
+      if (voiceOrb) voiceOrb.speak(text);
     }
-    var voiceRecorder = null;
-    var voiceChunks = [];
-    var voiceStream = null;
-    function stopVoiceTracks() {
-      if (voiceStream) {
-        try {
-          voiceStream.getTracks().forEach(function (t) { t.stop(); });
-        } catch (e) { /* ignore */ }
-        voiceStream = null;
-      }
-    }
-    if (micBtn) micBtn.addEventListener("click", function () {
-      if (voiceRecorder) {
-        try { voiceRecorder.stop(); } catch (e) { /* ignore */ }
-        return;
-      }
-      var MR = window.MediaRecorder;
-      if (!MR || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        if (status) status.textContent = "voice recording not supported here — type instead.";
-        input.focus();
-        return;
-      }
-      navigator.mediaDevices.getUserMedia({audio: true}).then(function (stream) {
-        voiceStream = stream;
-        voiceChunks = [];
-        try {
-          voiceRecorder = new MR(stream);
-        } catch (e) {
-          stopVoiceTracks();
-          if (status) status.textContent = "mic unavailable — type instead.";
-          return;
-        }
-        voiceRecorder.ondataavailable = function (ev) {
-          if (ev.data && ev.data.size) voiceChunks.push(ev.data);
-        };
-        voiceRecorder.onstop = function () {
-          stopVoiceTracks();
-          var blob = new Blob(voiceChunks, {type: voiceRecorder.mimeType || "audio/webm"});
-          voiceRecorder = null;
-          if (!blob.size) {
-            if (status) status.textContent = "";
-            return;
-          }
-          if (status) status.textContent = "transcribing…";
-          fetch("/dashboard/voice/transcribe", {
+    function initVoiceOrb() {
+      if (!orbEl || !window.VoiceOrb) return;
+      voiceOrb = window.VoiceOrb.create({
+        orb: orbEl,
+        status: status,
+        onText: function (text) {
+          input.value = text;
+          form.requestSubmit();
+        },
+        transcribe: function (blob) {
+          return fetch("/dashboard/voice/transcribe", {
             method: "POST",
             credentials: "same-origin",
             body: blob
           }).then(function (resp) {
-            return resp.json().then(function (j) { return {ok: resp.ok, body: j}; });
-          }).then(function (out) {
-            if (out.ok && out.body && out.body.text) {
-              input.value = out.body.text;
-              if (status) status.textContent = "";
-              form.requestSubmit();
-            } else {
-              var msg = (out.body && out.body.error && out.body.error.message) ||
-                "transcription failed";
-              if (status) status.textContent = msg + " — type instead.";
-            }
-          }).catch(function () {
-            if (status) status.textContent = "transcription failed — type instead.";
+            return resp.json().then(function (j) {
+              if (resp.ok && j && j.text) return j.text;
+              var err = new Error((j && j.error && j.error.message) || "Transcription failed");
+              throw err;
+            });
           });
-        };
-        voiceRecorder.start();
-        if (status) status.textContent = "recording… tap mic to send.";
-      }).catch(function () {
-        if (status) status.textContent = "mic unavailable — type instead.";
+        },
+        synthesize: function (text) {
+          return fetch("/dashboard/voice/synthesize", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({input: text})
+          }).then(function (resp) {
+            if (!resp.ok) return null;
+            return resp.blob();
+          }).catch(function () { return null; });
+        }
       });
-    });
+    }
+    if (document.readyState === "complete") initVoiceOrb();
+    else window.addEventListener("load", initVoiceOrb);
     // Bmax marker: dot + name header for assistant bubbles. DOM-only
     // (textContent for the name), never innerHTML — same XSS posture as
     // bubble(). Re-applied after streaming clears or replaces content.

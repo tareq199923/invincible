@@ -467,6 +467,148 @@ async def test_dashboard_ignores_voice_bearer(client, byok_env,
     assert "No connected provider" in resp.text
 
 
+# --- B4: audio failover + model pinning ---------------------------------------
+
+
+def _candidates(*bases):
+    return [
+        {"name": f"p{i}", "base_url": base, "model_id": "chat-model-x"}
+        for i, base in enumerate(bases)
+    ]
+
+
+async def _resolver(candidate):
+    return "k"
+
+
+def _client_for(handler):
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+async def test_transcribe_skips_404_then_succeeds():
+    from invincible.core.voice import transcribe_audio
+
+    seen_models: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "gemini" in str(request.url):
+            return httpx.Response(404, json={"error": "nope"})
+        seen_models.append(request.content)
+        return httpx.Response(200, json={"text": "hi from openai"})
+
+    client = _client_for(handler)
+    try:
+        text = await transcribe_audio(
+            _candidates("https://generativelanguage.googleapis.com/v1beta/openai",
+                        "https://api.openai.com/v1"),
+            _resolver, b"audio-bytes", client=client)
+    finally:
+        await client.aclose()
+    assert text == "hi from openai"
+    # Audio model pinned, never the chat model_id.
+    assert seen_models and b"whisper-1" in seen_models[0]
+    assert b"chat-model-x" not in seen_models[0]
+
+
+async def test_transcribe_all_404_is_clear_502():
+    from invincible.core.voice import VoiceGatewayError, transcribe_audio
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "nope"})
+
+    client = _client_for(handler)
+    try:
+        try:
+            await transcribe_audio(
+                _candidates("https://api.groq.com/openai/v1"), _resolver,
+                b"audio-bytes", client=client)
+        except VoiceGatewayError as e:
+            assert e.status_code == 502
+            assert "no transcription surface" in str(e.body)
+        else:
+            raise AssertionError("expected VoiceGatewayError")
+    finally:
+        await client.aclose()
+
+
+async def test_synthesize_baymax_maps_to_alloy_and_skips_404():
+    from invincible.core.voice import synthesize_audio
+
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        if "groq" in str(request.url):
+            return httpx.Response(404, json={"error": "nope"})
+        bodies.append(_json.loads(request.content.decode("utf-8")))
+        return httpx.Response(200, content=b"AUDIO",
+                              headers={"content-type": "audio/mpeg"})
+
+    client = _client_for(handler)
+    try:
+        data, ctype = await synthesize_audio(
+            _candidates("https://api.groq.com/openai/v1",
+                        "https://api.openai.com/v1"),
+            _resolver, "Hello.", voice="baymax", client=client)
+    finally:
+        await client.aclose()
+    assert data == b"AUDIO"
+    assert ctype.startswith("audio/")
+    assert bodies and bodies[0]["voice"] == "alloy"
+    assert bodies[0]["model"] == "tts-1"
+
+
+async def test_synthesize_all_404_is_clear_502():
+    from invincible.core.voice import VoiceGatewayError, synthesize_audio
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "nope"})
+
+    client = _client_for(handler)
+    try:
+        try:
+            await synthesize_audio(
+                _candidates("https://api.groq.com/openai/v1"), _resolver,
+                "Hello.", client=client)
+        except VoiceGatewayError as e:
+            assert e.status_code == 502
+            assert "no speech surface" in str(e.body)
+        else:
+            raise AssertionError("expected VoiceGatewayError")
+    finally:
+        await client.aclose()
+
+
+def test_ordered_voice_candidates_openai_first():
+    from invincible.core.voice import _ordered_voice_candidates
+
+    ordered = _ordered_voice_candidates(_candidates(
+        "https://api.groq.com/openai/v1", "https://api.openai.com/v1"))
+    assert ordered[0]["base_url"] == "https://api.openai.com/v1"
+
+
+def test_voice_orb_replaces_mic_mute_buttons():
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    chat = (repo / "invincible" / "templates" / "chat.html").read_text(
+        encoding="utf-8")
+    phone = (repo / "invincible" / "templates" / "phone.html").read_text(
+        encoding="utf-8")
+    assert 'id="voice-orb"' in chat
+    assert 'id="phone-orb"' in phone
+    assert "voice-orb.js" in chat and "voice-orb.css" in chat
+    assert "voice-orb.js" in phone and "voice-orb.css" in phone
+    # Old separate buttons are gone (one orb, tap-to-stop).
+    assert "chat-mic" not in chat and "chat-mute" not in chat
+    assert "phone-mic" not in phone and "phone-mute" not in phone
+    assert (repo / "invincible" / "templates" / "static" /
+            "voice-orb.js").exists()
+    assert (repo / "invincible" / "templates" / "static" /
+            "voice-orb.css").exists()
+
+
 # --- fail-safe: voice off leaves text chat unchanged -------------------------
 
 

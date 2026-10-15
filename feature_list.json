@@ -96,5 +96,12 @@
     "state": "passing",
     "title": "B3 voice (mic in + spoken Bmax, ephemeral tokens)",
     "verification": "ruff check . && pytest tests/test_voice.py tests/test_webchat.py tests/test_webchat_agent.py tests/test_agent_endpoints.py tests/test_baymax_prompt.py tests/test_harness_tools_golden.py tests/test_harness_tools_registry.py"
+  },
+  {
+    "behavior": "voice STT/TTS skips providers without /audio/* (404) and tries the next credential with OpenAI first; audio models pinned to whisper-1/tts-1 (never the chat model); legacy voice name baymax maps to alloy; all-audio-404 yields a clear 502 text-only fallback; single voice orb replaces mic+mute on webchat+PWA with listening/working/speaking states, mic-level pulse, tap-to-interrupt, auto-transcribe-send and auto-speak (text stays source of truth)",
+    "id": "B4",
+    "state": "passing",
+    "title": "B4 voice reliability + orb (audio failover + talking circle)",
+    "verification": "ruff check . && pytest tests/test_voice.py tests/test_handoff.py tests/test_baymax_prompt.py tests/test_webchat.py"
   }
 ]

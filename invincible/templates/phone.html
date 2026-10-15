@@ -3,6 +3,8 @@
 {% block head_extra %}
 <link rel="manifest" href="/static/phone.webmanifest">
 <meta name="theme-color" content="#ffffff">
+<link rel="stylesheet" href="/static/voice-orb.css?v={{ asset_rev('voice-orb.css') }}">
+<script src="/static/voice-orb.js?v={{ asset_rev('voice-orb.js') }}" defer></script>
 {% endblock %}
 {% block content %}
 <div class="phone-wrap">
@@ -27,10 +29,8 @@
   <div id="phone-log" aria-live="polite"></div>
 
   <div id="phone-composer">
-    <button type="button" id="phone-mic" class="mic-btn"
-            title="Push to talk / Hey Baymax" aria-label="Push to talk">
-      &#127908;
-    </button>
+    <button type="button" id="phone-orb" class="voice-orb"
+            title="Talk" aria-label="Talk"></button>
     <textarea id="phone-input" placeholder="Message Baymax&hellip;"
               aria-label="Message"></textarea>
     <button type="button" id="phone-send" title="Send"
@@ -39,13 +39,10 @@
   <div class="composer-row">
     <button type="button" id="phone-hop" title="Hop to PC"
             aria-label="Hop to PC">&#10142; Hop to PC</button>
-    <button type="button" id="phone-mute" title="Mute spoken replies"
-            aria-label="Mute spoken replies">&#128266;</button>
     <span id="phone-status" aria-live="polite"></span>
   </div>
-  <p class="muted" id="phone-voice-hint">Voice: tap the mic to record,
-  tap again to send. Replies speak aloud unless muted — text is the
-  record. Or say "Hey Baymax" inside this page after tapping once.</p>
+  <p class="muted" id="phone-voice-hint">Voice: tap the circle to talk,
+  tap again to send. Replies speak aloud — text is the record.</p>
 </div>
 
 <script>
@@ -59,59 +56,12 @@
     var log = document.getElementById("phone-log");
     var input = document.getElementById("phone-input");
     var sendBtn = document.getElementById("phone-send");
-    var micBtn = document.getElementById("phone-mic");
+    var orbEl = document.getElementById("phone-orb");
     var hopBtn = document.getElementById("phone-hop");
-    var muteBtn = document.getElementById("phone-mute");
     var status = document.getElementById("phone-status");
     if (!log || !input || !sendBtn) return;
 
-    // Spoken replies: on unless muted (persisted on this phone only).
-    // Mute is rendering-only — text bubbles stay the source of truth.
-    var muted = false;
-    try {
-      muted = window.localStorage.getItem("phone-voice-muted") === "1";
-    } catch (e) { /* private mode: default on */ }
-    function renderMute() {
-      if (muteBtn) muteBtn.textContent = muted ? "🔇" : "🔊";
-    }
-    renderMute();
-    if (muteBtn) muteBtn.addEventListener("click", function () {
-      muted = !muted;
-      try { window.localStorage.setItem("phone-voice-muted", muted ? "1" : "0"); }
-      catch (e) { /* ignore */ }
-      renderMute();
-      if (!muted && status) status.textContent = "";
-    });
-
-    // Speak one assistant reply through the server (the user's own
-    // provider credential synthesizes; the real key never leaves the
-    // server). Any failure — voice off, no speech surface, network —
-    // stays silent: the text bubble is the record.
-    function speak(text) {
-      if (muted) return;
-      var c = creds();
-      text = (text || "").trim().slice(0, 4000);
-      if (!text || !c.key) return;
-      fetch("/v1/audio/speech", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer " + c.key
-        },
-        body: JSON.stringify({input: text, voice: "baymax"})
-      }).then(function (resp) {
-        if (!resp.ok) return null;
-        return resp.blob();
-      }).then(function (blob) {
-        if (!blob) return;
-        try {
-          var url = URL.createObjectURL(blob);
-          var audio = new Audio(url);
-          audio.onended = function () { URL.revokeObjectURL(url); };
-          audio.play().catch(function () { /* autoplay gate: stay silent */ });
-        } catch (e) { /* no audio element: stay silent */ }
-      }).catch(function () { /* voice is rendering-only: never an error */ });
-    }
+    var voiceOrb = null;
 
     var history = [];
     var sessionId = null;
@@ -161,6 +111,10 @@
       var key = keyInput ? keyInput.value.trim() : "";
       var model = modelInput ? modelInput.value.trim() : "";
       return {key: key, model: model};
+    }
+
+    function speak(text) {
+      if (voiceOrb) voiceOrb.speak(text);
     }
 
     function send(text) {
@@ -234,148 +188,48 @@
       }
     });
 
-    // In-app wake only: Web Speech API behind the mic button
-    // (push-to-talk when unsupported). Saying "Hey Baymax" in the
-    // transcript sends immediately; anything else fills the composer.
-    var recog = null;
-    function wakeWordHit(s) {
-      return /(hey[, ]?\s*(baymax|bmax))/i.test(s || "");
-    }
-    function startVoice() {
-      var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SR) {
-        if (status) status.textContent = "voice not supported here — type instead.";
-        input.focus();
-        return;
-      }
-      try {
-        recog = new SR();
-        recog.lang = "en-US";
-        recog.interimResults = true;
-        recog.maxAlternatives = 1;
-        if (status) status.textContent = "listening… tap mic to stop.";
-        micBtn.classList.add("live");
-        recog.onresult = function (ev) {
-          var transcript = "";
-          for (var i = 0; i < ev.results.length; i++) {
-            transcript += ev.results[i][0].transcript;
-          }
-          input.value = transcript;
-          if (wakeWordHit(transcript)) {
-            var cleaned = transcript.replace(
-              /hey[, ]?\s*(baymax|bmax)/i, "").trim();
-            if (cleaned) send(corrected(cleaned));
-            else if (status) status.textContent = "yes? (say more)";
-          }
-        };
-        recog.onend = function () {
-          micBtn.classList.remove("live");
-          // Final transcript without the wake word: send it like PTT.
-          var t = input.value.trim();
-          if (t && !sendBtn.disabled && !wakeWordHit(t)) {
-            if (status) status.textContent = "";
-          }
-          recog = null;
-        };
-        recog.onerror = function () {
-          micBtn.classList.remove("live");
-          if (status) status.textContent = "mic error — type instead.";
-          recog = null;
-        };
-        recog.start();
-      } catch (e) {
-        if (status) status.textContent = "mic unavailable — type instead.";
-      }
-    }
-    function corrected(s) { return s; }
-    // Recorded-audio PTT (preferred): tap mic to record, tap again to
-    // stop — the clip uploads to /v1/audio/transcriptions and the
-    // transcript sends like typed text (server-side transcription via
-    // the user's own provider; explicit press only, never background
-    // listening). Falls back to the Web Speech path below when
-    // recording is unavailable here.
-    var recorder = null;
-    var recChunks = [];
-    var recStream = null;
-    function stopTracks() {
-      if (recStream) {
-        try {
-          recStream.getTracks().forEach(function (t) { t.stop(); });
-        } catch (e) { /* ignore */ }
-        recStream = null;
-      }
-    }
-    function uploadVoice(blob) {
-      var c = creds();
-      if (!c.key) {
-        if (status) status.textContent = "paste your inv_ key first.";
-        return;
-      }
-      if (status) status.textContent = "transcribing…";
-      fetch("/v1/audio/transcriptions", {
-        method: "POST",
-        headers: {"Authorization": "Bearer " + c.key},
-        body: blob
-      }).then(function (resp) {
-        return resp.json().then(function (j) { return {ok: resp.ok, body: j}; });
-      }).then(function (out) {
-        if (out.ok && out.body && out.body.text) {
-          if (status) status.textContent = "";
-          send(out.body.text);
-        } else {
-          var msg = (out.body && out.body.error && out.body.error.message) ||
-            "transcription failed";
-          if (status) status.textContent = msg + " — type instead.";
+    // B4 voice orb: tap the circle to talk, tap to send, tap while
+    // speaking to interrupt. Server-side STT via the user's own OpenAI
+    // credential; text bubbles stay the source of truth.
+    function initVoiceOrb() {
+      if (!orbEl || !window.VoiceOrb) return;
+      voiceOrb = window.VoiceOrb.create({
+        orb: orbEl,
+        status: status,
+        onText: function (text) { send(text); },
+        transcribe: function (blob) {
+          var c = creds();
+          if (!c.key) return Promise.reject(new Error("paste your inv_ key first"));
+          return fetch("/v1/audio/transcriptions", {
+            method: "POST",
+            headers: {"Authorization": "Bearer " + c.key},
+            body: blob
+          }).then(function (resp) {
+            return resp.json().then(function (j) {
+              if (resp.ok && j && j.text) return j.text;
+              throw new Error((j && j.error && j.error.message) || "Transcription failed");
+            });
+          });
+        },
+        synthesize: function (text) {
+          var c = creds();
+          if (!c.key) return Promise.resolve(null);
+          return fetch("/v1/audio/speech", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer " + c.key
+            },
+            body: JSON.stringify({input: text, voice: "alloy"})
+          }).then(function (resp) {
+            if (!resp.ok) return null;
+            return resp.blob();
+          }).catch(function () { return null; });
         }
-      }).catch(function () {
-        if (status) status.textContent = "transcription failed — type instead.";
       });
     }
-    function startRecording() {
-      var MR = window.MediaRecorder;
-      if (!MR || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        startVoice();
-        return;
-      }
-      navigator.mediaDevices.getUserMedia({audio: true}).then(function (stream) {
-        recStream = stream;
-        recChunks = [];
-        try {
-          recorder = new MR(stream);
-        } catch (e) {
-          stopTracks();
-          startVoice();
-          return;
-        }
-        recorder.ondataavailable = function (ev) {
-          if (ev.data && ev.data.size) recChunks.push(ev.data);
-        };
-        recorder.onstop = function () {
-          stopTracks();
-          micBtn.classList.remove("live");
-          var blob = new Blob(recChunks, {type: recorder.mimeType || "audio/webm"});
-          recorder = null;
-          if (blob.size) uploadVoice(blob);
-          else if (status) status.textContent = "";
-        };
-        recorder.start();
-        micBtn.classList.add("live");
-        if (status) status.textContent = "recording… tap mic to send.";
-      }).catch(function () {
-        startVoice();
-      });
-    }
-    micBtn.addEventListener("click", function () {
-      if (recorder) {
-        try { recorder.stop(); } catch (e) { /* ignore */ }
-        return;
-      }
-      if (recog) {
-        try { recog.stop(); } catch (e) { /* ignore */ }
-        return;
-      }
-      startRecording();
-    });
+    if (document.readyState === "complete") initVoiceOrb();
+    else window.addEventListener("load", initVoiceOrb);
 
     // Hop to PC: the current composer text (or the last user turn)
     // becomes the handoff task; recent turns ride as context.

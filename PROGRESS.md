@@ -5,6 +5,20 @@
 
 ## Current State
 
+- B4 done (`passing`, committed as `bde3ac2`, unpushed): voice reliability + orb — OpenAI-base
+  credentials tried first, 404 skips to next (all-404 is a clear 502
+  "no transcription/speech surface; connect OpenAI", never
+  "Transcription refused HTTP 404"); audio models pinned to
+  whisper-1/tts-1 (never the chat model_id); legacy `baymax` maps to
+  `alloy`. New shared `templates/static/voice-orb.{css,js}` (pulse by
+  mic RMS, listening/working/speaking states, tap-to-interrupt,
+  textContent-only) replaces mic+mute on `chat.html` (`#voice-orb`)
+  and `phone.html` (`#phone-orb`, drops Web Speech wake path, sends
+  `alloy`); realms unchanged (cookie vs inv_ key), text stays source
+  of truth. New: 6 tests in `tests/test_voice.py` (404-skip both
+  directions, model pinning, alloy mapping, ordering, orb markup);
+  docs: SECURITY §14, PROVIDERS voice matrix. FULL suite 1912 passed
+  (1906 baseline + 6), 11 skipped, 1 deselected; `ruff check .` clean.
 - B3 done (`passing`, committed as `ff46c9e`, pushed): in-app voice — mic PTT in + spoken
   Bmax out + ephemeral tokens. New `core/voice.py` (stateless HMAC
   `vv1.{user}.{scope}.{expiry}.{device}` tokens, 5-min TTL, `stt`/`tts`
@@ -138,16 +152,14 @@
 
 ## In Progress
 
-- None — B3 complete (`passing`, committed as `ff46c9e`, pushed).
+- None — B4 complete (`passing`, uncommitted).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps
 
 1. F05 vector seam remains `planned` — next candidate; set `active`
    only at next clock-in.
-2. F05 vector seam remains `planned` — next candidate; set `active`
-   only at next clock-in.
-3. Live Tk window (glide/dock/click-through visuals) still unverified —
+2. Live Tk window (glide/dock/click-through visuals) still unverified —
    needs a visible Windows desktop session; hermetic + read-only live
    metrics are green.
 3. F04 fan-out (`harness_fanout.py` + 18 tests) stays green, untouched.
