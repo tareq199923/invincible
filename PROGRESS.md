@@ -5,6 +5,10 @@
 
 ## Current State
 
+- B6 done (`passing`, committed as `3198a65`, unpushed): free mic-in on Groq —
+  `whisper-large-v3-turbo` per-provider STT (OpenAI stays `whisper-1`
+  first); Groq TTS still clean 502 text-only. 41 voice tests green;
+  `ruff` clean; docs: PROVIDERS matrix, SECURITY §14.
 - B5 done (`passing`, committed as `b663a68`, pushed): voice 402 now shows the provider's
   reason (e.g. `Transcription refused (HTTP 402: Insufficient
   credits.)`) via safe body excerpt in `core/voice.py`; no keys in
@@ -157,7 +161,7 @@
 
 ## In Progress
 
-- None — B5 complete (`passing`, uncommitted).
+- None — B6 complete (`passing`, uncommitted).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

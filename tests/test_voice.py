@@ -510,6 +510,27 @@ async def test_transcribe_skips_404_then_succeeds():
     assert b"chat-model-x" not in seen_models[0]
 
 
+async def test_transcribe_groq_uses_free_turbo_model():
+    from invincible.core.voice import transcribe_audio
+
+    seen: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.content)
+        return httpx.Response(200, json={"text": "hi from groq"})
+
+    client = _client_for(handler)
+    try:
+        text = await transcribe_audio(
+            _candidates("https://api.groq.com/openai/v1"), _resolver,
+            b"audio-bytes", client=client)
+    finally:
+        await client.aclose()
+    assert text == "hi from groq"
+    assert seen and b"whisper-large-v3-turbo" in seen[0]
+    assert b"chat-model-x" not in seen[0]
+
+
 async def test_transcribe_all_404_is_clear_502():
     from invincible.core.voice import VoiceGatewayError, transcribe_audio
 

@@ -110,5 +110,12 @@
     "state": "passing",
     "title": "B5 voice upstream errors (surface billing reason)",
     "verification": "ruff check . && pytest tests/test_voice.py"
+  },
+  {
+    "behavior": "Groq credentials transcribe free via whisper-large-v3-turbo (OpenAI stays whisper-1 first); Groq TTS still clean 502 text-only; matrix + tests pin the per-provider audio model",
+    "id": "B6",
+    "state": "passing",
+    "title": "B6 free mic-in on Groq (per-provider STT model)",
+    "verification": "ruff check . && pytest tests/test_voice.py"
   }
 ]

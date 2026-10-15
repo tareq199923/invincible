@@ -60,10 +60,25 @@ _DEVICE_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 # sent as the audio model, and the legacy "baymax" voice name is not a
 # valid OpenAI voice. Pin the audio models and map the voice name here
 # so every caller (v1 + dashboard, STT + TTS) shares one rule.
+# B6: Groq serves transcription free with its own model name — map it
+# per-provider so free mic-in works without OpenAI. Groq has no speech
+# surface; TTS stays OpenAI-only with the clean 502 text fallback.
 VOICE_STT_MODEL = "whisper-1"
 VOICE_TTS_MODEL = "tts-1"
 DEFAULT_TTS_VOICE = "alloy"
 OPENAI_AUDIO_BASE = "https://api.openai.com/v1"
+GROQ_AUDIO_BASE = "https://api.groq.com/openai/v1"
+GROQ_STT_MODEL = "whisper-large-v3-turbo"
+
+
+def _stt_model_for(base_url: str, override: str | None) -> str:
+    """Audio transcription model for one credential's base URL."""
+    if override is not None:
+        cleaned = str(override).strip()
+        return cleaned or VOICE_STT_MODEL
+    if str(base_url or "").rstrip("/").lower() == GROQ_AUDIO_BASE:
+        return GROQ_STT_MODEL
+    return VOICE_STT_MODEL
 
 
 def _ordered_voice_candidates(candidates) -> list:
@@ -275,8 +290,7 @@ async def transcribe_audio(candidates, key_resolver, audio: bytes, *,
             tried += 1
             base_url = str(candidate.get("base_url", "")).rstrip("/")
             url = f"{base_url}/audio/transcriptions"
-            body_model = (str(model).strip() or VOICE_STT_MODEL
-                          if model is not None else VOICE_STT_MODEL)
+            body_model = _stt_model_for(base_url, model)
             try:
                 resp = await http.post(
                     url,

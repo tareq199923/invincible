@@ -118,8 +118,9 @@ Compat matrix (fail-closed — a provider without the surface yields
 
 | Provider | STT / TTS | Notes |
 |---|---|---|
-| `openai` catalog | served when the credential succeeds | Reference `/audio/*` shapes. Tried first; audio models pinned to `whisper-1`/`tts-1`, legacy voice `baymax` maps to `alloy`. |
-| `nvidia_nim`, `groq`, `openrouter`, `gemini`, custom rows | 502 text-only fallback until proven | Unverified audio surfaces; their 404 is skipped for the next credential, all-404 is a clear 502. |
+| `openai` catalog | STT `whisper-1` + TTS `tts-1` served when the credential succeeds | Reference `/audio/*` shapes. Tried first; legacy voice `baymax` maps to `alloy`. |
+| `groq` catalog | STT `whisper-large-v3-turbo` served free; TTS 502 text-only | Mic-in works without OpenAI; replies stay text (no speech surface). |
+| `nvidia_nim`, `openrouter`, `gemini`, custom rows | 502 text-only fallback until proven | Unverified audio surfaces; their 404 is skipped for the next credential, all-404 is a clear 502. |
 
 Ephemeral voice tokens (`POST /v1/voice/token`,
 `POST /dashboard/voice/token`) are realm-bound, scope-bound

@@ -1169,9 +1169,10 @@ tokens that authorize it.
   except that user's provider, and provider keys never enter a
   response (pinned by `tests/test_voice.py` key-material scans).
   OpenAI-base credentials are tried first; a 404 (no `/audio/*`
-  surface, e.g. groq/gemini/openrouter/nim) skips to the next
-  credential instead of aborting, and audio models are pinned to
-  `whisper-1`/`tts-1` (never the chat `model_id`; legacy voice
+  surface, e.g. gemini/openrouter/nim) skips to the next
+  credential instead of aborting, and audio models are pinned
+  (`whisper-1`/`tts-1` on OpenAI, `whisper-large-v3-turbo` for Groq
+  mic-in free; never the chat `model_id`; legacy voice
   `baymax` maps to `alloy`). A provider with no audio surface fails
   closed with 502 and the client keeps the text bubble (see the compat
   matrix in [PROVIDERS.md](PROVIDERS.md)).
