@@ -5,7 +5,13 @@
 
 ## Current State
 
-- B6 done (`passing`, committed as `3198a65`, unpushed): free mic-in on Groq —
+- B7 done (`passing`, committed as `d75b9c7`, unpushed): free browser voice fallback — orb
+  uses device-local Web Speech recognition + speechSynthesis when the
+  server has no audio surface; no fetch, no keys, tap-to-stop covers
+  both; server voice preferred when credentials exist, voice-off never
+  falls back. Static test pins the fallback strings; docs: PROVIDERS
+  matrix, SECURITY device-local note, phone hint.
+- B6 done (`passing`, committed as `3603d47`, unpushed): free mic-in on Groq —
   `whisper-large-v3-turbo` per-provider STT (OpenAI stays `whisper-1`
   first); Groq TTS still clean 502 text-only. 41 voice tests green;
   `ruff` clean; docs: PROVIDERS matrix, SECURITY §14.
@@ -161,7 +167,7 @@
 
 ## In Progress
 
-- None — B6 complete (`passing`, uncommitted).
+- None — B7 complete (`passing`, uncommitted).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

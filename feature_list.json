@@ -117,5 +117,12 @@
     "state": "passing",
     "title": "B6 free mic-in on Groq (per-provider STT model)",
     "verification": "ruff check . && pytest tests/test_voice.py"
+  },
+  {
+    "behavior": "orb falls back to device-local browser voice when no audio provider exists (Web Speech recognition for mic-in, speechSynthesis for reply-out); no fetch, no keys, tap-to-stop works for both; server voice unchanged when credentials exist",
+    "id": "B7",
+    "state": "passing",
+    "title": "B7 free browser voice fallback (no key talk-back)",
+    "verification": "ruff check . && pytest tests/test_voice.py tests/test_webchat.py tests/test_handoff.py"
   }
 ]

@@ -1197,3 +1197,9 @@ tokens that authorize it.
   refuses per user the same way. Either off leaves text chat
   byte-identical (pinned by the fail-safe test). Tapping the orb while
   it speaks stops playback locally; there is no separate mute button.
+- **Free browser fallback (device-local).** When the server has no
+  audio surface (no OpenAI/Groq credential), the orb falls back to Web
+  Speech recognition + `speechSynthesis` on the device itself: no
+  fetch, no keys, audio never leaves the browser. Server voice is
+  preferred whenever a credential exists; voice-off refusals never
+  trigger the fallback. Text bubbles stay the source of truth.

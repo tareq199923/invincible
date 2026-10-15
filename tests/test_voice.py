@@ -628,6 +628,12 @@ def test_voice_orb_replaces_mic_mute_buttons():
             "voice-orb.js").exists()
     assert (repo / "invincible" / "templates" / "static" /
             "voice-orb.css").exists()
+    orb_js = (repo / "invincible" / "templates" / "static" /
+              "voice-orb.js").read_text(encoding="utf-8")
+    # B7 free fallback: device-local speech, no fetch, no keys.
+    assert "SpeechRecognition" in orb_js
+    assert "speechSynthesis" in orb_js
+    assert "Free mode" in orb_js
 
 
 async def test_transcribe_402_surfaces_billing_excerpt():
