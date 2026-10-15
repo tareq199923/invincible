@@ -5,7 +5,7 @@
 
 ## Current State
 
-- B8 done (`passing`, committed as `2204696`, unpushed): speak only on mic turns — orb sets
+- B8 done (`passing`, committed as `394edcc`, pushed): speak only on mic turns — orb sets
   a per-turn flag consumed at submit; typed turns stay text-only on
   webchat + PWA. Static test pins the gating; `ruff` clean; 91
   voice+webchat+handoff passed.
