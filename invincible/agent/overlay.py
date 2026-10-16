@@ -182,6 +182,314 @@ def bowed_waypoints(ax, ay, bx, by, steps: int) -> list:
     return points
 
 
+# Bluey cubic-bezier timing curves (port of CursorOverlay.swift
+# TimingCurve: CSS-style cubic-bezier maps time 0..1 to progress 0..1).
+TIMING_LAUNCH = (0.42, 0.0, 0.22, 1.0)
+TIMING_REDIRECT = (0.25, 0.25, 0.22, 1.0)
+TIMING_STEADY = (0.42, 0.0, 0.38, 1.0)
+_TIMING_BY_NAME = {
+    "launch": TIMING_LAUNCH,
+    "redirect": TIMING_REDIRECT,
+    "steady": TIMING_STEADY,
+}
+
+
+def _cubic_coord(t: float, a: float, b: float) -> float:
+    u = 1.0 - t
+    return 3 * u * u * t * a + 3 * u * t * t * b + t * t * t
+
+
+def _cubic_deriv(t: float, a: float, b: float) -> float:
+    u = 1.0 - t
+    return 3 * u * u * a + 6 * u * t * (b - a) + 3 * t * t * (1 - b)
+
+
+def _timing_param(curve, x: float) -> float:
+    try:
+        x1, _y1, x2, _y2 = (float(v) for v in curve)
+    except (TypeError, ValueError):
+        return min(max(float(x), 0.0), 1.0) if isinstance(
+            x, (int, float)) and math.isfinite(x) else 0.0
+    try:
+        target = min(max(float(x), 0.0), 1.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(target):
+        return 0.0
+    t = target
+    for _ in range(8):
+        err = _cubic_coord(t, x1, x2) - target
+        if abs(err) < 1e-7:
+            return t
+        d = _cubic_deriv(t, x1, x2)
+        if abs(d) < 1e-7:
+            break
+        t -= err / d
+    low, high, t = 0.0, 1.0, target
+    for _ in range(40):
+        value = _cubic_coord(t, x1, x2)
+        if abs(value - target) < 1e-7:
+            break
+        if value < target:
+            low = t
+        else:
+            high = t
+        t = (low + high) / 2
+    return t
+
+
+def timing_value(curve, x) -> float:
+    """Bezier progress 0..1 for time ``x`` (pure, hermetic).
+
+    Port of ``TimingCurve.value(at:)``. Malformed curves clamp to
+    linear time; out-of-range ``x`` clamps to 0/1.
+    """
+    try:
+        fx = float(x)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(fx):
+        return 0.0
+    if fx <= 0:
+        return 0.0
+    if fx >= 1:
+        return 1.0
+    try:
+        x1, y1, x2, y2 = (float(v) for v in curve)
+    except (TypeError, ValueError):
+        return fx
+    if not all(math.isfinite(v) for v in (x1, y1, x2, y2)):
+        return fx
+    return _cubic_coord(_timing_param((x1, y1, x2, y2), fx), y1, y2)
+
+
+def timing_rate(curve, x) -> float:
+    """d(progress)/d(time) at ``x`` (pure, hermetic).
+
+    Port of ``TimingCurve.rate(at:)``. Zero on degenerate slopes.
+    """
+    try:
+        fx = float(x)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(fx):
+        return 0.0
+    clamped = min(max(fx, 0.0), 1.0)
+    try:
+        x1, y1, x2, y2 = (float(v) for v in curve)
+    except (TypeError, ValueError):
+        return 0.0
+    if not all(math.isfinite(v) for v in (x1, y1, x2, y2)):
+        return 0.0
+    t = _timing_param((x1, y1, x2, y2), clamped)
+    dx = _cubic_deriv(t, x1, x2)
+    dy = _cubic_deriv(t, y1, y2)
+    if abs(dx) <= 1e-7:
+        return 0.0
+    return dy / dx
+
+
+def flight_position(from_xy, c1_xy, c2_xy, to_xy, e) -> tuple[float, float]:
+    """Cubic-bezier point at eased progress ``e`` (pure, hermetic).
+
+    Port of ``Flight.position``. Malformed inputs fall back to ``to``.
+    """
+    try:
+        fx, fy = float(from_xy[0]), float(from_xy[1])
+        ax, ay = float(c1_xy[0]), float(c1_xy[1])
+        bx, by = float(c2_xy[0]), float(c2_xy[1])
+        tx, ty = float(to_xy[0]), float(to_xy[1])
+        fe = float(e)
+    except (TypeError, ValueError, IndexError):
+        try:
+            return (float(to_xy[0]), float(to_xy[1]))
+        except (TypeError, ValueError, IndexError):
+            return (0.0, 0.0)
+    vals = (fx, fy, ax, ay, bx, by, tx, ty, fe)
+    if not all(math.isfinite(v) for v in vals):
+        return (tx, ty)
+    u = 1.0 - fe
+    a = u * u * u
+    b = 3 * u * u * fe
+    c = 3 * u * fe * fe
+    d = fe * fe * fe
+    return (a * fx + b * ax + c * bx + d * tx,
+            a * fy + b * ay + c * by + d * ty)
+
+
+def flight_tangent(from_xy, c1_xy, c2_xy, to_xy, e) -> tuple[float, float]:
+    """Cubic-bezier derivative at ``e`` (pure, hermetic).
+
+    Port of ``Flight.tangent``. Malformed inputs yield ``(0, 0)``.
+    """
+    try:
+        fx, fy = float(from_xy[0]), float(from_xy[1])
+        ax, ay = float(c1_xy[0]), float(c1_xy[1])
+        bx, by = float(c2_xy[0]), float(c2_xy[1])
+        tx, ty = float(to_xy[0]), float(to_xy[1])
+        fe = float(e)
+    except (TypeError, ValueError, IndexError):
+        return (0.0, 0.0)
+    vals = (fx, fy, ax, ay, bx, by, tx, ty, fe)
+    if not all(math.isfinite(v) for v in vals):
+        return (0.0, 0.0)
+    u = 1.0 - fe
+    a = 3 * u * u
+    b = 6 * u * fe
+    c = 3 * fe * fe
+    return (a * (ax - fx) + b * (bx - ax) + c * (tx - bx),
+            a * (ay - fy) + b * (by - ay) + c * (ty - by))
+
+
+def plan_flight(from_xy, goal_xy, velocity_xy=(0.0, 0.0),
+                now: float = 0.0, bounds=(0, 0, 1920, 1080),
+                dragging: bool = False) -> dict:
+    """Plan a Bluey-style trip (pure, hermetic).
+
+    Port of ``CursorEngine.plan(to:)``. ``bounds`` is the virtual-screen
+    ``(ox, oy, w, h)`` rect (F15 parity: negative origins kept; the
+    middle is ``ox + w/2``). ``now`` is the caller's own monotonic
+    clock (the child stamps its own — clocks never cross the pipe).
+    ``velocity_xy`` is px/s, init ``(0, 0)``. ``dragging`` forces a
+    straight steady trip (bow 0). Returns a flight dict with
+    ``timing`` in ``launch|redirect|steady``; zero-distance plans land
+    immediately with ``duration`` 0. Never raises.
+    """
+    try:
+        fx, fy = float(from_xy[0]), float(from_xy[1])
+        gx, gy = float(goal_xy[0]), float(goal_xy[1])
+    except (TypeError, ValueError, IndexError):
+        return {"from": (0.0, 0.0), "c1": (0.0, 0.0),
+                "c2": (0.0, 0.0), "to": (0.0, 0.0),
+                "start": 0.0, "duration": 0.0,
+                "timing": "launch", "pointing": True}
+    try:
+        vx, vy = float(velocity_xy[0]), float(velocity_xy[1])
+    except (TypeError, ValueError, IndexError):
+        vx, vy = 0.0, 0.0
+    try:
+        start = float(now)
+    except (TypeError, ValueError):
+        start = 0.0
+    try:
+        ox, oy, bw, bh = (float(v) for v in bounds)
+    except (TypeError, ValueError):
+        ox, oy, bw, bh = 0.0, 0.0, 1920.0, 1080.0
+    if not all(math.isfinite(v) for v in (fx, fy, gx, gy)):
+        gx, gy = (v if math.isfinite(v) else 0.0 for v in (gx, gy))
+        fx, fy = (v if math.isfinite(v) else 0.0 for v in (fx, fy))
+    if not math.isfinite(start):
+        start = 0.0
+    if not all(math.isfinite(v) for v in (vx, vy)):
+        vx, vy = 0.0, 0.0
+    if not all(math.isfinite(v) for v in (ox, oy, bw, bh)):
+        ox, oy, bw, bh = 0.0, 0.0, 1920.0, 1080.0
+    dragging = dragging is True
+    dx, dy = gx - fx, gy - fy
+    dist = math.hypot(dx, dy)
+    if not math.isfinite(dist) or dist <= 0.5:
+        return {"from": (fx, fy), "c1": (fx, fy), "c2": (gx, gy),
+                "to": (gx, gy), "start": start, "duration": 0.0,
+                "timing": "launch", "pointing": True}
+    duration = min(1.2, max(0.45, 0.4 + 0.12 * math.log2(1 + dist / 24)))
+    if dragging:
+        duration = min(1.6, max(0.6, duration * 1.45))
+    direction = (dx / dist, dy / dist)
+    normal = (-direction[1], direction[0])
+    if abs(direction[0]) > 0.4:
+        if normal[1] > 0:
+            normal = (-normal[0], -normal[1])
+    else:
+        middle = ox + bw / 2 if bw > 0 else fx
+        toward = 1.0 if middle - (fx + gx) / 2 >= 0 else -1.0
+        if normal[0] * toward < 0:
+            normal = (-normal[0], -normal[1])
+    bow = 0.0 if dragging else min(dist * 0.1, 70.0) * 0.75
+    reach = dist * 0.3
+    c2 = (gx - direction[0] * reach + normal[0] * bow,
+          gy - direction[1] * reach + normal[1] * bow)
+    speed = math.hypot(vx, vy)
+    if speed > 60:
+        carry = (vx * duration / 3, vy * duration / 3)
+        length = math.hypot(*carry)
+        if length > dist * 0.6:
+            scale = dist * 0.6 / length
+            carry = (carry[0] * scale, carry[1] * scale)
+        c1 = (fx + carry[0], fy + carry[1])
+        timing = "redirect"
+    else:
+        c1 = (fx + direction[0] * reach + normal[0] * bow,
+              fy + direction[1] * reach + normal[1] * bow)
+        timing = "steady" if dragging else "launch"
+    return {"from": (fx, fy), "c1": c1, "c2": c2, "to": (gx, gy),
+            "start": start, "duration": duration,
+            "timing": timing, "pointing": True}
+
+
+def flight_time_remaining(flight, now) -> float:
+    """Seconds until a planned flight arrives (pure, hermetic).
+
+    Port of ``CursorEngine.timeToArrive``. Zero for landed/malformed.
+    """
+    try:
+        start = float(flight["start"])
+        duration = float(flight["duration"])
+        moment = float(now)
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return 0.0
+    if not all(math.isfinite(v) for v in (start, duration, moment)):
+        return 0.0
+    return max(0.0, start + duration - moment)
+
+
+def press_scale(now, press_start, depth: float = 0.05) -> float:
+    """Uniform press squish factor (pure, hermetic, overlay-only).
+
+    Port of ``CursorEngine.pressScale``: quick press-in over 0.12s,
+    then a spring back with a tiny rebound over 0.30s (total 0.42s).
+    Returns 1.0 outside the window or on malformed input.
+    """
+    try:
+        moment, origin = float(now), float(press_start)
+        amount = float(depth)
+    except (TypeError, ValueError):
+        return 1.0
+    if not all(math.isfinite(v) for v in (moment, origin, amount)):
+        return 1.0
+    t = moment - origin
+    if t < 0 or t >= 0.42:
+        return 1.0
+    if t < 0.12:
+        return 1 - amount * math.sin(t / 0.12 * math.pi / 2)
+    r = (t - 0.12) / 0.3
+    return 1 - amount * math.cos(r * math.pi * 1.5) * math.exp(-r * 3.2)
+
+
+def hover_offset(now, landed_at, is_home: bool = False,
+                 settled: bool = True) -> float:
+    """Gentle vertical hover while holding a point (pure, hermetic).
+
+    Port of ``CursorEngine.hover``: zero at home or mid-flight, then
+    a 2.4Hz sine at 1.6px eased in over 0.35→0.95s after landing.
+    Overlay-only affordance; never raises.
+    """
+    try:
+        moment, landed = float(now), float(landed_at)
+    except (TypeError, ValueError):
+        return 0.0
+    if not all(math.isfinite(v) for v in (moment, landed)):
+        return 0.0
+    if is_home is True or settled is not True:
+        return 0.0
+    since = moment - landed
+    if since < 0:
+        return 0.0
+    amount = min(1.0, max(0.0, (since - 0.35) / 0.6))
+    if amount <= 0:
+        return 0.0
+    return math.sin(since * 2.4) * 1.6 * amount
+
+
 def eye_offset(hx, hy, cx, cy, r_max: float) -> tuple[int, int]:
     """Pupil offset from head center toward the cursor (pure, hermetic).
 
@@ -411,11 +719,13 @@ class Overlay:
             with contextlib.suppress(Exception):
                 proc.kill()
 
-    def announce(self, point: dict) -> None:
+    def announce(self, point: dict, dragging: bool = False) -> None:
         """Glide the head to a resolved 0-1000 grid point. Never raises.
 
         Malformed points are ignored (the job already validated its
         own args - the overlay never second-guesses execution).
+        ``dragging`` selects the straight steady trip; omitted/False
+        keeps the classic bowed glide (backward compat).
         """
         if not isinstance(point, dict):
             return
@@ -429,7 +739,10 @@ class Overlay:
             return
         if not 0 <= x <= OVERLAY_GRID_MAX or not 0 <= y <= OVERLAY_GRID_MAX:
             return
-        self._send({"type": "target", "x": int(x), "y": int(y)})
+        payload: dict = {"type": "target", "x": int(x), "y": int(y)}
+        if dragging is True:
+            payload["dragging"] = True
+        self._send(payload)
 
     def settle(self) -> None:
         """Ask the head to dock now (idle timeout docks anyway)."""
@@ -576,15 +889,31 @@ def _run_window(tk) -> None:
     now0 = time.monotonic()
     state = {"path": [], "idle_since": now0, "to_target": False,
              "trail": [], "squash_until": 0.0,
-             "bubble_until": 0.0, "bubble_text": ""}
+             "bubble_until": 0.0, "bubble_text": "",
+             "flight": None, "velocity": [0.0, 0.0],
+             "landed_at": now0 - 10.0,
+             "press_start": now0 - 10.0, "press_depth": 0.0}
 
     def _draw() -> None:
         hx, hy = head_xy
         now = time.monotonic()
         squished = now < state["squash_until"]
-        hovering = bool(state["path"]) and bool(state["to_target"])
+        hovering = (state["flight"] is not None or bool(state["path"])) \
+            and bool(state["to_target"])
         rx, ry = head_radii(radius, hovering=hovering,
                             squished=squished)
+        with contextlib.suppress(Exception):
+            ps = press_scale(now, state["press_start"],
+                             state["press_depth"])
+            if math.isfinite(ps) and ps > 0:
+                rx, ry = rx * ps, ry * ps
+        settled = state["flight"] is None and not state["path"]
+        is_home = (not bool(state["to_target"]) and settled)
+        with contextlib.suppress(Exception):
+            dy = hover_offset(now, state["landed_at"],
+                              is_home=is_home, settled=settled)
+            if math.isfinite(dy):
+                hy = hy + dy
         trail = state["trail"]
         for i, dot in enumerate(trail_ids):
             if i < len(trail):
@@ -641,6 +970,8 @@ def _run_window(tk) -> None:
                 if kind == "settle":
                     target = (dock[0] + radius, dock[1] + radius)
                     state["to_target"] = False
+                    state["flight"] = None
+                    state["velocity"] = [0.0, 0.0]
                     state["path"] = ease_waypoints(
                         head_xy[0], head_xy[1],
                         float(target[0]), float(target[1]), steps)
@@ -648,24 +979,74 @@ def _run_window(tk) -> None:
                     with contextlib.suppress(Exception):
                         px, py = grid_to_pixel(
                             message.get("x"), message.get("y"), vrect)
-                        state["path"] = bowed_waypoints(
-                            head_xy[0], head_xy[1],
-                            float(px), float(py), steps)
+                        dragging = message.get("dragging", False) is True
+                        now_child = time.monotonic()
+                        state["flight"] = plan_flight(
+                            (head_xy[0], head_xy[1]),
+                            (float(px), float(py)),
+                            tuple(state["velocity"]),
+                            now_child, vrect, dragging)
+                        state["path"] = []
                         state["to_target"] = True
-                        state["idle_since"] = time.monotonic()
+                        state["idle_since"] = now_child
                         label = bubble_text_for(
                             message.get("x"), message.get("y"))
                         if label:
                             state["bubble_text"] = label
                             state["bubble_until"] = (
-                                time.monotonic()
+                                now_child
                                 + OVERLAY_GLIDE_SECONDS
                                 + OVERLAY_BUBBLE_SECONDS)
         except queue.Empty:
             pass
         with contextlib.suppress(OSError):
             cursor = cursor_pos()
-        if state["path"]:
+        if state["flight"] is not None:
+            with contextlib.suppress(Exception):
+                flight = state["flight"]
+                now = time.monotonic()
+                duration = float(flight["duration"])
+                if duration <= 0:
+                    head_xy[0], head_xy[1] = flight["to"]
+                    state["flight"] = None
+                    state["velocity"] = [0.0, 0.0]
+                    state["idle_since"] = now
+                    state["landed_at"] = now
+                    if state["to_target"]:
+                        state["to_target"] = False
+                        state["squash_until"] = now + OVERLAY_SQUISH_SECONDS
+                        state["press_start"] = now
+                        state["press_depth"] = 0.05
+                else:
+                    p = min(1.0, max(0.0, (now - float(flight["start"]))
+                                            / duration))
+                    curve = _TIMING_BY_NAME.get(
+                        flight.get("timing"), TIMING_LAUNCH)
+                    e = timing_value(curve, p)
+                    pos = flight_position(
+                        flight["from"], flight["c1"],
+                        flight["c2"], flight["to"], e)
+                    head_xy[0], head_xy[1] = pos
+                    if p >= 1:
+                        head_xy[0], head_xy[1] = flight["to"]
+                        state["flight"] = None
+                        state["velocity"] = [0.0, 0.0]
+                        state["idle_since"] = now
+                        state["landed_at"] = now
+                        if state["to_target"]:
+                            state["to_target"] = False
+                            state["squash_until"] = (
+                                now + OVERLAY_SQUISH_SECONDS)
+                            state["press_start"] = now
+                            state["press_depth"] = 0.05
+                    else:
+                        rate = timing_rate(curve, p) / duration
+                        tangent = flight_tangent(
+                            flight["from"], flight["c1"],
+                            flight["c2"], flight["to"], e)
+                        state["velocity"] = [tangent[0] * rate,
+                                             tangent[1] * rate]
+        elif state["path"]:
             head_xy[0], head_xy[1] = state["path"].pop(0)
             if not state["path"]:
                 now = time.monotonic()

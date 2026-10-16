@@ -180,5 +180,12 @@
     "state": "passing",
     "title": "Chord fix (VK mains under modifiers)",
     "verification": "ruff check . && pytest tests/test_computer_use.py tests/test_tool_executor.py"
+  },
+  {
+    "behavior": "overlay glides Bluey-smooth: cubic TimingCurve launch/redirect/steady + Flight position/tangent pure funcs (bow toward middle, velocity-carry redirect, exact landing, dragging straight/steady), child-stamped clock, frozen bowed_waypoints compat, press/hover affordance child-side only, headless zero latency",
+    "id": "Item-1",
+    "state": "passing",
+    "title": "Smoother cursor (Bluey motion port)",
+    "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py"
   }
 ]

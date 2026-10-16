@@ -5,6 +5,18 @@
 
 ## Current State
 
+- Item-1 done (`passing`): smoother cursor — Bluey motion port
+  (`agent/overlay.py`: cubic `timing_value/rate` launch/redirect/steady,
+  `flight_position/tangent`, `plan_flight` alongside frozen
+  `bowed_waypoints`, `press_scale`/`hover_offset` overlay-only affordance;
+  `_run_window` target path uses child-stamped monotonic flights with
+  velocity-carry redirect, dragging straight/steady via
+  `announce(dragging)` IPC (missing key=False); `runner` passes
+  dragging only for drag jobs so click call shape is unchanged).
+  New pins in `tests/test_overlay.py` (8 tests: easing, bow direction,
+  no-kink carry, drag/exact-land, press/hover boundaries, drag IPC +
+  drag-job). `ruff` clean, 57 passed overlay/computer slice, full
+  1956 passed / 11 skipped / 1 deselected.
 - Overlay look pass done (`passing`, uncommitted): Bluey-like berry head —
   stacked light/mid/deep gradient, white rim, teardrop tip, shine dot,
   faint glow; eyes/tracking unchanged, original art. Pins for
@@ -261,7 +273,7 @@
 
 ## In Progress
 
-- None — B9 complete (`passing`, uncommitted).
+- None — Item-1 complete (`passing`).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

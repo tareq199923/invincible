@@ -389,7 +389,14 @@ async def execute_job(job: dict) -> dict:
             # head settles back to its dock corner after. Every overlay
             # call is best-effort - a dead overlay never breaks a job.
             seen = ensure_overlay()
-            sink = seen.announce if seen is not None else None
+            if seen is not None and job_type == "drag":
+                _seen = seen
+
+                def sink(point, _seen=_seen):  # type: ignore[misc]
+                    with contextlib.suppress(Exception):
+                        _seen.announce(point, dragging=True)
+            else:
+                sink = seen.announce if seen is not None else None
             dwell = (overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS
                      if seen is not None and seen.alive else 0.0)
             try:

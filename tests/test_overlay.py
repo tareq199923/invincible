@@ -381,6 +381,159 @@ def test_no_registry_surface_for_overlay():
     assert harness_tools.get_tool("overlay") is None
 
 
+def test_timing_curves_easing_values():
+    for curve in (overlay.TIMING_LAUNCH, overlay.TIMING_REDIRECT,
+                  overlay.TIMING_STEADY):
+        assert overlay.timing_value(curve, 0) == 0.0
+        assert overlay.timing_value(curve, 1) == 1.0
+        assert overlay.timing_value(curve, -0.5) == 0.0
+        assert overlay.timing_value(curve, 1.5) == 1.0
+        mid = overlay.timing_value(curve, 0.5)
+        assert 0.0 < mid < 1.0
+        assert overlay.timing_rate(curve, 0.5) >= 0.0
+    # Launch starts gently (lags linear early), then outruns it by mid.
+    assert overlay.timing_value(overlay.TIMING_LAUNCH, 0.25) < 0.25
+    assert overlay.timing_value(overlay.TIMING_LAUNCH, 0.5) > 0.5
+    # Redirect keeps incoming speed: runs ahead of the gentle launch early.
+    assert (overlay.timing_value(overlay.TIMING_REDIRECT, 0.25)
+            > overlay.timing_value(overlay.TIMING_LAUNCH, 0.25))
+    # Monotonic: samples never step back.
+    for curve in (overlay.TIMING_LAUNCH, overlay.TIMING_REDIRECT,
+                  overlay.TIMING_STEADY):
+        samples = [overlay.timing_value(curve, i / 20) for i in range(21)]
+        assert all(b + 1e-9 >= a
+                   for a, b in zip(samples, samples[1:], strict=False))
+
+
+def test_flight_position_tangent_exact_land():
+    from_xy, c1, c2, to_xy = (0.0, 0.0), (60.0, -20.0), (140.0, -20.0), \
+        (200.0, 0.0)
+    assert overlay.flight_position(from_xy, c1, c2, to_xy, 0.0) == from_xy
+    assert overlay.flight_position(from_xy, c1, c2, to_xy, 1.0) == to_xy
+    mid = overlay.flight_position(from_xy, c1, c2, to_xy, 0.5)
+    assert mid[1] < 0  # bowed above the chord
+    tangent = overlay.flight_tangent(from_xy, c1, c2, to_xy, 0.0)
+    assert tangent[0] > 0  # leaves toward the goal
+    assert overlay.flight_tangent("bad", c1, c2, to_xy, 0.5) == (0.0, 0.0)
+
+
+def test_plan_flight_bow_direction_and_bounds():
+    bounds = (0, 0, 1920, 1080)
+    sideways = overlay.plan_flight((100.0, 500.0), (500.0, 500.0),
+                                   (0.0, 0.0), 0.0, bounds)
+    assert sideways["timing"] == "launch"
+    assert sideways["c1"][1] < 500.0 and sideways["c2"][1] < 500.0
+    left = overlay.plan_flight((200.0, 100.0), (200.0, 700.0),
+                               (0.0, 0.0), 0.0, bounds)
+    right = overlay.plan_flight((1700.0, 100.0), (1700.0, 700.0),
+                                (0.0, 0.0), 0.0, bounds)
+    assert left["c1"][0] > 200.0 and left["c2"][0] > 200.0
+    assert right["c1"][0] < 1700.0 and right["c2"][0] < 1700.0
+    # Negative-origin virtual rect keeps the middle math correct.
+    neg = (-1920, 0, 1920, 1080)
+    neg_plan = overlay.plan_flight((-1500.0, 100.0), (-1500.0, 700.0),
+                                   (0.0, 0.0), 5.0, neg)
+    assert neg_plan["c1"][0] > -1500.0  # toward ox+w/2 = -960
+    assert neg_plan["start"] == 5.0
+    assert overlay.plan_flight((1.0, 1.0), (1.2, 1.1), (0.0, 0.0),
+                               0.0, bounds)["duration"] == 0.0
+
+
+def test_plan_flight_velocity_carry_no_kink():
+    bounds = (0, 0, 1920, 1080)
+    fast = overlay.plan_flight((100.0, 100.0), (500.0, 100.0),
+                               (800.0, 0.0), 0.0, bounds)
+    assert fast["timing"] == "redirect"
+    # c1 carries forward along the incoming velocity (no kink).
+    assert fast["c1"][0] > 100.0 and abs(fast["c1"][1] - 100.0) < 1e-6
+    first = overlay.flight_position(
+        fast["from"], fast["c1"], fast["c2"], fast["to"],
+        overlay.timing_value(overlay.TIMING_REDIRECT, 0.05))
+    dx, dy = first[0] - 100.0, first[1] - 100.0
+    assert dx > 0 and abs(math.degrees(math.atan2(dy, dx))) < 30.0
+    slow = overlay.plan_flight((100.0, 100.0), (500.0, 100.0),
+                               (0.0, 0.0), 0.0, bounds)
+    assert slow["timing"] == "launch"
+    # Carry capped at 0.6 * distance.
+    huge = overlay.plan_flight((0.0, 0.0), (100.0, 0.0),
+                               (10000.0, 0.0), 0.0, bounds)
+    assert huge["c1"][0] - 0.0 <= 60.0 + 1e-6
+
+
+def test_plan_flight_dragging_straight_steady_and_land():
+    bounds = (0, 0, 1920, 1080)
+    drag = overlay.plan_flight((0.0, 0.0), (400.0, 0.0),
+                               (0.0, 0.0), 3.0, bounds, True)
+    assert drag["timing"] == "steady"
+    assert drag["c1"][1] == 0.0 and drag["c2"][1] == 0.0
+    assert drag["duration"] >= overlay.plan_flight(
+        (0.0, 0.0), (400.0, 0.0), (0.0, 0.0), 3.0, bounds)["duration"]
+    # Sampling a flight lands exactly on the goal.
+    for flight in (drag, overlay.plan_flight(
+            (10.0, 20.0), (300.0, 400.0), (0.0, 0.0), 0.0, bounds)):
+        end = overlay.flight_position(
+            flight["from"], flight["c1"], flight["c2"], flight["to"], 1.0)
+        assert end == flight["to"]
+    assert abs(overlay.flight_time_remaining(drag, 3.0)
+                 - drag["duration"]) < 1e-9
+    assert overlay.flight_time_remaining(drag, 3.0 + drag["duration"]) == 0.0
+
+
+def test_press_scale_and_hover_boundaries():
+    assert overlay.press_scale(10.0, 0.0) == 1.0
+    assert overlay.press_scale(-1.0, 0.0) == 1.0
+    assert overlay.press_scale(0.42, 0.0) == 1.0
+    dipped = overlay.press_scale(0.06, 0.0, 0.14)
+    assert 1 - 0.14 - 1e-9 <= dipped < 1.0
+    assert overlay.press_scale("bad", 0.0) == 1.0
+    assert overlay.hover_offset(10.0, 0.0, is_home=True, settled=True) == 0.0
+    assert overlay.hover_offset(10.0, 0.0, is_home=False,
+                                settled=False) == 0.0
+    assert overlay.hover_offset(0.2, 0.0, settled=True) == 0.0
+    held = overlay.hover_offset(1.5, 0.0, settled=True)
+    assert abs(held) <= 1.6 + 1e-9
+
+
+def test_announce_dragging_ipc_backward_compat():
+    handle = overlay.Overlay()
+    stdin = _FakeStdin()
+    handle._proc = _FakeProc(stdin)
+    handle.announce({"x": 10, "y": 20})
+    assert json.loads(stdin.lines[-1]) == {"type": "target", "x": 10, "y": 20}
+    handle.announce({"x": 10, "y": 20}, dragging=True)
+    assert json.loads(stdin.lines[-1]) == {
+        "type": "target", "x": 10, "y": 20, "dragging": True}
+
+
+async def test_execute_job_drag_announces_dragging(monkeypatch,
+                                                   _clean_overlay_state):
+    seen = {}
+
+    async def fake_act(name, args, *, on_point=None,
+                       pre_action_delay=0.0):
+        seen["on_point"] = on_point
+        return {"status": "ok", "action": name}
+
+    announced: list = []
+
+    class _Live:
+        alive = True
+
+        def announce(self, point, dragging=False):
+            announced.append((point, dragging))
+
+        def settle(self):
+            pass
+
+    monkeypatch.setattr(runner, "ensure_overlay", lambda: _Live())
+    monkeypatch.setattr(tool_executor, "_computer_act", fake_act)
+    out = await runner.execute_job(
+        {"type": "drag", "args": {"x": 1, "y": 2}})
+    assert out == {"status": "ok", "action": "drag"}
+    seen["on_point"]({"x": 1, "y": 2})
+    assert announced == [({"x": 1, "y": 2}, True)]
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Win32 metrics only")
 def test_overlay_live_metrics_on_windows():
     import ctypes
