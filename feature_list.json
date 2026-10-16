@@ -208,5 +208,12 @@
     "state": "passing",
     "title": "Quiet UI (auto-tuck + screen-corner border)",
     "verification": "ruff check . && pytest tests/test_voice.py tests/test_webchat.py tests/test_handoff.py"
+  },
+  {
+    "behavior": "Orb hold-to-ask + chirp: 300ms primary-pointer hold adds is-asking (border mirrors is-listening, suppressClick kills the synthetic tap, gesture unlocks shared AudioContext, hold re-arms tuck via isRecording) and submits with asked:true while taps send asked:false; mic replies chirp pentatonic words-based syllables (0.07-0.13s, 0.5x octave, fail-silent, muted/typed silent); ids, realms, textContent-only intact",
+    "id": "Item-6",
+    "state": "passing",
+    "title": "Hold-to-ask + chirp (Bluey feel, text stays truth)",
+    "verification": "ruff check . && pytest tests/test_voice.py tests/test_webchat.py tests/test_handoff.py"
   }
 ]

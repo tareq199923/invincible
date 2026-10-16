@@ -11,7 +11,8 @@
   "use strict";
 
   function setState(orb, state) {
-    orb.classList.remove("is-listening", "is-working", "is-speaking");
+    orb.classList.remove("is-listening", "is-working", "is-speaking",
+      "is-asking");
     if (state) orb.classList.add(state);
     orb.style.setProperty("--level", "0");
   }
@@ -93,24 +94,70 @@
     var panel = opts.panel || null;
     var border = opts.border || null;
     var tuckTimer = null;
+    // Item-6 hold-to-ask + chirp (Bluey feel, text stays truth).
+    // 300ms press-and-hold marks this turn as asked; a short tap keeps
+    // the B4/B8 behavior. No haptics dependency; reduced-motion uses
+    // the same static listening style.
+    var HOLD_MS = 300;
+    var holdTimer = null;
+    var holdPointerId = null;
+    var holding = false;
+    var askedNext = false;
+    var suppressClick = false;
+    var sharedCtx = null;
 
-    // Orb state plus its mirror on the screen-corner border. Reuses the
-    // exact .is-* names (is-listening/is-working/is-speaking) — no new
-    // state classes; border restyles them as a solid edge in CSS.
+    function isMuted() {
+      try {
+        if (opts.muted) return true;
+        if (typeof opts.isMuted === "function") return !!opts.isMuted();
+      } catch (e) { /* ignore */ }
+      return false;
+    }
+
+    function ensureSharedAudio() {
+      try {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return null;
+        if (!sharedCtx) sharedCtx = new AC();
+        try {
+          if (sharedCtx.state === "suspended") sharedCtx.resume();
+        } catch (e) { /* backstop below */ }
+        return sharedCtx;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function chirpSyllables(words) {
+      var n = 0;
+      if (typeof words === "number") {
+        n = words;
+      } else if (typeof words === "string") {
+        var t = words.trim();
+        n = t ? t.split(/\s+/).length : 0;
+      }
+      return Math.min(Math.max(n || 0, 3), 5);
+    }
+
+    // Orb state plus its mirror on the screen-corner border. The orb
+    // takes is-asking while held; the border mirrors it as is-listening
+    // (no new border color — blue listening edge in CSS).
     function setOrbState(state) {
+      var borderState = state === "is-asking" ? "is-listening" : state;
       setState(orb, state);
       if (border) {
         border.classList.remove("is-listening", "is-working",
           "is-speaking");
-        if (state) border.classList.add(state);
+        if (borderState) border.classList.add(borderState);
       }
     }
 
-    // Mic active (recording, browser-listening, or speaking back) pauses
-    // the tuck timer: the panel never tucks mid-record.
+    // Mic active (recording, browser-listening, speaking back, or held
+    // asking) pauses the tuck timer: the panel never tucks mid-record.
     function isRecording() {
-      return !!(recorder || recog) ||
+      return !!(recorder || recog || holding) ||
         orb.classList.contains("is-listening") ||
+        orb.classList.contains("is-asking") ||
         orb.classList.contains("is-speaking");
     }
 
@@ -193,6 +240,8 @@
     function toIdle(msg) {
       recorder = null;
       chunks = [];
+      holding = false;
+      clearHoldTimer();
       stopTracks();
       stopAudio();
       stopRecog();
@@ -200,6 +249,14 @@
       orb.setAttribute("aria-label", "Talk");
       setStatus(statusEl, msg || idleLabel);
       scheduleTuck();
+    }
+
+    function clearHoldTimer() {
+      if (holdTimer) {
+        try { clearTimeout(holdTimer); } catch (e) { /* ignore */ }
+        holdTimer = null;
+      }
+      holdPointerId = null;
     }
 
     function friendlyTranscribeError(err) {
@@ -247,9 +304,13 @@
         transcript = (transcript || "").trim();
         recog = null;
         if (transcript) {
+          var wasAsked = askedNext;
+          askedNext = false;
+          holding = false;
           toIdle("");
-          opts.onText(transcript);
+          opts.onText(transcript, wasAsked);
         } else {
+          askedNext = false;
           toIdle("Heard nothing — try again.");
         }
       };
@@ -290,23 +351,30 @@
     }
 
     async function upload(blob) {
+      var uploadAsked = askedNext;
       setOrbState("is-working");
       setStatus(statusEl, "Transcribing…");
       try {
         var text = await opts.transcribe(blob);
         text = (text || "").trim();
         if (!text) {
+          askedNext = false;
+          holding = false;
           toIdle("Heard nothing — try again.");
           return;
         }
+        askedNext = false;
+        holding = false;
         toIdle("");
-        opts.onText(text);
+        opts.onText(text, uploadAsked);
       } catch (err) {
         if (isCapabilityError(err) && hasBrowserSTT()) {
           setStatus(statusEl, friendlyTranscribeError(err));
           browserListen();
           return;
         }
+        askedNext = false;
+        holding = false;
         toIdle(friendlyTranscribeError(err));
       }
     }
@@ -347,12 +415,102 @@
       };
       stopLevel = attachLevel(stream, orb);
       recorder.start();
-      setOrbState("is-listening");
-      orb.setAttribute("aria-label", "Stop and send");
-      setStatus(statusEl, "Listening… tap to send.");
+      if (holding || askedNext) {
+        setOrbState("is-asking");
+        orb.setAttribute("aria-label", "Release to ask");
+        setStatus(statusEl, "Asking… release to send.");
+      } else {
+        setOrbState("is-listening");
+        orb.setAttribute("aria-label", "Stop and send");
+        setStatus(statusEl, "Listening… tap to send.");
+      }
     }
 
+    function cancelHold() {
+      clearHoldTimer();
+      if (holding) {
+        holding = false;
+        askedNext = false;
+        if (!recorder && !recog) setOrbState(null);
+      }
+    }
+
+    // Item-6 hold-to-ask: 300ms press-and-hold marks the turn asked.
+    // Pointerdown unlocks/resumes the shared AudioContext (gesture) so
+    // the later async chirp is allowed; fail-silent stays the backstop.
+    // Primary pointer only; multi-touch and extra mouse buttons ignored.
+    orb.addEventListener("pointerdown", function (ev) {
+      try {
+        if (ev && ev.isPrimary === false) return;
+        if (ev && ev.buttons !== undefined && ev.buttons > 1) return;
+        if (holdPointerId !== null) return;
+        try {
+          holdPointerId = ev && ev.pointerId !== undefined
+            ? ev.pointerId : 0;
+        } catch (e) { holdPointerId = 0; }
+      } catch (e) { return; }
+      ensureSharedAudio();
+      scheduleTuck();
+      clearHoldTimer();
+      holdTimer = setTimeout(function () {
+        holdTimer = null;
+        holding = true;
+        askedNext = true;
+        suppressClick = true;
+        setOrbState("is-asking");
+        orb.setAttribute("aria-label", "Release to ask");
+        setStatus(statusEl, "Asking… release to send.");
+        scheduleTuck();
+        if (!recorder && !recog &&
+            !orb.classList.contains("is-working") &&
+            !orb.classList.contains("is-speaking")) {
+          start();
+        } else if (recorder || recog) {
+          setOrbState("is-asking");
+        }
+      }, HOLD_MS);
+    });
+
+    ["pointerup", "pointerleave", "pointercancel"].forEach(function (ev) {
+      orb.addEventListener(ev, function (e) {
+        try {
+          if (e && e.pointerId !== undefined && holdPointerId !== null &&
+              e.pointerId !== holdPointerId &&
+              ev !== "pointerleave") return;
+        } catch (err) { /* ignore */ }
+        var wasHolding = holding;
+        clearHoldTimer();
+        if (wasHolding) {
+          holding = false;
+          // Hold-submit: stop recording / recognition; the transcript
+          // resolves via upload/browserListen with asked:true. The
+          // following click is suppressed (see suppressClick).
+          if (recog) {
+            try { recog.stop(); } catch (err2) { toIdle(""); }
+          } else if (recorder) {
+            try { recorder.stop(); } catch (err3) { toIdle(""); }
+          } else if (wasHolding && askedNext) {
+            setOrbState(null);
+          }
+          try {
+            if (ev === "pointerleave" || ev === "pointercancel") {
+              suppressClick = false;
+            }
+          } catch (err4) { /* ignore */ }
+        } else {
+          askedNext = false;
+        }
+      });
+    });
+
     orb.addEventListener("click", function () {
+      // Fix 1: hold-submit + tap-click double-fire. A hold sets
+      // suppressClick; swallow the synthetic click that follows
+      // pointerup so hold asks exactly once.
+      if (suppressClick) {
+        suppressClick = false;
+        return;
+      }
       // Item-5: tapping the orb reopens a tucked panel (and restarts the
       // quiet clock); the tap then behaves exactly as before.
       if (panel) {
@@ -377,29 +535,86 @@
       start();
     });
 
-    // Bluey-style chirp: short two-tone blip when a mic reply starts.
-    // Fail-silent, no fetch, no keys. Only called for orb-initiated
-    // (mic) turns; typed turns stay fully silent (B8).
-    function playChirp() {
+    // Bluey-style chirp: pentatonic scoop/wobble blip when a mic reply
+    // starts. Syllables from the reply word count
+    // (min(max(words,3),5)). Fail-silent, no fetch, no keys. Only called
+    // for orb-initiated (mic) turns; typed turns stay fully silent (B8).
+    // Mute kills the chirp. Reuses the gesture-unlocked shared context
+    // (AudioContext created on pointerdown); a suspended context skips.
+    function playChirp(words) {
       try {
-        var AC = window.AudioContext || window.webkitAudioContext;
-        if (!AC) return;
-        var ctx = new AC();
-        var now = ctx.currentTime;
-        var gain = ctx.createGain();
-        gain.gain.setValueAtTime(0.0001, now);
-        gain.gain.exponentialRampToValueAtTime(0.18, now + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
-        gain.connect(ctx.destination);
-        [[660, 0], [880, 0.1]].forEach(function (note) {
+        if (isMuted()) return;
+        var ctx = sharedCtx || ensureSharedAudio();
+        if (!ctx) {
+          try {
+            var AC0 = window.AudioContext || window.webkitAudioContext;
+            if (!AC0) return;
+            ctx = new AC0();
+            sharedCtx = ctx;
+          } catch (e) { return; }
+        }
+        try {
+          if (ctx.state === "suspended") return;
+        } catch (e) { /* play anyway, backstop below */ }
+        var syllables = chirpSyllables(words);
+        // C major pentatonic two octaves up (C6…E7); 0.5x octave drop
+        // keeps it round, never piercing. Notes 0.07–0.09s, last 0.13s.
+        var scale = [1046.5, 1174.7, 1318.5, 1568.0,
+          1760.0, 2093.0, 2349.3, 2637.0];
+        var idx = 1 + Math.floor(Math.random() * 3);
+        var t0 = ctx.currentTime + 0.01;
+        for (var i = 0; i < syllables; i++) {
+          if (i > 0) {
+            var step = [-1, 1, 1, 2][Math.floor(Math.random() * 4)];
+            idx = Math.min(Math.max(idx + step, 0), scale.length - 1);
+          }
+          var note = scale[idx] * 0.5;
+          var dur = i === syllables - 1
+            ? 0.13 : 0.07 + Math.random() * 0.02;
+          var gap = 0.028;
+          var start = t0;
+          var gain = ctx.createGain();
+          gain.gain.setValueAtTime(0.0001, start);
+          gain.gain.exponentialRampToValueAtTime(0.18, start + 0.006);
+          gain.gain.exponentialRampToValueAtTime(0.0001,
+            start + dur);
+          gain.connect(ctx.destination);
           var osc = ctx.createOscillator();
           osc.type = "sine";
-          osc.frequency.setValueAtTime(note[0], now + note[1]);
+          var scoopFrom = note * 0.82;
+          try {
+            osc.frequency.setValueAtTime(scoopFrom, start);
+            osc.frequency.exponentialRampToValueAtTime(note,
+              start + 0.025);
+            if (i === syllables - 1) {
+              osc.frequency.setValueAtTime(note, start + 0.025);
+              osc.frequency.linearRampToValueAtTime(note * 1.012,
+                start + dur * 0.6);
+              osc.frequency.linearRampToValueAtTime(note,
+                start + dur);
+            }
+          } catch (e2) {
+            try { osc.frequency.setValueAtTime(note, start); }
+            catch (e3) { /* ignore */ }
+          }
+          var osc2 = null;
+          try {
+            osc2 = ctx.createOscillator();
+            osc2.type = "sine";
+            osc2.frequency.setValueAtTime(note * 2, start);
+            var g2 = ctx.createGain();
+            g2.gain.setValueAtTime(0.12, start);
+            g2.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+            osc2.connect(g2);
+            g2.connect(gain);
+            osc2.start(start);
+            osc2.stop(start + dur + 0.02);
+          } catch (e4) { osc2 = null; }
           osc.connect(gain);
-          osc.start(now + note[1]);
-          osc.stop(now + note[1] + 0.12);
-        });
-        setTimeout(function () { try { ctx.close(); } catch (e) { /* ignore */ } }, 400);
+          osc.start(start);
+          osc.stop(start + dur + 0.02);
+          t0 = start + dur + gap;
+        }
       } catch (e) { /* ignore: chirp never breaks chat */ }
     }
 
@@ -408,6 +623,7 @@
       // free browser speech when the server has no speech surface.
       // Silent only when neither exists: the text bubble is the record.
       async speak(text) {
+        if (isMuted()) return;
         stopAudio();
         stopRecog();
         text = (text || "").trim().slice(0, 4000);
@@ -440,6 +656,7 @@
       chirp: playChirp,
       untuck: untuck,
       destroy: clearTuck,
+      holdMs: HOLD_MS,
     };
   }
 

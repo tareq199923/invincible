@@ -36,7 +36,7 @@
   outline-offset: 2px;
 }
 
-.voice-orb.is-listening {
+.voice-orb.is-listening, .voice-orb.is-asking {
   color: var(--accent);
   border-color: var(--accent);
   transform: scale(calc(1 + var(--level, 0) * 0.12));
@@ -94,7 +94,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .voice-orb, .voice-orb.is-listening, .voice-orb.is-speaking,
+  .voice-orb, .voice-orb.is-listening, .voice-orb.is-asking,
+  .voice-orb.is-speaking,
   .voice-orb.is-working {
     animation: none;
     transform: none;

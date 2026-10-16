@@ -36,8 +36,8 @@
               aria-label="Message"></textarea>
     <div class="composer-actions">
     <button type="button" id="phone-orb" class="voice-orb"
-            title="Talk" aria-label="Talk" aria-controls="phone-panel"
-            aria-expanded="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M17 11a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg></button>
+            title="Talk — hold to ask" aria-label="Talk — hold to ask" aria-controls="phone-panel"
+            aria-expanded="true" data-hold-ms="300"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M17 11a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg></button>
     <button type="button" id="phone-send" title="Send"
             aria-label="Send">&uarr;</button>
     </div>
@@ -72,7 +72,11 @@
 
     var voiceOrb = null;
     // B8: speak only orb (mic) turns; typed send stays silent.
+    // Item-6: hold-to-ask sets askedNext; tap mic turns speak but send
+    // asked:false. Mute (voice off) leaves voiceNext false so chirp +
+    // speech stay silent.
     var voiceNext = false;
+    var askedNext = false;
 
     var history = [];
     var sessionId = null;
@@ -159,23 +163,27 @@
     function send(text) {
       var c = creds();
       text = (text || "").trim();
-      if (!text || sendBtn.disabled) { voiceNext = false; return; }
+      if (!text || sendBtn.disabled) { voiceNext = false; askedNext = false; return; }
       if (!c.key) {
         if (status) status.textContent = "paste your inv_ key first.";
         voiceNext = false;
+        askedNext = false;
         return;
       }
       if (!c.model) {
         if (status) status.textContent = "enter a model id (see /v1/models).";
         voiceNext = false;
+        askedNext = false;
         return;
       }
       var turnShouldSpeak = voiceNext;
+      var turnAsked = askedNext;
       voiceNext = false;
+      askedNext = false;
       persist();
       bubble("user", text);
       var outMsg = {role: "user", content: text};
-      if (turnShouldSpeak) outMsg.asked = true;
+      if (turnAsked) outMsg.asked = true;
       history.push(outMsg);
       input.value = "";
       sendBtn.disabled = true;
@@ -211,7 +219,7 @@
             if (status) status.textContent = "";
             if (turnShouldSpeak) {
               if (voiceOrb && voiceOrb.chirp) {
-                try { voiceOrb.chirp(); } catch (e) { /* silent */ }
+                try { voiceOrb.chirp(answer); } catch (e) { /* silent */ }
               }
               speak(answer);
             }
@@ -250,7 +258,7 @@
         status: status,
         panel: document.getElementById("phone-panel"),
         border: document.getElementById("mode-border"),
-        onText: function (text) { voiceNext = true; send(text); },
+        onText: function (text, asked) { voiceNext = true; askedNext = !!asked; send(text); },
         transcribe: function (blob) {
           var c = creds();
           if (!c.key) return Promise.reject(new Error("paste your inv_ key first"));

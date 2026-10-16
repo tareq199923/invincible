@@ -5,6 +5,20 @@
 
 ## Current State
 
+- Item-6 done (`passing`): hold-to-ask + chirp — 300ms primary-pointer
+  hold on `#voice-orb`/`#phone-orb` adds `is-asking` (border mirrors
+  `is-listening`, no new color), sets `askedNext`, gesture-unlocks a
+  shared AudioContext, re-arms tuck via `isRecording()`, and submits
+  with `asked:true`; `suppressClick` swallows the synthetic tap so hold
+  asks once. Taps keep B4/B8 behavior but now send `asked:false`.
+  `playChirp(words)` pentatonic scoop/wobble (`min(max(words,3),5)`,
+  0.07–0.09s notes, 0.13s last, 0.5x octave, 0.028s gaps, suspended
+  skips, fail-silent); mic replies chirp with reply words, typed stay
+  silent, mute kills chirp + speech. Ids, realms, textContent-only, and
+  the Item-5 tuck guard frozen. New pin
+  `test_hold_to_ask_and_chirp_item6` + updated chirp/border pins.
+  `ruff` clean, 97 passed voice/webchat/handoff slice, full
+  1965 passed / 11 skipped / 1 deselected.
 - Item-5 done (`passing`): quiet UI — PWA credential picks wrapped in
   `#phone-panel[data-autotuck="6"]` (real `.phone-wrap` + `phone-key` /
   `phone-model` nodes, order-pinned) collapsing after 6s idle via
@@ -310,7 +324,7 @@
 
 ## In Progress
 
-- None — Item-5 complete (`passing`).
+- None — Item-6 complete (`passing`).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

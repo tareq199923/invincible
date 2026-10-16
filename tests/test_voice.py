@@ -651,7 +651,7 @@ def test_speak_only_on_mic_turns():
     assert "if (shouldSpeak) speak(finalText);" in chat
     # Phone mic turns chirp then speak (typed stays silent).
     assert "speak(answer)" in phone
-    assert "voiceOrb.chirp()" in phone
+    assert "voiceOrb.chirp(" in phone
 
 
 def test_gemini_style_composer_bar():
@@ -689,7 +689,62 @@ def test_chirp_on_mic_replies_only():
     assert "AudioContext" in orb_js
     # Mic turns chirp at reply start; typed turns stay silent (B8).
     assert "if (turnShouldSpeak && voiceOrb && voiceOrb.chirp)" in chat
-    assert "voiceOrb.chirp()" in phone
+    assert "voiceOrb.chirp(" in phone
+
+
+def test_hold_to_ask_and_chirp_item6():
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    orb_js = (repo / "invincible" / "templates" / "static" /
+              "voice-orb.js").read_text(encoding="utf-8")
+    chat = (repo / "invincible" / "templates" / "chat.html").read_text(
+        encoding="utf-8")
+    phone = (repo / "invincible" / "templates" / "phone.html").read_text(
+        encoding="utf-8")
+    css = (repo / "invincible" / "templates" / "static" /
+           "voice-orb.css").read_text(encoding="utf-8")
+    # Hold gesture attrs exist on both orbs (300ms Bluey hold).
+    for html in (chat, phone):
+        assert 'data-hold-ms="300"' in html
+    assert "HOLD_MS = 300" in orb_js
+    assert "pointerdown" in orb_js
+    assert "pointerup" in orb_js and "pointercancel" in orb_js
+    assert "is-asking" in orb_js
+    assert "askedNext" in orb_js
+    # Fix 1: hold-submit suppresses the synthetic tap click (asks once).
+    assert "suppressClick" in orb_js
+    # Primary-pointer + multi-touch guard, no haptics dependency.
+    assert "isPrimary" in orb_js
+    assert "vibrate" not in orb_js
+    # asked:true flows only on hold-submit (tap keeps asked:false).
+    assert "onText(text, uploadAsked)" in orb_js or \
+        "opts.onText(text, wasAsked)" in orb_js or \
+        "opts.onText(transcript, wasAsked)" in orb_js
+    for html in (chat, phone):
+        assert "askedNext" in html
+        assert "turnAsked" in html
+        assert "asked: turnAsked" in html or "outMsg.asked" in html
+    # Chirp takes reply words (pentatonic scoop/wobble, word-count
+    # syllables) and stays fail-silent.
+    assert "playChirp(words)" in orb_js
+    assert "chirpSyllables" in orb_js
+    assert "0.07" in orb_js and "0.13" in orb_js
+    assert "* 0.5" in orb_js
+    assert "suspended" in orb_js
+    assert "exponentialRampToValueAtTime" in orb_js
+    # Fix 2: gesture-unlocked shared AudioContext reused by the chirp.
+    assert "sharedCtx" in orb_js
+    assert "ensureSharedAudio" in orb_js
+    # Chirp on mic replies only; typed turns stay silent (B8 intact).
+    assert "voiceOrb.chirp(answer)" in phone
+    assert "voiceOrb.chirp(payload.text)" in chat
+    # Mute kills chirp + speech.
+    assert "isMuted" in orb_js
+    assert "muted" in orb_js
+    # Fix 3: orb is-asking mirrors to border is-listening (no new color).
+    assert "is-asking" in css
+    assert "mode-border" in css
 
 
 def test_quiet_ui_autotuck_panel():
@@ -754,9 +809,13 @@ def test_quiet_ui_mode_border():
     assert "border-radius: 55px" in css
     assert "env(safe-area-inset-" in css
     # Reuses the exact orb .is-* state names — no invented classes.
+    # Item-6: orb takes is-asking while held; the border mirrors it as
+    # is-listening (no new border color).
     for state in ("is-listening", "is-working", "is-speaking"):
         assert state in css and state in orb_js
-    assert "is-asking" not in orb_js and "is-thinking" not in orb_js
+    assert "is-asking" in orb_js
+    assert "is-thinking" not in orb_js
+    assert 'state === "is-asking"' in orb_js
     assert "opts.border || null" in orb_js
     # Pulse is opacity-only on working; static otherwise; flat, no glow.
     assert "mode-pulse" in css
