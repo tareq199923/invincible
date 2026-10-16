@@ -556,3 +556,42 @@ def test_move_to_uses_virtualdesk_flag(monkeypatch):
     assert seen["flags"] & te._COMPUTER_MOUSE_ABSOLUTE
     assert seen["dx"] == te._computer_abs(500)
     assert seen["dy"] == te._computer_abs(500)
+
+
+def test_press_chord_main_rides_vk_not_unicode(monkeypatch):
+    """Live find: ctrl+z arrived as bare z — Unicode strokes ignore
+    held modifiers, so chord mains must ride wVk."""
+    import invincible.core.tool_executor as te
+
+    calls = []
+
+    def fake_key_input(api, *, vk=0, scan=0, flags=0):
+        calls.append({"vk": vk, "scan": scan, "flags": flags})
+        return ("key", len(calls))
+
+    monkeypatch.setattr(te, "_computer_key_input", fake_key_input)
+    monkeypatch.setattr(te, "_computer_send",
+                        lambda api, inputs: None)
+    te._computer_press({}, frozenset({"ctrl", "z"}))
+    assert calls[0] == {"vk": 0x11, "scan": 0, "flags": 0}
+    assert calls[1] == {"vk": 0x5A, "scan": 0, "flags": 0}
+    assert calls[2] == {"vk": 0x5A, "scan": 0, "flags": 0x0002}
+    assert calls[3] == {"vk": 0x11, "scan": 0, "flags": 0x0002}
+
+
+def test_press_bare_key_keeps_unicode_path(monkeypatch):
+    import invincible.core.tool_executor as te
+
+    calls = []
+
+    def fake_key_input(api, *, vk=0, scan=0, flags=0):
+        calls.append({"vk": vk, "scan": scan, "flags": flags})
+        return ("key", len(calls))
+
+    monkeypatch.setattr(te, "_computer_key_input", fake_key_input)
+    monkeypatch.setattr(te, "_computer_send",
+                        lambda api, inputs: None)
+    te._computer_press({}, frozenset({"z"}))
+    assert len(calls) == 2
+    assert all(call["vk"] == 0 and call["scan"] != 0
+               for call in calls)

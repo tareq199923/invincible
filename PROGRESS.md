@@ -5,7 +5,14 @@
 
 ## Current State
 
-- F17 done (`passing`, uncommitted): loop-cost guidance — `environment_note`
+- F18 done (`passing`, uncommitted): chord fix from the live transcript —
+  `press_keys` modifier chords dropped their modifier (ctrl+z typed bare
+  `z`) because single-char mains rode KEYEVENTF_UNICODE, which ignores
+  held modifiers. Chord mains now ride virtual-key codes
+  (`_COMPUTER_VK_ALNUM`); modifier-free presses keep the Unicode path.
+  New pins in `tests/test_computer_use.py` (VK-chord + Unicode-bare).
+  `ruff` clean, 128 passed in computer/tool-executor slice.
+- F17 done (`passing`, committed as `94a99ab`): loop-cost guidance — `environment_note`
   teaches lean turns in all modes (skip todo/memory overhead on 1–2 tool
   tasks) plus manual/auto computer-use discipline (default-browser
   `open_url`, dispatched-not-verified + fresh-look verification, media

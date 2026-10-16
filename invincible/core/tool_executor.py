@@ -2390,6 +2390,12 @@ _COMPUTER_VK_NAMED = {
     "down": 0x28, "insert": 0x2D, "del": 0x2E,
     **{f"f{i}": 0x6F + i for i in range(1, 25)},
 }
+# Single characters with 1:1 virtual-key codes (chords are already
+# lowercased by parse_keys_chord, so lowercase keys suffice).
+_COMPUTER_VK_ALNUM = {
+    **{c: 0x41 + i for i, c in enumerate("abcdefghijklmnopqrstuvwxyz")},
+    **{c: 0x30 + i for i, c in enumerate("0123456789")},
+}
 _UIA_IS_PASSWORD = 30019
 # IUIAutomation vtable index of GetFocusedElement (past IUnknown 0-2;
 # verified live on the dev box like the TreeWalker indices — do not
@@ -2537,14 +2543,26 @@ def _computer_type(api: dict, text: str) -> None:
 
 
 def _computer_press(api: dict, chord: frozenset) -> None:
-    """One main key plus held modifiers (denylist checked upstream)."""
+    """One main key plus held modifiers (denylist checked upstream).
+
+    Chord mains ride virtual-key codes: KEYEVENTF_UNICODE strokes
+    ignore held modifiers, so a chord whose main key rides wScan
+    arrives with the modifier dropped (observed live: ctrl+z typed a
+    bare ``z``, ctrl+t never opened a tab). Modifier-free presses
+    keep the Unicode path (layout-independent typing).
+    """
     mains = sorted(chord - _KEY_MODIFIERS)
     main = mains[0]
     batch = []
     for mod in sorted(chord & _KEY_MODIFIERS):
         batch.append(_computer_key_input(
             api, vk=_COMPUTER_VK_MODIFIERS[mod]))
-    if len(main) == 1:
+    if len(main) == 1 and (chord & _KEY_MODIFIERS) \
+            and main in _COMPUTER_VK_ALNUM:
+        vk = _COMPUTER_VK_ALNUM[main]
+        batch.append(_computer_key_input(api, vk=vk))
+        batch.append(_computer_key_input(api, vk=vk, flags=0x0002))
+    elif len(main) == 1:
         for unit in _computer_utf16_units(main):
             batch.append(_computer_key_input(api, scan=unit,
                                              flags=0x0004))

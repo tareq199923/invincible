@@ -173,5 +173,12 @@
     "state": "passing",
     "title": "Loop-cost guidance (lean-turn discipline)",
     "verification": "ruff check . && pytest tests/test_webchat_agent.py tests/test_harness_tools_golden.py tests/test_harness_tools_registry.py"
+  },
+  {
+    "behavior": "press_keys modifier chords actually deliver the modifier: chord mains ride virtual-key codes (Unicode strokes ignore held modifiers — observed live as ctrl+z typing bare z), modifier-free presses keep the layout-independent Unicode path",
+    "id": "F18",
+    "state": "passing",
+    "title": "Chord fix (VK mains under modifiers)",
+    "verification": "ruff check . && pytest tests/test_computer_use.py tests/test_tool_executor.py"
   }
 ]
