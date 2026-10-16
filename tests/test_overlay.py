@@ -143,13 +143,14 @@ def test_eye_offset_toward_cursor_and_clamp():
 
 def test_dock_corner_all_corners():
     vrect = (0, 0, 1920, 1080)
-    assert overlay.dock_corner(vrect, 72) == (1824, 984)
-    assert overlay.dock_corner(vrect, 72, "bl") == (24, 984)
+    lift = overlay.OVERLAY_DOCK_LIFT
+    assert overlay.dock_corner(vrect, 72) == (1824, 984 - lift)
+    assert overlay.dock_corner(vrect, 72, "bl") == (24, 984 - lift)
     assert overlay.dock_corner(vrect, 72, "tr") == (1824, 24)
     assert overlay.dock_corner(vrect, 72, "tl") == (24, 24)
-    assert overlay.dock_corner(vrect, 72, "nope") == (1824, 984)
+    assert overlay.dock_corner(vrect, 72, "nope") == (1824, 984 - lift)
     # Negative-origin rect docks relative to its own corner.
-    assert overlay.dock_corner((-1920, 0, 1920, 1080), 72) == (-96, 984)
+    assert overlay.dock_corner((-1920, 0, 1920, 1080), 72) == (-96, 984 - lift)
 
 
 def test_overlay_handle_never_raises_when_dead():
@@ -532,6 +533,37 @@ async def test_execute_job_drag_announces_dragging(monkeypatch,
     assert out == {"status": "ok", "action": "drag"}
     seen["on_point"]({"x": 1, "y": 2})
     assert announced == [({"x": 1, "y": 2}, True)]
+
+
+def test_tip_alpha_docked_zero_flying_one():
+    assert overlay.tip_alpha() == 0.0
+    assert overlay.tip_alpha(flight_active=False, dragging=False,
+                             to_target=False, settled=True,
+                             press_age=10.0) == 0.0
+    assert overlay.tip_alpha(flight_active=True, to_target=True,
+                             settled=False, press_age=10.0) == 1.0
+    assert overlay.tip_alpha(dragging=True, settled=True) == 1.0
+    assert overlay.tip_alpha(flight_active=False, press_age="bad") == 0.0
+
+
+def test_tip_alpha_press_window_then_hidden():
+    assert overlay.tip_alpha(press_age=0.0) == 1.0
+    assert overlay.tip_alpha(press_age=0.1) == 1.0
+    assert overlay.tip_alpha(press_age=0.41) == 1.0
+    assert overlay.tip_alpha(press_age=0.42) == 0.0
+    assert overlay.tip_alpha(press_age=1.0) == 0.0
+    assert overlay.tip_alpha(press_age=-0.1) == 0.0
+
+
+def test_dock_lift_clears_taskbar():
+    vrect = (0, 0, 1920, 1080)
+    assert overlay.OVERLAY_DOCK_LIFT == 48
+    dock = overlay.dock_corner(vrect, overlay.OVERLAY_HEAD_PX)
+    bottom = dock[1] + overlay.OVERLAY_HEAD_PX
+    assert bottom <= vrect[1] + vrect[3] - overlay.OVERLAY_DOCK_LIFT
+    # Top corners unaffected by the lift.
+    assert overlay.dock_corner(vrect, 72, "tl") == (24, 24)
+    assert overlay.tip_alpha() == 0.0  # docked = round head, tip hidden
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Win32 metrics only")

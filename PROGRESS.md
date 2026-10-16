@@ -5,6 +5,15 @@
 
 ## Current State
 
+- Item-1b done (`passing`): tip only when working + dock lift
+  (`agent/overlay.py`: pure `tip_alpha` 1.0 while flight/drag/press-window
+  else 0.0, `_draw` hides tip polygon when docked, head + eyes always on,
+  `state["dragging"]` from existing IPC key, `OVERLAY_DOCK_LIFT=48` raises
+  br/bl docks above the taskbar, top corners unchanged).
+  New pins in `tests/test_overlay.py` (3 tests: tip dock/fly/press/drag,
+  lift clears taskbar; dock corner pins updated for the lift).
+  `ruff` clean, 60 passed overlay/computer slice, full
+  1959 passed / 11 skipped / 1 deselected.
 - Item-1 done (`passing`): smoother cursor — Bluey motion port
   (`agent/overlay.py`: cubic `timing_value/rate` launch/redirect/steady,
   `flight_position/tangent`, `plan_flight` alongside frozen
@@ -273,7 +282,7 @@
 
 ## In Progress
 
-- None — Item-1 complete (`passing`).
+- None — Item-1b complete (`passing`).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

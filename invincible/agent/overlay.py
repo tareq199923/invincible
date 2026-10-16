@@ -59,6 +59,7 @@ OVERLAY_IDLE_SETTLE_SECONDS = 2.0
 OVERLAY_PRE_ACTION_DWELL_SECONDS = 0.35
 OVERLAY_DOCK_MARGIN = 24
 OVERLAY_DOCK_CORNER = "br"
+OVERLAY_DOCK_LIFT = 48
 OVERLAY_TRANSPARENT_KEY = "magenta"
 
 # F16 Bluey states (child-side drawing only — no job-logic touch,
@@ -490,6 +491,28 @@ def hover_offset(now, landed_at, is_home: bool = False,
     return math.sin(since * 2.4) * 1.6 * amount
 
 
+def tip_alpha(*, flight_active: bool = False, dragging: bool = False,
+              to_target: bool = False, settled: bool = True,
+              press_age=None) -> float:
+    """Tip-polygon visibility 0.0/1.0 (pure, hermetic, overlay-only).
+
+    1.0 while working: a flight is active, a drag is held, or the
+    press window (``0 <= press_age < 0.42``, same as ``press_scale``)
+    is open. 0.0 docked/idle/home/settled. Tk has no per-item alpha
+    so the caller shows/hides the polygon. Never raises.
+    """
+    try:
+        if flight_active is True or dragging is True:
+            return 1.0
+        if press_age is not None:
+            age = float(press_age)
+            if math.isfinite(age) and 0 <= age < 0.42:
+                return 1.0
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0
+
+
 def eye_offset(hx, hy, cx, cy, r_max: float) -> tuple[int, int]:
     """Pupil offset from head center toward the cursor (pure, hermetic).
 
@@ -513,7 +536,12 @@ def eye_offset(hx, hy, cx, cy, r_max: float) -> tuple[int, int]:
 def dock_corner(vrect: tuple, head_px: int,
                 corner: str = OVERLAY_DOCK_CORNER,
                 margin: int = OVERLAY_DOCK_MARGIN) -> tuple[int, int]:
-    """Top-left pixel of the idle-docked head box (pure, hermetic)."""
+    """Top-left pixel of the idle-docked head box (pure, hermetic).
+
+    Bottom corners ride ``OVERLAY_DOCK_LIFT`` px above the full vrect
+    bottom so the head clears the Windows taskbar; top corners are
+    unchanged. Signature frozen.
+    """
     ox, oy, width, height = vrect
     try:
         size = max(1, int(head_px))
@@ -524,8 +552,9 @@ def dock_corner(vrect: tuple, head_px: int,
     except (TypeError, ValueError):
         pad = 0
     spots = {
-        "br": (ox + width - pad - size, oy + height - pad - size),
-        "bl": (ox + pad, oy + height - pad - size),
+        "br": (ox + width - pad - size,
+               oy + height - pad - size - OVERLAY_DOCK_LIFT),
+        "bl": (ox + pad, oy + height - pad - size - OVERLAY_DOCK_LIFT),
         "tr": (ox + width - pad - size, oy + pad),
         "tl": (ox + pad, oy + pad),
     }
@@ -892,7 +921,8 @@ def _run_window(tk) -> None:
              "bubble_until": 0.0, "bubble_text": "",
              "flight": None, "velocity": [0.0, 0.0],
              "landed_at": now0 - 10.0,
-             "press_start": now0 - 10.0, "press_depth": 0.0}
+             "press_start": now0 - 10.0, "press_depth": 0.0,
+             "dragging": False}
 
     def _draw() -> None:
         hx, hy = head_xy
@@ -933,7 +963,16 @@ def _run_window(tk) -> None:
         canvas.coords(head_light, hx - rx * 0.62, hy - ry * 0.72,
                       hx + rx * 0.45, hy + ry * 0.05)
         pts = teardrop_points(hx, hy, rx, ry)
-        if pts:
+        try:
+            tip_on = tip_alpha(
+                flight_active=state["flight"] is not None,
+                dragging=state["dragging"] is True,
+                to_target=bool(state["to_target"]),
+                settled=settled,
+                press_age=now - float(state["press_start"])) >= 0.5
+        except Exception:
+            tip_on = False
+        if pts and tip_on:
             flat = [c for p in pts for c in p]
             canvas.coords(tip, *flat)
         else:
@@ -972,6 +1011,7 @@ def _run_window(tk) -> None:
                     state["to_target"] = False
                     state["flight"] = None
                     state["velocity"] = [0.0, 0.0]
+                    state["dragging"] = False
                     state["path"] = ease_waypoints(
                         head_xy[0], head_xy[1],
                         float(target[0]), float(target[1]), steps)
@@ -988,6 +1028,7 @@ def _run_window(tk) -> None:
                             now_child, vrect, dragging)
                         state["path"] = []
                         state["to_target"] = True
+                        state["dragging"] = dragging
                         state["idle_since"] = now_child
                         label = bubble_text_for(
                             message.get("x"), message.get("y"))
@@ -1010,6 +1051,7 @@ def _run_window(tk) -> None:
                     head_xy[0], head_xy[1] = flight["to"]
                     state["flight"] = None
                     state["velocity"] = [0.0, 0.0]
+                    state["dragging"] = False
                     state["idle_since"] = now
                     state["landed_at"] = now
                     if state["to_target"]:
@@ -1031,6 +1073,7 @@ def _run_window(tk) -> None:
                         head_xy[0], head_xy[1] = flight["to"]
                         state["flight"] = None
                         state["velocity"] = [0.0, 0.0]
+                        state["dragging"] = False
                         state["idle_since"] = now
                         state["landed_at"] = now
                         if state["to_target"]:

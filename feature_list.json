@@ -187,5 +187,12 @@
     "state": "passing",
     "title": "Smoother cursor (Bluey motion port)",
     "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py"
+  },
+  {
+    "behavior": "overlay docked reads round: tip polygon hidden at dock/idle (shown only while flying, dragging, or in the 0.42s press window), head + eyes always visible, dock lifted above the taskbar via DOCK_LIFT on bottom corners — child-side Tk only, headless zero latency",
+    "id": "Item-1b",
+    "state": "passing",
+    "title": "Tip only when working (docked round + lift)",
+    "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py"
   }
 ]
