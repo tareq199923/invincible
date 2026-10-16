@@ -54,6 +54,9 @@ OVERLAY_EYE_TRACK_R = 9
 # (the dwell lives in the runner - it only waits when an overlay is
 # alive, so headless jobs pay zero added latency).
 OVERLAY_POLL_SECONDS = 1.0 / 30.0
+# Settle/idle glides + bubble timing only — target glides carry their
+# own Bluey plan_flight duration (see _overlay_delay_fn in runner.py,
+# which stretches the pre-action dwell to cover it).
 OVERLAY_GLIDE_SECONDS = 0.30
 OVERLAY_IDLE_SETTLE_SECONDS = 2.0
 OVERLAY_PRE_ACTION_DWELL_SECONDS = 0.35

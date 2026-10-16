@@ -280,9 +280,10 @@ async def test_execute_job_computer_headless_no_dwell(
     seen = {}
 
     async def fake_act(name, args, *, on_point=None,
-                       pre_action_delay=0.0):
+                       pre_action_delay=0.0, delay_for=None):
         seen["on_point"] = on_point
         seen["delay"] = pre_action_delay
+        seen["delay_for"] = delay_for
         return {"status": "ok", "action": name}
 
     monkeypatch.setattr(runner, "ensure_overlay", lambda: None)
@@ -292,6 +293,7 @@ async def test_execute_job_computer_headless_no_dwell(
     assert out == {"status": "ok", "action": "click"}
     assert seen["on_point"] is None
     assert seen["delay"] == 0.0
+    assert seen["delay_for"] is None
 
 
 async def test_execute_job_computer_announces_and_settles(
@@ -311,9 +313,10 @@ async def test_execute_job_computer_announces_and_settles(
     seen = {}
 
     async def fake_act(name, args, *, on_point=None,
-                       pre_action_delay=0.0):
+                       pre_action_delay=0.0, delay_for=None):
         seen["on_point"] = on_point
         seen["delay"] = pre_action_delay
+        seen["delay_for"] = delay_for
         if on_point is not None:
             on_point({"x": 111, "y": 222})
         return {"status": "ok", "action": name}
@@ -326,6 +329,7 @@ async def test_execute_job_computer_announces_and_settles(
     assert out == {"status": "ok", "action": "click"}
     assert seen["on_point"] == live.announce
     assert seen["delay"] == overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS
+    assert callable(seen["delay_for"])
     assert announced == [{"x": 111, "y": 222}]
     assert settled == [True]
 
@@ -511,8 +515,9 @@ async def test_execute_job_drag_announces_dragging(monkeypatch,
     seen = {}
 
     async def fake_act(name, args, *, on_point=None,
-                       pre_action_delay=0.0):
+                       pre_action_delay=0.0, delay_for=None):
         seen["on_point"] = on_point
+        seen["delay_for"] = delay_for
         return {"status": "ok", "action": name}
 
     announced: list = []

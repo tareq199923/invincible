@@ -86,6 +86,63 @@ _OVERLAY: overlay.Overlay | None = None
 _OVERLAY_RETRY_AT = 0.0
 OVERLAY_RETRY_COOLDOWN_SECONDS = 60.0
 
+# Parent-side estimate of the overlay head position (virtual-screen px),
+# so the pre-action dwell can cover the planned Bluey flight. ``None``
+# until the first announced point (the child starts docked).
+_OVERLAY_HEAD_PX: tuple[float, float] | None = None
+# Dwell bounds: the flight estimate plus a 30Hz-tick landing buffer,
+# clamped so a pathological leg never stalls a job.
+_OVERLAY_DWELL_BUFFER_SECONDS = 0.1
+_OVERLAY_DWELL_MAX_SECONDS = 1.3
+_OVERLAY_DRAG_DWELL_MAX_SECONDS = 2.0
+
+
+def _overlay_delay_fn(dragging: bool):
+    """Per-point dwell covering the planned flight. Never raises.
+
+    Estimates each leg with the same ``plan_flight`` the child flies
+    (duration depends only on distance + dragging, so zero velocity
+    and clock are exact here); drag sums both legs on the second call
+    (the single dwell runs after both resolves). Falls back to the
+    base dwell whenever metrics or geometry are unavailable.
+    """
+    legs: list[float] = []
+
+    def delay_for(point) -> float:
+        try:
+            vrect = overlay.virtual_screen()
+            gx = float(point.get("x"))
+            gy = float(point.get("y"))
+        except (OSError, TypeError, ValueError, AttributeError):
+            return overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS
+        global _OVERLAY_HEAD_PX
+        start = _OVERLAY_HEAD_PX
+        if start is None:
+            try:
+                dock = overlay.dock_corner(
+                    vrect, overlay.OVERLAY_HEAD_PX)
+                radius = overlay.OVERLAY_HEAD_PX // 2
+                start = (float(dock[0] + radius),
+                         float(dock[1] + radius))
+            except Exception:
+                return overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS
+        with contextlib.suppress(Exception):
+            goal = overlay.grid_to_pixel(gx, gy, vrect)
+            flight = overlay.plan_flight(
+                start, (float(goal[0]), float(goal[1])),
+                (0.0, 0.0), 0.0, vrect, dragging)
+            _OVERLAY_HEAD_PX = (float(goal[0]), float(goal[1]))
+            legs.append(float(flight["duration"]))
+        if not legs:
+            return overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS
+        total = sum(legs[-2:]) if dragging else legs[-1]
+        cap = (_OVERLAY_DRAG_DWELL_MAX_SECONDS if dragging
+               else _OVERLAY_DWELL_MAX_SECONDS)
+        return min(max(total + _OVERLAY_DWELL_BUFFER_SECONDS,
+                       overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS), cap)
+
+    return delay_for
+
 
 def ensure_overlay() -> overlay.Overlay | None:
     """Live overlay handle, or None when headless. Never raises.
@@ -389,20 +446,27 @@ async def execute_job(job: dict) -> dict:
             # head settles back to its dock corner after. Every overlay
             # call is best-effort - a dead overlay never breaks a job.
             seen = ensure_overlay()
-            if seen is not None and job_type == "drag":
+            alive = seen is not None and seen.alive
+            if alive and job_type == "drag":
                 _seen = seen
 
-                def sink(point, _seen=_seen):  # type: ignore[misc]
+                def sink(point, *_, _seen=_seen, **__):  # type: ignore[misc]
                     with contextlib.suppress(Exception):
                         _seen.announce(point, dragging=True)
+            elif alive:
+                assert seen is not None
+                sink = seen.announce
             else:
-                sink = seen.announce if seen is not None else None
+                sink = None
             dwell = (overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS
-                     if seen is not None and seen.alive else 0.0)
+                     if alive else 0.0)
+            delay_for = (_overlay_delay_fn(job_type == "drag")
+                         if alive else None)
             try:
                 return await tool_executor._computer_act(
                     job_type, args if isinstance(args, dict) else {},
-                    on_point=sink, pre_action_delay=dwell)
+                    on_point=sink, pre_action_delay=dwell,
+                    delay_for=delay_for)
             finally:
                 if seen is not None:
                     with contextlib.suppress(Exception):

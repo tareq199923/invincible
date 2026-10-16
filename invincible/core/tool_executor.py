@@ -2770,9 +2770,35 @@ async def _computer_dwell(seconds: float) -> None:
         await asyncio.sleep(delay)
 
 
+def _resolve_delay(pre_action_delay, delay_for, point) -> float:
+    """Dwell covering the overlay glide (pure, never raises).
+
+    ``pre_action_delay`` is the base float (backward compat — a bad
+    value reads as 0). ``delay_for`` is an optional per-point estimator
+    ``(point) -> seconds`` (the runner's Bluey-flight estimate); its
+    answer wins when larger, and any failure falls back to the base.
+    """
+    try:
+        base = float(pre_action_delay or 0)
+    except (TypeError, ValueError):
+        base = 0.0
+    if not 0 <= base < 3600:
+        base = 0.0
+    if delay_for is None:
+        return base
+    try:
+        extra = float(delay_for(point))
+    except Exception:
+        return base
+    if not 0 <= extra < 3600:
+        return base
+    return max(base, extra)
+
+
 async def _computer_act(name: str, args: dict, *,
                       on_point=None,
-                      pre_action_delay: float = 0.0) -> dict:
+                      pre_action_delay: float = 0.0,
+                      delay_for=None) -> dict:
     """Execute one Pack 3 action on THIS machine (agent-side only).
 
     ToolBlocked propagates (the runner maps it to a blocked result);
@@ -2786,6 +2812,10 @@ async def _computer_act(name: str, args: dict, *,
     ``on_point`` announces each resolved grid point to the F11 overlay
     (never breaks the job); ``pre_action_delay`` pauses once before
     the terminal physical action so the overlay glide lands first.
+    ``delay_for`` is an optional ``(point) -> seconds`` estimator
+    (runner-supplied Bluey-flight cover); each point-bearing branch
+    dwells ``max(base, estimate)`` so settle never aborts a glide
+    mid-flight. ``None`` keeps the plain base delay.
     """
     if os.name != "nt":
         return {"status": "unavailable",
@@ -2799,7 +2829,8 @@ async def _computer_act(name: str, args: dict, *,
         if name == "click":
             point, echo = await _computer_resolve(norm,
                                                   on_point=on_point)
-            await _computer_dwell(pre_action_delay)
+            await _computer_dwell(_resolve_delay(
+                pre_action_delay, delay_for, point))
             _computer_click_at(api, point["x"], point["y"],
                                norm["button"], norm["double"])
             return {"status": "ok", "action": "click",
@@ -2813,7 +2844,8 @@ async def _computer_act(name: str, args: dict, *,
                 # wrong element).
                 point, echo = await _computer_resolve(norm,
                                                       on_point=on_point)
-                await _computer_dwell(pre_action_delay)
+                await _computer_dwell(_resolve_delay(
+                    pre_action_delay, delay_for, point))
                 _computer_click_at(api, point["x"], point["y"],
                                    "left", False)
             else:
@@ -2838,7 +2870,8 @@ async def _computer_act(name: str, args: dict, *,
             if "control" in norm or "x" in norm:
                 point, echo = await _computer_resolve(norm,
                                                       on_point=on_point)
-                await _computer_dwell(pre_action_delay)
+                await _computer_dwell(_resolve_delay(
+                    pre_action_delay, delay_for, point))
                 _computer_click_at(api, point["x"], point["y"],
                                    "left", False)
             else:
@@ -2850,7 +2883,8 @@ async def _computer_act(name: str, args: dict, *,
         if name == "scroll":
             point, echo = await _computer_resolve(norm,
                                                   on_point=on_point)
-            await _computer_dwell(pre_action_delay)
+            await _computer_dwell(_resolve_delay(
+                pre_action_delay, delay_for, point))
             _computer_scroll_at(api, point.get("x"), point.get("y"),
                                 norm["direction"], norm["amount"])
             return {"status": "ok", "action": "scroll",
@@ -2861,7 +2895,8 @@ async def _computer_act(name: str, args: dict, *,
                                                        on_point=on_point)
             end, echo_to = await _computer_resolve(norm["to"],
                                                    on_point=on_point)
-            await _computer_dwell(pre_action_delay)
+            await _computer_dwell(_resolve_delay(
+                pre_action_delay, delay_for, end))
             _computer_drag(api, start["x"], start["y"],
                            end["x"], end["y"])
             return {"status": "ok", "action": "drag",

@@ -595,3 +595,57 @@ def test_press_bare_key_keeps_unicode_path(monkeypatch):
     assert len(calls) == 2
     assert all(call["vk"] == 0 and call["scan"] != 0
                for call in calls)
+
+
+def test_resolve_delay_base_and_estimator():
+    te = tool_executor
+    base = 0.35
+    assert te._resolve_delay(base, None, {"x": 1, "y": 2}) == base
+    assert te._resolve_delay(base, lambda p: 0.9, {"x": 1, "y": 2}) == 0.9
+    assert te._resolve_delay(base, lambda p: 0.1, {"x": 1, "y": 2}) == base
+    assert te._resolve_delay(base, _raising_estimator,
+                             {"x": 1, "y": 2}) == base
+    assert te._resolve_delay("bogus", None, {"x": 1, "y": 2}) == 0.0
+    assert te._resolve_delay(base, lambda p: float("nan"),
+                             {"x": 1, "y": 2}) == base
+    assert te._resolve_delay(base, lambda p: float("inf"),
+                             {"x": 1, "y": 2}) == base
+
+
+def _raising_estimator(point):
+    raise RuntimeError("estimator died")
+
+
+def test_overlay_delay_fn_covers_planned_flight(monkeypatch):
+    from invincible.agent import overlay, runner
+
+    vrect = (0, 0, 1920, 1080)
+    monkeypatch.setattr(overlay, "virtual_screen", lambda: vrect)
+    monkeypatch.setattr(runner, "_OVERLAY_HEAD_PX", None)
+    delay_for = runner._overlay_delay_fn(False)
+    dwell = delay_for({"x": 900, "y": 500})
+    dock = overlay.dock_corner(vrect, overlay.OVERLAY_HEAD_PX)
+    radius = overlay.OVERLAY_HEAD_PX // 2
+    flight = overlay.plan_flight(
+        (float(dock[0] + radius), float(dock[1] + radius)),
+        overlay.grid_to_pixel(900, 500, vrect),
+        (0.0, 0.0), 0.0, vrect, False)
+    assert dwell >= float(flight["duration"])
+    assert dwell <= runner._OVERLAY_DWELL_MAX_SECONDS
+    assert dwell >= overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS
+    # Malformed points fall back to the base dwell, never raise.
+    assert delay_for({"x": "bad", "y": 1}) == (
+        overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS)
+
+
+def test_overlay_delay_fn_drag_sums_legs(monkeypatch):
+    from invincible.agent import overlay, runner
+
+    monkeypatch.setattr(overlay, "virtual_screen",
+                        lambda: (0, 0, 1920, 1080))
+    monkeypatch.setattr(runner, "_OVERLAY_HEAD_PX", None)
+    delay_for = runner._overlay_delay_fn(True)
+    first = delay_for({"x": 100, "y": 100})
+    total = delay_for({"x": 900, "y": 800})
+    assert total >= first
+    assert total <= runner._OVERLAY_DRAG_DWELL_MAX_SECONDS

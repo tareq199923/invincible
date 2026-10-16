@@ -5,6 +5,18 @@
 
 ## Current State
 
+- Item-1c done (`passing`): glide-cover dwell — the 0.35s fixed dwell was
+  shorter than every Bluey flight (0.45s min, ~0.9s typical), so settle
+  aborted each glide mid-flight and the head never landed. Fix:
+  `tool_executor._computer_act` takes optional `delay_for(point)` and
+  each point-bearing branch dwells `max(base, estimate)` via pure
+  `_resolve_delay` (float-only callers unchanged); `runner` supplies
+  `_overlay_delay_fn` estimating each leg with the same `plan_flight`
+  (drag sums both legs, capped 1.3/2.0s + 0.1s buffer, dock-seeded head
+  tracking, base fallback). Headless still passes `0.0`/`None`.
+  New pins: `_resolve_delay` matrix + estimator cover/drag-sum/fallback
+  (3 tests). `ruff` clean, 63 passed overlay/computer slice, full
+  1962 passed / 11 skipped / 1 deselected.
 - Item-1b done (`passing`): tip only when working + dock lift
   (`agent/overlay.py`: pure `tip_alpha` 1.0 while flight/drag/press-window
   else 0.0, `_draw` hides tip polygon when docked, head + eyes always on,
@@ -282,7 +294,7 @@
 
 ## In Progress
 
-- None — Item-1b complete (`passing`).
+- None — Item-1c complete (`passing`).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

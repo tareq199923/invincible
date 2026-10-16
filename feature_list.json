@@ -194,5 +194,12 @@
     "state": "passing",
     "title": "Tip only when working (docked round + lift)",
     "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py"
+  },
+  {
+    "behavior": "overlay glide always lands before the click: pre-action dwell stretches to cover the planned Bluey flight (parent-side estimate from the same plan_flight, capped), so settle never aborts a glide mid-flight — headless still zero delay",
+    "id": "Item-1c",
+    "state": "passing",
+    "title": "Glide-cover dwell (land before act)",
+    "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py"
   }
 ]
