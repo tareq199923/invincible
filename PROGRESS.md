@@ -5,7 +5,7 @@
 
 ## Current State
 
-- Phone markdown follow-up (`passing`, committed as `18744a4`): `POST
+- Phone markdown follow-up (`passing`, code committed as `fd5631e`): `POST
   /dashboard/chat/render` (cookie realm, presentation-only, same
   `render_chat_markdown`) lets the PWA match desktop chat without
   touching the `/v1/*` wire shape; `phone.html` renders assistant
