@@ -52,7 +52,9 @@
   // B2 phone shell (PWA-first): push-to-talk + face + bubbles over the
   // SAME chat pipeline (/v1/chat/completions with your inv_ key) and
   // Hop-to-PC over POST /agent/handoff. No assets, no framework.
-  // All inserts are textContent-only (same XSS posture as chat.html).
+  // Assistant bubbles render server-side markdown (raw HTML disabled,
+  // same renderer as desktop chat) via POST /dashboard/chat/render;
+  // everything else is textContent-only.
   (function () {
     var keyInput = document.getElementById("phone-key");
     var modelInput = document.getElementById("phone-model");
@@ -122,6 +124,34 @@
       if (voiceOrb) voiceOrb.speak(text);
     }
 
+    // Assistant markdown: server-rendered HTML (raw HTML disabled, same
+    // renderer as desktop chat) so the phone reads like chat.html. Falls
+    // back to plain text when the render call fails — the bubble is the
+    // record either way, and speech always uses the plain answer.
+    function renderAssistant(div, answer, done) {
+      fetch("/dashboard/chat/render", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({text: answer})
+      }).then(function (resp) {
+        return resp.json().then(function (j) { return {ok: resp.ok, body: j}; });
+      }).then(function (out) {
+        if (out.ok && out.body && out.body.html) {
+          var md = document.createElement("div");
+          md.className = "md";
+          md.innerHTML = out.body.html;
+          div.appendChild(md);
+        } else {
+          div.appendChild(document.createTextNode(answer));
+        }
+        if (done) done();
+      }).catch(function () {
+        div.appendChild(document.createTextNode(answer));
+        if (done) done();
+      });
+    }
+
     function send(text) {
       var c = creds();
       text = (text || "").trim();
@@ -171,15 +201,17 @@
           name.textContent = "Bmax";
           pending.appendChild(dot);
           pending.appendChild(name);
-          pending.appendChild(document.createTextNode(answer));
-          history.push({role: "assistant", content: answer});
-          if (status) status.textContent = "";
-          if (turnShouldSpeak) {
-            if (voiceOrb && voiceOrb.chirp) {
-              try { voiceOrb.chirp(); } catch (e) { /* silent */ }
+          renderAssistant(pending, answer, function () {
+            pending.classList.remove("pending");
+            history.push({role: "assistant", content: answer});
+            if (status) status.textContent = "";
+            if (turnShouldSpeak) {
+              if (voiceOrb && voiceOrb.chirp) {
+                try { voiceOrb.chirp(); } catch (e) { /* silent */ }
+              }
+              speak(answer);
             }
-            speak(answer);
-          }
+          });
         } else {
           var msg = (out.body && out.body.error && out.body.error.message) ||
             "request failed";

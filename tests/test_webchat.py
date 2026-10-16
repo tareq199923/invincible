@@ -81,6 +81,8 @@ async def test_webchat_requires_session(client):
     assert anon.status_code == 401
     anon = await client.post("/dashboard/chat/stream", json=STREAM_BODY)
     assert anon.status_code == 401
+    anon = await client.post("/dashboard/chat/render", json={"text": "hi"})
+    assert anon.status_code == 401
 
 
 async def test_webchat_rejects_inv_keys(client, byok_env):
@@ -95,6 +97,9 @@ async def test_webchat_rejects_inv_keys(client, byok_env):
         "/dashboard/chat/models", headers=headers)).status_code == 401
     assert (await client.post(
         "/dashboard/chat/stream", json=STREAM_BODY,
+        headers=headers)).status_code == 401
+    assert (await client.post(
+        "/dashboard/chat/render", json={"text": "hi"},
         headers=headers)).status_code == 401
 
 
@@ -140,6 +145,28 @@ async def test_models_lists_candidates(client, byok_env):
     await webchat_user(client, "mods@example.com", credential_count=2)
     models = (await client.get("/dashboard/chat/models")).json()
     assert models == {"models": ["w1-model", "w2-model"]}
+
+
+async def test_render_markdown_xss_and_bounds(client, byok_env):
+    await webchat_user(client, "render@example.com", credential_count=0)
+    resp = await client.post(
+        "/dashboard/chat/render", json={"text": "**bold**\n\n- a\n- b"})
+    assert resp.status_code == 200, resp.text
+    html = resp.json()["html"]
+    assert "<strong>bold</strong>" in html
+    assert "<ul>" in html
+    evil = await client.post(
+        "/dashboard/chat/render",
+        json={"text": '<script>alert(1)</script><img src=x onerror="a()">'})
+    assert evil.status_code == 200, evil.text
+    assert "<script>" not in evil.json()["html"]
+    assert "<img" not in evil.json()["html"]
+    assert (await client.post(
+        "/dashboard/chat/render", json={"text": ""})).status_code == 400
+    assert (await client.post(
+        "/dashboard/chat/render", json={})).status_code == 400
+    assert (await client.post(
+        "/dashboard/chat/render", json={"text": 5})).status_code == 400
 
 
 async def test_stream_happy_path_and_history(

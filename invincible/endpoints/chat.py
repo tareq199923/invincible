@@ -371,6 +371,33 @@ async def delete_chat_session(
     return {"deleted": True}
 
 
+@router.post("/dashboard/chat/render")
+async def chat_render(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    """Render assistant plain-text to safe bubble HTML (phone PWA).
+
+    Cookie-realm ONLY like every other webchat route. Presentation-only:
+    the same ``render_chat_markdown`` the webchat history and ``done``
+    bubbles share, so the phone and desktop chat can never disagree.
+    The phone calls /v1/* with its own inv_ key (a path with no
+    server-rendered HTML by protocol-compat design), then renders here.
+    Raw HTML is disabled server-side; the client inserts ``html`` via
+    innerHTML with a textContent fallback on failure.
+    """
+    try:
+        raw = await request.json()
+    except Exception:
+        raw = None
+    if not isinstance(raw, dict):
+        return _bad_request("Request body must be JSON.")
+    text = raw.get("text", "")
+    if not isinstance(text, str) or not text.strip():
+        return _bad_request("text is required.")
+    return {"html": render_chat_markdown(text)}
+
+
 @router.post("/dashboard/chat/stream")
 async def chat_stream(
     request: Request,

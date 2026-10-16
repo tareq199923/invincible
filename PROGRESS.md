@@ -5,7 +5,15 @@
 
 ## Current State
 
-- Chat markdown done (`passing`, committed as `7afe3a7`): assistant bubbles now render
+- Phone markdown follow-up (`passing`, committed as `18744a4`): `POST
+  /dashboard/chat/render` (cookie realm, presentation-only, same
+  `render_chat_markdown`) lets the PWA match desktop chat without
+  touching the `/v1/*` wire shape; `phone.html` renders assistant
+  replies via it (textContent fallback, speech still plain `answer`)
+  and now clears the `pending` faint class on success. Realm gates
+  extended, new `test_render_markdown_xss_and_bounds`. `ruff` clean,
+  29 webchat + 44 voice passed.
+- Chat markdown done (`passing`, committed as `6c2e20a`): assistant bubbles now render
   markdown via new `core/markdown.py:render_chat_markdown()` (markdown-it
   CommonMark + tables, raw HTML disabled so `<script>`/`<img onerror>`
   escape as text). `endpoints/chat.py:_renderable_turns` pre-renders
