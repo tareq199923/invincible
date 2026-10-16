@@ -5,7 +5,15 @@
 
 ## Current State
 
-- F14 done (`passing`, uncommitted): loop-cost guard — `IDENTICAL_LOOK_LIMIT=3`
+- F15 done (`passing`, uncommitted): coordinate parity — SendInput moves
+  carry VIRTUALDESK (`core/tool_executor.py`), `look_at_screen` maps UIA
+  rects + mouse against virtual origin/size via `look_grid_virtual`
+  (inverse of `overlay.grid_to_pixel`), overlay already virtual. New pins:
+  virtual round-trip (`test_look_at_screen.py`), VIRTUALDESK flag
+  (`test_computer_use.py`). Live multi-monitor glide-vs-click check still
+  deferred to a visible Windows desktop. `ruff` clean, 50 passed in
+  look/computer/overlay slice.
+- F14 done (`passing`, committed as `cda787a`): loop-cost guard — `IDENTICAL_LOOK_LIMIT=3`
   consecutive identical `look_at_screen` results end the tool loop via the
   repeat-guard close-out (`core/webchat_agent.py`: `_look_result_key` +
   non-resetting counter, unchanged-screen close-out note). Interleaved

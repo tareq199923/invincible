@@ -533,3 +533,26 @@ async def test_computer_ok_carries_verified_false(monkeypatch):
         "click", {"x": 1, "y": 2, "button": "left"})
     assert result["status"] == "ok"
     assert result["verified"] is False
+
+
+def test_move_to_uses_virtualdesk_flag(monkeypatch):
+    import invincible.core.tool_executor as te
+
+    seen = {}
+
+    def fake_input(api, *, dx=0, dy=0, data=0, flags=0):
+        seen["flags"] = flags
+        seen["dx"] = dx
+        seen["dy"] = dy
+        return ("input", flags)
+
+    def fake_send(api, inputs):
+        seen["inputs"] = inputs
+
+    monkeypatch.setattr(te, "_computer_mouse_input", fake_input)
+    monkeypatch.setattr(te, "_computer_send", fake_send)
+    te._computer_move_to({}, 500, 500)
+    assert seen["flags"] & te._COMPUTER_MOUSE_VIRTUALDESK
+    assert seen["flags"] & te._COMPUTER_MOUSE_ABSOLUTE
+    assert seen["dx"] == te._computer_abs(500)
+    assert seen["dy"] == te._computer_abs(500)

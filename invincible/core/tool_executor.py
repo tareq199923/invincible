@@ -1713,6 +1713,25 @@ def look_grid(rect: tuple, width: float, height: float) -> tuple[int, int]:
     return (min(max(gx, 0), 1000), min(max(gy, 0), 1000))
 
 
+def look_grid_virtual(rect: tuple, vrect: tuple) -> tuple[int, int]:
+    """Midpoint of a virtual-screen pixel rect on the 0-1000 grid.
+
+    Pure, hermetic, F15: ``vrect`` is ``(origin_x, origin_y, width,
+    height)`` — the conceptual inverse of
+    ``agent/overlay.py:grid_to_pixel`` (which folds the same vrect
+    onto pixels). UIA bounding rects arrive in virtual-screen
+    coordinates, so the origin offset must apply here; the legacy
+    ``look_grid`` (primary-only, origin 0,0) stays for compat.
+    """
+    left, top, w, h = rect
+    ox, oy, width, height = vrect
+    if width <= 0 or height <= 0:
+        return (0, 0)
+    gx = int((left + w / 2 - ox) / width * 1000)
+    gy = int((top + h / 2 - oy) / height * 1000)
+    return (min(max(gx, 0), 1000), min(max(gy, 0), 1000))
+
+
 def _look_uia_interfaces() -> dict:
     """Load UIAutomationCore entry points (Windows only, lazy)."""
     import ctypes
@@ -1916,8 +1935,17 @@ def _look_walk(api: dict) -> dict:
             finally:
                 oleaut32.VariantClear(ctypes.byref(var))
 
-        sw = user32.GetSystemMetrics(0) or 1
-        sh = user32.GetSystemMetrics(1) or 1
+        ox = user32.GetSystemMetrics(76)
+        oy = user32.GetSystemMetrics(77)
+        vw = user32.GetSystemMetrics(78) or 1
+        vh = user32.GetSystemMetrics(79) or 1
+        if vw <= 0 or vh <= 0:
+            # Same fallback as agent/overlay.py:virtual_screen —
+            # primary-only when the virtual metrics read empty.
+            ox, oy = 0, 0
+            vw = user32.GetSystemMetrics(0) or 1
+            vh = user32.GetSystemMetrics(1) or 1
+        vrect = (ox, oy, vw, vh)
         length = user32.GetWindowTextLengthW(hwnd)
         buf = ctypes.create_unicode_buffer(length + 1)
         user32.GetWindowTextW(hwnd, buf, length + 1)
@@ -1938,9 +1966,9 @@ def _look_walk(api: dict) -> dict:
             rect = prop_rect(element)
             if (type_id not in _LOOK_SKIP_TYPES and rect is not None
                     and rect[2] > 3 and rect[3] > 3
-                    and rect[0] < sw and rect[1] < sh
-                    and rect[0] + rect[2] > 0
-                    and rect[1] + rect[3] > 0
+                    and rect[0] < ox + vw and rect[1] < oy + vh
+                    and rect[0] + rect[2] > ox
+                    and rect[1] + rect[3] > oy
                     and prop_int(element, _UIA_OFFSCREEN) != 1):
                 label = (prop_text(element, _UIA_NAME) or "").strip()
                 label = " ".join(label.split())
@@ -1969,7 +1997,7 @@ def _look_walk(api: dict) -> dict:
             round(c["rect"][1] / 6), round(c["rect"][0] / 6)))
         controls = []
         for i, item in enumerate(found[:LOOK_MAX_CONTROLS]):
-            gx, gy = look_grid(item["rect"], sw, sh)
+            gx, gy = look_grid_virtual(item["rect"], vrect)
             controls.append({
                 "id": f"C{i + 1}", "kind": item["kind"],
                 "label": item["label"], "x": gx, "y": gy,
@@ -1983,9 +2011,9 @@ def _look_walk(api: dict) -> dict:
         else:
             mx, my = 0, 0
         return {"app": app, "controls": controls,
-                "mouse": {"x": min(max(int(mx / sw * 1000), 0), 1000),
-                          "y": min(max(int(my / sh * 1000), 0), 1000)},
-                "size": {"w": sw, "h": sh}}
+                "mouse": {"x": min(max(int((mx - ox) / vw * 1000), 0), 1000),
+                          "y": min(max(int((my - oy) / vh * 1000), 0), 1000)},
+                "size": {"w": vw, "h": vh}}
     finally:
         for iface in held:
             with contextlib.suppress(Exception):
@@ -2437,15 +2465,23 @@ def _computer_key_input(api: dict, *, vk: int = 0, scan: int = 0,
 
 
 def _computer_abs(value: int) -> int:
-    """0-1000 grid to SendInput absolute units (0-65535, primary screen
-    — the same screen look_at_screen's grid is measured on)."""
+    """0-1000 grid to SendInput absolute units (0-65535, virtual screen
+    — the same virtual grid look_at_screen reports and the overlay
+    glides on; F15)."""
     return value * 65535 // COMPUTER_GRID_MAX
+
+
+# SendInput mouse flags (named so the VIRTUALDESK bit is pinned, F15).
+_COMPUTER_MOUSE_MOVE = 0x0001
+_COMPUTER_MOUSE_ABSOLUTE = 0x8000
+_COMPUTER_MOUSE_VIRTUALDESK = 0x4000
 
 
 def _computer_move_to(api: dict, x: int, y: int) -> None:
     _computer_send(api, [_computer_mouse_input(
         api, dx=_computer_abs(x), dy=_computer_abs(y),
-        flags=0x0001 | 0x8000)])  # MOVE | ABSOLUTE
+        flags=(_COMPUTER_MOUSE_MOVE | _COMPUTER_MOUSE_ABSOLUTE
+               | _COMPUTER_MOUSE_VIRTUALDESK))])  # MOVE|ABSOLUTE|VIRTUALDESK
 
 
 def _computer_click_at(api: dict, x: int, y: int, button: str,

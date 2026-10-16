@@ -29,6 +29,26 @@ def test_look_grid_center_and_clamp():
     assert tool_executor.look_grid((0, 0, 10, 10), 0, 0) == (0, 0)
 
 
+def test_look_grid_virtual_matches_overlay_round_trip():
+    from invincible.agent import overlay
+
+    # Secondary monitor left of primary: origin offset applies, and
+    # the overlay inverts the mapping exactly.
+    vrect = (-1920, 0, 3840, 1080)
+    grid = tool_executor.look_grid_virtual((-960, 270, 100, 60), vrect)
+    assert grid == (263, 277)
+    px, py = overlay.grid_to_pixel(*grid, vrect)
+    back = overlay.pixel_to_grid(px, py, vrect)
+    assert back == grid
+    # Primary-only vrect matches the legacy helper.
+    single = (0, 0, 1920, 1080)
+    assert tool_executor.look_grid_virtual(
+        (100, 100, 200, 200), single) == tool_executor.look_grid(
+        (100, 100, 200, 200), 1920, 1080)
+    assert tool_executor.look_grid_virtual((0, 0, 10, 10), (0, 0, 0, 0)) == (
+        0, 0)
+
+
 async def test_look_unavailable_off_windows(monkeypatch):
     monkeypatch.setattr(os, "name", "posix")
     out = await tool_executor._look_at_screen()
