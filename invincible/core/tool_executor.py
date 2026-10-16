@@ -2848,7 +2848,10 @@ async def _computer_resolve(target: dict, *,
     break the job - exceptions are swallowed here.
     """
     if "control" not in target:
-        point = {"x": target.get("x"), "y": target.get("y")}
+        point = {"x": target.get("x", target.get("x1",
+                                                target.get("x2"))),
+                 "y": target.get("y", target.get("y1",
+                                                target.get("y2")))}
         if point["x"] is None:
             return {}, {}
         _notify_point(on_point, point)
@@ -2918,6 +2921,31 @@ def _resolve_delay(pre_action_delay, delay_for, point) -> float:
     if not 0 <= extra < 3600:
         return base
     return max(base, extra)
+
+
+def _resolve_drag_delay(pre_action_delay, delay_for, start_point,
+                        end_point) -> float:
+    """Dwell covering a drag's two legs (pure, never raises).
+
+    A drag glides head→from then from→to; the runner's estimator
+    advances its head tracking on every call and returns the running
+    total on the second call. So the start leg must be estimated first
+    (return discarded) and the end leg second (returned). Single-point
+    ``_resolve_delay`` would estimate head→end direct and under-cover
+    by up to ~0.6s. Any failure falls back to the base.
+    """
+    if delay_for is None:
+        try:
+            base = float(pre_action_delay or 0)
+        except (TypeError, ValueError):
+            base = 0.0
+        return base if 0 <= base < 3600 else 0.0
+    try:
+        with contextlib.suppress(Exception):
+            delay_for(start_point)
+    except Exception:
+        pass
+    return _resolve_delay(pre_action_delay, delay_for, end_point)
 
 
 async def _computer_act(name: str, args: dict, *,
@@ -3020,8 +3048,8 @@ async def _computer_act(name: str, args: dict, *,
                                                        on_point=on_point)
             end, echo_to = await _computer_resolve(norm["to"],
                                                    on_point=on_point)
-            await _computer_dwell(_resolve_delay(
-                pre_action_delay, delay_for, end))
+            await _computer_dwell(_resolve_drag_delay(
+                pre_action_delay, delay_for, start, end))
             _computer_drag(api, start["x"], start["y"],
                            end["x"], end["y"])
             return {"status": "ok", "action": "drag",

@@ -651,6 +651,69 @@ def test_overlay_delay_fn_drag_sums_legs(monkeypatch):
     assert total <= runner._OVERLAY_DRAG_DWELL_MAX_SECONDS
 
 
+def test_resolve_drag_delay_covers_both_legs():
+    te = tool_executor
+
+    seen: list = []
+
+    def fake_estimator(point):
+        seen.append((point["x"], point["y"]))
+        return 0.5 if len(seen) == 1 else 1.4
+
+    start = {"x": 100, "y": 100}
+    end = {"x": 900, "y": 800}
+    dwell = te._resolve_drag_delay(0.35, fake_estimator, start, end)
+    assert [tuple(p) for p in seen] == [(100, 100), (900, 800)]
+    assert dwell == 1.4
+    assert te._resolve_drag_delay(0.35, None, start, end) == 0.35
+    assert te._resolve_drag_delay(
+        0.35, _raising_estimator, start, end) == 0.35
+
+
+def test_overlay_note_settled_resets_head(monkeypatch):
+    from invincible.agent import runner
+
+    monkeypatch.setattr(runner, "_OVERLAY_HEAD_PX", (10.0, 20.0))
+    runner._overlay_note_settled()
+    assert runner._OVERLAY_HEAD_PX is None
+
+
+async def test_drag_act_estimates_both_legs(monkeypatch):
+    """Item-1d: the drag branch estimates head->from then from->to so
+    the single dwell covers the full two-leg glide."""
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te.os, "name", "nt")
+    monkeypatch.setattr(te, "_computer_input_api",
+                        lambda: {"sentinel": True})
+
+    async def fake_resolve(target, *, on_point=None):
+        point = {"x": target.get("x", target.get("x1",
+                                                 target.get("x2"))),
+                 "y": target.get("y", target.get("y1",
+                                                 target.get("y2")))}
+        if on_point is not None:
+            on_point(point)
+        return point, point
+
+    monkeypatch.setattr(te, "_computer_resolve", fake_resolve)
+    monkeypatch.setattr(te, "_computer_dwell",
+                        lambda seconds: asyncio.sleep(0))
+    monkeypatch.setattr(te, "_computer_drag",
+                        lambda api, x1, y1, x2, y2: None)
+    seen: list = []
+
+    def fake_delay_for(point):
+        seen.append((point["x"], point["y"]))
+        return 0.5
+
+    result = await te._computer_act(
+        "drag", {"x1": 100, "y1": 100, "x2": 900, "y2": 800},
+        pre_action_delay=0.35, delay_for=fake_delay_for)
+    assert result["status"] == "ok"
+    assert seen == [(100, 100), (900, 800)]
+
+
 async def test_click_ok_exposes_effect_inputs(monkeypatch):
     """Item-4: the runner's click effect reads x/y/button off the ok
     result — the effect contract pins them here (core untouched)."""

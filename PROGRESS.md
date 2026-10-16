@@ -5,6 +5,21 @@
 
 ## Current State
 
+- Item-1d done (`passing`): glide-cover follow-up — drag dwell now covers
+  both legs (`core/tool_executor.py`: new pure `_resolve_drag_delay`
+  estimates head→from then from→to, drag branch uses it so the single
+  dwell is the two-leg sum; bare-xy drag alias fix in `_computer_resolve`
+  accepting x1/y1/x2/y2 — the old code raised KeyError 'x' on real
+  `{"x1"..}` jobs, now returns ok with x/y echo). Parent head tracking
+  resets on settle/stop/handoff via `runner._overlay_note_settled()` so
+  the next estimate dock-seeds instead of drifting. `tip_alpha`
+  keeps its frozen signature with ignored to_target/settled documented.
+  No registry/goldens/loop/realm/db change; headless zero latency
+  unchanged. New pins: 3 in `tests/test_computer_use.py`
+  (drag-delay both-legs, head reset, drag-act estimates both legs).
+  `ruff` clean, 90 passed overlay/computer slice, 239 passed
+  overlay/computer/look/voice/webchat-agent/webchat/handoff slice,
+  full 2001 passed / 11 skipped / 1 deselected.
 - Item-4 done (`passing`): fly-click feedback (draw only) — Bluey
   `CursorOverlay` softLand/clickEffect/typedEffect/bubble ported into
   `invincible/agent/overlay.py` as pure hermetic helpers (`ring_frame`
@@ -380,7 +395,7 @@
 
 ## In Progress
 
-- None — Item-4 complete (`passing`).
+- None — Item-1d complete (`passing`).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

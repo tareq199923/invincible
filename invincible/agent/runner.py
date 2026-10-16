@@ -144,6 +144,18 @@ def _overlay_delay_fn(dragging: bool):
     return delay_for
 
 
+def _overlay_note_settled() -> None:
+    """Forget the tracked head position (best-effort, never raises).
+
+    The child glides home on ``settle``; the next dwell estimate must
+    dock-seed instead of starting from a stale tour/drag point, or it
+    under-covers. Called wherever the parent asks the head home.
+    """
+    global _OVERLAY_HEAD_PX
+    with contextlib.suppress(Exception):
+        _OVERLAY_HEAD_PX = None
+
+
 def ensure_overlay() -> overlay.Overlay | None:
     """Live overlay handle, or None when headless. Never raises.
 
@@ -174,6 +186,7 @@ def stop_overlay() -> None:
     if current is not None:
         with contextlib.suppress(Exception):
             current.stop()
+    _overlay_note_settled()
 
 
 def handle_handoff(handoff: dict | None) -> None:
@@ -192,6 +205,7 @@ def handle_handoff(handoff: dict | None) -> None:
         seen = ensure_overlay()
         if seen is not None and seen.alive:
             seen.settle()
+            _overlay_note_settled()
 
 
 def _silence(task: asyncio.Task) -> None:
@@ -495,6 +509,7 @@ async def execute_job(job: dict) -> dict:
                 if seen is not None:
                     with contextlib.suppress(Exception):
                         seen.settle()
+                    _overlay_note_settled()
             # Item-4: post-action feedback (child draw only, suppressed
             # like every overlay call). The result stands regardless —
             # a dead overlay swallows the effect, never the job.

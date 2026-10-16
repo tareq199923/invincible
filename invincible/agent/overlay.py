@@ -595,6 +595,10 @@ def tip_alpha(*, flight_active: bool = False, dragging: bool = False,
     press window (``0 <= press_age < 0.42``, same as ``press_scale``)
     is open. 0.0 docked/idle/home/settled. Tk has no per-item alpha
     so the caller shows/hides the polygon. Never raises.
+
+    ``to_target``/``settled`` are frozen (backward compat, ignored):
+    docked-ness is already encoded in ``flight_active``/``dragging``/
+    ``press_age``, so they stay accepted but unread.
     """
     try:
         if flight_active is True or dragging is True:

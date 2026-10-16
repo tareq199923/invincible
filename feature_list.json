@@ -236,5 +236,12 @@
     "state": "passing",
     "title": "Hold-to-ask + chirp (Bluey feel, text stays truth)",
     "verification": "ruff check . && pytest tests/test_voice.py tests/test_webchat.py tests/test_handoff.py"
+  },
+  {
+    "behavior": "drag dwell covers both legs (head->from + from->to) via two estimator calls, parent head tracking resets on settle so the next estimate dock-seeds instead of drifting; tip_alpha keeps its frozen signature with ignored to_target/settled documented; headless zero latency unchanged",
+    "id": "Item-1d",
+    "state": "passing",
+    "title": "Glide-cover dwell follow-up (drag 2-leg + head reset)",
+    "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py"
   }
 ]
