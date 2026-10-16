@@ -464,6 +464,9 @@
                   });
                   pending.classList.remove("pending");
                   started = true;
+                  if (turnShouldSpeak && voiceOrb && voiceOrb.chirp) {
+                    try { voiceOrb.chirp(); } catch (e) { /* silent */ }
+                  }
                 }
                 pending.textContent += payload.text;
                 pending.scrollIntoView({block: "nearest"});
@@ -536,6 +539,7 @@
                 }
                 if (payload.mode) metaParts.push(payload.mode);
                 if (payload.execution) metaParts.push(payload.execution);
+                if (payload.target) metaParts.push("⌖ " + payload.target);
                 if (metaParts.length) {
                   var meta = document.createElement("span");
                   meta.className = "meta";

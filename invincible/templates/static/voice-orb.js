@@ -294,6 +294,32 @@
       start();
     });
 
+    // Bluey-style chirp: short two-tone blip when a mic reply starts.
+    // Fail-silent, no fetch, no keys. Only called for orb-initiated
+    // (mic) turns; typed turns stay fully silent (B8).
+    function playChirp() {
+      try {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        var ctx = new AC();
+        var now = ctx.currentTime;
+        var gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(0.18, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+        gain.connect(ctx.destination);
+        [[660, 0], [880, 0.1]].forEach(function (note) {
+          var osc = ctx.createOscillator();
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(note[0], now + note[1]);
+          osc.connect(gain);
+          osc.start(now + note[1]);
+          osc.stop(now + note[1] + 0.12);
+        });
+        setTimeout(function () { try { ctx.close(); } catch (e) { /* ignore */ } }, 400);
+      } catch (e) { /* ignore: chirp never breaks chat */ }
+    }
+
     return {
       // Plays an already-persisted assistant reply. Server voice first;
       // free browser speech when the server has no speech surface.
@@ -328,6 +354,7 @@
         if (!browserSpeak(text)) toIdle("");
       },
       stop: toIdle,
+      chirp: playChirp,
     };
   }
 

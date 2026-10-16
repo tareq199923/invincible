@@ -68,6 +68,24 @@ def test_ease_waypoints_shape():
     assert overlay.ease_waypoints(1.0, 2.0, 3.0, 4.0, 0) == [(3.0, 4.0)]
 
 
+def test_bowed_waypoints_arc_and_land():
+    path = overlay.bowed_waypoints(0.0, 0.0, 200.0, 0.0, 9)
+    assert len(path) == 9
+    assert path[-1] == (200.0, 0.0)
+    # Sideways moves bow upward (negative y), never below the line.
+    assert any(y < 0 for _, y in path[:-1])
+    assert all(y <= 0.001 for _, y in path)
+    # Bounded bow: at most 8% / 48px.
+    assert min(y for _, y in path) >= -16.001
+    # Ease-out still holds: gaps shrink toward landing.
+    gaps = [math.dist(path[i], path[i + 1])
+            for i in range(len(path) - 1)]
+    for before, after in zip(gaps, gaps[1:], strict=False):
+        assert after <= before + 6.0
+    assert overlay.bowed_waypoints(1.0, 2.0, 1.0, 2.0, 3) == [
+        (1.0, 2.0)] * 3
+
+
 def test_eye_offset_toward_cursor_and_clamp():
     assert overlay.eye_offset(100, 100, 103, 104, 9) == (3, 4)
     assert overlay.eye_offset(100, 100, 100, 100, 9) == (0, 0)

@@ -649,7 +649,9 @@ def test_speak_only_on_mic_turns():
         assert "voiceNext" in html
         assert "turnShouldSpeak" in html
     assert "if (shouldSpeak) speak(finalText);" in chat
-    assert "if (turnShouldSpeak) speak(answer);" in phone
+    # Phone mic turns chirp then speak (typed stays silent).
+    assert "speak(answer)" in phone
+    assert "voiceOrb.chirp()" in phone
 
 
 def test_gemini_style_composer_bar():
@@ -669,6 +671,25 @@ def test_gemini_style_composer_bar():
     assert "radial-gradient" not in css
     assert "hue-rotate" not in css
     assert "currentColor" in css or "var(--muted)" in css
+
+
+def test_chirp_on_mic_replies_only():
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    orb_js = (repo / "invincible" / "templates" / "static" /
+              "voice-orb.js").read_text(encoding="utf-8")
+    chat = (repo / "invincible" / "templates" / "chat.html").read_text(
+        encoding="utf-8")
+    phone = (repo / "invincible" / "templates" / "phone.html").read_text(
+        encoding="utf-8")
+    # Fail-silent WebAudio blip, exposed on the controller.
+    assert "playChirp" in orb_js
+    assert "chirp: playChirp" in orb_js
+    assert "AudioContext" in orb_js
+    # Mic turns chirp at reply start; typed turns stay silent (B8).
+    assert "if (turnShouldSpeak && voiceOrb && voiceOrb.chirp)" in chat
+    assert "voiceOrb.chirp()" in phone
 
 
 async def test_transcribe_402_surfaces_billing_excerpt():

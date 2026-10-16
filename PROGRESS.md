@@ -5,7 +5,14 @@
 
 ## Current State
 
-- Bluey steal pack 4 done (`passing`, uncommitted): prompt split + asked flag —
+- Embodied slice done (`passing`, uncommitted): chirp + anchored target tag +
+  bowed flights — `voice-orb.js:playChirp()` two-tone blip on mic replies
+  only (fail-silent); `run_agent_turn` tracks `last_target` into `done.target`
+  and `chat.html` appends `⌖ <target>` to bubble meta (textContent-safe);
+  `overlay.bowed_waypoints()` arcs target glides (8%/48px up, exact landing),
+  settle stays straight, dwell/headless unchanged. Pins in `test_voice.py`,
+  `test_webchat_agent.py`, `test_overlay.py`.
+- Bluey steal pack 4 done (`passing`, committed as `836fd9e`, pushed): prompt split + asked flag —
   `PERSONALITY/SAFETY_GUIDE/TOOL_GUIDE/COMPUTER_GROUNDING` split in
   `core/webchat_agent.py` (manual uses shared grounding, byte-identical);
   `asked:true` mic flag persisted in message JSONB (no migration), stripped

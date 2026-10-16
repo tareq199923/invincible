@@ -838,3 +838,25 @@ def test_stage_mutating_edit_file_null_safety(tmp_path):
     record = store.take(staged["token"], requester_subject=1)
     assert record["args"]["old_string"] == ""
     assert record["args"]["new_string"] == ""
+
+
+def test_target_label_for_computer_tools():
+    from invincible.core.webchat_agent import target_label
+
+    assert target_label("click", {"control": "C12"}) == "Click C12 (left)"
+    assert target_label("open_app", {"name": "Safari"}) == "Open Safari"
+    assert target_label("read_file", {"path": "x"}) is None
+    assert target_label("click", None) is None
+
+
+def test_chat_bubble_shows_target_tag():
+    from pathlib import Path as _P
+
+    html = (
+        _P(__file__)
+        .resolve()
+        .parent.parent.joinpath("invincible", "templates", "chat.html")
+        .read_text(encoding="utf-8")
+    )
+    assert "payload.target" in html
+    assert "\u2316 " in html

@@ -174,7 +174,12 @@
           pending.appendChild(document.createTextNode(answer));
           history.push({role: "assistant", content: answer});
           if (status) status.textContent = "";
-          if (turnShouldSpeak) speak(answer);
+          if (turnShouldSpeak) {
+            if (voiceOrb && voiceOrb.chirp) {
+              try { voiceOrb.chirp(); } catch (e) { /* silent */ }
+            }
+            speak(answer);
+          }
         } else {
           var msg = (out.body && out.body.error && out.body.error.message) ||
             "request failed";

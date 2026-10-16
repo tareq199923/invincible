@@ -492,6 +492,21 @@ def summarize_call(name: str, args: dict) -> str:
     return f"{name} {json.dumps(args)[:200]}"
 
 
+def target_label(name: str, args: dict | None) -> str | None:
+    """Short ⌖ tag for the assistant bubble when a computer tool ran.
+
+    Reuses summarize_call arg handling (control/x/y/button) so no new
+    arg-name coupling; capped at 120 chars for the bubble meta line.
+    None when args are malformed or the tool is not computer-use.
+    """
+    if name not in COMPUTER_ONLY_MUTATING or not isinstance(args, dict):
+        return None
+    try:
+        return summarize_call(name, args)[:120] or None
+    except Exception:
+        return None
+
+
 def approval_detail(name: str, args: dict) -> str:
     """Fuller detail for the approval card (the user approving sees
     their own data; the client renders it as text)."""
@@ -647,6 +662,7 @@ async def run_agent_turn(
     ]
     turn = list(prepared.to_persist)
     tools_used = 0
+    last_target: str | None = None
     full_text = ""
     # True once this turn has been appended to history, by either the happy
     # path or _persist_partial. Guarantees at most one append per turn, so a
@@ -798,6 +814,7 @@ async def run_agent_turn(
                     "attempts": info["attempts"],
                     "mode": mode,
                     "tools_used": tools_used,
+                    "target": last_target,
                     "explorer_calls": explorer_calls,
                     "fanout_calls": fanout_calls,
                     "execution": "agent" if agent_routed else "local",
@@ -918,6 +935,9 @@ async def run_agent_turn(
                 call_id = item["call_id"]
                 result_doc, ok = outcome["result"], outcome["ok"]
                 tools_used += 1
+                label = target_label(fname, item["args"])
+                if label is not None:
+                    last_target = label
                 if fname in harness_tools.explore_names():
                     explore_reads += 1
                 else:

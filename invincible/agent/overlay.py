@@ -129,6 +129,43 @@ def ease_waypoints(ax, ay, bx, by, steps: int) -> list:
     return points
 
 
+def bowed_waypoints(ax, ay, bx, by, steps: int) -> list:
+    """Bowed ease-out waypoints (pure, hermetic, Bluey-style curve).
+
+    Same timing as ease_waypoints but the path arcs through a control
+    point offset perpendicular to travel (at most 8% of distance,
+    capped at 48px, bowed upward for sideways moves). Ends EXACTLY on
+    b. Settle-to-dock keeps the straight ease; only target glides bow.
+    """
+    try:
+        count = max(1, int(steps))
+    except (TypeError, ValueError):
+        count = 1
+    try:
+        fx, fy, tx, ty = float(ax), float(ay), float(bx), float(by)
+    except (TypeError, ValueError):
+        return [(float(bx), float(by))]
+    dx, dy = tx - fx, ty - fy
+    dist = math.hypot(dx, dy)
+    if dist == 0 or not math.isfinite(dist):
+        return [(tx, ty)] * count if count > 1 else [(tx, ty)]
+    nx, ny = -dy / dist, dx / dist
+    if ny > 0:
+        nx, ny = -nx, -ny
+    bow = min(dist * 0.08, 48.0)
+    cx, cy = (fx + tx) / 2 + nx * bow, (fy + ty) / 2 + ny * bow
+    points = []
+    for i in range(1, count + 1):
+        t = i / count
+        eased = 1.0 - (1.0 - t) ** 3
+        u = 1.0 - eased
+        x = u * u * fx + 2 * u * eased * cx + eased * eased * tx
+        y = u * u * fy + 2 * u * eased * cy + eased * eased * ty
+        points.append((x, y))
+    points[-1] = (tx, ty)
+    return points
+
+
 def eye_offset(hx, hy, cx, cy, r_max: float) -> tuple[int, int]:
     """Pupil offset from head center toward the cursor (pure, hermetic).
 
@@ -433,7 +470,7 @@ def _run_window(tk) -> None:
                     with contextlib.suppress(Exception):
                         px, py = grid_to_pixel(
                             message.get("x"), message.get("y"), vrect)
-                        state["path"] = ease_waypoints(
+                        state["path"] = bowed_waypoints(
                             head_xy[0], head_xy[1],
                             float(px), float(py), steps)
                         state["idle_since"] = time.monotonic()
