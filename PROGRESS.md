@@ -5,6 +5,17 @@
 
 ## Current State
 
+- Chat markdown done (`passing`, committed as `7afe3a7`): assistant bubbles now render
+  markdown via new `core/markdown.py:render_chat_markdown()` (markdown-it
+  CommonMark + tables, raw HTML disabled so `<script>`/`<img onerror>`
+  escape as text). `endpoints/chat.py:_renderable_turns` pre-renders
+  history `html`, `chat_stream:done` sends markdown `bubble_html`
+  (streaming stays plain textContent, swaps on done); `templates/chat.html`
+  renders `t.html | safe` in `.md`, user bubbles stay plain; `app.css`
+  adds scoped `.md` styles (headings/lists/code/pre/table/quote).
+  New `tests/test_chat_markdown.py` (6 hermetic); updated
+  `test_stream_happy_path_and_history` bubble expectation. `ruff` clean,
+  34 webchat+markdown passed.
 - Embodied slice done (`passing`, uncommitted): chirp + anchored target tag +
   bowed flights — `voice-orb.js:playChirp()` two-tone blip on mic replies
   only (fail-silent); `run_agent_turn` tracks `last_target` into `done.target`

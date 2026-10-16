@@ -514,10 +514,30 @@ main.bare .panel { background: var(--surface); border: 1px solid var(--border); 
 #chat-log { display: flex; flex-direction: column; gap: 1.1rem; margin: 0.5rem 0 1.25rem; }
 .bubble { font-size: 0.96rem; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
 .bubble-user { align-self: auto; background: var(--user-bubble); border-radius: 14px; padding: 0.6rem 0.9rem; }
-.bubble-assistant { align-self: auto; }
+.bubble-assistant { align-self: auto; white-space: normal; }
 .bubble .meta { display: block; margin-top: 0.4rem; font-size: 0.72rem; color: var(--faint); }
 .bubble.error { color: var(--err); }
-.bubble.pending { color: var(--faint); }
+.bubble.pending { color: var(--faint); white-space: pre-wrap; }
+/* Assistant markdown (server-rendered, raw HTML disabled): plain streaming
+   text swaps to this on done. Scoped to .md so user bubbles keep pre-wrap. */
+.bubble .md > :first-child { margin-top: 0; }
+.bubble .md > :last-child { margin-bottom: 0; }
+.bubble .md p { margin: 0 0 0.6rem; }
+.bubble .md h1, .bubble .md h2, .bubble .md h3 { margin: 0.9rem 0 0.45rem; line-height: 1.35; }
+.bubble .md h1 { font-size: 1.2rem; }
+.bubble .md h2 { font-size: 1.1rem; }
+.bubble .md h3 { font-size: 1rem; }
+.bubble .md ul, .bubble .md ol { margin: 0 0 0.6rem 1.25rem; padding: 0; }
+.bubble .md li { margin: 0.2rem 0; }
+.bubble .md li::marker { color: var(--accent); }
+.bubble .md code { font-family: var(--mono); font-size: 0.85em; background: var(--code-bg); border-radius: 6px; padding: 0.1rem 0.35rem; }
+.bubble .md pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.6rem 0.75rem; overflow-x: auto; margin: 0 0 0.6rem; }
+.bubble .md pre code { background: transparent; padding: 0; border-radius: 0; font-size: 0.82rem; }
+.bubble .md blockquote { margin: 0 0 0.6rem; padding: 0.1rem 0 0.1rem 0.75rem; border-left: 3px solid var(--accent); color: var(--muted); }
+.bubble .md table { border-collapse: collapse; margin: 0 0 0.6rem; font-size: 0.87rem; display: block; overflow-x: auto; }
+.bubble .md th, .bubble .md td { border: 1px solid var(--border); padding: 0.35rem 0.6rem; text-align: left; }
+.bubble .md th { background: var(--raise); }
+.bubble .md a { color: var(--accent-ink); }
 /* B0.2 Bmax marker: original soft-white dot + name (no image assets,
    no Disney likeness). Dot eyes use theme ink; ring uses theme accent. */
 .baymax-dot {

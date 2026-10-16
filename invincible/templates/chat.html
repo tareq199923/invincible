@@ -28,8 +28,8 @@
 
 <div id="chat-log">
 {% for t in history %}
-  <div class="bubble bubble-{{ t.role }}{% if t.role == "assistant" %} bubble-baymax{% endif %}">{% if t.role == "assistant" %}<span class="baymax-dot" aria-hidden="true"></span><span class="baymax-name">Bmax</span>{% endif %}{{ t.text }}<!--
-   -->{% if t.role == "assistant" %}<span class="meta"></span>{% endif %}</div>
+  <div class="bubble bubble-{{ t.role }}{% if t.role == "assistant" %} bubble-baymax{% endif %}">{% if t.role == "assistant" %}<span class="baymax-dot" aria-hidden="true"></span><span class="baymax-name">Bmax</span><div class="md">{{ t.html | safe }}</div><!--
+   --><span class="meta"></span>{% else %}{{ t.text }}{% endif %}</div>
 {% else %}
   <p class="muted empty" id="chat-empty">No messages yet. Say hello below.</p>
 {% endfor %}

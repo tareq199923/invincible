@@ -23,7 +23,6 @@ pipeline itself is shared with the API path via ``core/chat_service.py``
 persisted, tool-pairing repair, BYOK-only routing through the single
 ``router._iter_attempts`` loop, persistence + runs rows).
 """
-import html
 import logging
 import uuid
 
@@ -37,6 +36,7 @@ from invincible.core.chat_service import (
     prepare_chat,
     web_sse_event,
 )
+from invincible.core.markdown import render_chat_markdown
 from invincible.core.principal import Principal
 from invincible.core.settings import settings
 from invincible.core.webchat_agent import (
@@ -109,9 +109,14 @@ def _bound_title(text: str) -> str:
 
 
 def _renderable_turns(history: list) -> list[dict]:
-    """History subset the text-only template renders: user/assistant turns
-    with non-empty string content (system injections are never persisted;
-    tool payloads from API-created turns are skipped in v1)."""
+    """History subset the template renders: user/assistant turns with
+    non-empty string content (system injections are never persisted;
+    tool payloads from API-created turns are skipped in v1).
+
+    Assistant turns carry pre-rendered ``html`` (see
+    ``core/markdown.render_chat_markdown``) so history and the
+    just-streamed ``done`` bubble share one renderer; user turns stay
+    plain ``text`` (never markdown-rendered)."""
     turns = []
     for message in history:
         if not isinstance(message, dict):
@@ -121,7 +126,10 @@ def _renderable_turns(history: list) -> list[dict]:
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
             continue
-        turns.append({"role": message["role"], "text": content})
+        turn = {"role": message["role"], "text": content}
+        if message["role"] == "assistant":
+            turn["html"] = render_chat_markdown(content)
+        turns.append(turn)
     return turns
 
 
@@ -467,11 +475,11 @@ async def chat_stream(
                 if ev_name == "approval":
                     waited.append(ev_data["token"])
                 if ev_name == "done":
-                    # Server-rendered final bubble: escaped once here so
-                    # the client inserts it without an XSS surface.
+                    # Server-rendered final bubble: markdown HTML with raw
+                    # HTML disabled, so the client inserts it without an
+                    # XSS surface (same posture as the old escaped+<br>).
                     answer = ev_data.pop("text", "")
-                    ev_data["bubble_html"] = html.escape(
-                        answer).replace("\n", "<br>")
+                    ev_data["bubble_html"] = render_chat_markdown(answer)
                 yield web_sse_event(ev_name, ev_data)
         finally:
             for token in waited:

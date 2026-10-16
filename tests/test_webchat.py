@@ -158,7 +158,7 @@ async def test_stream_happy_path_and_history(
     assert len(done) == 1
     assert done[0]["provider"] == "Web1"
     assert done[0]["model"] == "w1-model"
-    assert done[0]["bubble_html"] == "hello"
+    assert done[0]["bubble_html"] == "<p>hello</p>\n"
     assert not [data for name, data in events if name == "error"]
     # Persisted history is the API-path shape: the user turn plus the
     # assembled assistant turn, no system injections stored.
