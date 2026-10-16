@@ -5,7 +5,14 @@
 
 ## Current State
 
-- F13 done (`passing`, uncommitted): computer-use honesty — `result_ok`
+- F14 done (`passing`, uncommitted): loop-cost guard — `IDENTICAL_LOOK_LIMIT=3`
+  consecutive identical `look_at_screen` results end the tool loop via the
+  repeat-guard close-out (`core/webchat_agent.py`: `_look_result_key` +
+  non-resetting counter, unchanged-screen close-out note). Interleaved
+  actions don’t reset it; differing looks don’t trip it. New pins in
+  `tests/test_webchat_agent.py` (key unit + trip/no-trip integration).
+  `ruff` clean, 60 passed in webchat/look/computer slice.
+- F13 done (`passing`, committed as `bd2ed83`): computer-use honesty — `result_ok`
   counts `unavailable` as not-ok (`core/tool_dispatch.py`), stale C ids
   return error results via `ValueError` catch (`core/tool_executor.py:
   _computer_act`), every `ok` carries `verified: False` (dispatched, not

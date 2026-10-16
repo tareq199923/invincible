@@ -113,6 +113,13 @@ MAX_TOOL_ITERATIONS = 25
 # no-tools answer). Counted on dispatched calls — including error
 # results — so blocked/denied/malformed retry loops trip it too.
 REPEAT_LIMIT = 3
+# F14 no-change screen guard: this many consecutive identical
+# look_at_screen results ends the tool loop via the same close-out.
+# Counted on successful looks only ("status": "look"); intervening
+# non-look calls do NOT reset it — a computer action that reports ok
+# but leaves the screen byte-identical is exactly the spiral this
+# cuts (the song-turn pattern: look, click/type ok, same look, retry).
+IDENTICAL_LOOK_LIMIT = 3
 # Step 8 explore trigger: this many consecutive dispatched machine-read
 # calls hands the search to the explore sub-agent (once per turn, then
 # the main loop continues with its summary). Below every lean task's
@@ -599,6 +606,19 @@ def _preview_look(result: dict) -> str:
     return text
 
 
+def _look_result_key(result: dict) -> str | None:
+    """Canonical key for the F14 no-change guard: canonical JSON of a
+    successful look_at_screen result. None for anything else (errors,
+    unavailable, malformed) — those never count toward the spiral."""
+    if not isinstance(result, dict) or result.get("status") != "look":
+        return None
+    try:
+        return json.dumps(result, sort_keys=True, ensure_ascii=False,
+                          default=str)
+    except (TypeError, ValueError):
+        return None
+
+
 def _error_text(body: object) -> str:
     return upstream_error_detail(body) or "gateway error"
 
@@ -738,6 +758,12 @@ async def run_agent_turn(
     repeat_count = 0
     repeat_tripped = False
     repeat_name = ""
+    # F14 no-change screen state: trailing successful look key and its
+    # run length. Non-look dispatches do NOT reset it (the spiral is
+    # look, ok-action, same-look); a differing look or non-look result
+    # does. Turn-local like the repeat guard.
+    last_look_key: str | None = None
+    identical_look_count = 0
     # Step 8 explore state + F04 fan-out state: consecutive dispatched
     # machine-read calls (explore depth) and cross-plane dispatched
     # reads (fan-out breadth, reset on any non-read dispatch). One
@@ -762,6 +788,10 @@ async def run_agent_turn(
                 if capped:
                     note = ("Tool budget exhausted - answer the user now "
                             "with what you have, no more tool calls.")
+                elif repeat_name == "look_at_screen (unchanged screen)":
+                    note = ("The screen is unchanged across looks - answer "
+                            "the user now with what you have, no more "
+                            "tool calls.")
                 else:
                     note = (f"Same tool call repeated ({repeat_name}) - "
                             "answer the user now with what you have, "
@@ -957,6 +987,19 @@ async def run_agent_turn(
                 if repeat_count >= REPEAT_LIMIT:
                     repeat_tripped = True
                     repeat_name = fname
+                if fname == "look_at_screen":
+                    look_key = _look_result_key(result_doc)
+                    if look_key is None:
+                        last_look_key, identical_look_count = None, 0
+                    elif look_key == last_look_key:
+                        identical_look_count += 1
+                    else:
+                        last_look_key = look_key
+                        identical_look_count = 1
+                    if identical_look_count >= IDENTICAL_LOOK_LIMIT:
+                        repeat_tripped = True
+                        repeat_name = (
+                            "look_at_screen (unchanged screen)")
                 tool_message = {
                     "role": "tool",
                     "tool_call_id": call_id,

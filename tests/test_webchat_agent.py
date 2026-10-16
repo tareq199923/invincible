@@ -676,6 +676,111 @@ def test_call_key_canonicalizes_args():
     assert _call_key("read_file", {"path": object()})
 
 
+def test_look_result_key_ignores_non_looks():
+    from invincible.core.webchat_agent import _look_result_key
+
+    good = {"status": "look", "app": "Brave", "controls": [],
+            "mouse": {"x": 1, "y": 1}}
+    assert _look_result_key(good) == _look_result_key(dict(good))
+    assert _look_result_key({"status": "error", "error": "x"}) is None
+    assert _look_result_key({"status": "unavailable"}) is None
+    assert _look_result_key("not-a-dict") is None
+
+
+async def test_identical_looks_withhold_tools_after_third(
+    client, byok_env, router_setter, monkeypatch
+):
+    # Interleaved with reads so the Step-7 repeat guard (consecutive
+    # identical CALLS) never trips — only the F14 identical-RESULT
+    # guard should fire on the third identical look.
+    seq = [
+        tool_body("w1", [fn_call("c1", "look_at_screen", {})]),
+        tool_body("w1", [fn_call("c2", "read_file",
+                                {"path": "a.txt"})]),
+        tool_body("w1", [fn_call("c3", "look_at_screen", {})]),
+        tool_body("w1", [fn_call("c4", "read_file",
+                                {"path": "a.txt"})]),
+        tool_body("w1", [fn_call("c5", "look_at_screen", {})]),
+        provider_body("w1", content="screen is stuck, answering"),
+    ]
+    bodies, handler = scripted(seq)
+    router_setter({"w1.example.com": handler})
+
+    async def fake_look(executor):
+        return {"status": "look", "app": "Brave",
+                "controls": [{"id": "C1", "kind": "button",
+                              "label": "Play", "x": 500, "y": 500}],
+                "mouse": {"x": 1, "y": 1},
+                "size": {"w": 100, "h": 100}}
+
+    async def fake_read(path, *args):
+        return {"status": "read", "path": path, "content": "same"}
+
+    import invincible.core.tool_executor as te
+    import invincible.core.webchat_agent as webchat_agent
+
+    monkeypatch.setattr(webchat_agent, "_run_look_at_screen", fake_look)
+    monkeypatch.setattr(te, "read_file", fake_read)
+    await agent_user(client, "identical-look@example.com")
+    resp = await client.post("/dashboard/chat/stream", json={
+        "session_id": "web-identical-look", "message": "play it",
+        "mode": "plan"})
+    assert resp.status_code == 200, resp.text
+    events = parse_web_events(resp.text)
+    assert len([d for n, d in events if n == "tool_call"]) == 5
+    assert [n for n, _ in events].count("done") == 1
+    assert any(b.get("tools") is None for b in bodies)
+
+
+async def test_differing_looks_do_not_trip_guard(
+    client, byok_env, router_setter, monkeypatch
+):
+    seq = [
+        tool_body("w1", [fn_call("c1", "look_at_screen", {})]),
+        tool_body("w1", [fn_call("c2", "read_file",
+                                {"path": "a.txt"})]),
+        tool_body("w1", [fn_call("c3", "look_at_screen", {})]),
+        tool_body("w1", [fn_call("c4", "read_file",
+                                {"path": "b.txt"})]),
+        tool_body("w1", [fn_call("c5", "look_at_screen", {})]),
+        provider_body("w1", content="screen is changing, continue"),
+    ]
+    bodies, handler = scripted(seq)
+    router_setter({"w1.example.com": handler})
+    states = [
+        {"status": "look", "app": "Brave-A",
+         "controls": [], "mouse": {"x": 1, "y": 1}},
+        {"status": "look", "app": "Brave-B",
+         "controls": [], "mouse": {"x": 2, "y": 2}},
+        {"status": "look", "app": "Brave-C",
+         "controls": [], "mouse": {"x": 3, "y": 3}},
+    ]
+    state = {"i": 0}
+
+    async def fake_look(executor):
+        resp = states[min(state["i"], len(states) - 1)]
+        state["i"] += 1
+        return resp
+
+    async def fake_read(path, *args):
+        return {"status": "read", "path": path, "content": path}
+
+    import invincible.core.tool_executor as te
+    import invincible.core.webchat_agent as webchat_agent
+
+    monkeypatch.setattr(webchat_agent, "_run_look_at_screen", fake_look)
+    monkeypatch.setattr(te, "read_file", fake_read)
+    await agent_user(client, "differing-look@example.com")
+    resp = await client.post("/dashboard/chat/stream", json={
+        "session_id": "web-differing-look", "message": "watch it",
+        "mode": "plan"})
+    assert resp.status_code == 200, resp.text
+    events = parse_web_events(resp.text)
+    assert len([d for n, d in events if n == "tool_call"]) == 5
+    assert [n for n, _ in events].count("done") == 1
+    assert all(b.get("tools") for b in bodies)
+
+
 # --- environment_note: OS/shell guidance after the static prompt -----------
 
 
