@@ -5,7 +5,13 @@
 
 ## Current State
 
-- F15 done (`passing`, uncommitted): coordinate parity — SendInput moves
+- F16 done (`passing`, uncommitted): overlay Bluey states — press squish
+  on target arrival, hover grow while gliding, fading trail, `⌖ x,y`
+  bubble (`agent/overlay.py`: `head_radii`/`trail_push`/`bubble_text_for`
+  pure + `_run_window` wiring; runner/registry untouched, headless
+  latency unchanged). New pins in `tests/test_overlay.py` (3 tests).
+  `ruff` clean, 46 passed in overlay/computer slice.
+- F15 done (`passing`, committed as `16513f5`): coordinate parity — SendInput moves
   carry VIRTUALDESK (`core/tool_executor.py`), `look_at_screen` maps UIA
   rects + mouse against virtual origin/size via `look_grid_virtual`
   (inverse of `overlay.grid_to_pixel`), overlay already virtual. New pins:

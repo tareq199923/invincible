@@ -55,6 +55,16 @@ OVERLAY_DOCK_MARGIN = 24
 OVERLAY_DOCK_CORNER = "br"
 OVERLAY_TRANSPARENT_KEY = "magenta"
 
+# F16 Bluey states (child-side drawing only — no job-logic touch,
+# no added headless latency): press squish on target arrival, hover
+# grow while gliding, fading trail, coordinate bubble near the head.
+OVERLAY_SQUISH_SECONDS = 0.18
+OVERLAY_SQUISH_RX = 1.08
+OVERLAY_SQUISH_RY = 0.82
+OVERLAY_HOVER_SCALE = 1.08
+OVERLAY_TRAIL_POINTS = 8
+OVERLAY_BUBBLE_SECONDS = 1.5
+
 # Win32 GetSystemMetrics indices (verified live on Windows - never
 # trusted from memory, per the F09 vtable lesson).
 _SM_XVIRTUALSCREEN = 76
@@ -207,6 +217,72 @@ def dock_corner(vrect: tuple, head_px: int,
     }
     picked = spots.get(str(corner).lower(), spots["br"])
     return (int(picked[0]), int(picked[1]))
+
+
+def head_radii(radius: float, *, hovering: bool = False,
+               squished: bool = False) -> tuple[float, float]:
+    """Head (rx, ry) for the F16 Bluey states (pure, hermetic).
+
+    Squish wins over hover: on target arrival the head presses
+    (wider + flatter for ``OVERLAY_SQUISH_SECONDS``); while gliding
+    to a target it hovers slightly grown; idle draws the base circle.
+    """
+    try:
+        base = float(radius)
+    except (TypeError, ValueError):
+        return (0.0, 0.0)
+    if base <= 0:
+        return (0.0, 0.0)
+    if squished:
+        return (base * OVERLAY_SQUISH_RX, base * OVERLAY_SQUISH_RY)
+    if hovering:
+        grown = base * OVERLAY_HOVER_SCALE
+        return (grown, grown)
+    return (base, base)
+
+
+def trail_push(trail: list, x: float, y: float,
+               cap: int = OVERLAY_TRAIL_POINTS) -> list:
+    """Append one head position, oldest-first, capped (pure, hermetic).
+
+    Never raises on malformed input; non-finite points are ignored so
+    a bad poll never poisons the trail.
+    """
+    try:
+        items = list(trail or [])
+    except TypeError:
+        items = []
+    try:
+        fx, fy = float(x), float(y)
+    except (TypeError, ValueError):
+        return items[-max(1, cap - 1):] if cap else items
+    if not math.isfinite(fx) or not math.isfinite(fy):
+        return items
+    try:
+        limit = max(1, int(cap))
+    except (TypeError, ValueError):
+        limit = OVERLAY_TRAIL_POINTS
+    items.append((fx, fy))
+    return items[-limit:]
+
+
+def bubble_text_for(x, y) -> str | None:
+    """Coordinate bubble label for a target point (pure, hermetic).
+
+    None for malformed points (the job already validated its args —
+    the overlay never second-guesses execution, same contract as
+    ``Overlay.announce``).
+    """
+    if isinstance(x, bool) or isinstance(y, bool):
+        return None
+    if not isinstance(x, (int, float)) or not isinstance(
+            y, (int, float)):
+        return None
+    if not math.isfinite(x) or not math.isfinite(y):
+        return None
+    if not 0 <= x <= OVERLAY_GRID_MAX or not 0 <= y <= OVERLAY_GRID_MAX:
+        return None
+    return f"\u2316 {int(x)},{int(y)}"
 
 
 def virtual_screen() -> tuple[int, int, int, int]:
@@ -428,6 +504,18 @@ def _run_window(tk) -> None:
                                outline=OVERLAY_EYE_FILL)
     eye_r = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_EYE_FILL,
                                outline=OVERLAY_EYE_FILL)
+    trail_ids = [
+        canvas.create_oval(-10, -10, -10, -10,
+                           fill=OVERLAY_HEAD_OUTLINE,
+                           outline=OVERLAY_HEAD_OUTLINE)
+        for _ in range(OVERLAY_TRAIL_POINTS)
+    ]
+    bubble_box = canvas.create_rectangle(-10, -10, -10, -10,
+                                         fill=OVERLAY_HEAD_FILL,
+                                         outline=OVERLAY_HEAD_OUTLINE)
+    bubble_label = canvas.create_text(-10, -10, text="",
+                                      fill=OVERLAY_EYE_FILL,
+                                      font=("Segoe UI", 9))
     inbox: queue.Queue = queue.Queue(maxsize=16)
     reader = threading.Thread(target=_stdin_reader, args=(inbox,),
                               daemon=True)
@@ -438,19 +526,46 @@ def _run_window(tk) -> None:
         cursor = (ox + width // 2, oy + height // 2)
     steps = max(2, int(round(
         OVERLAY_GLIDE_SECONDS / OVERLAY_POLL_SECONDS)))
-    state = {"path": [], "idle_since": time.monotonic()}
+    now0 = time.monotonic()
+    state = {"path": [], "idle_since": now0, "to_target": False,
+             "trail": [], "squash_until": 0.0,
+             "bubble_until": 0.0, "bubble_text": ""}
 
     def _draw() -> None:
         hx, hy = head_xy
+        now = time.monotonic()
+        squished = now < state["squash_until"]
+        hovering = bool(state["path"]) and bool(state["to_target"])
+        rx, ry = head_radii(radius, hovering=hovering,
+                            squished=squished)
+        trail = state["trail"]
+        for i, dot in enumerate(trail_ids):
+            if i < len(trail):
+                tx, ty = trail[i]
+                size = 2.0 + 4.0 * (i + 1) / max(len(trail), 1)
+                canvas.coords(dot, tx - size, ty - size,
+                              tx + size, ty + size)
+            else:
+                canvas.coords(dot, -10, -10, -10, -10)
         ex, ey = eye_offset(hx, hy, cursor[0], cursor[1],
                             OVERLAY_EYE_TRACK_R)
-        canvas.coords(head, hx - radius, hy - radius,
-                      hx + radius, hy + radius)
+        canvas.coords(head, hx - rx, hy - ry, hx + rx, hy + ry)
         for item, side in ((eye_l, -1), (eye_r, 1)):
             ecx = hx + side * OVERLAY_EYE_DX + ex
             ecy = hy + OVERLAY_EYE_DY + ey
             canvas.coords(item, ecx - OVERLAY_EYE_R, ecy - OVERLAY_EYE_R,
                           ecx + OVERLAY_EYE_R, ecy + OVERLAY_EYE_R)
+        if now < state["bubble_until"] and state["bubble_text"]:
+            label = state["bubble_text"]
+            top = hy - ry - 34
+            half = min(120.0, 8.0 + len(label) * 3.6)
+            canvas.coords(bubble_box, hx - half, top - 11,
+                          hx + half, top + 11)
+            canvas.coords(bubble_label, hx, top)
+            canvas.itemconfigure(bubble_label, text=label)
+        else:
+            canvas.coords(bubble_box, -10, -10, -10, -10)
+            canvas.coords(bubble_label, -10, -10)
 
     def _tick() -> None:
         nonlocal cursor
@@ -463,6 +578,7 @@ def _run_window(tk) -> None:
                     return
                 if kind == "settle":
                     target = (dock[0] + radius, dock[1] + radius)
+                    state["to_target"] = False
                     state["path"] = ease_waypoints(
                         head_xy[0], head_xy[1],
                         float(target[0]), float(target[1]), steps)
@@ -473,7 +589,16 @@ def _run_window(tk) -> None:
                         state["path"] = bowed_waypoints(
                             head_xy[0], head_xy[1],
                             float(px), float(py), steps)
+                        state["to_target"] = True
                         state["idle_since"] = time.monotonic()
+                        label = bubble_text_for(
+                            message.get("x"), message.get("y"))
+                        if label:
+                            state["bubble_text"] = label
+                            state["bubble_until"] = (
+                                time.monotonic()
+                                + OVERLAY_GLIDE_SECONDS
+                                + OVERLAY_BUBBLE_SECONDS)
         except queue.Empty:
             pass
         with contextlib.suppress(OSError):
@@ -481,13 +606,20 @@ def _run_window(tk) -> None:
         if state["path"]:
             head_xy[0], head_xy[1] = state["path"].pop(0)
             if not state["path"]:
-                state["idle_since"] = time.monotonic()
+                now = time.monotonic()
+                state["idle_since"] = now
+                if state["to_target"]:
+                    state["to_target"] = False
+                    state["squash_until"] = now + OVERLAY_SQUISH_SECONDS
         elif time.monotonic() - state["idle_since"] \
                 >= OVERLAY_IDLE_SETTLE_SECONDS:
             home = (float(dock[0] + radius), float(dock[1] + radius))
             if (head_xy[0], head_xy[1]) != home:
+                state["to_target"] = False
                 state["path"] = ease_waypoints(
                     head_xy[0], head_xy[1], home[0], home[1], steps)
+        state["trail"] = trail_push(
+            state["trail"], head_xy[0], head_xy[1])
         _draw()
         root.after(int(OVERLAY_POLL_SECONDS * 1000), _tick)
 

@@ -51,6 +51,35 @@ def test_pixel_grid_round_trip():
             assert overlay.pixel_to_grid(*pixels, vrect) == point
 
 
+def test_head_radii_idle_hover_squish():
+    assert overlay.head_radii(36) == (36.0, 36.0)
+    grown = overlay.head_radii(36, hovering=True)
+    assert grown[0] > 36.0 and grown[0] == grown[1]
+    squished = overlay.head_radii(36, hovering=True, squished=True)
+    assert squished[0] > 36.0 > squished[1]
+    assert overlay.head_radii(0) == (0.0, 0.0)
+    assert overlay.head_radii("bad") == (0.0, 0.0)
+
+
+def test_trail_push_caps_and_ignores_bad_points():
+    trail = []
+    for i in range(20):
+        trail = overlay.trail_push(trail, float(i), 0.0)
+    assert len(trail) == overlay.OVERLAY_TRAIL_POINTS
+    assert trail[-1] == (19.0, 0.0)
+    same = overlay.trail_push(trail, float("nan"), 0.0)
+    assert same == trail
+    assert overlay.trail_push("bad", 1.0, 2.0)[-1] == (1.0, 2.0)
+
+
+def test_bubble_text_for_coords_and_malformed():
+    assert overlay.bubble_text_for(500, 200) == "\u2316 500,200"
+    assert overlay.bubble_text_for(0, 0) == "\u2316 0,0"
+    for bad in ((True, 1), (1, False), ("x", 1), (1, None),
+                (float("nan"), 1), (-1, 1), (1, 2000)):
+        assert overlay.bubble_text_for(*bad) is None
+
+
 def test_ease_waypoints_shape():
     path = overlay.ease_waypoints(0.0, 0.0, 90.0, 30.0, 9)
     assert len(path) == 9
