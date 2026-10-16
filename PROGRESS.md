@@ -5,7 +5,11 @@
 
 ## Current State
 
-- F16 done (`passing`, uncommitted): overlay Bluey states — press squish
+- Hygiene (`passing`, uncommitted): full suite 1944 passed, 11 skipped,
+  1 deselected (`pytest -q`, ~7.5 min, PG reachable); `ruff check .`
+  clean; only `?? .vscode/` untracked (pre-existing, not ours).
+  Zero `active` items (F05 vector seam stays `planned`).
+- F16 done (`passing`, committed as `53c884d`): overlay Bluey states — press squish
   on target arrival, hover grow while gliding, fading trail, `⌖ x,y`
   bubble (`agent/overlay.py`: `head_radii`/`trail_push`/`bubble_text_for`
   pure + `_run_window` wiring; runner/registry untouched, headless
@@ -167,7 +171,7 @@
   MCP_PROTOCOL §7 tools, SECURITY §12, ROADMAP count 34. Vetted
   plan survived contact: one real find during vetting (the batch
   trap), confirmed in code before building.
-- Last commit: `61473d6` (main, pushed) — F12 multimodal image parts.
+- Last commit: `53c884d` (main) — F16 overlay Bluey states.
 - F12 done (`passing`, uncommitted): multimodal image parts — the model
   truly sees screenshots (new pure `invincible/core/vision.py`:
   extract/attach around trim, PNG-IHDR token estimates, 4-image +
