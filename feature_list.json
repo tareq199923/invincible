@@ -166,5 +166,12 @@
     "state": "passing",
     "title": "Overlay Bluey states (squish/hover/trail/bubble)",
     "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py"
+  },
+  {
+    "behavior": "webchat guidance trims 21-call song turns: environment_note teaches default-browser open_url, dispatched-not-verified computer results with fresh-look verification, volume/filesystem probes only on ask, and skipping todo/memory overhead on 1-2 tool tasks (prompts/goldens otherwise untouched)",
+    "id": "F17",
+    "state": "passing",
+    "title": "Loop-cost guidance (lean-turn discipline)",
+    "verification": "ruff check . && pytest tests/test_webchat_agent.py tests/test_harness_tools_golden.py tests/test_harness_tools_registry.py"
   }
 ]

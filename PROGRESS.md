@@ -5,7 +5,14 @@
 
 ## Current State
 
-- Hygiene (`passing`, uncommitted): full suite 1944 passed, 11 skipped,
+- F17 done (`passing`, uncommitted): loop-cost guidance — `environment_note`
+  teaches lean turns in all modes (skip todo/memory overhead on 1–2 tool
+  tasks) plus manual/auto computer-use discipline (default-browser
+  `open_url`, dispatched-not-verified + fresh-look verification, media
+  probes only on ask). Static prompts and tool goldens untouched. New
+  pin `test_environment_note_lean_turn_discipline`. `ruff` clean,
+  65 passed in webchat/golden/registry slice.
+- Hygiene (`passing`, committed as `12b7313`): full suite 1944 passed, 11 skipped,
   1 deselected (`pytest -q`, ~7.5 min, PG reachable); `ruff check .`
   clean; only `?? .vscode/` untracked (pre-existing, not ours).
   Zero `active` items (F05 vector seam stays `planned`).

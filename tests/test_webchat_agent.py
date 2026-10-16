@@ -915,6 +915,32 @@ def test_environment_note_memory_direction_split():
             assert "remember this" in note, (mode, execution)
 
 
+def test_environment_note_lean_turn_discipline():
+    """F17: lean-turn discipline rides environment_note (prompts and
+    tool goldens untouched). Plan gets the shared todo/memory trim
+    only; manual/auto add the computer-use discipline."""
+    from invincible.core.webchat_agent import environment_note
+
+    for execution in ("local", "agent"):
+        for mode in ("plan", "manual", "auto"):
+            note = environment_note(execution, mode=mode)
+            assert "one or two tool calls" in note, (mode, execution)
+    for execution in ("local", "agent"):
+        plan_note = environment_note(execution, mode="plan")
+        assert "default browser" not in plan_note
+        assert "dispatched, not pixels verified" not in plan_note
+        for mode in ("manual", "auto"):
+            note = environment_note(execution, mode=mode)
+            assert "default browser" in note, (mode, execution)
+            assert "open that app explicitly" in note, (mode, execution)
+            assert "dispatched, not pixels verified" in note, (
+                mode, execution)
+            assert "fresh look_at_screen" in note, (mode, execution)
+            assert "never retry identical coordinates" in note, (
+                mode, execution)
+            assert "only when the user asks" in note, (mode, execution)
+
+
 def test_mode_prompts_unified_brevity():
     """Verify-then-reply-in-a-few-lines tails are identical; plan keeps
     its 'end with the plan' tail."""

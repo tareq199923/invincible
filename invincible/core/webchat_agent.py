@@ -294,7 +294,9 @@ def environment_note(
         "(code_search/find_files) and read only the hits. "
         "For large files, page with read_file offset/limit. "
         "Track multi-step work with todo. "
-        "Search memory (memory_search/list) when past context could help."
+        "Search memory (memory_search/list) when past context could help. "
+        "Skip the todo list and memory lookups/saves when the task "
+        "finishes in one or two tool calls."
     )
     if mode == "plan":
         guidance = read_guidance
@@ -306,6 +308,13 @@ def environment_note(
             "Use task_state_set for in-task progress and memory_save for "
             "lasting cross-session facts; save when the user says "
             "\"remember this\" (or \"save this\"). "
+            "Computer-use discipline: open_url opens the OS default "
+            "browser, not a chosen window (when the user names a "
+            "browser, open that app explicitly); a computer-use ok "
+            "result means dispatched, not pixels verified — confirm "
+            "with a fresh look_at_screen and never retry identical "
+            "coordinates on an unchanged screen; probe volume or the "
+            "filesystem for media playback only when the user asks. "
             "Never use inline `python -c` to edit files. If a tool call "
             "is declined or blocked, do not retry another way, tell "
             "the user."
