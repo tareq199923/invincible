@@ -6,7 +6,9 @@ soft-white rounded head with two ink eyes (no Disney likeness - the
 canvas echo of the ``.baymax-dot`` CSS concept in
 ``invincible/templates/static/app.css``). It glides to each Pack 3
 target point BEFORE the action executes (so the user watches Bmax
-"do" the click/type), idles docked at a screen corner, and its eyes
+"do" the click/type), idles docked at a screen corner, and works
+through a queued point tour (``point()``) on Bluey-style holds when
+it is otherwise free — tools never wait on the head. Its eyes
 track the real mouse at ~30Hz.
 
 Stdlib only (tkinter + ctypes + threading + subprocess) - no new
@@ -50,16 +52,26 @@ OVERLAY_EYE_DY = -6
 OVERLAY_EYE_R = 7
 OVERLAY_EYE_TRACK_R = 9
 
-# Motion: ~30Hz cursor poll, ease-out glide, idle dock, pre-action dwell
-# (the dwell lives in the runner - it only waits when an overlay is
-# alive, so headless jobs pay zero added latency).
+# Motion: ~30Hz cursor poll, ease-out glide, choreographed point
+# queue + quiet-based homing, pre-action dwell (the dwell lives in
+# the runner - it only waits when an overlay is alive, so headless
+# jobs pay zero added latency).
 OVERLAY_POLL_SECONDS = 1.0 / 30.0
 # Settle/idle glides + bubble timing only — target glides carry their
 # own Bluey plan_flight duration (see _overlay_delay_fn in runner.py,
 # which stretches the pre-action dwell to cover it).
 OVERLAY_GLIDE_SECONDS = 0.30
-OVERLAY_IDLE_SETTLE_SECONDS = 2.0
 OVERLAY_PRE_ACTION_DWELL_SECONDS = 0.35
+# Point-queue choreography (Item-2, Bluey RealtimeHost port): every
+# queued tour point holds 1.0s flight allowance + 2.2s minimum; the
+# head goes home 1.2s after a request once quiet, else after 5.0s
+# quiet. These replace the old fixed idle-settle delay — homing now
+# flows through choreo_step so a queued tour is never cut short.
+OVERLAY_POINT_MIN_HOLD_SECONDS = 2.2
+OVERLAY_POINT_FLIGHT_SECONDS = 1.0
+OVERLAY_IDLE_HOME_SECONDS = 5.0
+OVERLAY_HOME_QUIET_SECONDS = 1.2
+OVERLAY_POINT_LABEL_CAP = 60
 OVERLAY_DOCK_MARGIN = 24
 OVERLAY_DOCK_CORNER = "br"
 OVERLAY_DOCK_LIFT = 48
@@ -631,6 +643,146 @@ def bubble_text_for(x, y) -> str | None:
     return f"\u2316 {int(x)},{int(y)}"
 
 
+def choreo_state(now: float) -> dict:
+    """Fresh point-queue choreography state (pure data, hermetic)."""
+    try:
+        stamp = float(now)
+    except (TypeError, ValueError):
+        stamp = 0.0
+    if not math.isfinite(stamp):
+        stamp = 0.0
+    return {"queue": [], "hold_until": stamp, "home_requested": False,
+            "speaking": False, "quiet_since": stamp}
+
+
+def _choreo_grid(x, y) -> tuple | None:
+    """Validated 0-1000 grid ints for a queued point (None when bad)."""
+    if isinstance(x, bool) or isinstance(y, bool):
+        return None
+    if not isinstance(x, (int, float)) or not isinstance(
+            y, (int, float)):
+        return None
+    if not math.isfinite(x) or not math.isfinite(y):
+        return None
+    if not 0 <= x <= OVERLAY_GRID_MAX or not 0 <= y <= OVERLAY_GRID_MAX:
+        return None
+    return (int(x), int(y))
+
+
+def choreo_point(state: dict, x, y, label: str = "") -> bool:
+    """Enqueue a tour point; clears any home request (pure, hermetic).
+
+    Bluey's ``point()``: the spot joins the queue and the head works
+    through it when the hold expires — tools never wait on it.
+    Labels collapse to one line (capped). Never raises; False when
+    the point or state is malformed.
+    """
+    try:
+        grid = _choreo_grid(x, y)
+        if grid is None:
+            return False
+        text = " ".join(str(label or "").split())
+        if len(text) > OVERLAY_POINT_LABEL_CAP:
+            text = text[:OVERLAY_POINT_LABEL_CAP] + "…"
+        state["queue"].append((grid[0], grid[1], text))
+        state["home_requested"] = False
+        return True
+    except (AttributeError, TypeError):
+        return False
+
+
+def choreo_request_home(state: dict) -> None:
+    """Flag a trip home once the head is quiet (pure, never raises)."""
+    with contextlib.suppress(AttributeError, TypeError):
+        state["home_requested"] = True
+
+
+def choreo_set_speaking(state: dict, on: bool, now: float) -> None:
+    """Track reply speech (pure, never raises).
+
+    While speaking, homing pauses; the moment speech stops stamps
+    quiet (Bluey's ``setSpeaking``). ``on`` must be a real bool —
+    anything else is ignored, like ``confirm_action``'s approve.
+    """
+    try:
+        flag = on is True
+        if state.get("speaking") and not flag:
+            try:
+                stamp = float(now)
+            except (TypeError, ValueError):
+                stamp = state.get("quiet_since", 0.0)
+            if math.isfinite(stamp):
+                state["quiet_since"] = stamp
+        state["speaking"] = flag
+    except (AttributeError, TypeError):
+        pass
+
+
+def choreo_take_control(state: dict) -> None:
+    """Drop the queued tour: a real action flies now (pure, Item-1c).
+
+    ``announce()`` (a click/drag point) preempts the visual tour —
+    the head goes where the action lands instead. Never raises.
+    """
+    with contextlib.suppress(AttributeError, TypeError):
+        state["queue"].clear()
+
+
+def choreo_go_home(state: dict) -> None:
+    """Clear a completed trip home (pure, never raises)."""
+    with contextlib.suppress(AttributeError, TypeError):
+        state["queue"].clear()
+        state["home_requested"] = False
+
+
+def choreo_step(state: dict, now: float) -> tuple:
+    """One 1/30s choreography decision (pure, hermetic, never raises).
+
+    Returns ``("launch", (x, y, label))`` to fly a queued point (the
+    caller stamps the hold), ``("dock", None)`` to glide home, or
+    ``(None, None)`` to hold position. Holds run 1.0s flight
+    allowance + 2.2s minimum; home fires 1.2s after a request once
+    quiet, else after 5.0s quiet; speaking pauses homing.
+    """
+    try:
+        now_f = float(now)
+        hold_until = float(state["hold_until"])
+        home_requested = state["home_requested"] is True
+        speaking = state["speaking"] is True
+        quiet_since = float(state["quiet_since"])
+        queued = state["queue"]
+    except (AttributeError, TypeError, ValueError):
+        return (None, None)
+    if not math.isfinite(now_f) or not math.isfinite(hold_until):
+        return (None, None)
+    if now_f < hold_until:
+        return (None, None)
+    try:
+        items = list(queued)
+    except TypeError:
+        return (None, None)
+    if items:
+        try:
+            state["queue"].pop(0)
+        except (AttributeError, IndexError, TypeError):
+            return (None, None)
+        state["hold_until"] = now_f + OVERLAY_POINT_FLIGHT_SECONDS \
+            + OVERLAY_POINT_MIN_HOLD_SECONDS
+        if not speaking and math.isfinite(quiet_since):
+            state["quiet_since"] = now_f
+        return ("launch", items[0])
+    try:
+        quiet_for = 0.0 if speaking else now_f - quiet_since
+    except (TypeError, ValueError):
+        return (None, None)
+    if not math.isfinite(quiet_for):
+        return (None, None)
+    if (home_requested and quiet_for > OVERLAY_HOME_QUIET_SECONDS) \
+            or quiet_for > OVERLAY_IDLE_HOME_SECONDS:
+        return ("dock", None)
+    return (None, None)
+
+
 def berry_shades() -> tuple[str, str, str]:
     """Light→mid→deep fills for the stacked-oval gradient (pure)."""
     return (OVERLAY_BERRY_LIGHT, OVERLAY_BERRY_MID, OVERLAY_BERRY_DEEP)
@@ -702,10 +854,11 @@ def cursor_pos() -> tuple[int, int]:
 class Overlay:
     """Parent-side handle to the overlay child process.
 
-    Best-effort by contract: ``start``/``announce``/``settle`` never
-    raise, and ``alive`` is False whenever there is no window (off
-    Windows, spawn failure, dead child). Jobs check ``alive`` and skip
-    the pre-action dwell when it is False.
+    Best-effort by contract: ``start``/``announce``/``point``/
+    ``request_home``/``set_speaking``/``settle`` never raise, and
+    ``alive`` is False whenever there is no window (off Windows,
+    spawn failure, dead child). Jobs check ``alive`` and skip the
+    pre-action dwell when it is False.
     """
 
     def __init__(self) -> None:
@@ -754,8 +907,10 @@ class Overlay:
     def announce(self, point: dict, dragging: bool = False) -> None:
         """Glide the head to a resolved 0-1000 grid point. Never raises.
 
-        Malformed points are ignored (the job already validated its
-        own args - the overlay never second-guesses execution).
+        takeControl: a real action flies NOW and drops any queued tour
+        (the child clears its point queue on receipt). Malformed
+        points are ignored (the job already validated its own args -
+        the overlay never second-guesses execution).
         ``dragging`` selects the straight steady trip; omitted/False
         keeps the classic bowed glide (backward compat).
         """
@@ -775,6 +930,39 @@ class Overlay:
         if dragging is True:
             payload["dragging"] = True
         self._send(payload)
+
+    def point(self, point: dict, label: str = "") -> None:
+        """Queue a tour point; the head catches up visually. Never raises.
+
+        Bluey's ``point()``: appends to the child queue and clears any
+        home request — tools run immediately, the head glides through
+        queued spots on its own holds. Same validation as
+        ``announce``; malformed points are ignored.
+        """
+        grid = _choreo_grid(
+            point.get("x") if isinstance(point, dict) else None,
+            point.get("y") if isinstance(point, dict) else None)
+        if grid is None:
+            return
+        payload: dict = {"type": "point", "x": grid[0], "y": grid[1]}
+        text = " ".join(str(label or "").split())
+        if text:
+            if len(text) > OVERLAY_POINT_LABEL_CAP:
+                text = text[:OVERLAY_POINT_LABEL_CAP] + "…"
+            payload["label"] = text
+        self._send(payload)
+
+    def request_home(self) -> None:
+        """Ask the head home once quiet (sets the flag, never raises)."""
+        self._send({"type": "home"})
+
+    def set_speaking(self, on: bool) -> None:
+        """Track reply speech: homing pauses while true (never raises).
+
+        ``on`` must be a real bool — anything else sends False, like
+        ``confirm_action`` treats non-true approve as deny.
+        """
+        self._send({"type": "speaking", "on": on is True})
 
     def settle(self) -> None:
         """Ask the head to dock now (idle timeout docks anyway)."""
@@ -808,7 +996,8 @@ def _stdin_reader(inbox: queue.Queue) -> None:
         except ValueError:
             continue
         if isinstance(message, dict) and message.get("type") in (
-                "target", "settle", "quit"):
+                "target", "point", "home", "speaking", "settle",
+                "quit"):
             with contextlib.suppress(queue.Full):
                 inbox.put_nowait(message)
     with contextlib.suppress(queue.Full):
@@ -919,13 +1108,40 @@ def _run_window(tk) -> None:
     steps = max(2, int(round(
         OVERLAY_GLIDE_SECONDS / OVERLAY_POLL_SECONDS)))
     now0 = time.monotonic()
-    state = {"path": [], "idle_since": now0, "to_target": False,
+    state = {"path": [], "to_target": False,
              "trail": [], "squash_until": 0.0,
              "bubble_until": 0.0, "bubble_text": "",
              "flight": None, "velocity": [0.0, 0.0],
              "landed_at": now0 - 10.0,
              "press_start": now0 - 10.0, "press_depth": 0.0,
-             "dragging": False}
+             "dragging": False, "choreo": choreo_state(now0)}
+
+    def _dock() -> None:
+        target = (dock[0] + radius, dock[1] + radius)
+        state["to_target"] = False
+        state["flight"] = None
+        state["velocity"] = [0.0, 0.0]
+        state["dragging"] = False
+        state["path"] = ease_waypoints(
+            head_xy[0], head_xy[1],
+            float(target[0]), float(target[1]), steps)
+
+    def _launch(gx, gy, label, dragging,
+                bubble_seconds: float) -> None:
+        now_child = time.monotonic()
+        px, py = grid_to_pixel(gx, gy, vrect)
+        state["flight"] = plan_flight(
+            (head_xy[0], head_xy[1]),
+            (float(px), float(py)),
+            tuple(state["velocity"]),
+            now_child, vrect, dragging)
+        state["path"] = []
+        state["to_target"] = True
+        state["dragging"] = dragging
+        text = label or bubble_text_for(gx, gy)
+        if text:
+            state["bubble_text"] = text
+            state["bubble_until"] = now_child + bubble_seconds
 
     def _draw() -> None:
         hx, hy = head_xy
@@ -1010,37 +1226,30 @@ def _run_window(tk) -> None:
                     root.destroy()
                     return
                 if kind == "settle":
-                    target = (dock[0] + radius, dock[1] + radius)
-                    state["to_target"] = False
-                    state["flight"] = None
-                    state["velocity"] = [0.0, 0.0]
-                    state["dragging"] = False
-                    state["path"] = ease_waypoints(
-                        head_xy[0], head_xy[1],
-                        float(target[0]), float(target[1]), steps)
+                    with contextlib.suppress(Exception):
+                        _dock()
+                        choreo_go_home(state["choreo"])
                 elif kind == "target":
                     with contextlib.suppress(Exception):
-                        px, py = grid_to_pixel(
-                            message.get("x"), message.get("y"), vrect)
-                        dragging = message.get("dragging", False) is True
-                        now_child = time.monotonic()
-                        state["flight"] = plan_flight(
-                            (head_xy[0], head_xy[1]),
-                            (float(px), float(py)),
-                            tuple(state["velocity"]),
-                            now_child, vrect, dragging)
-                        state["path"] = []
-                        state["to_target"] = True
-                        state["dragging"] = dragging
-                        state["idle_since"] = now_child
-                        label = bubble_text_for(
-                            message.get("x"), message.get("y"))
-                        if label:
-                            state["bubble_text"] = label
-                            state["bubble_until"] = (
-                                now_child
-                                + OVERLAY_GLIDE_SECONDS
+                        choreo_take_control(state["choreo"])
+                        _launch(message.get("x"), message.get("y"), "",
+                                message.get("dragging", False) is True,
+                                OVERLAY_GLIDE_SECONDS
                                 + OVERLAY_BUBBLE_SECONDS)
+                elif kind == "point":
+                    with contextlib.suppress(Exception):
+                        choreo_point(state["choreo"], message.get("x"),
+                                     message.get("y"),
+                                     message.get("label", ""))
+                elif kind == "home":
+                    with contextlib.suppress(Exception):
+                        choreo_request_home(state["choreo"])
+                elif kind == "speaking":
+                    with contextlib.suppress(Exception):
+                        choreo_set_speaking(
+                            state["choreo"],
+                            message.get("on") is True,
+                            time.monotonic())
         except queue.Empty:
             pass
         with contextlib.suppress(OSError):
@@ -1055,7 +1264,6 @@ def _run_window(tk) -> None:
                     state["flight"] = None
                     state["velocity"] = [0.0, 0.0]
                     state["dragging"] = False
-                    state["idle_since"] = now
                     state["landed_at"] = now
                     if state["to_target"]:
                         state["to_target"] = False
@@ -1077,7 +1285,6 @@ def _run_window(tk) -> None:
                         state["flight"] = None
                         state["velocity"] = [0.0, 0.0]
                         state["dragging"] = False
-                        state["idle_since"] = now
                         state["landed_at"] = now
                         if state["to_target"]:
                             state["to_target"] = False
@@ -1096,17 +1303,27 @@ def _run_window(tk) -> None:
             head_xy[0], head_xy[1] = state["path"].pop(0)
             if not state["path"]:
                 now = time.monotonic()
-                state["idle_since"] = now
                 if state["to_target"]:
                     state["to_target"] = False
                     state["squash_until"] = now + OVERLAY_SQUISH_SECONDS
-        elif time.monotonic() - state["idle_since"] \
-                >= OVERLAY_IDLE_SETTLE_SECONDS:
-            home = (float(dock[0] + radius), float(dock[1] + radius))
-            if (head_xy[0], head_xy[1]) != home:
-                state["to_target"] = False
-                state["path"] = ease_waypoints(
-                    head_xy[0], head_xy[1], home[0], home[1], steps)
+        else:
+            action, payload = None, None
+            with contextlib.suppress(Exception):
+                action, payload = choreo_step(
+                    state["choreo"], time.monotonic())
+            if action == "launch":
+                with contextlib.suppress(Exception):
+                    _launch(payload[0], payload[1], payload[2], False,
+                            OVERLAY_POINT_FLIGHT_SECONDS
+                            + OVERLAY_POINT_MIN_HOLD_SECONDS)
+            elif action == "dock":
+                home = (float(dock[0] + radius),
+                        float(dock[1] + radius))
+                if (head_xy[0], head_xy[1]) != home:
+                    with contextlib.suppress(Exception):
+                        _dock()
+                with contextlib.suppress(Exception):
+                    choreo_go_home(state["choreo"])
         state["trail"] = trail_push(
             state["trail"], head_xy[0], head_xy[1])
         _draw()

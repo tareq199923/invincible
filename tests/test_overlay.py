@@ -589,3 +589,198 @@ def test_overlay_live_metrics_on_windows():
     assert rect[3] == user32.GetSystemMetrics(79)
     x, y = overlay.cursor_pos()
     assert isinstance(x, int) and isinstance(y, int)
+
+
+def _choreo(*pts):
+    state = overlay.choreo_state(1000.0)
+    for pt in pts:
+        assert overlay.choreo_point(state, *pt) is True
+    return state
+
+
+def test_choreo_queue_order_and_minimum_hold():
+    state = _choreo((10, 20, "a"), (30, 40, "b"))
+    action, item = overlay.choreo_step(state, 1000.0)
+    assert (action, item) == ("launch", (10, 20, "a"))
+    # Hold is flight 1.0 + minimum 2.2: nothing pops mid-hold.
+    assert overlay.choreo_step(state, 1001.5) == (None, None)
+    # Second point still queued in order after the hold expires.
+    action, item = overlay.choreo_step(state, 1004.0)
+    assert (action, item) == ("launch", (30, 40, "b"))
+
+
+def test_choreo_point_clears_home_request():
+    state = overlay.choreo_state(0.0)
+    overlay.choreo_request_home(state)
+    assert state["home_requested"] is True
+    assert overlay.choreo_point(state, 5, 5) is True
+    assert state["home_requested"] is False
+
+
+def test_choreo_home_on_quiet_and_on_request():
+    # Empty queue, hold expired, never spoke: home after 5.0s quiet.
+    state = overlay.choreo_state(0.0)
+    assert overlay.choreo_step(state, 5.0) == (None, None)
+    assert overlay.choreo_step(state, 5.01) == ("dock", None)
+    # Requested home: 1.2s of quiet suffices, not before.
+    requested = overlay.choreo_state(0.0)
+    overlay.choreo_request_home(requested)
+    assert overlay.choreo_step(requested, 1.2) == (None, None)
+    assert overlay.choreo_step(requested, 1.21) == ("dock", None)
+
+
+def test_choreo_speaking_blocks_home_then_stamps_quiet():
+    state = overlay.choreo_state(0.0)
+    overlay.choreo_set_speaking(state, True, 10.0)
+    assert overlay.choreo_step(state, 100.0) == (None, None)
+    overlay.choreo_set_speaking(state, False, 100.0)
+    assert overlay.choreo_step(state, 101.19) == (None, None)
+    assert overlay.choreo_step(state, 101.21) == (None, None)
+    # Requested home after speech stops: quiet counts from the stop.
+    overlay.choreo_request_home(state)
+    assert overlay.choreo_step(state, 101.19) == (None, None)
+    assert overlay.choreo_step(state, 101.21) == ("dock", None)
+
+
+def test_choreo_take_control_clears_queue():
+    state = _choreo((1, 2, "a"), (3, 4, "b"))
+    overlay.choreo_take_control(state)
+    assert state["queue"] == []
+    assert overlay.choreo_step(state, 9999.0) == ("dock", None)
+
+
+def test_choreo_go_home_clears_flag_and_queue():
+    state = _choreo((1, 2, "a"))
+    overlay.choreo_request_home(state)
+    overlay.choreo_go_home(state)
+    assert state["queue"] == [] and state["home_requested"] is False
+
+
+def test_choreo_label_sanitize_and_junk_never_raises():
+    state = overlay.choreo_state(0.0)
+    assert overlay.choreo_point(state, 7, 8, "line\none\ttwo") is True
+    assert state["queue"] == [(7, 8, "line one two")]
+    assert overlay.choreo_point(state, 9, 9, "z" * 200) is True
+    assert state["queue"][-1][2].endswith("…")
+    for bad_x, bad_y in ((None, 1), ("x", 1), (True, 1), (1, None),
+                         (1, "y"), (-1, 5), (5, 1001),
+                         (float("nan"), 1), (1, float("inf"))):
+        assert overlay.choreo_point(state, bad_x, bad_y) is False
+    assert overlay.choreo_step(None, 0.0) == (None, None)
+    assert overlay.choreo_step("junk", "junk") == (None, None)
+    overlay.choreo_request_home(None)
+    overlay.choreo_take_control(None)
+    overlay.choreo_go_home(None)
+    overlay.choreo_set_speaking(None, True, 0.0)
+    overlay.choreo_set_speaking({}, "yes", "junk")
+
+
+def test_point_request_home_speaking_serialize_to_child():
+    handle = overlay.Overlay()
+    stdin = _FakeStdin()
+    handle._proc = _FakeProc(stdin)
+    handle.point({"x": 250, "y": 750}, label="Save")
+    assert json.loads(stdin.lines[-1]) == {
+        "type": "point", "x": 250, "y": 750, "label": "Save"}
+    handle.point({"x": 10, "y": 20})
+    assert json.loads(stdin.lines[-1]) == {"type": "point", "x": 10,
+                                           "y": 20}
+    handle.request_home()
+    assert json.loads(stdin.lines[-1]) == {"type": "home"}
+    handle.set_speaking(True)
+    assert json.loads(stdin.lines[-1]) == {"type": "speaking",
+                                           "on": True}
+    handle.set_speaking("yes")
+    assert json.loads(stdin.lines[-1]) == {"type": "speaking",
+                                           "on": False}
+    before = len(stdin.lines)
+    for garbage in (None, "point", 42, [], {"x": "a", "y": 1},
+                    {"x": True, "y": 1}, {"x": 1}, {"y": 1},
+                    {"x": -1, "y": 50}, {"x": 50, "y": 1001},
+                    {"x": float("inf"), "y": 1},
+                    {"x": float("nan"), "y": 1}):
+        handle.point(garbage)
+    assert len(stdin.lines) == before
+
+
+def test_choreography_senders_never_raise_when_dead():
+    stillborn = overlay.Overlay()
+    stillborn.point({"x": 1, "y": 2}, label="ok")
+    stillborn.request_home()
+    stillborn.set_speaking(True)
+    assert stillborn.alive is False
+
+
+async def test_execute_job_look_queues_near_point(
+        monkeypatch, _clean_overlay_state):
+    queued: list = []
+
+    class _Live:
+        alive = True
+
+        def point(self, point, label=""):
+            queued.append((point, label))
+
+    async def fake_look():
+        return {"status": "look", "app": "App",
+                "controls": [
+                    {"id": "C1", "kind": "button", "label": "Go",
+                     "x": 100, "y": 200},
+                    {"id": "C2", "kind": "link", "label": "Docs",
+                     "x": 300, "y": 400}],
+                "mouse": {"x": 100, "y": 200},
+                "size": {"w": 1000, "h": 1000},
+                "near": {"id": "C2", "kind": "link",
+                         "label": "Docs"},
+                "truncated": False}
+
+    monkeypatch.setattr(runner, "ensure_overlay", lambda: _Live())
+    monkeypatch.setattr(tool_executor, "_look_at_screen", fake_look)
+    out = await runner.execute_job({"type": "look_at_screen",
+                                    "args": {}})
+    # Result shape untouched; the tour point rides alongside.
+    assert out["status"] == "look"
+    assert out["near"] == {"id": "C2", "kind": "link",
+                           "label": "Docs"}
+    assert queued == [({"x": 300, "y": 400}, "Docs")]
+
+
+async def test_execute_job_look_without_near_skips_queue(
+        monkeypatch, _clean_overlay_state):
+    queued: list = []
+
+    class _Live:
+        alive = True
+
+        def point(self, point, label=""):
+            queued.append((point, label))
+
+    async def fake_look():
+        return {"status": "look", "app": "App", "controls": [],
+                "mouse": {"x": 1, "y": 1},
+                "size": {"w": 10, "h": 10}, "near": None,
+                "truncated": False}
+
+    monkeypatch.setattr(runner, "ensure_overlay", lambda: _Live())
+    monkeypatch.setattr(tool_executor, "_look_at_screen", fake_look)
+    out = await runner.execute_job({"type": "look_at_screen",
+                                    "args": {}})
+    assert out["status"] == "look"
+    assert queued == []
+
+
+async def test_execute_job_look_headless_result_intact(
+        monkeypatch, _clean_overlay_state):
+    async def fake_look():
+        return {"status": "look", "app": "App", "controls": [],
+                "mouse": {"x": 0, "y": 0},
+                "size": {"w": 1, "h": 1}, "near": None,
+                "truncated": False}
+
+    monkeypatch.setattr(runner, "ensure_overlay", lambda: None)
+    monkeypatch.setattr(tool_executor, "_look_at_screen", fake_look)
+    out = await runner.execute_job({"type": "look_at_screen",
+                                    "args": {}})
+    assert out["status"] == "look"
+    assert set(out) == {"status", "app", "controls", "mouse", "size",
+                        "near", "truncated"}

@@ -991,3 +991,54 @@ def test_chat_bubble_shows_target_tag():
     )
     assert "payload.target" in html
     assert "\u2316 " in html
+
+
+async def test_look_flows_through_loop_verbatim_no_queue_surface(
+    client, byok_env, router_setter, monkeypatch
+):
+    # Item-2: the overlay point queue lives agent-side only — the
+    # webchat loop passes look results through verbatim (no queue /
+    # choreography keys, no mutation), approvals/order/F14 untouched.
+    seq = [
+        tool_body("w1", [fn_call("c1", "look_at_screen", {})]),
+        provider_body("w1", content="saw it"),
+    ]
+    bodies, handler = scripted(seq)
+    router_setter({"w1.example.com": handler})
+
+    look_result = {
+        "status": "look", "app": "App",
+        "controls": [{"id": "C1", "kind": "button", "label": "Go",
+                      "x": 100, "y": 200}],
+        "mouse": {"x": 100, "y": 200},
+        "size": {"w": 1000, "h": 1000},
+        "near": {"id": "C1", "kind": "button", "label": "Go"},
+        "mouse_hint": "The mouse pointer is at @100,200.",
+        "truncated": False,
+    }
+
+    async def fake_look(executor):
+        return dict(look_result)
+
+    import invincible.core.webchat_agent as webchat_agent
+
+    monkeypatch.setattr(webchat_agent, "_run_look_at_screen", fake_look)
+    await agent_user(client, "look-verbatim@example.com")
+    resp = await client.post("/dashboard/chat/stream", json={
+        "session_id": "web-look-verbatim", "message": "look around",
+        "mode": "plan"})
+    assert resp.status_code == 200, resp.text
+    events = parse_web_events(resp.text)
+    results = [d for n, d in events if n == "tool_result"]
+    assert len(results) == 1 and results[0]["ok"] is True
+    assert results[0]["name"] == "look_at_screen"
+    assert "C1" in results[0]["preview"]
+    # The F14 key still derives from the untouched result shape.
+    assert webchat_agent._look_result_key(
+        look_result) == webchat_agent._look_result_key(
+        dict(look_result))
+    # Approval surface unchanged: look stays approval-free.
+    from invincible.core import harness_tools
+
+    assert "look_at_screen" not in \
+        harness_tools.approval_required_names()

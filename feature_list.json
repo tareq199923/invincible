@@ -203,6 +203,13 @@
     "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py"
   },
   {
+    "behavior": "overlay point queue: queued tour points hold 1.0s + 2.2s each with FIFO order, head goes home 1.2s after request or 5.0s quiet, real actions takeControl-clear the queue, speaking blocks homing; tools never wait on the head, F14/approvals/results untouched",
+    "id": "Item-2",
+    "state": "passing",
+    "title": "Point queue (overlay choreography, visual only)",
+    "verification": "ruff check . && pytest tests/test_webchat_agent.py tests/test_overlay.py tests/test_computer_use.py"
+  },
+  {
     "behavior": "look_at_screen results carry mouse grounding: near {id,kind,label} (smallest-area contain, else <60px nearest, else null) + single-line mouse_hint @x,y with this/that/here sentence + truncated bool; C order/grid math byte-identical, missing-mouse omits hint, F13 untouched",
     "id": "Item-3",
     "state": "passing",

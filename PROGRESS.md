@@ -5,6 +5,27 @@
 
 ## Current State
 
+- Item-2 done (`passing`): point queue (overlay choreography, visual
+  only) — Bluey `RealtimeHost` choreograph ported into
+  `invincible/agent/overlay.py` as pure hermetic helpers
+  (`choreo_state/point/request_home/set_speaking/take_control/go_home/step`):
+  queued tour points hold 1.0s flight + 2.2s minimum FIFO, head homes
+  1.2s after a request once quiet else 5.0s quiet, speaking pauses
+  homing (quiet stamps on stop), real-action `announce` takeControls
+  the queue, `settle` docks + clears. Child `_run_window` drives the
+  step every 1/30s tick (same flight/dock code factored into
+  `_launch`/`_dock`; the old fixed 2s idle-settle is superseded,
+  `OVERLAY_IDLE_SETTLE_SECONDS` removed). Parent `Overlay` gains
+  best-effort `point/request_home/set_speaking` senders; `runner`
+  queues a tour point at the look result's `near` control (suppressed,
+  never blocks tools; computer path + headless `0.0` dwell
+  byte-identical). No registry/goldens/loop/realm/db change; no docs
+  (no user-visible text changed). New pins: 12 in
+  `tests/test_overlay.py` (order/hold/home/request/speaking/clear/
+  labels/junk/serializers/runner look×3) + 1 loop-verbatim pin in
+  `tests/test_webchat_agent.py`. `ruff` clean, 112 passed
+  webchat/overlay/computer slice, full 1986 passed / 11 skipped /
+  1 deselected.
 - Item-3 done (`passing`): better "this" — `look_at_screen` results now
   carry mouse grounding as additive-only keys (`core/tool_executor.py`:
   pure `look_near` pixel-space smallest-area-contain (Bluey −6px
@@ -341,7 +362,7 @@
 
 ## In Progress
 
-- None — Item-3 complete (`passing`).
+- None — Item-2 complete (`passing`).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

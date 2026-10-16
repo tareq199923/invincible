@@ -435,7 +435,31 @@ async def execute_job(job: dict) -> dict:
             # F09: no args, no paths, no URLs - reads the frontmost
             # window's controls on this machine; no sandbox check
             # applies. Non-Windows answers unavailable, never raises.
-            return await tool_executor._look_at_screen()
+            # Item-2: queue a visual tour point at the cursor's
+            # control (stdin write only, suppressed like every
+            # overlay call) - tools run immediately, the head
+            # catches up on its own holds.
+            result = await tool_executor._look_at_screen()
+            with contextlib.suppress(Exception):
+                seen = ensure_overlay()
+                if (seen is not None and seen.alive
+                        and isinstance(result, dict)
+                        and result.get("status") == "look"):
+                    near = result.get("near")
+                    target = None
+                    if isinstance(near, dict) and near.get("id"):
+                        for control in result.get("controls") or []:
+                            if (isinstance(control, dict)
+                                    and control.get("id")
+                                    == near.get("id")):
+                                target = control
+                                break
+                    if isinstance(target, dict):
+                        seen.point(
+                            {"x": target.get("x"),
+                             "y": target.get("y")},
+                            label=str(target.get("label", "")))
+            return result
         if job_type in tool_executor.COMPUTER_TOOLS:
             # F10: paired-PC input + launch. Shape + denylist are
             # re-checked inside _computer_act (Wall 2); ToolBlocked
