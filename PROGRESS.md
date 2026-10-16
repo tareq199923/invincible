@@ -5,6 +5,24 @@
 
 ## Current State
 
+- Item-4 done (`passing`): fly-click feedback (draw only) — Bluey
+  `CursorOverlay` softLand/clickEffect/typedEffect/bubble ported into
+  `invincible/agent/overlay.py` as pure hermetic helpers (`ring_frame`
+  expanding 1.0→1.25x + thinning 3→1 outline, `glyph_frame` 46px
+  ease-out rise over 0.9s, `effect_glyph_chars` first-6 non-space) +
+  child `_draw` ring oval + 6-text glyph pool; landings stamp press
+  0.05 + 30px/0.7s ring, click effects press 0.14 + 38px/0.65s ring
+  (right-click deep tint) + 1.4s `⌖ x,y` bubble, type effects press
+  0.035 + staggered glyphs (replaces live set, cap 6). Parent
+  `Overlay.effect()` sender; `runner` fires it on click/type ok only
+  (results/approvals/F13/F14 untouched, errors skip, dead overlay
+  swallows). No registry/goldens/docs change (bubble is
+  overlay-internal, no protocol wording changed). New pins: 9 in
+  `tests/test_overlay.py` (ring/glyph math, glyph cap, sender
+  wire+tint+junk/dead, runner click/type/error/flaky) + 3 effect-input
+  contracts in `tests/test_computer_use.py`. `ruff` clean, 124 passed
+  overlay/computer/webchat-agent slice, full 1998 passed / 11 skipped /
+  1 deselected.
 - Item-2 done (`passing`): point queue (overlay choreography, visual
   only) — Bluey `RealtimeHost` choreograph ported into
   `invincible/agent/overlay.py` as pure hermetic helpers
@@ -362,7 +380,7 @@
 
 ## In Progress
 
-- None — Item-2 complete (`passing`).
+- None — Item-4 complete (`passing`).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

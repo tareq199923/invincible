@@ -87,6 +87,24 @@ OVERLAY_HOVER_SCALE = 1.08
 OVERLAY_TRAIL_POINTS = 8
 OVERLAY_BUBBLE_SECONDS = 1.5
 
+# Item-4 fly-click feedback (child-side drawing only — same contract:
+# no job-logic touch, dead overlay swallows everything). Bluey
+# CursorOverlay softLand/clickEffect/typedEffect/bubble, same numbers.
+OVERLAY_LAND_RING_PX = 30
+OVERLAY_LAND_RING_SECONDS = 0.7
+OVERLAY_CLICK_RING_PX = 38
+OVERLAY_CLICK_RING_SECONDS = 0.65
+OVERLAY_CLICK_BUBBLE_SECONDS = 1.4
+OVERLAY_GLYPH_RISE_PX = 46.0
+OVERLAY_GLYPH_LIFE_SECONDS = 0.9
+OVERLAY_GLYPH_CAP = 6
+OVERLAY_EFFECT_TEXT_CAP = 24
+OVERLAY_PRESS_LAND = 0.05
+OVERLAY_PRESS_CLICK = 0.14
+OVERLAY_PRESS_TYPE = 0.035
+OVERLAY_RING_LEFT_FILL = OVERLAY_BERRY_MID
+OVERLAY_RING_RIGHT_FILL = OVERLAY_BERRY_DEEP
+
 # Win32 GetSystemMetrics indices (verified live on Windows - never
 # trusted from memory, per the F09 vtable lesson).
 _SM_XVIRTUALSCREEN = 76
@@ -479,6 +497,68 @@ def press_scale(now, press_start, depth: float = 0.05) -> float:
         return 1 - amount * math.sin(t / 0.12 * math.pi / 2)
     r = (t - 0.12) / 0.3
     return 1 - amount * math.cos(r * math.pi * 1.5) * math.exp(-r * 3.2)
+
+
+def ring_frame(now, start, duration, radius) -> tuple | None:
+    """Expanding ring frame (pure, hermetic, overlay-only).
+
+    Returns ``(radius_px, width_px)`` while alive, None when expired.
+    The ring grows 1.0→1.25x as its outline thins 3→1 — Tk canvas has
+    no per-item alpha, so thinning reads as the fade.
+    """
+    try:
+        moment, origin = float(now), float(start)
+        life, base = float(duration), float(radius)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in (moment, origin, life, base)):
+        return None
+    if life <= 0 or base <= 0:
+        return None
+    t = (moment - origin) / life
+    if t < 0 or t >= 1:
+        return None
+    width = 3 if t < 0.5 else (2 if t < 0.8 else 1)
+    return (base * (1 + 0.25 * t), width)
+
+
+def glyph_frame(now, start, life, rise) -> float | None:
+    """Rise offset px for a typed glyph (pure, hermetic, overlay-only).
+
+    Ease-out quad over ``life`` seconds climbing ``rise`` px, then
+    None (expired — the glyph pops out instead of fading, since Tk
+    text items carry no alpha).
+    """
+    try:
+        moment, origin = float(now), float(start)
+        span, climb = float(life), float(rise)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in (moment, origin, span, climb)):
+        return None
+    if span <= 0:
+        return None
+    t = (moment - origin) / span
+    if t < 0 or t >= 1:
+        return None
+    return climb * (1 - (1 - t) * (1 - t))
+
+
+def effect_glyph_chars(text: str) -> list:
+    """Typed-feedback glyphs: first non-space chars, capped (pure).
+
+    Bluey's ``typedEffect`` skips whitespace and shows every char;
+    ours caps the live set (Tk items are pooled, not transient layers).
+    Non-string input gives []; empty text gives []. Never raises.
+    """
+    if not isinstance(text, str):
+        return []
+    try:
+        collapsed = " ".join(text.split())
+    except Exception:
+        return []
+    return [ch for ch in collapsed if not ch.isspace()][
+        :OVERLAY_GLYPH_CAP]
 
 
 def hover_offset(now, landed_at, is_home: bool = False,
@@ -964,6 +1044,36 @@ class Overlay:
         """
         self._send({"type": "speaking", "on": on is True})
 
+    def effect(self, kind: str, point=None, button: str = "left",
+               text: str = "") -> None:
+        """Post-action click/type feedback (child draw only, never raises).
+
+        Sent after a successful computer action: ``click`` squishes +
+        rings + bubbles the coordinates (right button gets the deep
+        tint), ``type`` squishes + floats up to 6 glyphs of ``text``.
+        Unknown kinds and malformed points are ignored — the job
+        already validated its args and its result stands regardless.
+        """
+        if kind == "click":
+            grid = _choreo_grid(
+                point.get("x") if isinstance(point, dict) else None,
+                point.get("y") if isinstance(point, dict) else None)
+            if grid is None:
+                return
+            payload: dict = {"type": "effect", "kind": "click",
+                             "x": grid[0], "y": grid[1],
+                             "button": ("right" if button == "right"
+                                        else "left")}
+            self._send(payload)
+            return
+        if kind == "type":
+            chars = effect_glyph_chars(text)
+            if not chars:
+                return
+            self._send({"type": "effect", "kind": "type",
+                        "text": "".join(chars)})
+            return
+
     def settle(self) -> None:
         """Ask the head to dock now (idle timeout docks anyway)."""
         self._send({"type": "settle"})
@@ -996,8 +1106,8 @@ def _stdin_reader(inbox: queue.Queue) -> None:
         except ValueError:
             continue
         if isinstance(message, dict) and message.get("type") in (
-                "target", "point", "home", "speaking", "settle",
-                "quit"):
+                "target", "point", "home", "speaking", "effect",
+                "settle", "quit"):
             with contextlib.suppress(queue.Full):
                 inbox.put_nowait(message)
     with contextlib.suppress(queue.Full):
@@ -1097,6 +1207,15 @@ def _run_window(tk) -> None:
     bubble_label = canvas.create_text(-10, -10, text="",
                                       fill=OVERLAY_EYE_FILL,
                                       font=("Segoe UI", 9))
+    click_ring = canvas.create_oval(-10, -10, -10, -10,
+                                    outline=OVERLAY_RING_LEFT_FILL,
+                                    width=3)
+    glyph_ids = [
+        canvas.create_text(-10, -10, text="",
+                           fill=OVERLAY_BERRY_DEEP,
+                           font=("Segoe UI", 22, "bold"))
+        for _ in range(OVERLAY_GLYPH_CAP)
+    ]
     inbox: queue.Queue = queue.Queue(maxsize=16)
     reader = threading.Thread(target=_stdin_reader, args=(inbox,),
                               daemon=True)
@@ -1114,7 +1233,8 @@ def _run_window(tk) -> None:
              "flight": None, "velocity": [0.0, 0.0],
              "landed_at": now0 - 10.0,
              "press_start": now0 - 10.0, "press_depth": 0.0,
-             "dragging": False, "choreo": choreo_state(now0)}
+             "dragging": False, "choreo": choreo_state(now0),
+             "ring": None, "glyphs": []}
 
     def _dock() -> None:
         target = (dock[0] + radius, dock[1] + radius)
@@ -1142,6 +1262,48 @@ def _run_window(tk) -> None:
         if text:
             state["bubble_text"] = text
             state["bubble_until"] = now_child + bubble_seconds
+
+    def _spawn_ring(x, y, radius, duration, tint) -> None:
+        state["ring"] = {"x": float(x), "y": float(y),
+                         "start": time.monotonic(),
+                         "duration": duration, "radius": radius,
+                         "tint": tint}
+
+    def _spawn_land_ring() -> None:
+        _spawn_ring(head_xy[0], head_xy[1], OVERLAY_LAND_RING_PX,
+                    OVERLAY_LAND_RING_SECONDS, OVERLAY_RING_LEFT_FILL)
+
+    def _effect(message: dict) -> None:
+        now_fx = time.monotonic()
+        kind = message.get("kind")
+        if kind == "click":
+            grid = _choreo_grid(message.get("x"), message.get("y"))
+            if grid is None:
+                return
+            state["press_start"] = now_fx
+            state["press_depth"] = OVERLAY_PRESS_CLICK
+            tint = (OVERLAY_RING_RIGHT_FILL
+                    if message.get("button") == "right"
+                    else OVERLAY_RING_LEFT_FILL)
+            _spawn_ring(head_xy[0], head_xy[1], OVERLAY_CLICK_RING_PX,
+                        OVERLAY_CLICK_RING_SECONDS, tint)
+            label = bubble_text_for(*grid)
+            if label:
+                state["bubble_text"] = label
+                state["bubble_until"] = (
+                    now_fx + OVERLAY_CLICK_BUBBLE_SECONDS)
+        elif kind == "type":
+            chars = effect_glyph_chars(message.get("text", ""))
+            if not chars:
+                return
+            state["press_start"] = now_fx
+            state["press_depth"] = OVERLAY_PRESS_TYPE
+            base_x = head_xy[0] + radius * 0.6
+            base_y = head_xy[1] - radius
+            state["glyphs"] = [
+                {"x": base_x + i * 8.0, "y": base_y,
+                 "char": ch, "start": now_fx}
+                for i, ch in enumerate(chars)]
 
     def _draw() -> None:
         hx, hy = head_xy
@@ -1215,6 +1377,47 @@ def _run_window(tk) -> None:
         else:
             canvas.coords(bubble_box, -10, -10, -10, -10)
             canvas.coords(bubble_label, -10, -10)
+        ring = state["ring"]
+        if isinstance(ring, dict):
+            frame = None
+            with contextlib.suppress(Exception):
+                frame = ring_frame(now, ring["start"],
+                                   ring["duration"], ring["radius"])
+            if frame is None:
+                state["ring"] = None
+                canvas.coords(click_ring, -10, -10, -10, -10)
+            else:
+                with contextlib.suppress(Exception):
+                    canvas.itemconfigure(click_ring,
+                                         outline=ring["tint"])
+                    canvas.coords(click_ring, hx - frame[0], hy - frame[0],
+                                  hx + frame[0], hy + frame[0])
+                    canvas.itemconfigure(click_ring, width=frame[1])
+        else:
+            canvas.coords(click_ring, -10, -10, -10, -10)
+        live = state["glyphs"]
+        if live:
+            kept = []
+            for i, glyph in enumerate(live):
+                if not isinstance(glyph, dict):
+                    continue
+                rise = None
+                with contextlib.suppress(Exception):
+                    rise = glyph_frame(now, glyph["start"],
+                                       OVERLAY_GLYPH_LIFE_SECONDS,
+                                       OVERLAY_GLYPH_RISE_PX)
+                if rise is None:
+                    continue
+                kept.append(glyph)
+                if i < len(glyph_ids):
+                    with contextlib.suppress(Exception):
+                        canvas.coords(glyph_ids[i], glyph["x"],
+                                      glyph["y"] - rise)
+                        canvas.itemconfigure(
+                            glyph_ids[i], text=glyph["char"])
+            state["glyphs"] = kept
+            for j in range(len(kept), len(glyph_ids)):
+                canvas.coords(glyph_ids[j], -10, -10)
 
     def _tick() -> None:
         nonlocal cursor
@@ -1250,6 +1453,9 @@ def _run_window(tk) -> None:
                             state["choreo"],
                             message.get("on") is True,
                             time.monotonic())
+                elif kind == "effect":
+                    with contextlib.suppress(Exception):
+                        _effect(message)
         except queue.Empty:
             pass
         with contextlib.suppress(OSError):
@@ -1269,7 +1475,8 @@ def _run_window(tk) -> None:
                         state["to_target"] = False
                         state["squash_until"] = now + OVERLAY_SQUISH_SECONDS
                         state["press_start"] = now
-                        state["press_depth"] = 0.05
+                        state["press_depth"] = OVERLAY_PRESS_LAND
+                        _spawn_land_ring()
                 else:
                     p = min(1.0, max(0.0, (now - float(flight["start"]))
                                             / duration))
@@ -1291,7 +1498,8 @@ def _run_window(tk) -> None:
                             state["squash_until"] = (
                                 now + OVERLAY_SQUISH_SECONDS)
                             state["press_start"] = now
-                            state["press_depth"] = 0.05
+                            state["press_depth"] = OVERLAY_PRESS_LAND
+                            _spawn_land_ring()
                     else:
                         rate = timing_rate(curve, p) / duration
                         tangent = flight_tangent(

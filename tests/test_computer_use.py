@@ -649,3 +649,78 @@ def test_overlay_delay_fn_drag_sums_legs(monkeypatch):
     total = delay_for({"x": 900, "y": 800})
     assert total >= first
     assert total <= runner._OVERLAY_DRAG_DWELL_MAX_SECONDS
+
+
+async def test_click_ok_exposes_effect_inputs(monkeypatch):
+    """Item-4: the runner's click effect reads x/y/button off the ok
+    result — the effect contract pins them here (core untouched)."""
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te.os, "name", "nt")
+    monkeypatch.setattr(te, "_computer_input_api",
+                        lambda: {"sentinel": True})
+
+    async def fake_resolve(target, *, on_point=None):
+        return {"x": 940, "y": 27}, {"x": 940, "y": 27}
+
+    monkeypatch.setattr(te, "_computer_resolve", fake_resolve)
+
+    async def fake_dwell(seconds):
+        pass
+
+    monkeypatch.setattr(te, "_computer_dwell", fake_dwell)
+    monkeypatch.setattr(te, "_computer_click_at",
+                        lambda api, x, y, button, double: None)
+    result = await te._computer_act(
+        "click", {"x": 940, "y": 27, "button": "right"})
+    assert result["status"] == "ok"
+    assert result["verified"] is False
+    assert isinstance(result["x"], int)
+    assert isinstance(result["y"], int)
+    assert result["button"] == "right"
+
+
+async def test_type_ok_keeps_feedback_shape(monkeypatch):
+    """Item-4: type feedback rides the call args (text) — the ok
+    result keeps chars/submit/version honesty markers intact."""
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te.os, "name", "nt")
+    monkeypatch.setattr(te, "_computer_input_api",
+                        lambda: {"sentinel": True})
+
+    async def fake_dwell(seconds):
+        pass
+
+    async def fake_probe():
+        return False
+
+    monkeypatch.setattr(te, "_computer_dwell", fake_dwell)
+    monkeypatch.setattr(te, "_focus_is_password", fake_probe)
+    monkeypatch.setattr(te, "_computer_type",
+                        lambda api, text: None)
+    result = await te._computer_act(
+        "type_text", {"text": "hello"})
+    assert result["status"] == "ok"
+    assert result["chars"] == 5
+    assert result["submit"] is False
+    assert result["verified"] is False
+
+
+async def test_effect_inputs_absent_on_error(monkeypatch):
+    """Item-4: error results carry no x/y — the runner skips the
+    click effect by construction (stale ids stay errors, F13)."""
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te.os, "name", "nt")
+
+    async def fake_look():
+        return {"status": "look", "app": "Brave", "controls": []}
+
+    monkeypatch.setattr(te, "_look_at_screen", fake_look)
+    monkeypatch.setattr(te, "_computer_input_api",
+                        lambda: {"sentinel": True})
+    result = await te._computer_act(
+        "click", {"control": "C30", "button": "left"})
+    assert result["status"] == "error"
+    assert "x" not in result and "y" not in result

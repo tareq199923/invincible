@@ -487,7 +487,7 @@ async def execute_job(job: dict) -> dict:
             delay_for = (_overlay_delay_fn(job_type == "drag")
                          if alive else None)
             try:
-                return await tool_executor._computer_act(
+                result = await tool_executor._computer_act(
                     job_type, args if isinstance(args, dict) else {},
                     on_point=sink, pre_action_delay=dwell,
                     delay_for=delay_for)
@@ -495,6 +495,23 @@ async def execute_job(job: dict) -> dict:
                 if seen is not None:
                     with contextlib.suppress(Exception):
                         seen.settle()
+            # Item-4: post-action feedback (child draw only, suppressed
+            # like every overlay call). The result stands regardless —
+            # a dead overlay swallows the effect, never the job.
+            with contextlib.suppress(Exception):
+                if (alive and isinstance(result, dict)
+                        and result.get("status") == "ok"):
+                    if job_type == "click":
+                        seen.effect("click",
+                                    {"x": result.get("x"),
+                                     "y": result.get("y")},
+                                    button=str(result.get("button",
+                                                           "left")))
+                    elif job_type == "type_text" and isinstance(
+                            args, dict):
+                        seen.effect("type",
+                                    text=str(args.get("text", "")))
+            return result
         return {
             "status": "error",
             "error": f"Unknown job type: {job_type}. Valid job types: "

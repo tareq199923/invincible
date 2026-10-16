@@ -210,6 +210,13 @@
     "verification": "ruff check . && pytest tests/test_webchat_agent.py tests/test_overlay.py tests/test_computer_use.py"
   },
   {
+    "behavior": "overlay fly-click feedback: land squish 0.05 + 30px ring, click 0.14 + 38px ring (right-click tint) + 1.4s coordinate bubble, typed chunks 0.035 + up to 6 rising glyphs; draw-only, results/approvals/F14 untouched, dead overlay silent",
+    "id": "Item-4",
+    "state": "passing",
+    "title": "Fly-click feedback (squish + ring + bubble, draw only)",
+    "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py tests/test_webchat_agent.py"
+  },
+  {
     "behavior": "look_at_screen results carry mouse grounding: near {id,kind,label} (smallest-area contain, else <60px nearest, else null) + single-line mouse_hint @x,y with this/that/here sentence + truncated bool; C order/grid math byte-identical, missing-mouse omits hint, F13 untouched",
     "id": "Item-3",
     "state": "passing",

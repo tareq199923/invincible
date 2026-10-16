@@ -591,6 +591,203 @@ def test_overlay_live_metrics_on_windows():
     assert isinstance(x, int) and isinstance(y, int)
 
 
+def test_ring_frame_expand_thin_and_expiry():
+    assert overlay.ring_frame(0.0, 0.0, 0.7, 30) == (30.0, 3)
+    mid = overlay.ring_frame(0.35, 0.0, 0.7, 30)
+    assert mid is not None and mid[0] > 30.0 and mid[1] == 2
+    late = overlay.ring_frame(0.6, 0.0, 0.7, 30)
+    assert late is not None and late[1] == 1
+    assert overlay.ring_frame(0.7, 0.0, 0.7, 30) is None
+    assert overlay.ring_frame(-0.1, 0.0, 0.7, 30) is None
+    assert overlay.ring_frame("bad", 0.0, 0.7, 30) is None
+    assert overlay.ring_frame(0.1, 0.0, 0.0, 30) is None
+    assert overlay.ring_frame(0.1, 0.0, 0.7, 0) is None
+
+
+def test_glyph_frame_rise_ease_out_and_expiry():
+    assert overlay.glyph_frame(0.0, 0.0, 0.9, 46.0) == 0.0
+    mid = overlay.glyph_frame(0.45, 0.0, 0.9, 46.0)
+    assert mid is not None and 0 < mid < 46.0
+    # Ease-out: most of the climb happens early.
+    assert overlay.glyph_frame(0.45, 0.0, 0.9, 46.0) > 46.0 / 2
+    assert overlay.glyph_frame(0.9, 0.0, 0.9, 46.0) is None
+    assert overlay.glyph_frame(-0.1, 0.0, 0.9, 46.0) is None
+    assert overlay.glyph_frame("bad", 0.0, 0.9, 46.0) is None
+    assert overlay.glyph_frame(0.1, 0.0, 0.0, 46.0) is None
+
+
+def test_effect_glyph_chars_skip_space_and_cap():
+    assert overlay.effect_glyph_chars("hi you") == ["h", "i", "y", "o",
+                                                   "u"]
+    assert overlay.effect_glyph_chars("  a\nb\t c ") == ["a", "b", "c"]
+    assert overlay.effect_glyph_chars("") == []
+    assert overlay.effect_glyph_chars(None) == []
+    assert overlay.effect_glyph_chars(42) == []
+    long_text = "z" * 200
+    assert overlay.effect_glyph_chars(long_text) == ["z"] * 6
+    assert len(overlay.effect_glyph_chars("abcdefghij")) == 6
+
+
+def test_effect_serializes_click_and_type_to_child():
+    handle = overlay.Overlay()
+    stdin = _FakeStdin()
+    handle._proc = _FakeProc(stdin)
+    handle.effect("click", {"x": 250, "y": 750}, button="left")
+    assert json.loads(stdin.lines[-1]) == {
+        "type": "effect", "kind": "click", "x": 250, "y": 750,
+        "button": "left"}
+    handle.effect("click", {"x": 10, "y": 20}, button="right")
+    assert json.loads(stdin.lines[-1])["button"] == "right"
+    handle.effect("click", {"x": 10, "y": 20}, button="middle")
+    assert json.loads(stdin.lines[-1])["button"] == "left"
+    handle.effect("type", text="hi you")
+    assert json.loads(stdin.lines[-1]) == {
+        "type": "effect", "kind": "type", "text": "hiyou"}
+    before = len(stdin.lines)
+    for bad in ({"kind": "frobnicate"}, {"kind": "click"},
+                {"kind": "click", "point": None}):
+        handle.effect(bad.get("kind"), bad.get("point"),
+                      text=bad.get("text", ""))
+    handle.effect("click", {"x": "a", "y": 1})
+    handle.effect("click", {"x": 5000, "y": 1})
+    handle.effect("type", text="   ")
+    handle.effect("type", text="")
+    assert len(stdin.lines) == before
+
+
+def test_effect_never_raises_when_dead():
+    stillborn = overlay.Overlay()
+    stillborn.effect("click", {"x": 1, "y": 2}, button="right")
+    stillborn.effect("type", text="hello")
+    stillborn.effect("bogus", {"x": 1, "y": 2})
+    assert stillborn.alive is False
+
+
+async def test_execute_job_click_ok_sends_effect(
+        monkeypatch, _clean_overlay_state):
+    effects: list = []
+    settled: list = []
+
+    class _Live:
+        alive = True
+
+        def announce(self, point, dragging=False):
+            pass
+
+        def settle(self):
+            settled.append(True)
+
+        def effect(self, kind, point=None, button="left", text=""):
+            effects.append({"kind": kind, "point": point,
+                            "button": button, "text": text})
+
+    async def fake_act(name, args, *, on_point=None,
+                       pre_action_delay=0.0, delay_for=None):
+        return {"status": "ok", "action": "click", "button": "right",
+                "double": False, "verified": False,
+                "x": 111, "y": 222}
+
+    monkeypatch.setattr(runner, "ensure_overlay", lambda: _Live())
+    monkeypatch.setattr(tool_executor, "_computer_act", fake_act)
+    out = await runner.execute_job(
+        {"type": "click",
+         "args": {"x": 111, "y": 222, "button": "right"}})
+    assert out["status"] == "ok"
+    assert out["verified"] is False
+    assert effects == [{"kind": "click", "point": {"x": 111, "y": 222},
+                        "button": "right", "text": ""}]
+    assert settled == [True]
+
+
+async def test_execute_job_type_ok_sends_text_effect(
+        monkeypatch, _clean_overlay_state):
+    effects: list = []
+
+    class _Live:
+        alive = True
+
+        def announce(self, point, dragging=False):
+            pass
+
+        def settle(self):
+            pass
+
+        def effect(self, kind, point=None, button="left", text=""):
+            effects.append({"kind": kind, "text": text})
+
+    async def fake_act(name, args, *, on_point=None,
+                       pre_action_delay=0.0, delay_for=None):
+        return {"status": "ok", "action": "type_text", "chars": 5,
+                "submit": False, "verified": False}
+
+    monkeypatch.setattr(runner, "ensure_overlay", lambda: _Live())
+    monkeypatch.setattr(tool_executor, "_computer_act", fake_act)
+    out = await runner.execute_job(
+        {"type": "type_text", "args": {"text": "hello"}})
+    assert out["status"] == "ok"
+    assert effects == [{"kind": "type", "text": "hello"}]
+
+
+async def test_execute_job_error_sends_no_effect(
+        monkeypatch, _clean_overlay_state):
+    effects: list = []
+
+    class _Live:
+        alive = True
+
+        def announce(self, point, dragging=False):
+            pass
+
+        def settle(self):
+            pass
+
+        def effect(self, kind, point=None, button="left", text=""):
+            effects.append(kind)
+
+    async def fake_act(name, args, *, on_point=None,
+                       pre_action_delay=0.0, delay_for=None):
+        return {"status": "error", "error": "stale id C30"}
+
+    monkeypatch.setattr(runner, "ensure_overlay", lambda: _Live())
+    monkeypatch.setattr(tool_executor, "_computer_act", fake_act)
+    out = await runner.execute_job(
+        {"type": "click", "args": {"control": "C30"}})
+    assert out["status"] == "error"
+    assert effects == []
+
+
+async def test_execute_job_effect_failure_keeps_result(
+        monkeypatch, _clean_overlay_state):
+    settled: list = []
+
+    class _Flaky:
+        alive = True
+
+        def announce(self, point, dragging=False):
+            pass
+
+        def settle(self):
+            settled.append(True)
+
+        def effect(self, kind, point=None, button="left", text=""):
+            raise RuntimeError("overlay died mid-effect")
+
+    async def fake_act(name, args, *, on_point=None,
+                       pre_action_delay=0.0, delay_for=None):
+        return {"status": "ok", "action": "click", "button": "left",
+                "double": False, "verified": False,
+                "x": 5, "y": 6}
+
+    monkeypatch.setattr(runner, "ensure_overlay", lambda: _Flaky())
+    monkeypatch.setattr(tool_executor, "_computer_act", fake_act)
+    out = await runner.execute_job(
+        {"type": "click", "args": {"x": 5, "y": 6}})
+    assert out == {"status": "ok", "action": "click", "button": "left",
+                   "double": False, "verified": False,
+                   "x": 5, "y": 6}
+    assert settled == [True]
+
+
 def _choreo(*pts):
     state = overlay.choreo_state(1000.0)
     for pt in pts:
