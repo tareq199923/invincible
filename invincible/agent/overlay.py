@@ -34,10 +34,16 @@ import time
 
 OVERLAY_GRID_MAX = 1000
 
-# Look: original soft-white head, two ink eyes.
+# Look: Bluey-like berry head (original shades, no copied art).
 OVERLAY_HEAD_PX = 72
-OVERLAY_HEAD_FILL = "#fdfdfc"
-OVERLAY_HEAD_OUTLINE = "#e3ded2"
+OVERLAY_HEAD_FILL = "#7d9bff"
+OVERLAY_HEAD_OUTLINE = "#ffffff"
+OVERLAY_BERRY_LIGHT = "#b9cbff"
+OVERLAY_BERRY_MID = "#7d9bff"
+OVERLAY_BERRY_DEEP = "#5568d8"
+OVERLAY_SHINE_FILL = "#ffffff"
+OVERLAY_GLOW_FILL = "#7d9bff"
+OVERLAY_GLOW = True
 OVERLAY_EYE_FILL = "#20242b"
 OVERLAY_EYE_DX = 14
 OVERLAY_EYE_DY = -6
@@ -285,6 +291,32 @@ def bubble_text_for(x, y) -> str | None:
     return f"\u2316 {int(x)},{int(y)}"
 
 
+def berry_shades() -> tuple[str, str, str]:
+    """Light→mid→deep fills for the stacked-oval gradient (pure)."""
+    return (OVERLAY_BERRY_LIGHT, OVERLAY_BERRY_MID, OVERLAY_BERRY_DEEP)
+
+
+def teardrop_points(hx: float, hy: float, rx: float, ry: float) -> list:
+    """Tip triangle points above-left of the head (pure, hermetic).
+
+    Empty list for malformed input; otherwise 3 (x, y) points. The tip
+    reads as Bluey's teardrop peak without copying its exact path.
+    """
+    try:
+        fx, fy, arx, ary = float(hx), float(hy), float(rx), float(ry)
+    except (TypeError, ValueError):
+        return []
+    if not all(math.isfinite(v) for v in (fx, fy, arx, ary)):
+        return []
+    if arx <= 0 or ary <= 0:
+        return []
+    return [
+        (fx - arx * 0.95, fy - ary * 0.75),
+        (fx - arx * 0.10, fy - ary * 1.30),
+        (fx + arx * 0.25, fy - ary * 0.70),
+    ]
+
+
 def virtual_screen() -> tuple[int, int, int, int]:
     """Virtual-screen ``(ox, oy, w, h)`` via GetSystemMetrics.
 
@@ -498,8 +530,23 @@ def _run_window(tk) -> None:
     radius = OVERLAY_HEAD_PX // 2
     dock = dock_corner(vrect, OVERLAY_HEAD_PX)
     head_xy = [float(dock[0] + radius), float(dock[1] + radius)]
-    head = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_HEAD_FILL,
-                              outline=OVERLAY_HEAD_OUTLINE, width=2)
+    light, mid, deep = berry_shades()
+    glow = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_GLOW_FILL,
+                              outline=OVERLAY_GLOW_FILL, width=1)
+    with contextlib.suppress(Exception):
+        canvas.itemconfigure(glow, stipple="gray25")
+    if not OVERLAY_GLOW:
+        canvas.coords(glow, -10, -10, -10, -10)
+    head_deep = canvas.create_oval(0, 0, 1, 1, fill=deep,
+                                   outline=OVERLAY_HEAD_OUTLINE, width=3)
+    head_mid = canvas.create_oval(0, 0, 1, 1, fill=mid,
+                                  outline="", width=0)
+    head_light = canvas.create_oval(0, 0, 1, 1, fill=light,
+                                    outline="", width=0)
+    tip = canvas.create_polygon(0, 0, 1, 1, 2, 2, fill=mid,
+                                outline=OVERLAY_HEAD_OUTLINE, width=2)
+    shine = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_SHINE_FILL,
+                               outline=OVERLAY_SHINE_FILL)
     eye_l = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_EYE_FILL,
                                outline=OVERLAY_EYE_FILL)
     eye_r = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_EYE_FILL,
@@ -549,7 +596,22 @@ def _run_window(tk) -> None:
                 canvas.coords(dot, -10, -10, -10, -10)
         ex, ey = eye_offset(hx, hy, cursor[0], cursor[1],
                             OVERLAY_EYE_TRACK_R)
-        canvas.coords(head, hx - rx, hy - ry, hx + rx, hy + ry)
+        gr = max(rx, ry) * 1.35
+        canvas.coords(glow, hx - gr, hy - gr, hx + gr, hy + gr)
+        canvas.coords(head_deep, hx - rx, hy - ry, hx + rx, hy + ry)
+        canvas.coords(head_mid, hx - rx * 0.86, hy - ry * 0.86,
+                      hx + rx * 0.86, hy + ry * 0.86)
+        canvas.coords(head_light, hx - rx * 0.62, hy - ry * 0.72,
+                      hx + rx * 0.45, hy + ry * 0.05)
+        pts = teardrop_points(hx, hy, rx, ry)
+        if pts:
+            flat = [c for p in pts for c in p]
+            canvas.coords(tip, *flat)
+        else:
+            canvas.coords(tip, -10, -10, -10, -10, -10, -10)
+        sr = max(rx, ry) * 0.16
+        canvas.coords(shine, hx - rx * 0.42 - sr, hy - ry * 0.52 - sr,
+                      hx - rx * 0.42 + sr, hy - ry * 0.52 + sr)
         for item, side in ((eye_l, -1), (eye_r, 1)):
             ecx = hx + side * OVERLAY_EYE_DX + ex
             ecy = hy + OVERLAY_EYE_DY + ey

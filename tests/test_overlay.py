@@ -115,6 +115,20 @@ def test_bowed_waypoints_arc_and_land():
         (1.0, 2.0)] * 3
 
 
+def test_berry_look_helpers():
+    light, mid, deep = overlay.berry_shades()
+    assert (light, mid, deep) == (
+        overlay.OVERLAY_BERRY_LIGHT,
+        overlay.OVERLAY_BERRY_MID,
+        overlay.OVERLAY_BERRY_DEEP,
+    )
+    pts = overlay.teardrop_points(100.0, 100.0, 36.0, 36.0)
+    assert len(pts) == 3
+    assert min(y for _, y in pts) < 100.0 - 36.0 * 0.7
+    assert overlay.teardrop_points(0, 0, 0, 0) == []
+    assert overlay.teardrop_points("a", 0, 1, 1) == []
+
+
 def test_eye_offset_toward_cursor_and_clamp():
     assert overlay.eye_offset(100, 100, 103, 104, 9) == (3, 4)
     assert overlay.eye_offset(100, 100, 100, 100, 9) == (0, 0)

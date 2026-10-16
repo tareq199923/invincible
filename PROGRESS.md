@@ -5,6 +5,10 @@
 
 ## Current State
 
+- Overlay look pass done (`passing`, uncommitted): Bluey-like berry head —
+  stacked light/mid/deep gradient, white rim, teardrop tip, shine dot,
+  faint glow; eyes/tracking unchanged, original art. Pins for
+  `berry_shades`/`teardrop_points` in `test_overlay.py`.
 - F18 done (`passing`, uncommitted): chord fix from the live transcript —
   `press_keys` modifier chords dropped their modifier (ctrl+z typed bare
   `z`) because single-char mains rode KEYEVENTF_UNICODE, which ignores
