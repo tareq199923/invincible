@@ -86,6 +86,82 @@
     var stopLevel = null;
     var audio = null;
     var recog = null;
+    // Item-5 quiet UI: optional autotuck panel + screen-corner mode
+    // border (PWA phone.html passes both; chat.html passes neither and
+    // every helper below null-guards). Ids, realms, and textContent-only
+    // inserts are untouched.
+    var panel = opts.panel || null;
+    var border = opts.border || null;
+    var tuckTimer = null;
+
+    // Orb state plus its mirror on the screen-corner border. Reuses the
+    // exact .is-* names (is-listening/is-working/is-speaking) — no new
+    // state classes; border restyles them as a solid edge in CSS.
+    function setOrbState(state) {
+      setState(orb, state);
+      if (border) {
+        border.classList.remove("is-listening", "is-working",
+          "is-speaking");
+        if (state) border.classList.add(state);
+      }
+    }
+
+    // Mic active (recording, browser-listening, or speaking back) pauses
+    // the tuck timer: the panel never tucks mid-record.
+    function isRecording() {
+      return !!(recorder || recog) ||
+        orb.classList.contains("is-listening") ||
+        orb.classList.contains("is-speaking");
+    }
+
+    function clearTuck() {
+      if (tuckTimer) {
+        try { clearTimeout(tuckTimer); } catch (e) { /* ignore */ }
+        tuckTimer = null;
+      }
+    }
+
+    function setTucked(tucked) {
+      if (!panel) return;
+      panel.classList.toggle("is-tucked", tucked);
+      orb.setAttribute("aria-expanded", tucked ? "false" : "true");
+    }
+
+    function scheduleTuck() {
+      clearTuck();
+      if (!panel || panel.classList.contains("is-tucked")) return;
+      var secs = 6;
+      try {
+        var n = parseInt(panel.getAttribute("data-autotuck"), 10);
+        if (n > 0) secs = n;
+      } catch (e) { /* default 6s */ }
+      tuckTimer = setTimeout(function () {
+        tuckTimer = null;
+        if (isRecording()) { scheduleTuck(); return; }
+        setTucked(true);
+      }, secs * 1000);
+    }
+
+    function untuck() {
+      if (!panel) return;
+      clearTuck();
+      setTucked(false);
+      scheduleTuck();
+    }
+
+    if (panel) {
+      // Any pointerdown/input in the panel resets the quiet clock.
+      ["pointerdown", "input"].forEach(function (ev) {
+        panel.addEventListener(ev, function () {
+          if (panel.classList.contains("is-tucked")) return;
+          scheduleTuck();
+        });
+      });
+      try {
+        window.addEventListener("pagehide", clearTuck);
+      } catch (e) { /* ignore */ }
+      scheduleTuck();
+    }
 
     function stopTracks() {
       if (stream) {
@@ -120,9 +196,10 @@
       stopTracks();
       stopAudio();
       stopRecog();
-      setState(orb, null);
+      setOrbState(null);
       orb.setAttribute("aria-label", "Talk");
       setStatus(statusEl, msg || idleLabel);
+      scheduleTuck();
     }
 
     function friendlyTranscribeError(err) {
@@ -157,7 +234,7 @@
       recog.lang = "en-US";
       recog.interimResults = false;
       recog.maxAlternatives = 1;
-      setState(orb, "is-listening");
+      setOrbState("is-listening");
       orb.setAttribute("aria-label", "Stop and send");
       setStatus(statusEl, "Free mode listening… tap to stop.");
       recog.onresult = function (ev) {
@@ -202,7 +279,7 @@
         var utter = new SpeechSynthesisUtterance(text.slice(0, 4000));
         utter.onend = function () { toIdle(""); };
         utter.onerror = function () { toIdle(""); };
-        setState(orb, "is-speaking");
+        setOrbState("is-speaking");
         orb.setAttribute("aria-label", "Stop speaking");
         setStatus(statusEl, "Free mode speaking… tap to stop.");
         window.speechSynthesis.speak(utter);
@@ -213,7 +290,7 @@
     }
 
     async function upload(blob) {
-      setState(orb, "is-working");
+      setOrbState("is-working");
       setStatus(statusEl, "Transcribing…");
       try {
         var text = await opts.transcribe(blob);
@@ -270,12 +347,18 @@
       };
       stopLevel = attachLevel(stream, orb);
       recorder.start();
-      setState(orb, "is-listening");
+      setOrbState("is-listening");
       orb.setAttribute("aria-label", "Stop and send");
       setStatus(statusEl, "Listening… tap to send.");
     }
 
     orb.addEventListener("click", function () {
+      // Item-5: tapping the orb reopens a tucked panel (and restarts the
+      // quiet clock); the tap then behaves exactly as before.
+      if (panel) {
+        if (panel.classList.contains("is-tucked")) untuck();
+        else scheduleTuck();
+      }
       // Tap while speaking interrupts the reply (Grok/GPT feel) —
       // works for server audio and free browser speech alike.
       if (orb.classList.contains("is-speaking")) {
@@ -337,7 +420,7 @@
           try {
             var url = URL.createObjectURL(blob);
             audio = new Audio(url);
-            setState(orb, "is-speaking");
+            setOrbState("is-speaking");
             orb.setAttribute("aria-label", "Stop speaking");
             setStatus(statusEl, "Speaking… tap to stop.");
             audio.onended = function () {
@@ -355,6 +438,8 @@
       },
       stop: toIdle,
       chirp: playChirp,
+      untuck: untuck,
+      destroy: clearTuck,
     };
   }
 

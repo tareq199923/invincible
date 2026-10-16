@@ -692,6 +692,89 @@ def test_chirp_on_mic_replies_only():
     assert "voiceOrb.chirp()" in phone
 
 
+def test_quiet_ui_autotuck_panel():
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    phone = (repo / "invincible" / "templates" / "phone.html").read_text(
+        encoding="utf-8")
+    chat = (repo / "invincible" / "templates" / "chat.html").read_text(
+        encoding="utf-8")
+    orb_js = (repo / "invincible" / "templates" / "static" /
+              "voice-orb.js").read_text(encoding="utf-8")
+    css = (repo / "invincible" / "templates" / "static" /
+           "voice-orb.css").read_text(encoding="utf-8")
+    # Item-5: the PWA credential picks live inside the autotuck panel —
+    # real DOM nodes (.phone-wrap + phone-key/phone-model), not a forced id.
+    assert 'id="phone-panel"' in phone
+    assert 'data-autotuck="6"' in phone
+    assert phone.index("phone-panel") < phone.index("phone-key")
+    assert phone.index("phone-key") < phone.index("phone-model")
+    # Orb tap reopens: the orb controls the panel with aria-expanded.
+    assert 'aria-controls="phone-panel"' in phone
+    assert 'aria-expanded=' in phone
+    # Timer: 6s quiet collapses, any pointerdown/input resets the clock.
+    assert "data-autotuck" in orb_js
+    assert "pointerdown" in orb_js
+    assert "scheduleTuck" in orb_js
+    assert "clearTimeout" in orb_js
+    assert "pagehide" in orb_js
+    assert "is-tucked" in orb_js
+    assert '"false" : "true"' in orb_js or '"false":"true"' in orb_js or \
+        'tucked ? "false" : "true"' in orb_js
+    # Guard: never tucks mid-record (live recorder, browser recognition,
+    # or speaking/listening orb state re-arms instead of collapsing).
+    assert "recorder || recog" in orb_js
+    assert "is-speaking" in orb_js and "isRecording" in orb_js
+    # Tucked panel never intercepts taps; desktop chat has no panel and
+    # the shared module null-guards it.
+    assert "phone-panel" in css and "is-tucked" in css
+    assert 'id="phone-panel"' not in chat
+    assert "opts.panel || null" in orb_js
+    # Frozen behavior: ids, asked flag, textContent-only inserts intact.
+    assert 'id="phone-orb"' in phone and 'id="voice-orb"' in chat
+    assert "asked" in phone
+
+
+def test_quiet_ui_mode_border():
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    phone = (repo / "invincible" / "templates" / "phone.html").read_text(
+        encoding="utf-8")
+    orb_js = (repo / "invincible" / "templates" / "static" /
+              "voice-orb.js").read_text(encoding="utf-8")
+    css = (repo / "invincible" / "templates" / "static" /
+           "voice-orb.css").read_text(encoding="utf-8")
+    # Item-5: PWA screen-corner border element, never hit-testing.
+    assert 'id="mode-border"' in phone
+    assert 'aria-hidden="true"' in phone
+    assert "position: fixed" in css
+    assert "pointer-events: none" in css
+    assert "border-radius: 55px" in css
+    assert "env(safe-area-inset-" in css
+    # Reuses the exact orb .is-* state names — no invented classes.
+    for state in ("is-listening", "is-working", "is-speaking"):
+        assert state in css and state in orb_js
+    assert "is-asking" not in orb_js and "is-thinking" not in orb_js
+    assert "opts.border || null" in orb_js
+    # Pulse is opacity-only on working; static otherwise; flat, no glow.
+    assert "mode-pulse" in css
+    border_block = css[css.index("#mode-border"):
+                       css.index("@keyframes mode-pulse")]
+    assert "box-shadow" not in border_block
+    assert "opacity" in css[css.index("@keyframes mode-pulse"):]
+    pulse_use = [line for line in css.splitlines()
+                 if "mode-pulse" in line and "keyframes" not in line]
+    assert pulse_use and all("is-working" in css[
+        max(0, css.index(line) - 400):css.index(line)]
+        for line in pulse_use)
+    # Reduced motion disables the pulse; static borders need no motion.
+    assert "prefers-reduced-motion" in css
+    reduced = css[css.index("prefers-reduced-motion"):]
+    assert "mode-border" in reduced
+
+
 async def test_transcribe_402_surfaces_billing_excerpt():
     from invincible.core.voice import VoiceUpstreamError, transcribe_audio
 

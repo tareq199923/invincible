@@ -5,6 +5,22 @@
 
 ## Current State
 
+- Item-5 done (`passing`): quiet UI — PWA credential picks wrapped in
+  `#phone-panel[data-autotuck="6"]` (real `.phone-wrap` + `phone-key` /
+  `phone-model` nodes, order-pinned) collapsing after 6s idle via
+  `clearTimeout`/`scheduleTuck` on `pointerdown`/`input`; mic-active
+  guard (`recorder || recog`, `is-listening`/`is-speaking`) re-arms
+  instead of tucking, orb tap untucks with `aria-expanded` + `pagehide`
+  cleanup. `#mode-border` fixed screen-corner solid edge reusing the
+  exact orb `.is-*` names (blue listening 10px, purple working 8px with
+  opacity-only `mode-pulse`, pink speaking 8px; `pointer-events:none`,
+  55px radius + `env(safe-area-inset-*)`, no glow, reduced-motion off).
+  Shared `voice-orb.js` null-guards panel/border (`opts.panel/border`)
+  so desktop `chat.html` is untouched; ids, realms, `asked` flag, and
+  textContent-only inserts frozen; no registry/golden/wire change.
+  New pins: 2 static tests in `tests/test_voice.py` (panel + border).
+  `ruff` clean, 96 passed voice/webchat/handoff slice, full
+  1964 passed / 11 skipped / 1 deselected.
 - Item-1c done (`passing`): glide-cover dwell — the 0.35s fixed dwell was
   shorter than every Bluey flight (0.45s min, ~0.9s typical), so settle
   aborted each glide mid-flight and the head never landed. Fix:
@@ -294,7 +310,7 @@
 
 ## In Progress
 
-- None — Item-1c complete (`passing`).
+- None — Item-5 complete (`passing`).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

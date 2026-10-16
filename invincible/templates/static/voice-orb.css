@@ -99,4 +99,70 @@
     animation: none;
     transform: none;
   }
+  .phone-panel, #mode-border.is-working {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Item-5 quiet UI: auto-tuck credential panel on the PWA. Any
+   pointerdown/input resets the 6s clock (see voice-orb.js); the tucked
+   state fades + settles shut with an ease, and never intercepts taps. */
+.phone-panel {
+  overflow: hidden;
+  max-height: 12rem;
+  opacity: 1;
+  transform-origin: top center;
+  transition: max-height 0.25s ease-out, opacity 0.25s ease-out,
+    transform 0.25s ease-out;
+}
+
+.phone-panel.is-tucked {
+  max-height: 0;
+  opacity: 0;
+  transform: scale(0.96);
+  pointer-events: none;
+}
+
+/* Item-5 quiet UI: solid screen-corner mode border on the PWA. Follows
+   the orb .is-* states (blue = listening, purple = working/thinking,
+   pink = speaking). Opacity pulse on working only; static otherwise.
+   pointer-events:none so it never blocks taps; flat fills, no glow. */
+#mode-border {
+  position: fixed;
+  top: env(safe-area-inset-top, 0px);
+  right: env(safe-area-inset-right, 0px);
+  bottom: env(safe-area-inset-bottom, 0px);
+  left: env(safe-area-inset-left, 0px);
+  pointer-events: none;
+  border-style: solid;
+  border-width: 0;
+  border-color: transparent;
+  border-radius: 55px;
+  z-index: 60;
+}
+
+#mode-border.is-listening {
+  border-width: 10px;
+  border-color: #4f8bff;
+}
+
+#mode-border.is-working {
+  border-width: 8px;
+  border-color: #c79bff;
+  animation: mode-pulse 0.9s ease-in-out infinite;
+}
+
+#mode-border.is-speaking {
+  border-width: 8px;
+  border-color: #ff9ad0;
+}
+
+@keyframes mode-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.65;
+  }
 }

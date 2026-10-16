@@ -8,6 +8,7 @@
 {% endblock %}
 {% block content %}
 <div class="phone-wrap">
+  <div id="mode-border" class="mode-border" aria-hidden="true"></div>
   <div class="phone-face" aria-hidden="true">
     <span class="baymax-dot baymax-dot-lg"></span>
     <span class="baymax-name">Bmax</span>
@@ -17,6 +18,7 @@
   Paste one <code>inv_</code> key once — it stays in this phone's
   local storage and is sent only to this server.</p>
 
+  <div id="phone-panel" class="phone-panel" data-autotuck="6">
   <label class="pick" for="phone-key">inv_ key
     <input id="phone-key" type="password" autocomplete="off"
            placeholder="inv_…" aria-label="API key">
@@ -25,6 +27,7 @@
     <input id="phone-model" type="text" autocomplete="off"
            placeholder="model-id from /v1/models" aria-label="Model">
   </label>
+  </div>
 
   <div id="phone-log" aria-live="polite"></div>
 
@@ -33,7 +36,8 @@
               aria-label="Message"></textarea>
     <div class="composer-actions">
     <button type="button" id="phone-orb" class="voice-orb"
-            title="Talk" aria-label="Talk"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M17 11a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg></button>
+            title="Talk" aria-label="Talk" aria-controls="phone-panel"
+            aria-expanded="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M17 11a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg></button>
     <button type="button" id="phone-send" title="Send"
             aria-label="Send">&uarr;</button>
     </div>
@@ -244,6 +248,8 @@
       voiceOrb = window.VoiceOrb.create({
         orb: orbEl,
         status: status,
+        panel: document.getElementById("phone-panel"),
+        border: document.getElementById("mode-border"),
         onText: function (text) { voiceNext = true; send(text); },
         transcribe: function (blob) {
           var c = creds();

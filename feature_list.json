@@ -201,5 +201,12 @@
     "state": "passing",
     "title": "Glide-cover dwell (land before act)",
     "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py"
+  },
+  {
+    "behavior": "PWA stays quiet: credential picks auto-tuck after 6s idle (any pointerdown/input resets, never mid-record, orb tap reopens with aria-expanded) plus a solid screen-corner mode border following the orb is-* states (opacity pulse on working only, pointer-events none, no glow, reduced-motion off); ids, realms, asked flag, and textContent-only inserts unchanged",
+    "id": "Item-5",
+    "state": "passing",
+    "title": "Quiet UI (auto-tuck + screen-corner border)",
+    "verification": "ruff check . && pytest tests/test_voice.py tests/test_webchat.py tests/test_handoff.py"
   }
 ]
