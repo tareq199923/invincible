@@ -481,3 +481,55 @@ async def test_plan_mode_offers_no_computer_use(
     offered = offered_tool_names(bodies)
     assert "click" not in offered
     assert "look_at_screen" in offered
+
+
+def test_result_ok_unavailable_is_false():
+    from invincible.core.tool_dispatch import result_ok
+
+    assert result_ok({"status": "unavailable", "reason": "x"}) is False
+    assert result_ok({"status": "ok"}) is True
+    assert result_ok({"status": "error"}) is False
+
+
+async def test_computer_stale_id_returns_error_not_raise(monkeypatch):
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te.os, "name", "nt")
+
+    async def fake_look():
+        return {"status": "look", "app": "Brave",
+                "controls": [{"id": "C1", "kind": "button",
+                              "label": "Go", "x": 10, "y": 10}]}
+
+    monkeypatch.setattr(te, "_look_at_screen", fake_look)
+    monkeypatch.setattr(te, "_computer_input_api",
+                        lambda: {"sentinel": True})
+    result = await te._computer_act(
+        "click", {"control": "C30", "button": "left"})
+    assert result["status"] == "error"
+    assert "stale" in result["error"]
+
+
+async def test_computer_ok_carries_verified_false(monkeypatch):
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te.os, "name", "nt")
+    monkeypatch.setattr(te, "_computer_input_api",
+                        lambda: {"sentinel": True})
+
+    seen = {}
+
+    async def fake_resolve(target, *, on_point=None):
+        return {"x": 1, "y": 2}, {"x": 1, "y": 2}
+
+    async def fake_dwell(seconds):
+        seen["dwell"] = seconds
+
+    monkeypatch.setattr(te, "_computer_resolve", fake_resolve)
+    monkeypatch.setattr(te, "_computer_dwell", fake_dwell)
+    monkeypatch.setattr(te, "_computer_click_at",
+                        lambda api, x, y, button, double: None)
+    result = await te._computer_act(
+        "click", {"x": 1, "y": 2, "button": "left"})
+    assert result["status"] == "ok"
+    assert result["verified"] is False

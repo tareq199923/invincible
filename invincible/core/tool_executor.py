@@ -2543,7 +2543,8 @@ def _computer_open(api: dict, name: str, args: str) -> dict:
         return {"status": "error",
                 "error": f"could not open {name!r} "
                          f"(ShellExecute code {code})"}
-    return {"status": "ok", "action": "open_app", "name": name}
+    return {"status": "ok", "action": "open_app", "name": name,
+            "verified": False}
 
 
 async def _focus_is_password() -> bool | None:
@@ -2724,6 +2725,10 @@ async def _computer_act(name: str, args: dict, *,
     ValueError becomes an error result. Only ``unavailable`` answers
     off-Windows — never raises there.
 
+    ``ok`` means dispatched to the OS input queue / launcher, NOT
+    pixels verified: callers must confirm with a fresh look_at_screen
+    (every ``ok`` result carries ``verified: False`` for that reason).
+
     ``on_point`` announces each resolved grid point to the F11 overlay
     (never breaks the job); ``pre_action_delay`` pauses once before
     the terminal physical action so the overlay glide lands first.
@@ -2745,7 +2750,7 @@ async def _computer_act(name: str, args: dict, *,
                                norm["button"], norm["double"])
             return {"status": "ok", "action": "click",
                     "button": norm["button"],
-                    "double": norm["double"], **echo}
+                    "double": norm["double"], "verified": False, **echo}
         if name == "type_text":
             if "control" in norm or "x" in norm:
                 # Click-to-focus first, so the probe below inspects the
@@ -2774,7 +2779,7 @@ async def _computer_act(name: str, args: dict, *,
                 _computer_press(api, frozenset({"enter"}))
             return {"status": "ok", "action": "type_text",
                     "chars": len(norm["text"]),
-                    "submit": norm["submit"], **echo}
+                    "submit": norm["submit"], "verified": False, **echo}
         if name == "press_keys":
             if "control" in norm or "x" in norm:
                 point, echo = await _computer_resolve(norm,
@@ -2787,7 +2792,7 @@ async def _computer_act(name: str, args: dict, *,
                 await _computer_dwell(pre_action_delay)
             _computer_press(api, parse_keys_chord(norm["keys"]))
             return {"status": "ok", "action": "press_keys",
-                    "keys": norm["keys"], **echo}
+                    "keys": norm["keys"], "verified": False, **echo}
         if name == "scroll":
             point, echo = await _computer_resolve(norm,
                                                   on_point=on_point)
@@ -2796,7 +2801,7 @@ async def _computer_act(name: str, args: dict, *,
                                 norm["direction"], norm["amount"])
             return {"status": "ok", "action": "scroll",
                     "direction": norm["direction"],
-                    "amount": norm["amount"], **echo}
+                    "amount": norm["amount"], "verified": False, **echo}
         if name == "drag":
             start, echo_from = await _computer_resolve(norm["from"],
                                                        on_point=on_point)
@@ -2806,7 +2811,7 @@ async def _computer_act(name: str, args: dict, *,
             _computer_drag(api, start["x"], start["y"],
                            end["x"], end["y"])
             return {"status": "ok", "action": "drag",
-                    "from": echo_from, "to": echo_to}
+                    "from": echo_from, "to": echo_to, "verified": False}
         if name == "open_app":
             return _computer_open(api, norm["name"], norm["args"])
         if name == "open_url":
@@ -2814,7 +2819,9 @@ async def _computer_act(name: str, args: dict, *,
             if opened.get("status") != "ok":
                 return opened
             return {"status": "ok", "action": "open_url",
-                    "url": norm["url"]}
+                    "url": norm["url"], "verified": False}
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
     except OSError as e:
         logger.warning("computer-use %s failed: %s", name, e)
         return {"status": "error",

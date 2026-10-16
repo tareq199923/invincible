@@ -1098,6 +1098,12 @@ screen may have changed since the last `look_at_screen`:
 
 **Known limits (deliberate).**
 
+- *`ok` means dispatched, not pixels verified.* A computer-use `ok`
+  result proves the OS accepted the input / launch request
+  (`SendInput` queued, `ShellExecute` opened the default handler);
+  every `ok` carries `verified: False`. Confirm effects with a fresh
+  `look_at_screen` — never treat `ok` as a screenshot. `unavailable`
+  never reads `ok`.
 - *C-id staleness race.* A control id names a position in one
   `look_at_screen` read; the window may change before the click. The
   model convention is re-look before acting (in the manual/auto

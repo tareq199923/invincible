@@ -53,7 +53,8 @@ _PROJECT_CAP = harness_tools.PROJECT_CAP
 
 def result_ok(result: dict) -> bool:
     return result.get("status") not in (
-        "error", "agent_offline", "agent_timeout", "declined", "blocked")
+        "error", "agent_offline", "agent_timeout", "declined", "blocked",
+        "unavailable")
 
 
 def coerce_int(value, default: int) -> int:

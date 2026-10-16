@@ -138,5 +138,12 @@
     "state": "passing",
     "title": "B9 Gemini-style composer bar (orb inside)",
     "verification": "ruff check . && pytest tests/test_voice.py tests/test_webchat.py tests/test_handoff.py"
+  },
+  {
+    "behavior": "computer-use results are honest: unavailable never reads ok, stale control ids return error results (never raise), and click/type/press/open results carry dispatched-not-verified semantics with resolved targets",
+    "id": "F13",
+    "state": "passing",
+    "title": "Computer-use honesty (ok means dispatched, stale-id safe)",
+    "verification": "ruff check . && pytest tests/test_computer_use.py tests/test_webchat_agent.py tests/test_tool_executor.py"
   }
 ]

@@ -5,6 +5,13 @@
 
 ## Current State
 
+- F13 done (`passing`, uncommitted): computer-use honesty — `result_ok`
+  counts `unavailable` as not-ok (`core/tool_dispatch.py`), stale C ids
+  return error results via `ValueError` catch (`core/tool_executor.py:
+  _computer_act`), every `ok` carries `verified: False` (dispatched, not
+  pixels verified) + SECURITY §12 known-limits note. New pins in
+  `tests/test_computer_use.py` (3 tests). `ruff` clean, 157 passed in
+  computer/tool/webchat slice.
 - Phone markdown follow-up (`passing`, code committed as `fd5631e`): `POST
   /dashboard/chat/render` (cookie realm, presentation-only, same
   `render_chat_markdown`) lets the PWA match desktop chat without
