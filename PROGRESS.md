@@ -5,6 +5,23 @@
 
 ## Current State
 
+- Item-3 done (`passing`): better "this" — `look_at_screen` results now
+  carry mouse grounding as additive-only keys (`core/tool_executor.py`:
+  pure `look_near` pixel-space smallest-area-contain (Bluey −6px
+  inset) else <60px nearest else null, `look_mouse_hint` single-line
+  `@x,y[, on C# "label"]` + this/that/here sentence, `_look_assemble`
+  wiring with `near{id,kind,label}` + `mouse_hint` + `truncated` bool;
+  C order/ids/grid math byte-identical, missing cursor omits hint with
+  near null, labels whitespace-collapsed, hint excerpt capped at 60).
+  New pins in `tests/test_look_at_screen.py` (8 tests: near
+  smallest/tie/inset/nearest/junk, hint sanitize, assemble + missing
+  + 150%-style negative-origin parity cross-pinned to
+  `overlay.pixel_to_grid`, shape-drift tripwire); goldens/registry
+  untouched and green (results ≠ registry, no regen diff). Docs:
+  `MCP_PROTOCOL.md` look payload + `SECURITY.md` §12 grounding-aids
+  note. `ruff` clean, 15 passed look slice, 65 passed
+  golden/registry/webchat-agent slice, full 1973 passed / 11 skipped /
+  1 deselected.
 - Item-6 done (`passing`): hold-to-ask + chirp — 300ms primary-pointer
   hold on `#voice-orb`/`#phone-orb` adds `is-asking` (border mirrors
   `is-listening`, no new color), sets `askedNext`, gesture-unlocks a
@@ -324,7 +341,7 @@
 
 ## In Progress
 
-- None — Item-6 complete (`passing`).
+- None — Item-3 complete (`passing`).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

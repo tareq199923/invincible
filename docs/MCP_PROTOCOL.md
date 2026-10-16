@@ -907,8 +907,17 @@ read runs isolated so a dying window cannot take down the agent.
 No confirmation (read-only). Offered in every mode including plan.
 
 ```json
-{"status": "look", "app": "...", "controls": [{"id": "C1", "kind": "button", "label": "Save", "x": 940, "y": 27}], "mouse": {"x": 233, "y": 689}, "size": {"w": 1920, "h": 1080}}
+{"status": "look", "app": "...", "controls": [{"id": "C1", "kind": "button", "label": "Save", "x": 940, "y": 27}], "mouse": {"x": 233, "y": 689}, "size": {"w": 1920, "h": 1080}, "near": {"id": "C1", "kind": "button", "label": "Save"}, "mouse_hint": "The mouse pointer is at @233,689, on C1 \"Save\". When they say \"this\", \"that\" or \"here\", they mean what's at the mouse pointer.", "truncated": false}
 ```
+
+`mouse` is the cursor on the same 0–1000 grid. `near` names the
+control under (or within 60px of) the cursor — smallest-area hit
+wins — with its `kind` so a `click` can go straight at it; it is
+`null` when nothing is near. `mouse_hint` is the one-line grounding
+sentence for "this"/"that"/"here" (omitted when the cursor cannot
+be read — never an error). `truncated` is `true` when the walk hit
+its node/time/control caps and the list was cut. Reads carry no
+`verified` flag (that honesty marker is computer-use only).
 
 #### `click`
 

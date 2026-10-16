@@ -1732,6 +1732,134 @@ def look_grid_virtual(rect: tuple, vrect: tuple) -> tuple[int, int]:
     return (min(max(gx, 0), 1000), min(max(gy, 0), 1000))
 
 
+# Item-3: mouse grounding. Bluey's ScreenReader.target(near:) ported to
+# virtual-screen pixels: smallest-area containing hit (with Bluey's
+# -6px inset tolerance), else nearest edge within 60px, else omit.
+_LOOK_NEAR_INSET = 6
+_LOOK_NEAR_MAX_PX = 60
+# Hint label excerpt cap mirrors _preview_look's 60-char convention;
+# near.label itself keeps the full collapsed label.
+_LOOK_HINT_LABEL_CAP = 60
+
+
+def _look_collapse(text: object) -> str:
+    """Collapse AX labels to one line (walk titles do the same)."""
+    return " ".join(str(text or "").split())
+
+
+def look_near(mouse: tuple, items: list) -> dict | None:
+    """Control under (or right next to) a pixel point (pure, hermetic).
+
+    ``items`` is ``[(id, kind, label, rect)]`` in C order with rects in
+    the same virtual-screen pixel space as ``mouse`` (UIA rects and
+    GetCursorPos are both physical pixels, so DPI cannot split them —
+    see the F15 parity pin). A containing hit (Bluey's inset
+    tolerance) wins by smallest area; else the nearest edge within
+    60px; else None. Area ties keep C order (stable). Never raises.
+    """
+    import math
+
+    try:
+        px, py = float(mouse[0]), float(mouse[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if not math.isfinite(px) or not math.isfinite(py):
+        return None
+    hit = None
+    hit_area = 0.0
+    boxes: list = []
+    for entry in items or []:
+        try:
+            cid, kind, label = entry[0], entry[1], entry[2]
+            left, top, w, h = entry[3]
+            left, top, w, h = (
+                float(left), float(top), float(w), float(h))
+        except (TypeError, ValueError, IndexError):
+            continue
+        if (not math.isfinite(left) or not math.isfinite(top)
+                or not math.isfinite(w) or not math.isfinite(h)):
+            continue
+        if w <= 0 or h <= 0:
+            continue
+        boxes.append((cid, kind, label, left, top, w, h))
+    for cid, kind, label, left, top, w, h in boxes:
+        if (left - _LOOK_NEAR_INSET <= px <= left + w + _LOOK_NEAR_INSET
+                and top - _LOOK_NEAR_INSET <= py <= top + h
+                + _LOOK_NEAR_INSET):
+            area = w * h
+            if hit is None or area < hit_area:
+                hit = {"id": cid, "kind": kind, "label": label}
+                hit_area = area
+    if hit is not None:
+        return hit
+    nearest = None
+    nearest_d = 0.0
+    for cid, kind, label, left, top, w, h in boxes:
+        dx = max(left - px, 0.0, px - (left + w))
+        dy = max(top - py, 0.0, py - (top + h))
+        dist = math.hypot(dx, dy)
+        if dist < _LOOK_NEAR_MAX_PX and (
+                nearest is None or dist < nearest_d):
+            nearest = {"id": cid, "kind": kind, "label": label}
+            nearest_d = dist
+    return nearest
+
+
+def look_mouse_hint(mx: int, my: int, near: dict | None) -> str:
+    """Single-line mouse grounding sentence (pure, hermetic).
+
+    ``mx``/``my`` are the 0-1000 grid point. One line by construction
+    (labels collapsed, excerpt capped) so AX newlines can never split
+    the hint. ~20 tokens without a hit.
+    """
+    base = f"The mouse pointer is at @{mx},{my}"
+    if isinstance(near, dict) and near.get("id"):
+        excerpt = _look_collapse(near.get("label"))
+        if len(excerpt) > _LOOK_HINT_LABEL_CAP:
+            excerpt = excerpt[:_LOOK_HINT_LABEL_CAP] + "…"
+        base += f", on {near.get('id')} \"{excerpt}\""
+    return (base + ". When they say \"this\", \"that\" or \"here\", "
+            "they mean what's at the mouse pointer.")
+
+
+def _look_assemble(app, kept: list, vrect: tuple, mouse_px,
+                   truncated: bool) -> dict:
+    """Build the look result payload from walked controls (pure wire).
+
+    ``kept`` is the sorted + truncated ``[{kind, label, rect}]`` list;
+    C ids are assigned here in order (frozen). ``mouse_px`` is the
+    ``(x, y)`` virtual-screen pixel cursor or None when GetCursorPos
+    failed — then the hint is omitted and near is None, never an
+    error. Grid math is the same expression as the F15 inline path.
+    """
+    ox, oy, vw, vh = vrect
+    vw = vw or 1
+    vh = vh or 1
+    controls = []
+    near_items = []
+    for i, item in enumerate(kept):
+        cid = f"C{i + 1}"
+        gx, gy = look_grid_virtual(item["rect"], vrect)
+        label = _look_collapse(item.get("label"))
+        controls.append({"id": cid, "kind": item["kind"],
+                         "label": label, "x": gx, "y": gy})
+        near_items.append((cid, item["kind"], label, item["rect"]))
+    # Legacy compat: the mouse field keeps its 0,0-px fallback shape;
+    # the hint/near pair is what goes quiet when the cursor is unknown.
+    px, py = mouse_px if mouse_px is not None else (0, 0)
+    mouse = {"x": min(max(int((px - ox) / vw * 1000), 0), 1000),
+             "y": min(max(int((py - oy) / vh * 1000), 0), 1000)}
+    near = (look_near((px, py), near_items)
+            if mouse_px is not None else None)
+    payload = {"app": app, "controls": controls, "mouse": mouse,
+               "size": {"w": vw, "h": vh}, "near": near,
+               "truncated": bool(truncated)}
+    if mouse_px is not None:
+        payload["mouse_hint"] = look_mouse_hint(
+            mouse["x"], mouse["y"], near)
+    return payload
+
+
 def _look_uia_interfaces() -> dict:
     """Load UIAutomationCore entry points (Windows only, lazy)."""
     import ctypes
@@ -1953,10 +2081,12 @@ def _look_walk(api: dict) -> dict:
 
         found: list = []
         deadline = time.monotonic() + LOOK_TIME_BUDGET_SECONDS
+        timed_out = False
         visited = 0
         stack = [root.value]
         while stack and visited < LOOK_NODE_BUDGET:
             if time.monotonic() > deadline:
+                timed_out = True
                 break
             element = stack.pop()
             visited += 1
@@ -1995,25 +2125,20 @@ def _look_walk(api: dict) -> dict:
 
         found.sort(key=lambda c: (
             round(c["rect"][1] / 6), round(c["rect"][0] / 6)))
-        controls = []
-        for i, item in enumerate(found[:LOOK_MAX_CONTROLS]):
-            gx, gy = look_grid_virtual(item["rect"], vrect)
-            controls.append({
-                "id": f"C{i + 1}", "kind": item["kind"],
-                "label": item["label"], "x": gx, "y": gy,
-            })
+        truncated = (timed_out or len(found) > LOOK_MAX_CONTROLS
+                     or (visited >= LOOK_NODE_BUDGET and bool(stack)))
+        kept = found[:LOOK_MAX_CONTROLS]
 
         point = ctypes.create_string_buffer(8)
         if user32.GetCursorPos(point):
             mx, my = ctypes.cast(
                 point, ctypes.POINTER(ctypes.c_long * 2)).contents
-            mx, my = int(mx), int(my)
+            mouse_px = (int(mx), int(my))
         else:
-            mx, my = 0, 0
-        return {"app": app, "controls": controls,
-                "mouse": {"x": min(max(int((mx - ox) / vw * 1000), 0), 1000),
-                          "y": min(max(int((my - oy) / vh * 1000), 0), 1000)},
-                "size": {"w": vw, "h": vh}}
+            # Unknown cursor: hint omitted + near None in _look_assemble,
+            # never an error (the mouse field keeps its legacy shape).
+            mouse_px = None
+        return _look_assemble(app, kept, vrect, mouse_px, truncated)
     finally:
         for iface in held:
             with contextlib.suppress(Exception):

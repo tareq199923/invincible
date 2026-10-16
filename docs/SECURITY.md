@@ -1108,6 +1108,12 @@ screen may have changed since the last `look_at_screen`:
   `look_at_screen` read; the window may change before the click. The
   model convention is re-look before acting (in the manual/auto
   prompts); the echo is the backstop, not a lock.
+- *`near`/`mouse_hint` are grounding aids, not locks.* They describe
+  where the cursor was during that same read (smallest-area hit, else
+  nearest within 60px, else `null`/omitted). A `null` near or a
+  missing hint is a quiet read — never an error, never `ok`-adjacent.
+  `truncated: true` means the control list was cut at the walk caps;
+  the ids stay ordered but the screen has more.
 - *The denylist is chords, not intent.* `alt+f4` is refused but a
   model can still close unsaved work with a plain `click` on a ×
   button — that is what the per-call approval is for. Denylists catch
