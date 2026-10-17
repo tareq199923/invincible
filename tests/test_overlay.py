@@ -604,6 +604,23 @@ def test_ring_frame_expand_thin_and_expiry():
     assert overlay.ring_frame(0.1, 0.0, 0.7, 0) is None
 
 
+def test_effect_anchor_grid_to_pixel_and_junk():
+    """Item-4b: click effects anchor at the clicked grid point — the
+    pure seam the child draw uses, pinned off-device."""
+    vrect = (100, 50, 1600, 900)
+    assert overlay.effect_anchor((0, 0), vrect) == (
+        overlay.grid_to_pixel(0, 0, vrect))
+    assert overlay.effect_anchor((250, 750), vrect) == (
+        overlay.grid_to_pixel(250, 750, vrect))
+    for junk in (None, (), (1,), ("a", 1), (True, 1), (1, None),
+                 (1, 1001), (float("nan"), 1), (1, float("inf"))):
+        assert overlay.effect_anchor(junk, vrect) is None
+    # Malformed vrect: None, never raises (a 4-char string unpacks as
+    # four values — the grid math guard catches it).
+    assert overlay.effect_anchor((1, 1), "junk") is None
+    assert overlay.effect_anchor((1, 1), (0, 0)) is None
+
+
 def test_glyph_frame_rise_ease_out_and_expiry():
     assert overlay.glyph_frame(0.0, 0.0, 0.9, 46.0) == 0.0
     mid = overlay.glyph_frame(0.45, 0.0, 0.9, 46.0)
@@ -841,8 +858,10 @@ def test_choreo_speaking_blocks_home_then_stamps_quiet():
 
 def test_choreo_take_control_clears_queue():
     state = _choreo((1, 2, "a"), (3, 4, "b"))
+    overlay.choreo_request_home(state)
     overlay.choreo_take_control(state)
     assert state["queue"] == []
+    assert state["home_requested"] is False
     assert overlay.choreo_step(state, 9999.0) == ("dock", None)
 
 
@@ -911,6 +930,7 @@ def test_choreography_senders_never_raise_when_dead():
 async def test_execute_job_look_queues_near_point(
         monkeypatch, _clean_overlay_state):
     queued: list = []
+    vrect = (0, 0, 1000, 1000)
 
     class _Live:
         alive = True
@@ -933,6 +953,8 @@ async def test_execute_job_look_queues_near_point(
 
     monkeypatch.setattr(runner, "ensure_overlay", lambda: _Live())
     monkeypatch.setattr(tool_executor, "_look_at_screen", fake_look)
+    monkeypatch.setattr(overlay, "virtual_screen", lambda: vrect)
+    monkeypatch.setattr(runner, "_OVERLAY_HEAD_PX", None)
     out = await runner.execute_job({"type": "look_at_screen",
                                     "args": {}})
     # Result shape untouched; the tour point rides alongside.
@@ -940,6 +962,9 @@ async def test_execute_job_look_queues_near_point(
     assert out["near"] == {"id": "C2", "kind": "link",
                            "label": "Docs"}
     assert queued == [({"x": 300, "y": 400}, "Docs")]
+    # Item-4b: the queued tour point seeds the dwell head estimate.
+    assert overlay.grid_to_pixel(300, 400, vrect) == (
+        runner._OVERLAY_HEAD_PX)
 
 
 async def test_execute_job_look_without_near_skips_queue(

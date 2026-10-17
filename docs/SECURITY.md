@@ -1209,6 +1209,15 @@ tokens that authorize it.
   refuses per user the same way. Either off leaves text chat
   byte-identical (pinned by the fail-safe test). Tapping the orb while
   it speaks stops playback locally; there is no separate mute button.
+- **Hold-to-ask marks the turn; the chirp stays local.** A ≥300ms
+  press-and-hold on the orb submits the transcribed turn with
+  `asked:true` (persisted on the user turn; prompt assembly renders it
+  as "You asked: …"); a short tap sends `asked:false`. The
+  acknowledgement chirp is generated on-device (WebAudio, fail-silent)
+  and never leaves the browser; typed turns stay silent. Voice-off is
+  enforced server-side (kill-switch above) — the orb keeps a
+  fail-silent `isMuted` gate, but no template wires a client mute
+  button today.
 - **Free browser fallback (device-local).** When the server has no
   audio surface (no OpenAI/Groq credential), the orb falls back to Web
   Speech recognition + `speechSynthesis` on the device itself: no

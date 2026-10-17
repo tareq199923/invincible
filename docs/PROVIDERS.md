@@ -122,6 +122,13 @@ Compat matrix (fail-closed — a provider without the surface yields
 | `groq` catalog | STT `whisper-large-v3-turbo` served free; TTS 502 text-only | Mic-in works without OpenAI; replies stay text (no speech surface) unless the browser free fallback speaks them locally. |
 | `nvidia_nim`, `openrouter`, `gemini`, custom rows | 502 text-only fallback until proven, then free browser voice on-device | Unverified audio surfaces; their 404 is skipped for the next credential, all-404 is a clear 502. With no audio credential the orb uses device-local Web Speech (no fetch, no key). |
 
+Hold-to-ask rides the same pipeline: a ≥300ms press-and-hold on the
+orb marks the turn `asked:true` (persisted; the model sees it as
+"You asked"), taps send `asked:false`, and the tap acknowledgement
+chirp is generated on-device (WebAudio, fail-silent, never uploaded).
+Voice-off is server-gated; the orb's `isMuted` gate is fail-silent
+and unwired (see [SECURITY.md](SECURITY.md) §14).
+
 Ephemeral voice tokens (`POST /v1/voice/token`,
 `POST /dashboard/voice/token`) are realm-bound, scope-bound
 (`stt`/`tts`), device-bound, 5-minute HMAC tokens — never provider

@@ -787,3 +787,255 @@ async def test_effect_inputs_absent_on_error(monkeypatch):
         "click", {"control": "C30", "button": "left"})
     assert result["status"] == "error"
     assert "x" not in result and "y" not in result
+
+
+async def test_click_saves_and_warps_pointer(monkeypatch):
+    """Item-4b (Bluey warp): save -> click -> restore, in order."""
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te.os, "name", "nt")
+    monkeypatch.setattr(te, "_computer_input_api",
+                        lambda: {"sentinel": True})
+    order: list = []
+
+    async def fake_resolve(target, *, on_point=None):
+        return {"x": 5, "y": 6}, {"x": 5, "y": 6}
+
+    async def fake_dwell(seconds):
+        pass
+
+    def fake_pointer(api):
+        order.append("save")
+        return (11, 22)
+
+    def fake_click(api, x, y, button, double):
+        order.append("click")
+
+    def fake_warp(api, point):
+        order.append(("warp", point))
+
+    monkeypatch.setattr(te, "_computer_resolve", fake_resolve)
+    monkeypatch.setattr(te, "_computer_dwell", fake_dwell)
+    monkeypatch.setattr(te, "_computer_pointer", fake_pointer)
+    monkeypatch.setattr(te, "_computer_click_at", fake_click)
+    monkeypatch.setattr(te, "_computer_warp", fake_warp)
+    result = await te._computer_act(
+        "click", {"x": 5, "y": 6, "button": "left"})
+    assert result["status"] == "ok"
+    assert order == ["save", "click", ("warp", (11, 22))]
+
+
+async def test_scroll_saves_and_warps_pointer(monkeypatch):
+    """Item-4b: scroll hovers a point; the pointer comes back after."""
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te.os, "name", "nt")
+    monkeypatch.setattr(te, "_computer_input_api",
+                        lambda: {"sentinel": True})
+    order: list = []
+
+    async def fake_resolve(target, *, on_point=None):
+        return {"x": 5, "y": 6}, {"x": 5, "y": 6}
+
+    async def fake_dwell(seconds):
+        pass
+
+    def fake_pointer(api):
+        order.append("save")
+        return (11, 22)
+
+    def fake_scroll(api, x, y, direction, amount):
+        order.append("scroll")
+
+    def fake_warp(api, point):
+        order.append(("warp", point))
+
+    monkeypatch.setattr(te, "_computer_resolve", fake_resolve)
+    monkeypatch.setattr(te, "_computer_dwell", fake_dwell)
+    monkeypatch.setattr(te, "_computer_pointer", fake_pointer)
+    monkeypatch.setattr(te, "_computer_scroll_at", fake_scroll)
+    monkeypatch.setattr(te, "_computer_warp", fake_warp)
+    result = await te._computer_act(
+        "scroll", {"x": 5, "y": 6, "direction": "down", "amount": 3})
+    assert result["status"] == "ok"
+    assert order == ["save", "scroll", ("warp", (11, 22))]
+
+
+async def test_drag_saves_and_warps_pointer(monkeypatch):
+    """Item-4b: a drag is one save/warp pair around both legs."""
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te.os, "name", "nt")
+    monkeypatch.setattr(te, "_computer_input_api",
+                        lambda: {"sentinel": True})
+    order: list = []
+
+    async def fake_resolve(target, *, on_point=None):
+        return {"x": 100, "y": 100}, {"x": 100, "y": 100}
+
+    async def fake_dwell(seconds):
+        pass
+
+    def fake_pointer(api):
+        order.append("save")
+        return (11, 22)
+
+    def fake_drag(api, x1, y1, x2, y2):
+        order.append("drag")
+
+    def fake_warp(api, point):
+        order.append(("warp", point))
+
+    monkeypatch.setattr(te, "_computer_resolve", fake_resolve)
+    monkeypatch.setattr(te, "_computer_dwell", fake_dwell)
+    monkeypatch.setattr(te, "_computer_pointer", fake_pointer)
+    monkeypatch.setattr(te, "_computer_drag", fake_drag)
+    monkeypatch.setattr(te, "_computer_warp", fake_warp)
+    result = await te._computer_act(
+        "drag", {"x1": 100, "y1": 100, "x2": 900, "y2": 800})
+    assert result["status"] == "ok"
+    assert order == ["save", "drag", ("warp", (11, 22))]
+
+
+async def test_focus_click_type_warps_pointer(monkeypatch):
+    """type_text with x/y focuses first: the focus click gets the same
+    save/warp treatment before any keystroke."""
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te.os, "name", "nt")
+    monkeypatch.setattr(te, "_computer_input_api",
+                        lambda: {"sentinel": True})
+    order: list = []
+
+    async def fake_resolve(target, *, on_point=None):
+        return {"x": 5, "y": 6}, {"x": 5, "y": 6}
+
+    async def fake_dwell(seconds):
+        pass
+
+    async def fake_probe():
+        return False
+
+    def fake_pointer(api):
+        order.append("save")
+        return (11, 22)
+
+    def fake_click(api, x, y, button, double):
+        order.append("focus")
+
+    def fake_type(api, text):
+        order.append("type")
+
+    def fake_warp(api, point):
+        order.append(("warp", point))
+
+    monkeypatch.setattr(te, "_computer_resolve", fake_resolve)
+    monkeypatch.setattr(te, "_computer_dwell", fake_dwell)
+    monkeypatch.setattr(te, "_focus_is_password", fake_probe)
+    monkeypatch.setattr(te, "_computer_pointer", fake_pointer)
+    monkeypatch.setattr(te, "_computer_click_at", fake_click)
+    monkeypatch.setattr(te, "_computer_type", fake_type)
+    monkeypatch.setattr(te, "_computer_warp", fake_warp)
+    result = await te._computer_act(
+        "type_text", {"text": "hi", "x": 5, "y": 6})
+    assert result["status"] == "ok"
+    assert order == ["save", "focus", ("warp", (11, 22)), "type"]
+
+
+async def test_bare_type_never_touches_pointer(monkeypatch):
+    """Item-4b: bare type_text does not move the pointer — no save."""
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te.os, "name", "nt")
+    monkeypatch.setattr(te, "_computer_input_api",
+                        lambda: {"sentinel": True})
+
+    async def fake_dwell(seconds):
+        pass
+
+    async def fake_probe():
+        return False
+
+    def boom(api):
+        raise AssertionError("bare type must not save the pointer")
+
+    monkeypatch.setattr(te, "_computer_dwell", fake_dwell)
+    monkeypatch.setattr(te, "_focus_is_password", fake_probe)
+    monkeypatch.setattr(te, "_computer_type", lambda api, text: None)
+    monkeypatch.setattr(te, "_computer_pointer", boom)
+    result = await te._computer_act("type_text", {"text": "hi"})
+    assert result["status"] == "ok"
+
+
+async def test_warp_failure_never_fails_the_job(monkeypatch):
+    """Item-4b: the warp is best-effort — a raising restore still
+    leaves the ok result (a dead save just skips the warp)."""
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te.os, "name", "nt")
+    monkeypatch.setattr(te, "_computer_input_api",
+                        lambda: {"sentinel": True})
+
+    async def fake_resolve(target, *, on_point=None):
+        return {"x": 5, "y": 6}, {"x": 5, "y": 6}
+
+    async def fake_dwell(seconds):
+        pass
+
+    def boom(api, point):
+        raise RuntimeError("warp exploded")
+
+    monkeypatch.setattr(te, "_computer_resolve", fake_resolve)
+    monkeypatch.setattr(te, "_computer_dwell", fake_dwell)
+    monkeypatch.setattr(te, "_computer_pointer", lambda api: (1, 2))
+    monkeypatch.setattr(te, "_computer_click_at",
+                        lambda api, x, y, button, double: None)
+    monkeypatch.setattr(te, "_computer_warp", boom)
+    result = await te._computer_act("click", {"x": 5, "y": 6})
+    assert result["status"] == "ok"
+    assert result["x"] == 5 and result["y"] == 6
+
+
+def test_pointer_helpers_never_raise_on_broken_api():
+    import invincible.core.tool_executor as te
+
+    assert te._computer_pointer({}) is None
+    assert te._computer_pointer({"ctypes": None,
+                                 "user32": None}) is None
+    te._computer_warp({}, (1, 2))
+    te._computer_warp({"user32": None}, "junk")
+    te._computer_warp({}, None)
+
+
+def test_pointer_save_and_warp_byte_round_trip():
+    """POINT is two 32-bit longs: the read/write pair is byte-exact."""
+    import ctypes
+    import struct
+
+    import invincible.core.tool_executor as te
+
+    seen: dict = {}
+
+    class _User32:
+        @staticmethod
+        def GetCursorPos(buffer):
+            ctypes.memmove(buffer, struct.pack("<ii", 12, 34), 8)
+            return 1
+
+        @staticmethod
+        def SetCursorPos(x, y):
+            seen["warp"] = (x, y)
+            return 1
+
+    api = {"ctypes": ctypes, "user32": _User32()}
+    assert te._computer_pointer(api) == (12, 34)
+    te._computer_warp(api, (12, 34))
+    assert seen["warp"] == (12, 34)
+
+    class _Dead:
+        @staticmethod
+        def GetCursorPos(buffer):
+            return 0
+
+    assert te._computer_pointer({"ctypes": ctypes,
+                                 "user32": _Dead()}) is None

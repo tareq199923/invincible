@@ -159,6 +159,27 @@ def pixel_to_grid(px, py, vrect: tuple) -> tuple[int, int]:
             _clamp_grid((fy - oy) / height * OVERLAY_GRID_MAX))
 
 
+def effect_anchor(grid, vrect: tuple) -> tuple[int, int] | None:
+    """Click-effect anchor: grid point to virtual-screen pixels (pure).
+
+    Item-4b: the click ring + coordinate bubble anchor at the clicked
+    point (Bluey's point-anchored clickEffect), never at the live head
+    — the head is already gliding home when a late effect lands.
+    ``None`` for a malformed grid/vrect; never raises.
+    """
+    try:
+        gx, gy = grid
+        ox, oy, width, height = vrect
+        checked = _choreo_grid(gx, gy)
+        if checked is None:
+            return None
+        px, py = grid_to_pixel(checked[0], checked[1],
+                               (ox, oy, width, height))
+        return (int(px), int(py))
+    except (TypeError, ValueError):
+        return None
+
+
 def ease_waypoints(ax, ay, bx, by, steps: int) -> list:
     """Ease-out-cubic waypoints from a to b (pure, hermetic).
 
@@ -803,13 +824,17 @@ def choreo_set_speaking(state: dict, on: bool, now: float) -> None:
 
 
 def choreo_take_control(state: dict) -> None:
-    """Drop the queued tour: a real action flies now (pure, Item-1c).
+    """Drop the queued tour + home request: a real action flies now
+    (pure, Item-1c; home flag per Bluey's takeControl, Item-4b).
 
     ``announce()`` (a click/drag point) preempts the visual tour —
-    the head goes where the action lands instead. Never raises.
+    the head goes where the action lands instead. ``home_requested``
+    clears too: without it a real action after a home request would
+    immediately re-home once it lands. Never raises.
     """
     with contextlib.suppress(AttributeError, TypeError):
         state["queue"].clear()
+        state["home_requested"] = False
 
 
 def choreo_go_home(state: dict) -> None:
@@ -1234,7 +1259,7 @@ def _run_window(tk) -> None:
     state = {"path": [], "to_target": False,
              "trail": [], "squash_until": 0.0,
              "bubble_until": 0.0, "bubble_text": "",
-             "flight": None, "velocity": [0.0, 0.0],
+             "bubble_xy": None, "flight": None, "velocity": [0.0, 0.0],
              "landed_at": now0 - 10.0,
              "press_start": now0 - 10.0, "press_depth": 0.0,
              "dragging": False, "choreo": choreo_state(now0),
@@ -1262,6 +1287,7 @@ def _run_window(tk) -> None:
         state["path"] = []
         state["to_target"] = True
         state["dragging"] = dragging
+        state["bubble_xy"] = None
         text = label or bubble_text_for(gx, gy)
         if text:
             state["bubble_text"] = text
@@ -1284,18 +1310,25 @@ def _run_window(tk) -> None:
             grid = _choreo_grid(message.get("x"), message.get("y"))
             if grid is None:
                 return
+            anchor = effect_anchor(grid, vrect)
+            if anchor is None:
+                return
             state["press_start"] = now_fx
             state["press_depth"] = OVERLAY_PRESS_CLICK
             tint = (OVERLAY_RING_RIGHT_FILL
                     if message.get("button") == "right"
                     else OVERLAY_RING_LEFT_FILL)
-            _spawn_ring(head_xy[0], head_xy[1], OVERLAY_CLICK_RING_PX,
+            # Item-4b: ring + bubble anchor at the clicked point, never
+            # the live head (it may be gliding home already).
+            _spawn_ring(anchor[0], anchor[1], OVERLAY_CLICK_RING_PX,
                         OVERLAY_CLICK_RING_SECONDS, tint)
             label = bubble_text_for(*grid)
             if label:
                 state["bubble_text"] = label
                 state["bubble_until"] = (
                     now_fx + OVERLAY_CLICK_BUBBLE_SECONDS)
+                state["bubble_xy"] = (float(anchor[0]),
+                                      float(anchor[1]))
         elif kind == "type":
             chars = effect_glyph_chars(message.get("text", ""))
             if not chars:
@@ -1372,13 +1405,23 @@ def _run_window(tk) -> None:
                           ecx + OVERLAY_EYE_R, ecy + OVERLAY_EYE_R)
         if now < state["bubble_until"] and state["bubble_text"]:
             label = state["bubble_text"]
-            top = hy - ry - 34
+            # Item-4b: a click bubble keeps its anchor (the clicked
+            # point) while the head glides home; tour/land bubbles
+            # have bubble_xy None and follow the head.
+            bx, by = hx, hy
+            anchor_xy = state["bubble_xy"]
+            if isinstance(anchor_xy, tuple) and len(anchor_xy) == 2:
+                with contextlib.suppress(Exception):
+                    bx = float(anchor_xy[0])
+                    by = float(anchor_xy[1])
+            top = by - ry - 34
             half = min(120.0, 8.0 + len(label) * 3.6)
-            canvas.coords(bubble_box, hx - half, top - 11,
-                          hx + half, top + 11)
-            canvas.coords(bubble_label, hx, top)
+            canvas.coords(bubble_box, bx - half, top - 11,
+                          bx + half, top + 11)
+            canvas.coords(bubble_label, bx, top)
             canvas.itemconfigure(bubble_label, text=label)
         else:
+            state["bubble_xy"] = None
             canvas.coords(bubble_box, -10, -10, -10, -10)
             canvas.coords(bubble_label, -10, -10)
         ring = state["ring"]
@@ -1394,8 +1437,13 @@ def _run_window(tk) -> None:
                 with contextlib.suppress(Exception):
                     canvas.itemconfigure(click_ring,
                                          outline=ring["tint"])
-                    canvas.coords(click_ring, hx - frame[0], hy - frame[0],
-                                  hx + frame[0], hy + frame[0])
+                    # Item-4b: the ring stays at its spawn point (the
+                    # clicked point; land rings spawn at the head).
+                    canvas.coords(click_ring,
+                                  ring["x"] - frame[0],
+                                  ring["y"] - frame[0],
+                                  ring["x"] + frame[0],
+                                  ring["y"] + frame[0])
                     canvas.itemconfigure(click_ring, width=frame[1])
         else:
             canvas.coords(click_ring, -10, -10, -10, -10)

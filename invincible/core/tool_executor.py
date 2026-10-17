@@ -2555,6 +2555,14 @@ def _computer_input_api() -> dict:
     user32.SendInput.argtypes = [ctypes.c_uint, ctypes.c_void_p,
                                  ctypes.c_int]
     user32.SendInput.restype = ctypes.c_uint
+    # Item-4b pointer save/restore (Bluey warp): GetCursorPos writes a
+    # POINT (two 32-bit longs) into the caller's buffer; SetCursorPos
+    # takes virtual-screen pixels — the same space SendInput absolute
+    # rides (F15).
+    user32.GetCursorPos.argtypes = [ctypes.c_void_p]
+    user32.GetCursorPos.restype = ctypes.c_int
+    user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    user32.SetCursorPos.restype = ctypes.c_int
     shell32.ShellExecuteW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p,
                                       ctypes.c_wchar_p, ctypes.c_wchar_p,
                                       ctypes.c_void_p, ctypes.c_int]
@@ -2613,6 +2621,41 @@ def _computer_move_to(api: dict, x: int, y: int) -> None:
         api, dx=_computer_abs(x), dy=_computer_abs(y),
         flags=(_COMPUTER_MOUSE_MOVE | _COMPUTER_MOUSE_ABSOLUTE
                | _COMPUTER_MOUSE_VIRTUALDESK))])  # MOVE|ABSOLUTE|VIRTUALDESK
+
+
+def _computer_pointer(api: dict) -> tuple[int, int] | None:
+    """Live pointer, virtual-screen pixels (best-effort, never raises).
+
+    Save half of the Item-4b warp (Bluey's ``mouseLocation``): the
+    SendInput absolute grid rides the same virtual pixels (F15), so
+    restoring the saved point is offset-free. ``None`` when the read
+    fails — callers then skip the warp rather than guessing. A POINT
+    is two 32-bit longs; c_int32 reads exactly (and keeps the byte
+    pin platform-portable).
+    """
+    try:
+        ctypes = api["ctypes"]
+        point = ctypes.create_string_buffer(8)
+        if api["user32"].GetCursorPos(point):
+            x, y = ctypes.cast(
+                point, ctypes.POINTER(ctypes.c_int32 * 2)).contents
+            return (int(x), int(y))
+    except Exception:
+        pass
+    return None
+
+
+def _computer_warp(api: dict, point) -> None:
+    """Restore the pointer to a saved point (best-effort, never raises).
+
+    Bluey warps back right after click/scroll/drag so the user's own
+    pointer is never left on a target we acted on (ComputerControl
+    ``warp``); ``None``/malformed points are no-ops.
+    """
+    if not point:
+        return
+    with contextlib.suppress(Exception):
+        api["user32"].SetCursorPos(int(point[0]), int(point[1]))
 
 
 def _computer_click_at(api: dict, x: int, y: int, button: str,
@@ -2965,10 +3008,13 @@ async def _computer_act(name: str, args: dict, *,
     ``on_point`` announces each resolved grid point to the F11 overlay
     (never breaks the job); ``pre_action_delay`` pauses once before
     the terminal physical action so the overlay glide lands first.
-    ``delay_for`` is an optional ``(point) -> seconds`` estimator
-    (runner-supplied Bluey-flight cover); each point-bearing branch
-    dwells ``max(base, estimate)`` so settle never aborts a glide
-    mid-flight. ``None`` keeps the plain base delay.
+    Pointer-moving branches (click, scroll, drag, focus-clicks) save
+    the real pointer first and warp it back after (Item-4b Bluey
+    parity; best-effort — a failed save/warp never changes the
+    result). ``delay_for`` is an optional ``(point) -> seconds``
+    estimator (runner-supplied Bluey-flight cover); each point-bearing
+    branch dwells ``max(base, estimate)`` so settle never aborts a
+    glide mid-flight. ``None`` keeps the plain base delay.
     """
     if os.name != "nt":
         return {"status": "unavailable",
@@ -2984,8 +3030,14 @@ async def _computer_act(name: str, args: dict, *,
                                                   on_point=on_point)
             await _computer_dwell(_resolve_delay(
                 pre_action_delay, delay_for, point))
-            _computer_click_at(api, point["x"], point["y"],
-                               norm["button"], norm["double"])
+            # Item-4b (Bluey warp): save the real pointer, act, restore.
+            saved = _computer_pointer(api)
+            try:
+                _computer_click_at(api, point["x"], point["y"],
+                                   norm["button"], norm["double"])
+            finally:
+                with contextlib.suppress(Exception):
+                    _computer_warp(api, saved)
             return {"status": "ok", "action": "click",
                     "button": norm["button"],
                     "double": norm["double"], "verified": False, **echo}
@@ -2999,8 +3051,13 @@ async def _computer_act(name: str, args: dict, *,
                                                       on_point=on_point)
                 await _computer_dwell(_resolve_delay(
                     pre_action_delay, delay_for, point))
-                _computer_click_at(api, point["x"], point["y"],
-                                   "left", False)
+                saved = _computer_pointer(api)
+                try:
+                    _computer_click_at(api, point["x"], point["y"],
+                                       "left", False)
+                finally:
+                    with contextlib.suppress(Exception):
+                        _computer_warp(api, saved)
             else:
                 echo = {}
                 await _computer_dwell(pre_action_delay)
@@ -3025,8 +3082,13 @@ async def _computer_act(name: str, args: dict, *,
                                                       on_point=on_point)
                 await _computer_dwell(_resolve_delay(
                     pre_action_delay, delay_for, point))
-                _computer_click_at(api, point["x"], point["y"],
-                                   "left", False)
+                saved = _computer_pointer(api)
+                try:
+                    _computer_click_at(api, point["x"], point["y"],
+                                       "left", False)
+                finally:
+                    with contextlib.suppress(Exception):
+                        _computer_warp(api, saved)
             else:
                 echo = {}
                 await _computer_dwell(pre_action_delay)
@@ -3038,8 +3100,13 @@ async def _computer_act(name: str, args: dict, *,
                                                   on_point=on_point)
             await _computer_dwell(_resolve_delay(
                 pre_action_delay, delay_for, point))
-            _computer_scroll_at(api, point.get("x"), point.get("y"),
-                                norm["direction"], norm["amount"])
+            saved = _computer_pointer(api)
+            try:
+                _computer_scroll_at(api, point.get("x"), point.get("y"),
+                                    norm["direction"], norm["amount"])
+            finally:
+                with contextlib.suppress(Exception):
+                    _computer_warp(api, saved)
             return {"status": "ok", "action": "scroll",
                     "direction": norm["direction"],
                     "amount": norm["amount"], "verified": False, **echo}
@@ -3050,8 +3117,13 @@ async def _computer_act(name: str, args: dict, *,
                                                    on_point=on_point)
             await _computer_dwell(_resolve_drag_delay(
                 pre_action_delay, delay_for, start, end))
-            _computer_drag(api, start["x"], start["y"],
-                           end["x"], end["y"])
+            saved = _computer_pointer(api)
+            try:
+                _computer_drag(api, start["x"], start["y"],
+                               end["x"], end["y"])
+            finally:
+                with contextlib.suppress(Exception):
+                    _computer_warp(api, saved)
             return {"status": "ok", "action": "drag",
                     "from": echo_from, "to": echo_to, "verified": False}
         if name == "open_app":

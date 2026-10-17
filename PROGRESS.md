@@ -5,6 +5,32 @@
 
 ## Current State
 
+- Item-4b done (`passing`): fly-click fixups (4 review findings + claim
+  honesty). (1) Click effects anchor at the clicked point — pure
+  `overlay.effect_anchor` (grid→pixel) + `state["bubble_xy"]`: `_draw`
+  centers the ring on its spawn point and the bubble on the anchor
+  while the head glides home (runner sends settle before effect, and
+  the choreo idle-home had often launched the head home when a late
+  click landed); land rings still spawn at the head and tour bubbles
+  still follow it. (2) Bluey pointer warp — `_computer_pointer` /
+  `_computer_warp` (GetCursorPos/SetCursorPos on the SendInput api,
+  never-raise) wrapped around click, scroll, drag, and the
+  type_text/press_keys focus click; bare type/press + open_app/url
+  untouched; results unchanged. (3) `choreo_take_control` also clears
+  `home_requested` so a real action never re-homes after landing.
+  (4) Look tour points seed `_OVERLAY_HEAD_PX` via `_overlay_note_head`
+  (suppressed) closing the Item-1c cross-path dwell gap; settle still
+  resets to None. Decisions recorded: settle→effect order kept
+  (cosmetic once anchored); Item-6 "muted" claim corrected (the
+  `isMuted` gate is fail-silent but unwired; voice-off is
+  server-gated) + SECURITY §14/PROVIDERS notes; dead
+  cancelHold/data-hold-ms left (attribute pinned); stale last-commit
+  line fixed. New pins: 1 in `tests/test_overlay.py` (effect_anchor
+  pure) + 8 in `tests/test_computer_use.py` (save→act→warp order ×3,
+  focus-click warp, bare-type no-touch, raising-warp ok, broken-api
+  never-raise, byte round-trip), plus 2 extended (take_control flag,
+  look head seed). `ruff` clean, 248 passed targeted slice, full
+  2010 passed / 11 skipped / 1 deselected.
 - Item-1d done (`passing`): glide-cover follow-up — drag dwell now covers
   both legs (`core/tool_executor.py`: new pure `_resolve_drag_delay`
   estimates head→from then from→to, drag branch uses it so the single
@@ -84,8 +110,10 @@
   asks once. Taps keep B4/B8 behavior but now send `asked:false`.
   `playChirp(words)` pentatonic scoop/wobble (`min(max(words,3),5)`,
   0.07–0.09s notes, 0.13s last, 0.5x octave, 0.028s gaps, suspended
-  skips, fail-silent); mic replies chirp with reply words, typed stay
-  silent, mute kills chirp + speech. Ids, realms, textContent-only, and
+  skips, fail-silent, device-local); mic replies chirp with reply
+  words; typed turns stay silent and voice-off is server-gated (the
+  `isMuted` gate is kept fail-silent but unwired — no template passes
+  it; claim corrected in Item-4b). Ids, realms, textContent-only, and
   the Item-5 tuck guard frozen. New pin
   `test_hold_to_ask_and_chirp_item6` + updated chirp/border pins.
   `ruff` clean, 97 passed voice/webchat/handoff slice, full
@@ -323,7 +351,8 @@
   MCP_PROTOCOL §7 tools, SECURITY §12, ROADMAP count 34. Vetted
   plan survived contact: one real find during vetting (the batch
   trap), confirmed in code before building.
-- Last commit: `53c884d` (main) — F16 overlay Bluey states.
+- Last commit: `4350ce2` (main) — deploy: run db upgrade as Railway
+  preDeployCommand.
 - F12 done (`passing`, uncommitted): multimodal image parts — the model
   truly sees screenshots (new pure `invincible/core/vision.py`:
   extract/attach around trim, PNG-IHDR token estimates, 4-image +
@@ -395,7 +424,7 @@
 
 ## In Progress
 
-- None — Item-1d complete (`passing`).
+- None — Item-4b complete (`passing`).
   Zero `active`. Next: F05 vector seam at next clock-in.
 
 ## Next Steps

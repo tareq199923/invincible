@@ -156,6 +156,25 @@ def _overlay_note_settled() -> None:
         _OVERLAY_HEAD_PX = None
 
 
+def _overlay_note_head(x, y) -> None:
+    """Track a queued tour point as the head estimate (best-effort).
+
+    Item-4b (Item-1c cross-path gap): the look branch queues a point
+    the child head flies to, but no ``announce`` marks it on the
+    parent side — the next computer-action dwell would dock-seed and
+    under-cover the real flight. Junk leaves the estimate untouched;
+    never raises.
+    """
+    global _OVERLAY_HEAD_PX
+    with contextlib.suppress(Exception):
+        grid = overlay._choreo_grid(x, y)
+        if grid is None:
+            return
+        vrect = overlay.virtual_screen()
+        px, py = overlay.grid_to_pixel(grid[0], grid[1], vrect)
+        _OVERLAY_HEAD_PX = (float(px), float(py))
+
+
 def ensure_overlay() -> overlay.Overlay | None:
     """Live overlay handle, or None when headless. Never raises.
 
@@ -469,10 +488,14 @@ async def execute_job(job: dict) -> dict:
                                 target = control
                                 break
                     if isinstance(target, dict):
+                        # Item-4b: the queued point moves the child
+                        # head — seed the parent dwell estimate too.
                         seen.point(
                             {"x": target.get("x"),
                              "y": target.get("y")},
                             label=str(target.get("label", "")))
+                        _overlay_note_head(target.get("x"),
+                                           target.get("y"))
             return result
         if job_type in tool_executor.COMPUTER_TOOLS:
             # F10: paired-PC input + launch. Shape + denylist are
