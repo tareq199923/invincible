@@ -62,9 +62,12 @@ platform requires otherwise.
   `invincible db upgrade` (against `INVINCIBLE_MIGRATE_DB_URL` when set),
   then
   `uvicorn invincible.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'`.
-- **`railway.json`**: `startCommand` uses `--port $PORT` plus the same
-  proxy flags, with `healthcheckPath: /health` and a 120s healthcheck
-  timeout.
+- **`railway.json`**: `preDeployCommand` runs `invincible db upgrade`
+  (against `INVINCIBLE_MIGRATE_DB_URL` when set) before each deploy goes
+  live, because Railway's `startCommand` replaces the Dockerfile `CMD` and
+  would otherwise skip migrations. `startCommand` uses `--port $PORT` plus
+  the same proxy flags, with `healthcheckPath: /health` and a 120s
+  healthcheck timeout.
 - **`Procfile`**: the same uvicorn line for Heroku-style platforms.
 
 Why those flags matter:

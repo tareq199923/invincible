@@ -5,6 +5,9 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
+    "preDeployCommand": [
+      "sh -c 'INVINCIBLE_DB_URL=\"${INVINCIBLE_MIGRATE_DB_URL:-$INVINCIBLE_DB_URL}\" invincible db upgrade'"
+    ],
     "startCommand": "uvicorn invincible.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips '*'",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 120,
