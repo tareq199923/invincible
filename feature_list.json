@@ -278,5 +278,19 @@
     "state": "passing",
     "title": "Overlay Bmax restyle (navy/pink skin parity)",
     "verification": "ruff check . && pytest tests/test_overlay.py"
+  },
+  {
+    "behavior": "the one overlay head splits into a moving cursor-like pointer (navy classic-arrow carrying the pink robot face - two eyes, a wink slash, zigzag mouth - with the arrow tip as the hotspot: Bluey flight, landing tap, ring, coordinate bubble, typing glyphs, fading trail) and a stationary companion face (110px web-Bmax squircle, slightly left of the bottom-right corner, always visible, sleeps when idle, happy bounce in place, eyes follow the pointer while it travels and the real mouse while it rests); face state semantics, the face IPC verb, choreography, the runner driving loop and headless latency stay put; teardrop tip + hover-grow squish art retired",
+    "id": "F21",
+    "state": "passing",
+    "title": "Overlay pointer + companion face (head split)",
+    "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py tests/test_look_at_screen.py"
+  },
+  {
+    "behavior": "the desktop companion face mirrors voice turns (listening while the user talks, speaking while the reply is spoken) once a server->agent signal exists: voice state rides the agent queue as a control message, the runner forwards the new face states, and the face art gains the two poses; text stays source of truth, silent when voice is off",
+    "id": "F22",
+    "state": "planned",
+    "title": "Face voice states (listening/speaking + signal)",
+    "verification": "ruff check . && pytest tests/test_overlay.py tests/test_voice.py"
   }
 ]

@@ -86,10 +86,11 @@ _OVERLAY: overlay.Overlay | None = None
 _OVERLAY_RETRY_AT = 0.0
 OVERLAY_RETRY_COOLDOWN_SECONDS = 60.0
 
-# Parent-side estimate of the overlay head position (virtual-screen px),
-# so the pre-action dwell can cover the planned Bluey flight. ``None``
-# until the first announced point (the child starts docked).
-_OVERLAY_HEAD_PX: tuple[float, float] | None = None
+# Parent-side estimate of the overlay pointer TIP position
+# (virtual-screen px), so the pre-action dwell can cover the planned
+# Bluey flight. ``None`` until the first announced point (the child
+# starts parked beside the face).
+_OVERLAY_POINTER_PX: tuple[float, float] | None = None
 # Dwell bounds: the flight estimate plus a 30Hz-tick landing buffer,
 # clamped so a pathological leg never stalls a job.
 _OVERLAY_DWELL_BUFFER_SECONDS = 0.1
@@ -97,7 +98,7 @@ _OVERLAY_DWELL_MAX_SECONDS = 1.3
 _OVERLAY_DRAG_DWELL_MAX_SECONDS = 2.0
 
 # Item-7 face: result statuses that paint the X-eyes error burst on the
-# overlay head. Any other status a result names is a happy burst; a
+# overlay face. Any other status a result names is a happy burst; a
 # result that cannot name one is drawn as an error (never a fake win).
 _FACE_ERROR_STATUSES = ("error", "blocked", "unavailable")
 
@@ -120,15 +121,11 @@ def _overlay_delay_fn(dragging: bool):
             gy = float(point.get("y"))
         except (OSError, TypeError, ValueError, AttributeError):
             return overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS
-        global _OVERLAY_HEAD_PX
-        start = _OVERLAY_HEAD_PX
+        global _OVERLAY_POINTER_PX
+        start = _OVERLAY_POINTER_PX
         if start is None:
             try:
-                dock = overlay.dock_corner(
-                    vrect, overlay.OVERLAY_HEAD_PX)
-                radius = overlay.OVERLAY_HEAD_PX // 2
-                start = (float(dock[0] + radius),
-                         float(dock[1] + radius))
+                start = overlay.pointer_home(vrect)
             except Exception:
                 return overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS
         with contextlib.suppress(Exception):
@@ -136,7 +133,7 @@ def _overlay_delay_fn(dragging: bool):
             flight = overlay.plan_flight(
                 start, (float(goal[0]), float(goal[1])),
                 (0.0, 0.0), 0.0, vrect, dragging)
-            _OVERLAY_HEAD_PX = (float(goal[0]), float(goal[1]))
+            _OVERLAY_POINTER_PX = (float(goal[0]), float(goal[1]))
             legs.append(float(flight["duration"]))
         if not legs:
             return overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS
@@ -150,34 +147,35 @@ def _overlay_delay_fn(dragging: bool):
 
 
 def _overlay_note_settled() -> None:
-    """Forget the tracked head position (best-effort, never raises).
+    """Forget the tracked pointer position (best-effort, never raises).
 
-    The child glides home on ``settle``; the next dwell estimate must
-    dock-seed instead of starting from a stale tour/drag point, or it
-    under-covers. Called wherever the parent asks the head home.
+    The child parks the pointer on ``settle``; the next dwell estimate
+    must park-seed instead of starting from a stale tour/drag point,
+    or it under-covers. Called wherever the parent asks the pointer
+    home.
     """
-    global _OVERLAY_HEAD_PX
+    global _OVERLAY_POINTER_PX
     with contextlib.suppress(Exception):
-        _OVERLAY_HEAD_PX = None
+        _OVERLAY_POINTER_PX = None
 
 
-def _overlay_note_head(x, y) -> None:
-    """Track a queued tour point as the head estimate (best-effort).
+def _overlay_note_pointer(x, y) -> None:
+    """Track a queued tour point as the pointer estimate (best-effort).
 
     Item-4b (Item-1c cross-path gap): the look branch queues a point
-    the child head flies to, but no ``announce`` marks it on the
-    parent side — the next computer-action dwell would dock-seed and
+    the child pointer flies to, but no ``announce`` marks it on the
+    parent side — the next computer-action dwell would park-seed and
     under-cover the real flight. Junk leaves the estimate untouched;
     never raises.
     """
-    global _OVERLAY_HEAD_PX
+    global _OVERLAY_POINTER_PX
     with contextlib.suppress(Exception):
         grid = overlay._choreo_grid(x, y)
         if grid is None:
             return
         vrect = overlay.virtual_screen()
         px, py = overlay.grid_to_pixel(grid[0], grid[1], vrect)
-        _OVERLAY_HEAD_PX = (float(px), float(py))
+        _OVERLAY_POINTER_PX = (float(px), float(py))
 
 
 def ensure_overlay() -> overlay.Overlay | None:
@@ -211,7 +209,7 @@ def stop_overlay() -> None:
     global _OVERLAY, _OVERLAY_RETRY_AT
     current, _OVERLAY = _OVERLAY, None
     # An intentional stop (WS teardown -> poll fallback) may bring a
-    # fresh head up immediately; only accidental deaths sit out the
+    # fresh overlay up immediately; only accidental deaths sit out the
     # cooldown stamped by ensure_overlay.
     _OVERLAY_RETRY_AT = 0.0
     if current is not None:
@@ -221,11 +219,11 @@ def stop_overlay() -> None:
 
 
 def _overlay_face(state: str) -> None:
-    """Paint a face on the running overlay head (Item-7). Never raises.
+    """Paint a face on the running overlay (Item-7). Never raises.
 
     Reads the live handle directly instead of calling ``ensure_overlay``:
     a face annotates work the agent already started, it must never pop a
-    new head into existence. The overlay comes up with the agent
+    new overlay into existence. The overlay comes up with the agent
     connection, so headless / off-Windows / kill-switched machines and
     the test suite simply stay silent here.
     """
@@ -408,7 +406,7 @@ async def execute_job(job: dict) -> dict:
     Item-7: this wrapper owns the face signal only — the job's work is
     untouched. It paints the start, the outcome, and an idle clear when
     the job raises or is cancelled (a crashed job must not leave the
-    head stuck mid-work). Every face call is best-effort, like every
+    face stuck mid-work). Every face call is best-effort, like every
     other overlay call.
     """
     job_type = job.get("type") if isinstance(job, dict) else None
@@ -540,7 +538,7 @@ async def _execute_job(job: dict) -> dict:
             # applies. Non-Windows answers unavailable, never raises.
             # Item-2: queue a visual tour point at the cursor's
             # control (stdin write only, suppressed like every
-            # overlay call) - tools run immediately, the head
+            # overlay call) - tools run immediately, the pointer
             # catches up on its own holds.
             result = await tool_executor._look_at_screen()
             with contextlib.suppress(Exception):
@@ -559,13 +557,13 @@ async def _execute_job(job: dict) -> dict:
                                 break
                     if isinstance(target, dict):
                         # Item-4b: the queued point moves the child
-                        # head — seed the parent dwell estimate too.
+                        # pointer — seed the parent dwell estimate too.
                         seen.point(
                             {"x": target.get("x"),
                              "y": target.get("y")},
                             label=str(target.get("label", "")))
-                        _overlay_note_head(target.get("x"),
-                                           target.get("y"))
+                        _overlay_note_pointer(target.get("x"),
+                                              target.get("y"))
             return result
         if job_type in tool_executor.COMPUTER_TOOLS:
             # F10: paired-PC input + launch. Shape + denylist are
@@ -574,7 +572,7 @@ async def _execute_job(job: dict) -> dict:
             # Non-Windows answers unavailable, never raises.
             # F11: resolved points glide the overlay BEFORE the action
             # (pre-action dwell only when an overlay is alive); the
-            # head settles back to its dock corner after. Every overlay
+            # pointer parks back beside the face after. Every overlay
             # call is best-effort - a dead overlay never breaks a job.
             seen = ensure_overlay()
             alive = seen is not None and seen.alive

@@ -1,17 +1,21 @@
 # invincible/agent/overlay.py
-"""B1 head-cursor overlay (F11): a Bmax-head cursor on the paired PC.
+"""B1 overlay (F11/F21): a Bmax pointer + companion face on the PC.
 
-A transparent, click-through, always-on-top window draws a rounded
-navy head with two pink LED eyes - the web Bmax skin (F20), matching
-the robot-heads port's defaults in
+A transparent, click-through, always-on-top window draws two pieces
+of the web Bmax character (F20/F19) - the same skin as the
+robot-heads port's defaults in
 ``invincible/templates/static/robot-head.js`` (navy shell, slate trim,
-pink LEDs) so the desktop head and the web head read as the same
-character. It glides to each Pack 3
-target point BEFORE the action executes (so the user watches Bmax
-"do" the click/type), idles docked at a screen corner, and works
+pink LEDs). The moving piece is a cursor-like pointer: a classic
+up-left arrow carrying the pink robot face with its TIP as the
+hotspot, gliding to each Pack 3 target point BEFORE the action
+executes (so the user watches Bmax "do" the click/type) and working
 through a queued point tour (``point()``) on Bluey-style holds when
-it is otherwise free - tools never wait on the head. Its eyes
-track the real mouse at ~30Hz.
+it is otherwise free. The stationary piece is a companion face - a
+web-style squircle slightly left of the bottom-right corner - that
+stays put, shows what the agent is doing, and sleeps when idle; the
+parked pointer waits beside it. Tools never wait on either. The
+face's eyes follow the pointer while it travels and the operator's
+real mouse at ~30Hz while it rests.
 
 Stdlib only (tkinter + ctypes + threading + subprocess) - no new
 dependencies. Failure isolation is a requirement: the window runs in a
@@ -38,12 +42,11 @@ import time
 
 OVERLAY_GRID_MAX = 1000
 
-# Look: the web Bmax skin (F20) - the desktop head wears the same
+# Look: the web Bmax skin (F20) - the desktop overlay wears the same
 # character as the robot-heads port. SHELL_MID / HEAD_OUTLINE /
-# EYE_FILL are copied verbatim from robot-heads.js DEFAULTS
+# EYE_FILL are copied verbatim from robot-head.js DEFAULTS
 # (color / trimColor / screenColor) and pinned against it; DEEP and
 # LIGHT are the shell gradient's shaded edge and lit patch.
-OVERLAY_HEAD_PX = 72
 OVERLAY_SHELL_MID = "#0d142a"
 OVERLAY_SHELL_DEEP = "#0a0f20"
 OVERLAY_SHELL_LIGHT = "#243056"
@@ -57,6 +60,31 @@ OVERLAY_EYE_DY = -6
 OVERLAY_EYE_R = 7
 OVERLAY_EYE_TRACK_R = 9
 
+# F21 pointer + companion face: the single gliding head split into a
+# moving cursor-like pointer (the arrow TIP is the hotspot - it lands
+# exactly on the action pixel) and a stationary face that lives
+# slightly left of the bottom-right corner. Sizes: the pointer box is
+# OVERLAY_POINTER_PX tall by OVERLAY_POINTER_W wide; the face is an
+# OVERLAY_FACE_PX square shifted OVERLAY_FACE_SHIFT_LEFT px left of
+# the true corner (keeps the notification-toast lane clear). The
+# parked pointer waits OVERLAY_PARK_GAP px beside the face's left
+# edge, vertically centred on it. Eye geometry (OVERLAY_EYE_*) stays
+# base-scale: the face draws it multiplied by OVERLAY_FACE_EYE_SCALE
+# so the Bmax proportions hold at 110px.
+OVERLAY_POINTER_PX = 36
+OVERLAY_POINTER_W = 22
+OVERLAY_POINTER_STROKE = 2
+OVERLAY_PARK_GAP = 14
+OVERLAY_FACE_PX = 110
+OVERLAY_FACE_SHIFT_LEFT = 52
+OVERLAY_FACE_EYE_SCALE = 1.5
+OVERLAY_FACE_BOUNCE_PX = 7.0
+OVERLAY_FACE_PLATE_SCALE = 0.78
+OVERLAY_FACE_GLOW_SCALE = 1.20
+OVERLAY_FACE_RING_SCALE = 1.06
+OVERLAY_POINTER_EYE_R = 2.0
+OVERLAY_POINTER_FACE_STROKE = 1.6
+
 # Motion: ~30Hz cursor poll, ease-out glide, choreographed point
 # queue + quiet-based homing, pre-action dwell (the dwell lives in
 # the runner - it only waits when an overlay is alive, so headless
@@ -69,9 +97,10 @@ OVERLAY_GLIDE_SECONDS = 0.30
 OVERLAY_PRE_ACTION_DWELL_SECONDS = 0.35
 # Point-queue choreography (Item-2, Bluey RealtimeHost port): every
 # queued tour point holds 1.0s flight allowance + 2.2s minimum; the
-# head goes home 1.2s after a request once quiet, else after 5.0s
-# quiet. These replace the old fixed idle-settle delay — homing now
-# flows through choreo_step so a queued tour is never cut short.
+# pointer parks beside the face 1.2s after a request once quiet, else
+# after 5.0s quiet. These replace the old fixed idle-settle delay -
+# homing now flows through choreo_step so a queued tour is never cut
+# short.
 OVERLAY_POINT_MIN_HOLD_SECONDS = 2.2
 OVERLAY_POINT_FLIGHT_SECONDS = 1.0
 OVERLAY_IDLE_HOME_SECONDS = 5.0
@@ -82,13 +111,11 @@ OVERLAY_DOCK_CORNER = "br"
 OVERLAY_DOCK_LIFT = 48
 OVERLAY_TRANSPARENT_KEY = "magenta"
 
-# F16 Bluey states (child-side drawing only — no job-logic touch,
-# no added headless latency): press squish on target arrival, hover
-# grow while gliding, fading trail, coordinate bubble near the head.
-OVERLAY_SQUISH_SECONDS = 0.18
-OVERLAY_SQUISH_RX = 1.08
-OVERLAY_SQUISH_RY = 0.82
-OVERLAY_HOVER_SCALE = 1.08
+# F16 Bluey states, retargeted by F21 (child-side drawing only - no
+# job-logic touch, no added headless latency): press tap on target
+# arrival, fading trail, coordinate bubble near the pointer. The old
+# head's hover-grow and widen/flatten squish retired with it; the
+# pointer taps through the press curve alone.
 OVERLAY_TRAIL_POINTS = 8
 OVERLAY_BUBBLE_SECONDS = 1.5
 
@@ -110,7 +137,7 @@ OVERLAY_PRESS_TYPE = 0.035
 OVERLAY_RING_LEFT_FILL = OVERLAY_EYE_FILL        # primary: LED pink
 OVERLAY_RING_RIGHT_FILL = OVERLAY_HEAD_OUTLINE   # secondary: slate trim
 
-# Item-7 face: the head shows what the agent is doing. Kinds are
+# Item-7 face: the face shows what the agent is doing. Kinds are
 # child-side only; the parent sends working/searching/error/happy/idle
 # and the child derives sleeping from quiet. Wire payloads carry no
 # durations - the child owns every timer, like the effect verb.
@@ -197,8 +224,8 @@ def effect_anchor(grid, vrect: tuple) -> tuple[int, int] | None:
     """Click-effect anchor: grid point to virtual-screen pixels (pure).
 
     Item-4b: the click ring + coordinate bubble anchor at the clicked
-    point (Bluey's point-anchored clickEffect), never at the live head
-    — the head is already gliding home when a late effect lands.
+    point (Bluey's point-anchored clickEffect), never at the live
+    pointer - it is already gliding home when a late effect lands.
     ``None`` for a malformed grid/vrect; never raises.
     """
     try:
@@ -641,38 +668,13 @@ def hover_offset(now, landed_at, is_home: bool = False,
     return math.sin(since * 2.4) * 1.6 * amount
 
 
-def tip_alpha(*, flight_active: bool = False, dragging: bool = False,
-              to_target: bool = False, settled: bool = True,
-              press_age=None) -> float:
-    """Tip-polygon visibility 0.0/1.0 (pure, hermetic, overlay-only).
-
-    1.0 while working: a flight is active, a drag is held, or the
-    press window (``0 <= press_age < 0.42``, same as ``press_scale``)
-    is open. 0.0 docked/idle/home/settled. Tk has no per-item alpha
-    so the caller shows/hides the polygon. Never raises.
-
-    ``to_target``/``settled`` are frozen (backward compat, ignored):
-    docked-ness is already encoded in ``flight_active``/``dragging``/
-    ``press_age``, so they stay accepted but unread.
-    """
-    try:
-        if flight_active is True or dragging is True:
-            return 1.0
-        if press_age is not None:
-            age = float(press_age)
-            if math.isfinite(age) and 0 <= age < 0.42:
-                return 1.0
-    except (TypeError, ValueError):
-        return 0.0
-    return 0.0
-
-
 def eye_offset(hx, hy, cx, cy, r_max: float) -> tuple[int, int]:
-    """Pupil offset from head center toward the cursor (pure, hermetic).
+    """Pupil offset from face center toward a point (pure, hermetic).
 
-    The full vector when the cursor is near, clamped to ``r_max``
-    magnitude when far - the eyes glance toward the mouse without
-    leaving the head. ``(0, 0)`` when coincident or ``r_max <= 0``.
+    The full vector when the target is near, clamped to ``r_max``
+    magnitude when far - the face's eyes glance toward the pointer or
+    the mouse without leaving the face. ``(0, 0)`` when coincident or
+    ``r_max <= 0``.
     """
     try:
         dx, dy, cap = float(hx), float(hy), float(r_max)
@@ -733,9 +735,11 @@ def face_kind(face, now, *, quiet_since=None) -> str:
 
 
 def face_geometry(kind, now, blink=0.0) -> dict:
-    """Per-state eye geometry in px against the head centre (pure).
+    """Per-state eye geometry in px against the face centre (pure).
 
-    The idle values ARE the frozen eye constants (``OVERLAY_EYE_DX`` /
+    Values are base-scale (head-relative): the child draws them
+    multiplied by ``OVERLAY_FACE_EYE_SCALE``. The idle values ARE the
+    frozen eye constants (``OVERLAY_EYE_DX`` /
     ``OVERLAY_EYE_DY`` / ``OVERLAY_EYE_R``), so the resting face is
     byte-identical to the drawing that shipped before Item-7; ``track``
     says whether the cursor glance (``eye_offset``) still applies.
@@ -834,18 +838,19 @@ def face_apply(wire_state, now) -> dict | None:
     return {"kind": wire_state, "until": until}
 
 
-def dock_corner(vrect: tuple, head_px: int,
+def dock_corner(vrect: tuple, size_px: int,
                 corner: str = OVERLAY_DOCK_CORNER,
                 margin: int = OVERLAY_DOCK_MARGIN) -> tuple[int, int]:
-    """Top-left pixel of the idle-docked head box (pure, hermetic).
+    """Top-left pixel of a ``size_px`` box in the dock corner (pure).
 
     Bottom corners ride ``OVERLAY_DOCK_LIFT`` px above the full vrect
-    bottom so the head clears the Windows taskbar; top corners are
-    unchanged. Signature frozen.
+    bottom so the box clears the Windows taskbar; top corners are
+    unchanged. ``size_px`` was named ``head_px`` before F21; all
+    in-repo callers pass it positionally.
     """
     ox, oy, width, height = vrect
     try:
-        size = max(1, int(head_px))
+        size = max(1, int(size_px))
     except (TypeError, ValueError):
         size = 1
     try:
@@ -863,31 +868,179 @@ def dock_corner(vrect: tuple, head_px: int,
     return (int(picked[0]), int(picked[1]))
 
 
-def head_radii(radius: float, *, hovering: bool = False,
-               squished: bool = False) -> tuple[float, float]:
-    """Head (rx, ry) for the F16 Bluey states (pure, hermetic).
+def face_box(vrect: tuple) -> tuple[int, int]:
+    """Top-left pixel of the companion face's box (pure, hermetic).
 
-    Squish wins over hover: on target arrival the head presses
-    (wider + flatter for ``OVERLAY_SQUISH_SECONDS``); while gliding
-    to a target it hovers slightly grown; idle draws the base circle.
+    The face lives in the bottom-right dock spot (``OVERLAY_DOCK_LIFT``
+    above the taskbar, ``OVERLAY_DOCK_MARGIN`` from the edges) shifted
+    ``OVERLAY_FACE_SHIFT_LEFT`` px left so Windows notification toasts
+    keep the true corner. Malformed rects read as ``(0, 0)``; never
+    raises.
     """
     try:
-        base = float(radius)
+        x, y = dock_corner(vrect, OVERLAY_FACE_PX)
+    except (TypeError, ValueError):
+        return (0, 0)
+    return (int(x) - OVERLAY_FACE_SHIFT_LEFT, int(y))
+
+
+def pointer_home(vrect: tuple) -> tuple[float, float]:
+    """Parked pointer TIP position: beside the face's left edge (pure).
+
+    The tip is the hotspot, so "parked" is the tip of the pointer box
+    whose right edge sits ``OVERLAY_PARK_GAP`` px left of the face,
+    vertically centred against it. Malformed rects park near the
+    origin; never raises.
+    """
+    try:
+        fx, fy = face_box(vrect)
+        width = float(OVERLAY_POINTER_W)
+        height = float(OVERLAY_POINTER_PX)
+        return (float(fx) - OVERLAY_PARK_GAP - width,
+                float(fy) + (OVERLAY_FACE_PX - height) / 2.0)
     except (TypeError, ValueError):
         return (0.0, 0.0)
-    if base <= 0:
+
+
+def squircle_points(cx, cy, rx, ry, samples: int = 32,
+                    power: float = 3.6) -> list:
+    """Superellipse ring sampled clockwise (pure, hermetic).
+
+    The web face's shell is a ``bmax`` squircle; Tk has no squircle,
+    so the child draws one as a smooth polygon through ``samples``
+    points of ``|x/rx|^p + |y/ry|^p = 1`` (``power`` 3.6 reads as the
+    port's corner preset - fuller than an ellipse at the diagonals).
+    Non-positive radii or junk read as ``[]``; never raises.
+    """
+    try:
+        fcx, fcy = float(cx), float(cy)
+        frx, fry = float(rx), float(ry)
+        count = int(samples)
+        exponent = 2.0 / float(power)
+    except (TypeError, ValueError):
+        return []
+    if not all(math.isfinite(v) for v in (fcx, fcy, frx, fry)):
+        return []
+    if frx <= 0 or fry <= 0 or count < 3 or not math.isfinite(
+            exponent) or exponent <= 0:
+        return []
+    count = min(count, 256)
+    points = []
+    for i in range(count):
+        angle = 2.0 * math.pi * i / count
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        points.append((
+            fcx + frx * math.copysign(abs(cos_a) ** exponent, cos_a),
+            fcy + fry * math.copysign(abs(sin_a) ** exponent, sin_a)))
+    return points
+
+
+def pointer_arrow_points(px, py, w: float = OVERLAY_POINTER_W,
+                         h: float = OVERLAY_POINTER_PX) -> list:
+    """Classic up-left cursor polygon with the tip AT (px, py) (pure).
+
+    The tip is the hotspot: the body (notch + tail) extends down-right
+    of it exactly like a real arrow cursor, so a flight landing on a
+    target pixel puts the tip - not a centre - on the point. Junk and
+    non-positive sizes give ``[]``; never raises.
+    """
+    try:
+        fx, fy = float(px), float(py)
+        width, height = float(w), float(h)
+    except (TypeError, ValueError):
+        return []
+    if not all(math.isfinite(v) for v in (fx, fy, width, height)):
+        return []
+    if width <= 0 or height <= 0:
+        return []
+    shape = ((0.00, 0.00), (0.00, 0.60), (0.20, 0.46), (0.38, 0.97),
+             (0.56, 0.89), (0.38, 0.40), (0.98, 0.34))
+    return [(fx + sx * width, fy + sy * height) for sx, sy in shape]
+
+
+def pointer_face_parts(px, py, w: float = OVERLAY_POINTER_W,
+                       h: float = OVERLAY_POINTER_PX) -> dict:
+    """The pointer's robot face in px, tip-anchored (pure, hermetic).
+
+    The reference cursor carries two pink eyes (the right one winking
+    through a short slash) and a zigzag mouth on its navy body.
+    Returns ``{"eyes": [(cx, cy, r)] * 2, "wink": [(x, y)] * 2,
+    "mouth": [(x, y)] * 5}``; everything scales linearly from the tip,
+    so a pressed pointer keeps its face aligned. Junk and non-positive
+    sizes give ``{}``; never raises.
+    """
+    try:
+        fx, fy = float(px), float(py)
+        width, height = float(w), float(h)
+    except (TypeError, ValueError):
+        return {}
+    if not all(math.isfinite(v) for v in (fx, fy, width, height)):
+        return {}
+    if width <= 0 or height <= 0:
+        return {}
+    ratio = width / float(OVERLAY_POINTER_W)
+    radius = float(OVERLAY_POINTER_EYE_R) * ratio
+    eye_y = fy + 0.185 * height
+    left_x = fx + 0.20 * width
+    right_x = fx + 0.38 * width
+    return {
+        "eyes": [(left_x, eye_y, radius), (right_x, eye_y, radius)],
+        "wink": [(right_x - 1.2 * radius, eye_y - 0.6 * radius),
+                 (right_x + 1.2 * radius, eye_y + 0.6 * radius)],
+        "mouth": [(fx + 0.24 * width, fy + 0.300 * height),
+                  (fx + 0.33 * width, fy + 0.355 * height),
+                  (fx + 0.42 * width, fy + 0.300 * height),
+                  (fx + 0.51 * width, fy + 0.355 * height),
+                  (fx + 0.60 * width, fy + 0.300 * height)],
+    }
+
+
+def face_bounce_offset(kind, now, face_at) -> float:
+    """Happy-hop vertical offset in px for the face (pure, hermetic).
+
+    ``happy`` bursts get two quick hops over the burst window (the
+    same ``OVERLAY_FACE_HAPPY_SECONDS`` the eyes use), easing down a
+    touch; the offset is never positive (screen-up is negative y in
+    Tk). Every other kind, expired stamps and junk read as ``0.0``;
+    never raises.
+    """
+    if kind != "happy":
+        return 0.0
+    now_t = _face_number(now)
+    at_t = _face_number(face_at)
+    if now_t is None or at_t is None:
+        return 0.0
+    t = now_t - at_t
+    if t < 0 or t >= OVERLAY_FACE_HAPPY_SECONDS:
+        return 0.0
+    phase = t / OVERLAY_FACE_HAPPY_SECONDS
+    return -OVERLAY_FACE_BOUNCE_PX * abs(math.sin(2.0 * math.pi * phase)) \
+        * (1.0 - 0.25 * phase)
+
+
+def face_gaze_target(pointer_travelling, pointer_xy, mouse_xy) -> tuple:
+    """Where the face looks: the travelling pointer, else the mouse (pure).
+
+    F21's both rule: while the pointer flies the face follows it; once
+    it rests (parked beside the face or holding a point) the face goes
+    back to watching the operator's real mouse. Malformed pointer
+    coordinates fall through to the mouse; junk everywhere reads
+    ``(0.0, 0.0)``; never raises.
+    """
+    try:
+        if pointer_travelling is True:
+            return (float(pointer_xy[0]), float(pointer_xy[1]))
+    except (TypeError, ValueError, IndexError):
+        pass
+    try:
+        return (float(mouse_xy[0]), float(mouse_xy[1]))
+    except (TypeError, ValueError, IndexError):
         return (0.0, 0.0)
-    if squished:
-        return (base * OVERLAY_SQUISH_RX, base * OVERLAY_SQUISH_RY)
-    if hovering:
-        grown = base * OVERLAY_HOVER_SCALE
-        return (grown, grown)
-    return (base, base)
 
 
 def trail_push(trail: list, x: float, y: float,
                cap: int = OVERLAY_TRAIL_POINTS) -> list:
-    """Append one head position, oldest-first, capped (pure, hermetic).
+    """Append one pointer position, oldest-first, capped (pure).
 
     Never raises on malformed input; non-finite points are ignored so
     a bad poll never poisons the trail.
@@ -958,8 +1111,8 @@ def _choreo_grid(x, y) -> tuple | None:
 def choreo_point(state: dict, x, y, label: str = "") -> bool:
     """Enqueue a tour point; clears any home request (pure, hermetic).
 
-    Bluey's ``point()``: the spot joins the queue and the head works
-    through it when the hold expires — tools never wait on it.
+    Bluey's ``point()``: the spot joins the queue and the pointer
+    works through it when the hold expires — tools never wait on it.
     Labels collapse to one line (capped). Never raises; False when
     the point or state is malformed.
     """
@@ -978,7 +1131,7 @@ def choreo_point(state: dict, x, y, label: str = "") -> bool:
 
 
 def choreo_request_home(state: dict) -> None:
-    """Flag a trip home once the head is quiet (pure, never raises)."""
+    """Flag a trip home once the pointer is quiet (pure, never raises)."""
     with contextlib.suppress(AttributeError, TypeError):
         state["home_requested"] = True
 
@@ -1009,7 +1162,7 @@ def choreo_take_control(state: dict) -> None:
     (pure, Item-1c; home flag per Bluey's takeControl, Item-4b).
 
     ``announce()`` (a click/drag point) preempts the visual tour —
-    the head goes where the action lands instead. ``home_requested``
+    the pointer goes where the action lands instead. ``home_requested``
     clears too: without it a real action after a home request would
     immediately re-home once it lands. Never raises.
     """
@@ -1076,27 +1229,6 @@ def choreo_step(state: dict, now: float) -> tuple:
 def shell_shades() -> tuple[str, str, str]:
     """Light→mid→deep fills for the stacked-oval gradient (pure)."""
     return (OVERLAY_SHELL_LIGHT, OVERLAY_SHELL_MID, OVERLAY_SHELL_DEEP)
-
-
-def teardrop_points(hx: float, hy: float, rx: float, ry: float) -> list:
-    """Tip triangle points above-left of the head (pure, hermetic).
-
-    Empty list for malformed input; otherwise 3 (x, y) points. The tip
-    reads as Bluey's teardrop peak without copying its exact path.
-    """
-    try:
-        fx, fy, arx, ary = float(hx), float(hy), float(rx), float(ry)
-    except (TypeError, ValueError):
-        return []
-    if not all(math.isfinite(v) for v in (fx, fy, arx, ary)):
-        return []
-    if arx <= 0 or ary <= 0:
-        return []
-    return [
-        (fx - arx * 0.95, fy - ary * 0.75),
-        (fx - arx * 0.10, fy - ary * 1.30),
-        (fx + arx * 0.25, fy - ary * 0.70),
-    ]
 
 
 def virtual_screen() -> tuple[int, int, int, int]:
@@ -1195,7 +1327,7 @@ class Overlay:
                 proc.kill()
 
     def announce(self, point: dict, dragging: bool = False) -> None:
-        """Glide the head to a resolved 0-1000 grid point. Never raises.
+        """Glide the pointer to a resolved 0-1000 grid point. Never raises.
 
         takeControl: a real action flies NOW and drops any queued tour
         (the child clears its point queue on receipt). Malformed
@@ -1222,10 +1354,10 @@ class Overlay:
         self._send(payload)
 
     def point(self, point: dict, label: str = "") -> None:
-        """Queue a tour point; the head catches up visually. Never raises.
+        """Queue a tour point; the pointer catches up visually. Never raises.
 
         Bluey's ``point()``: appends to the child queue and clears any
-        home request — tools run immediately, the head glides through
+        home request — tools run immediately, the pointer glides through
         queued spots on its own holds. Same validation as
         ``announce``; malformed points are ignored.
         """
@@ -1243,7 +1375,7 @@ class Overlay:
         self._send(payload)
 
     def request_home(self) -> None:
-        """Ask the head home once quiet (sets the flag, never raises)."""
+        """Ask the pointer home once quiet (sets the flag, never raises)."""
         self._send({"type": "home"})
 
     def set_speaking(self, on: bool) -> None:
@@ -1255,7 +1387,7 @@ class Overlay:
         self._send({"type": "speaking", "on": on is True})
 
     def face(self, state: str) -> None:
-        """Show what the agent is doing on the head (never raises).
+        """Show what the agent is doing on the face (never raises).
 
         ``state`` is one of ``FACE_WIRE_STATES``: ``working`` and
         ``searching`` hold until the next face message, ``happy`` and
@@ -1298,7 +1430,7 @@ class Overlay:
             return
 
     def settle(self) -> None:
-        """Ask the head to dock now (idle timeout docks anyway)."""
+        """Ask the pointer to dock now (idle timeout docks anyway)."""
         self._send({"type": "settle"})
 
     def stop(self) -> None:
@@ -1333,8 +1465,8 @@ def _stdin_reader(inbox: queue.Queue) -> None:
             with contextlib.suppress(queue.Full):
                 inbox.put_nowait(message)
     # Parent death: the quit MUST land even when the inbox is full -
-    # a silently dropped quit would leave a head running forever with
-    # no parent. Make room by dropping the oldest unread message.
+    # a silently dropped quit would leave the overlay running forever
+    # with no parent. Make room by dropping the oldest unread message.
     try:
         inbox.put_nowait({"type": "quit"})
     except queue.Full:
@@ -1414,43 +1546,38 @@ def _run_window(tk) -> None:
             root.destroy()
         raise
 
-    radius = OVERLAY_HEAD_PX // 2
-    dock = dock_corner(vrect, OVERLAY_HEAD_PX)
-    head_xy = [float(dock[0] + radius), float(dock[1] + radius)]
+    # F21: the face sits in the bottom-right dock box (shifted left);
+    # the pointer parks beside it, and its TIP - the hotspot - is what
+    # every flight targets.
+    face_x, face_y = face_box(vrect)
+    face_r = OVERLAY_FACE_PX / 2.0
+    home = pointer_home(vrect)
+    pointer_xy = [float(home[0]), float(home[1])]
     light, mid, deep = shell_shades()
-    # F20 glow: a faint dithered band plus a crisp LED rim on the head
-    # edge (the single fat stippled disc read as a pink donut).
-    glow = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_GLOW_FILL,
-                              outline="", width=0)
+    # F20 glow, F21 shape: a faint dithered squircle band plus a crisp
+    # LED rim hugging the face's shell (a circular glow crossed the
+    # squircle's corners).
+    glow = canvas.create_polygon(-10, -10, -10, -10, -10, -10,
+                                 fill=OVERLAY_GLOW_FILL, outline="",
+                                 width=0, smooth=True)
     with contextlib.suppress(Exception):
         canvas.itemconfigure(glow, stipple="gray25")
-    glow_ring = canvas.create_oval(0, 0, 1, 1, fill="",
-                                   outline=OVERLAY_GLOW_FILL, width=2)
+    glow_ring = canvas.create_polygon(-10, -10, -10, -10, -10, -10,
+                                      fill="", outline=OVERLAY_GLOW_FILL,
+                                      width=2, smooth=True)
     if not OVERLAY_GLOW:
-        canvas.coords(glow, -10, -10, -10, -10)
-        canvas.coords(glow_ring, -10, -10, -10, -10)
-    # F20: the trail draws UNDER the head. With no aging, a settled
-    # head's trail collapses onto its own face (a stray dot between the
-    # eyes on the new skin); under the head it only reads as motion.
-    trail_ids = [
-        canvas.create_oval(-10, -10, -10, -10,
-                           fill=OVERLAY_HEAD_OUTLINE,
-                           outline=OVERLAY_HEAD_OUTLINE)
-        for _ in range(OVERLAY_TRAIL_POINTS)
-    ]
-    head_deep = canvas.create_oval(0, 0, 1, 1, fill=deep,
-                                   outline=OVERLAY_HEAD_OUTLINE, width=3)
-    head_mid = canvas.create_oval(0, 0, 1, 1, fill=mid,
-                                  outline="", width=0)
-    head_light = canvas.create_oval(0, 0, 1, 1, fill=light,
-                                    outline="", width=0)
-    tip = canvas.create_polygon(0, 0, 1, 1, 2, 2, fill=mid,
-                                outline=OVERLAY_HEAD_OUTLINE, width=2)
+        canvas.coords(glow, -10, -10, -10, -10, -10, -10)
+        canvas.coords(glow_ring, -10, -10, -10, -10, -10, -10)
+    face_shell = canvas.create_polygon(0, 0, 1, 1, 2, 2, fill=mid,
+                                       outline=OVERLAY_HEAD_OUTLINE,
+                                       width=3, smooth=True)
+    face_plate = canvas.create_polygon(0, 0, 1, 1, 2, 2, fill=deep,
+                                       outline=OVERLAY_HEAD_OUTLINE,
+                                       width=2, smooth=True)
     shine = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_SHINE_FILL,
                                outline=OVERLAY_SHINE_FILL)
-    # F20: the eyes are LED blocks (rectangles), not ovals - the web
-    # face's eyes are blocky pixels, so the desktop head matches. A
-    # stippled bloom sits behind each block so they read as lit.
+    # F20/F21: the face's eyes are LED blocks (rectangles); a stippled
+    # bloom sits behind each block so they read as lit.
     eye_bloom_l = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_GLOW_FILL,
                                      outline="")
     eye_bloom_r = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_GLOW_FILL,
@@ -1462,20 +1589,50 @@ def _run_window(tk) -> None:
                                     outline=OVERLAY_EYE_FILL)
     eye_r = canvas.create_rectangle(0, 0, 1, 1, fill=OVERLAY_EYE_FILL,
                                     outline=OVERLAY_EYE_FILL)
-    # Item-7 face: six extra items stacked right above the ovals - one
+    # Item-7 face: six extra items stacked right above the blocks - one
     # arc per eye (happy lids / sleeping) and two X strokes per eye
     # (error). Idle leaves them parked off-window.
+    eye_stroke = int(round(OVERLAY_FACE_EYE_STROKE
+                           * OVERLAY_FACE_EYE_SCALE))
     eye_arc_ids = [
         canvas.create_arc(-10, -10, -10, -10, start=0, extent=180,
                           style="arc", outline=OVERLAY_EYE_FILL,
-                          width=OVERLAY_FACE_EYE_STROKE)
+                          width=eye_stroke)
         for _ in range(2)
     ]
     eye_cross_ids = [
         canvas.create_line(-10, -10, -10, -10, fill=OVERLAY_EYE_FILL,
-                           width=OVERLAY_FACE_EYE_STROKE, capstyle="round")
+                           width=eye_stroke, capstyle="round")
         for _ in range(4)
     ]
+    # F20/F21: the trail draws UNDER the pointer. With no aging, a
+    # settled pointer's trail collapses onto its own art; underneath
+    # it only reads as motion.
+    trail_ids = [
+        canvas.create_oval(-10, -10, -10, -10,
+                           fill=OVERLAY_HEAD_OUTLINE,
+                           outline=OVERLAY_HEAD_OUTLINE)
+        for _ in range(OVERLAY_TRAIL_POINTS)
+    ]
+    # F21 pointer: a classic up-left cursor carrying the pink robot
+    # face; every coordinate draws relative to the tip (the hotspot).
+    pointer_poly = canvas.create_polygon(0, 0, 1, 1, 2, 2,
+                                         fill=mid,
+                                         outline=OVERLAY_HEAD_OUTLINE,
+                                         width=OVERLAY_POINTER_STROKE)
+    pointer_eye_l = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_EYE_FILL,
+                                       outline=OVERLAY_EYE_FILL)
+    pointer_eye_r = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_EYE_FILL,
+                                       outline=OVERLAY_EYE_FILL)
+    pointer_wink = canvas.create_line(-10, -10, -10, -10,
+                                      fill=OVERLAY_EYE_FILL,
+                                      width=OVERLAY_POINTER_FACE_STROKE,
+                                      capstyle="round")
+    pointer_mouth = canvas.create_line(-10, -10, -10, -10, -10, -10,
+                                       -10, -10, -10, -10,
+                                       fill=OVERLAY_EYE_FILL,
+                                       width=OVERLAY_POINTER_FACE_STROKE,
+                                       capstyle="round")
     bubble_box = canvas.create_rectangle(-10, -10, -10, -10,
                                          fill=OVERLAY_SHELL_MID,
                                          outline=OVERLAY_HEAD_OUTLINE)
@@ -1488,7 +1645,7 @@ def _run_window(tk) -> None:
     glyph_ids = [
         canvas.create_text(-10, -10, text="",
                            fill=OVERLAY_EYE_FILL,
-                           font=("Segoe UI", 22, "bold"))
+                           font=("Segoe UI", 18, "bold"))
         for _ in range(OVERLAY_GLYPH_CAP)
     ]
     inbox: queue.Queue = queue.Queue(maxsize=16)
@@ -1503,7 +1660,7 @@ def _run_window(tk) -> None:
         OVERLAY_GLIDE_SECONDS / OVERLAY_POLL_SECONDS)))
     now0 = time.monotonic()
     state = {"path": [], "to_target": False,
-             "trail": [], "squash_until": 0.0,
+             "trail": [],
              "bubble_until": 0.0, "bubble_text": "",
              "bubble_xy": None, "flight": None, "velocity": [0.0, 0.0],
              "landed_at": now0 - 10.0,
@@ -1513,13 +1670,13 @@ def _run_window(tk) -> None:
              "ring": None, "glyphs": []}
 
     def _dock() -> None:
-        target = (dock[0] + radius, dock[1] + radius)
+        target = pointer_home(vrect)
         state["to_target"] = False
         state["flight"] = None
         state["velocity"] = [0.0, 0.0]
         state["dragging"] = False
         state["path"] = ease_waypoints(
-            head_xy[0], head_xy[1],
+            pointer_xy[0], pointer_xy[1],
             float(target[0]), float(target[1]), steps)
 
     def _launch(gx, gy, label, dragging,
@@ -1527,7 +1684,7 @@ def _run_window(tk) -> None:
         now_child = time.monotonic()
         px, py = grid_to_pixel(gx, gy, vrect)
         state["flight"] = plan_flight(
-            (head_xy[0], head_xy[1]),
+            (pointer_xy[0], pointer_xy[1]),
             (float(px), float(py)),
             tuple(state["velocity"]),
             now_child, vrect, dragging)
@@ -1547,7 +1704,7 @@ def _run_window(tk) -> None:
                          "tint": tint}
 
     def _spawn_land_ring() -> None:
-        _spawn_ring(head_xy[0], head_xy[1], OVERLAY_LAND_RING_PX,
+        _spawn_ring(pointer_xy[0], pointer_xy[1], OVERLAY_LAND_RING_PX,
                     OVERLAY_LAND_RING_SECONDS, OVERLAY_RING_LEFT_FILL)
 
     def _effect(message: dict) -> None:
@@ -1566,7 +1723,7 @@ def _run_window(tk) -> None:
                     if message.get("button") == "right"
                     else OVERLAY_RING_LEFT_FILL)
             # Item-4b: ring + bubble anchor at the clicked point, never
-            # the live head (it may be gliding home already).
+            # the live pointer (it may be gliding home already).
             _spawn_ring(anchor[0], anchor[1], OVERLAY_CLICK_RING_PX,
                         OVERLAY_CLICK_RING_SECONDS, tint)
             label = bubble_text_for(*grid)
@@ -1582,76 +1739,35 @@ def _run_window(tk) -> None:
                 return
             state["press_start"] = now_fx
             state["press_depth"] = OVERLAY_PRESS_TYPE
-            base_x = head_xy[0] + radius * 0.6
-            base_y = head_xy[1] - radius
+            base_x = pointer_xy[0] + OVERLAY_POINTER_W * 0.6
+            base_y = pointer_xy[1] - 6.0
             state["glyphs"] = [
                 {"x": base_x + i * 8.0, "y": base_y,
                  "char": ch, "start": now_fx}
                 for i, ch in enumerate(chars)]
 
     def _draw() -> None:
-        hx, hy = head_xy
+        fcx = face_x + face_r
+        fcy = face_y + face_r
+        px, py = pointer_xy
         now = time.monotonic()
-        squished = now < state["squash_until"]
-        hovering = (state["flight"] is not None or bool(state["path"])) \
-            and bool(state["to_target"])
-        rx, ry = head_radii(radius, hovering=hovering,
-                            squished=squished)
+        press = 1.0
         with contextlib.suppress(Exception):
             ps = press_scale(now, state["press_start"],
                              state["press_depth"])
             if math.isfinite(ps) and ps > 0:
-                rx, ry = rx * ps, ry * ps
+                press = ps
         settled = state["flight"] is None and not state["path"]
         is_home = (not bool(state["to_target"]) and settled)
-        with contextlib.suppress(Exception):
-            dy = hover_offset(now, state["landed_at"],
-                              is_home=is_home, settled=settled)
-            if math.isfinite(dy):
-                hy = hy + dy
-        trail = state["trail"]
-        for i, dot in enumerate(trail_ids):
-            if i < len(trail):
-                tx, ty = trail[i]
-                size = 2.0 + 4.0 * (i + 1) / max(len(trail), 1)
-                canvas.coords(dot, tx - size, ty - size,
-                              tx + size, ty + size)
-            else:
-                canvas.coords(dot, -10, -10, -10, -10)
-        ex, ey = eye_offset(hx, hy, cursor[0], cursor[1],
-                            OVERLAY_EYE_TRACK_R)
-        if OVERLAY_GLOW:
-            gr = max(rx, ry) * 1.20
-            canvas.coords(glow, hx - gr, hy - gr, hx + gr, hy + gr)
-            rr = max(rx, ry) * 1.06
-            canvas.coords(glow_ring, hx - rr, hy - rr, hx + rr, hy + rr)
-        canvas.coords(head_deep, hx - rx, hy - ry, hx + rx, hy + ry)
-        canvas.coords(head_mid, hx - rx * 0.86, hy - ry * 0.86,
-                      hx + rx * 0.86, hy + ry * 0.86)
-        canvas.coords(head_light, hx - rx * 0.62, hy - ry * 0.72,
-                      hx + rx * 0.45, hy + ry * 0.05)
-        pts = teardrop_points(hx, hy, rx, ry)
-        try:
-            tip_on = tip_alpha(
-                flight_active=state["flight"] is not None,
-                dragging=state["dragging"] is True,
-                to_target=bool(state["to_target"]),
-                settled=settled,
-                press_age=now - float(state["press_start"])) >= 0.5
-        except Exception:
-            tip_on = False
-        if pts and tip_on:
-            flat = [c for p in pts for c in p]
-            canvas.coords(tip, *flat)
-        else:
-            canvas.coords(tip, -10, -10, -10, -10, -10, -10)
-        sr = max(rx, ry) * 0.16
-        canvas.coords(shine, hx - rx * 0.42 - sr, hy - ry * 0.52 - sr,
-                      hx - rx * 0.42 + sr, hy - ry * 0.52 + sr)
-        # Item-7 face: the state resolves on the child's own clock, then
-        # the shape is swapped in place. Idle reproduces the pre-Item-7
-        # eyes exactly (same box constants, same cursor glance); the
-        # arcs and X are items of their own, parked at -10 when unused.
+        if settled and not is_home:
+            with contextlib.suppress(Exception):
+                bob = hover_offset(now, state["landed_at"],
+                                   is_home=is_home, settled=settled)
+                if math.isfinite(bob):
+                    py = py + bob
+        # F21 face: the state + blink + happy hop resolve on the child's
+        # own clock, exactly like the pre-split head (Item-7); the hop
+        # lifts the whole drawn face.
         face = "idle"
         with contextlib.suppress(Exception):
             face = face_kind(state["face"], now,
@@ -1660,18 +1776,53 @@ def _run_window(tk) -> None:
         with contextlib.suppress(Exception):
             blink = face_blink(now)
         geom = face_geometry(face, now, blink)
-        track = (ex, ey) if geom["track"] else (0, 0)
+        with contextlib.suppress(Exception):
+            fcy = fcy + face_bounce_offset(face, now, state["face_at"])
+        if OVERLAY_GLOW:
+            gpts = squircle_points(
+                fcx, fcy, face_r * OVERLAY_FACE_GLOW_SCALE,
+                face_r * OVERLAY_FACE_GLOW_SCALE)
+            if gpts:
+                canvas.coords(glow, *[c for p in gpts for c in p])
+            rpts = squircle_points(
+                fcx, fcy, face_r * OVERLAY_FACE_RING_SCALE,
+                face_r * OVERLAY_FACE_RING_SCALE)
+            if rpts:
+                canvas.coords(glow_ring, *[c for p in rpts for c in p])
+        shell = squircle_points(fcx, fcy, face_r, face_r)
+        if shell:
+            canvas.coords(face_shell, *[c for p in shell for c in p])
+        plate = squircle_points(fcx, fcy, face_r * OVERLAY_FACE_PLATE_SCALE,
+                                face_r * OVERLAY_FACE_PLATE_SCALE)
+        if plate:
+            canvas.coords(face_plate, *[c for p in plate for c in p])
+        sr = face_r * 0.11
+        canvas.coords(shine, fcx - face_r * 0.55 - sr,
+                      fcy - face_r * 0.66 - sr,
+                      fcx - face_r * 0.55 + sr,
+                      fcy - face_r * 0.66 + sr)
+        # F21 gaze: the travelling pointer first, the real mouse while
+        # it rests (the parked pointer is not "looking" at anything).
+        travel = state["flight"] is not None or bool(state["path"])
+        gx, gy = face_gaze_target(travel, (px, py), cursor)
+        gaze = eye_offset(fcx, fcy, gx, gy,
+                          OVERLAY_EYE_TRACK_R * OVERLAY_FACE_EYE_SCALE)
+        track = gaze if geom["track"] else (0, 0)
+        scale = OVERLAY_FACE_EYE_SCALE
         parked = (-10, -10, -10, -10)
         for oval, bloom, arc, cross_a, cross_b, side in (
                 (eye_l, eye_bloom_l, eye_arc_ids[0], eye_cross_ids[0],
                  eye_cross_ids[1], -1),
                 (eye_r, eye_bloom_r, eye_arc_ids[1], eye_cross_ids[2],
                  eye_cross_ids[3], 1)):
-            ecx = hx + side * geom["dx"] + geom["sweep"] + track[0]
-            ecy = hy + geom["dy"] + track[1]
-            box = (ecx - geom["rx"], ecy - geom["ry"],
-                   ecx + geom["rx"], ecy + geom["ry"])
-            bm = max(geom["rx"], geom["ry"]) * 1.30
+            ecx = fcx + side * geom["dx"] * scale \
+                + (geom["sweep"] * scale + track[0])
+            ecy = fcy + geom["dy"] * scale + track[1]
+            erx = geom["rx"] * scale
+            ery = geom["ry"] * scale
+            box = (ecx - erx, ecy - ery,
+                   ecx + erx, ecy + ery)
+            bm = max(erx, ery) * 1.30
             bloom_box = (ecx - bm, ecy - bm, ecx + bm, ecy + bm)
             if geom["eyes"] == "oval":
                 canvas.coords(oval, *box)
@@ -1696,18 +1847,55 @@ def _run_window(tk) -> None:
                 canvas.coords(bloom, *parked)
                 canvas.coords(cross_a, *parked)
                 canvas.coords(cross_b, *parked)
+        trail = state["trail"]
+        for i, dot in enumerate(trail_ids):
+            if i < len(trail):
+                tx, ty = trail[i]
+                size = 1.2 + 2.4 * (i + 1) / max(len(trail), 1)
+                canvas.coords(dot, tx - size, ty - size,
+                              tx + size, ty + size)
+            else:
+                canvas.coords(dot, -10, -10, -10, -10)
+        # F21 pointer: the arrow + ink scale about the tip by the press
+        # factor, so the hotspot never drifts mid-tap.
+        pw = OVERLAY_POINTER_W * press
+        ph = OVERLAY_POINTER_PX * press
+        apts = pointer_arrow_points(px, py, pw, ph)
+        if apts:
+            canvas.coords(pointer_poly, *[c for p in apts for c in p])
+        parts = pointer_face_parts(px, py, pw, ph)
+        eyes = parts.get("eyes") if parts else None
+        if eyes:
+            for item, (exx, eyy, err) in zip(
+                    (pointer_eye_l, pointer_eye_r), eyes, strict=False):
+                canvas.coords(item, exx - err, eyy - err,
+                              exx + err, eyy + err)
+        else:
+            for item in (pointer_eye_l, pointer_eye_r):
+                canvas.coords(item, -10, -10, -10, -10)
+        wink = parts.get("wink") if parts else None
+        if wink:
+            canvas.coords(pointer_wink, wink[0][0], wink[0][1],
+                          wink[1][0], wink[1][1])
+        else:
+            canvas.coords(pointer_wink, -10, -10, -10, -10)
+        mouth = parts.get("mouth") if parts else None
+        if mouth:
+            canvas.coords(pointer_mouth, *[c for p in mouth for c in p])
+        else:
+            canvas.coords(pointer_mouth, *([-10, -10] * 5))
         if now < state["bubble_until"] and state["bubble_text"]:
             label = state["bubble_text"]
             # Item-4b: a click bubble keeps its anchor (the clicked
-            # point) while the head glides home; tour/land bubbles
-            # have bubble_xy None and follow the head.
-            bx, by = hx, hy
+            # point) while the pointer travels; tour/land bubbles have
+            # bubble_xy None and follow the pointer.
+            bx, by = px, py
             anchor_xy = state["bubble_xy"]
             if isinstance(anchor_xy, tuple) and len(anchor_xy) == 2:
                 with contextlib.suppress(Exception):
                     bx = float(anchor_xy[0])
                     by = float(anchor_xy[1])
-            top = by - ry - 34
+            top = by - OVERLAY_POINTER_PX - 26
             half = min(120.0, 8.0 + len(label) * 3.6)
             canvas.coords(bubble_box, bx - half, top - 11,
                           bx + half, top + 11)
@@ -1731,7 +1919,7 @@ def _run_window(tk) -> None:
                     canvas.itemconfigure(click_ring,
                                          outline=ring["tint"])
                     # Item-4b: the ring stays at its spawn point (the
-                    # clicked point; land rings spawn at the head).
+                    # clicked point; land rings spawn at the pointer).
                     canvas.coords(click_ring,
                                   ring["x"] - frame[0],
                                   ring["y"] - frame[0],
@@ -1821,14 +2009,13 @@ def _run_window(tk) -> None:
                 now = time.monotonic()
                 duration = float(flight["duration"])
                 if duration <= 0:
-                    head_xy[0], head_xy[1] = flight["to"]
+                    pointer_xy[0], pointer_xy[1] = flight["to"]
                     state["flight"] = None
                     state["velocity"] = [0.0, 0.0]
                     state["dragging"] = False
                     state["landed_at"] = now
                     if state["to_target"]:
                         state["to_target"] = False
-                        state["squash_until"] = now + OVERLAY_SQUISH_SECONDS
                         state["press_start"] = now
                         state["press_depth"] = OVERLAY_PRESS_LAND
                         _spawn_land_ring()
@@ -1841,17 +2028,15 @@ def _run_window(tk) -> None:
                     pos = flight_position(
                         flight["from"], flight["c1"],
                         flight["c2"], flight["to"], e)
-                    head_xy[0], head_xy[1] = pos
+                    pointer_xy[0], pointer_xy[1] = pos
                     if p >= 1:
-                        head_xy[0], head_xy[1] = flight["to"]
+                        pointer_xy[0], pointer_xy[1] = flight["to"]
                         state["flight"] = None
                         state["velocity"] = [0.0, 0.0]
                         state["dragging"] = False
                         state["landed_at"] = now
                         if state["to_target"]:
                             state["to_target"] = False
-                            state["squash_until"] = (
-                                now + OVERLAY_SQUISH_SECONDS)
                             state["press_start"] = now
                             state["press_depth"] = OVERLAY_PRESS_LAND
                             _spawn_land_ring()
@@ -1863,12 +2048,9 @@ def _run_window(tk) -> None:
                         state["velocity"] = [tangent[0] * rate,
                                              tangent[1] * rate]
         elif state["path"]:
-            head_xy[0], head_xy[1] = state["path"].pop(0)
+            pointer_xy[0], pointer_xy[1] = state["path"].pop(0)
             if not state["path"]:
-                now = time.monotonic()
-                if state["to_target"]:
-                    state["to_target"] = False
-                    state["squash_until"] = now + OVERLAY_SQUISH_SECONDS
+                state["to_target"] = False
         else:
             action, payload = None, None
             with contextlib.suppress(Exception):
@@ -1880,15 +2062,14 @@ def _run_window(tk) -> None:
                             OVERLAY_POINT_FLIGHT_SECONDS
                             + OVERLAY_POINT_MIN_HOLD_SECONDS)
             elif action == "dock":
-                home = (float(dock[0] + radius),
-                        float(dock[1] + radius))
-                if (head_xy[0], head_xy[1]) != home:
+                home_now = pointer_home(vrect)
+                if (pointer_xy[0], pointer_xy[1]) != home_now:
                     with contextlib.suppress(Exception):
                         _dock()
                 with contextlib.suppress(Exception):
                     choreo_go_home(state["choreo"])
         state["trail"] = trail_push(
-            state["trail"], head_xy[0], head_xy[1])
+            state["trail"], pointer_xy[0], pointer_xy[1])
         _draw()
         root.after(int(OVERLAY_POLL_SECONDS * 1000), _tick)
 

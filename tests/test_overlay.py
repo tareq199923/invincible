@@ -1,5 +1,5 @@
 # tests/test_overlay.py
-"""F11 B1 head-cursor overlay: Bmax-head cursor on the paired PC.
+"""F11/F21 B1 overlay: Bmax pointer + companion face on the paired PC.
 
 Pure geometry/animation helpers are hermetic; the overlay handle
 (Overlay) is best-effort by contract (never raises, dead overlay =
@@ -54,14 +54,72 @@ def test_pixel_grid_round_trip():
             assert overlay.pixel_to_grid(*pixels, vrect) == point
 
 
-def test_head_radii_idle_hover_squish():
-    assert overlay.head_radii(36) == (36.0, 36.0)
-    grown = overlay.head_radii(36, hovering=True)
-    assert grown[0] > 36.0 and grown[0] == grown[1]
-    squished = overlay.head_radii(36, hovering=True, squished=True)
-    assert squished[0] > 36.0 > squished[1]
-    assert overlay.head_radii(0) == (0.0, 0.0)
-    assert overlay.head_radii("bad") == (0.0, 0.0)
+def test_face_box_and_pointer_home_relate():
+    vrect = (0, 0, 1920, 1080)
+    fx, fy = overlay.face_box(vrect)
+    dock = overlay.dock_corner(vrect, overlay.OVERLAY_FACE_PX)
+    assert (fx, fy) == (dock[0] - overlay.OVERLAY_FACE_SHIFT_LEFT, dock[1])
+    hx, hy = overlay.pointer_home(vrect)
+    # The parked pointer's right edge sits OVERLAY_PARK_GAP left of the
+    # face, vertically centred against it.
+    assert hx + overlay.OVERLAY_POINTER_W == fx - overlay.OVERLAY_PARK_GAP
+    assert hy == fy + (overlay.OVERLAY_FACE_PX
+                       - overlay.OVERLAY_POINTER_PX) / 2.0
+    # Malformed rects never raise; ``None`` parks near the origin and
+    # keeps the same left-of-face relationship.
+    assert overlay.face_box(None) == (0, 0)
+    hx2, hy2 = overlay.pointer_home(None)
+    assert hx2 + overlay.OVERLAY_POINTER_W == -overlay.OVERLAY_PARK_GAP
+    assert math.isfinite(hy2)
+
+
+def test_squircle_points_shape_and_bounds():
+    pts = overlay.squircle_points(50.0, 60.0, 20.0, 10.0, samples=64)
+    assert len(pts) == 64
+    for x, y in pts:
+        assert abs(x - 50.0) <= 20.0 + 1e-9
+        assert abs(y - 60.0) <= 10.0 + 1e-9
+    # Corners fill past an ellipse: the unit-circle diagonal (1.0) is
+    # exceeded at the 45-degree samples.
+    diag = max(math.hypot((x - 50.0) / 20.0, (y - 60.0) / 10.0)
+               for x, y in pts)
+    assert diag > 1.05
+    # Defaults + junk.
+    assert len(overlay.squircle_points(0, 0, 5, 5)) == 32
+    assert overlay.squircle_points(0, 0, 0, 5) == []
+    assert overlay.squircle_points(0, 0, -1, 5) == []
+    assert overlay.squircle_points("a", 0, 1, 1) == []
+    assert overlay.squircle_points(0, 0, 1, 1, samples="x") == []
+
+
+def test_pointer_arrow_points_tip_anchor():
+    pts = overlay.pointer_arrow_points(10.0, 20.0, 22.0, 36.0)
+    assert len(pts) == 7
+    assert pts[0] == (10.0, 20.0)  # the tip IS the hotspot
+    # The whole body extends down-right of the tip.
+    assert all(x >= 10.0 and y >= 20.0 for x, y in pts)
+    assert max(x for x, _ in pts) <= 10.0 + 22.0 + 1e-9
+    assert max(y for _, y in pts) <= 20.0 + 36.0 + 1e-9
+    assert overlay.pointer_arrow_points(0, 0, 0, 1) == []
+    assert overlay.pointer_arrow_points(0, 0, 1, -1) == []
+    assert overlay.pointer_arrow_points("a", 0, 1, 1) == []
+    assert overlay.pointer_arrow_points(float("nan"), 0, 1, 1) == []
+
+
+def test_pointer_face_parts_scale_from_tip():
+    parts = overlay.pointer_face_parts(0.0, 0.0, 22.0, 36.0)
+    eyes = parts["eyes"]
+    assert len(eyes) == 2
+    assert eyes[0][0] < eyes[1][0]
+    assert eyes[0][2] == overlay.OVERLAY_POINTER_EYE_R
+    assert len(parts["wink"]) == 2
+    assert len(parts["mouth"]) == 5
+    # Scaling (press) keeps every coordinate linear in the tip anchor.
+    half = overlay.pointer_face_parts(0.0, 0.0, 11.0, 18.0)
+    assert half["eyes"][0][2] == overlay.OVERLAY_POINTER_EYE_R / 2.0
+    assert half["eyes"][1][0] == eyes[1][0] / 2.0
+    assert overlay.pointer_face_parts(0, 0, 0, 1) == {}
+    assert overlay.pointer_face_parts("a", 0, 1, 1) == {}
 
 
 def test_trail_push_caps_and_ignores_bad_points():
@@ -125,15 +183,10 @@ def test_shell_look_helpers():
         overlay.OVERLAY_SHELL_MID,
         overlay.OVERLAY_SHELL_DEEP,
     )
-    pts = overlay.teardrop_points(100.0, 100.0, 36.0, 36.0)
-    assert len(pts) == 3
-    assert min(y for _, y in pts) < 100.0 - 36.0 * 0.7
-    assert overlay.teardrop_points(0, 0, 0, 0) == []
-    assert overlay.teardrop_points("a", 0, 1, 1) == []
 
 
 def test_overlay_wears_the_web_bmax_skin():
-    """F20: the desktop head's skin IS the web face's default skin."""
+    """F20: the desktop overlay's skin IS the web face's default skin."""
     from pathlib import Path
 
     repo = Path(__file__).resolve().parent.parent
@@ -569,35 +622,52 @@ async def test_execute_job_drag_announces_dragging(monkeypatch,
     assert announced == [({"x": 1, "y": 2}, True)]
 
 
-def test_tip_alpha_docked_zero_flying_one():
-    assert overlay.tip_alpha() == 0.0
-    assert overlay.tip_alpha(flight_active=False, dragging=False,
-                             to_target=False, settled=True,
-                             press_age=10.0) == 0.0
-    assert overlay.tip_alpha(flight_active=True, to_target=True,
-                             settled=False, press_age=10.0) == 1.0
-    assert overlay.tip_alpha(dragging=True, settled=True) == 1.0
-    assert overlay.tip_alpha(flight_active=False, press_age="bad") == 0.0
+def test_face_bounce_offset_happy_window():
+    span = overlay.OVERLAY_FACE_HAPPY_SECONDS
+    hops = [overlay.face_bounce_offset("happy", t, 0.0)
+            for t in (0.0, span * 0.125, span * 0.25, span * 0.375)]
+    assert all(dy <= 0.0 for dy in hops)
+    assert min(hops) < 0.0
+    assert max(abs(dy) for dy in hops) <= overlay.OVERLAY_FACE_BOUNCE_PX
+    # Outside the burst / other kinds / junk are still.
+    assert overlay.face_bounce_offset("happy", span, 0.0) == 0.0
+    assert overlay.face_bounce_offset("happy", span + 1.0, 0.0) == 0.0
+    assert overlay.face_bounce_offset("idle", 0.5, 0.0) == 0.0
+    assert overlay.face_bounce_offset("happy", "soon", 0.0) == 0.0
+    assert overlay.face_bounce_offset("happy", 0.5, None) == 0.0
+    assert overlay.face_bounce_offset(None, None, None) == 0.0
 
 
-def test_tip_alpha_press_window_then_hidden():
-    assert overlay.tip_alpha(press_age=0.0) == 1.0
-    assert overlay.tip_alpha(press_age=0.1) == 1.0
-    assert overlay.tip_alpha(press_age=0.41) == 1.0
-    assert overlay.tip_alpha(press_age=0.42) == 0.0
-    assert overlay.tip_alpha(press_age=1.0) == 0.0
-    assert overlay.tip_alpha(press_age=-0.1) == 0.0
+def test_face_gaze_target_pointer_then_mouse():
+    # Travelling: the face follows the pointer (both rule, part 1).
+    assert overlay.face_gaze_target(True, (10.0, 20.0), (100, 200)) == (
+        10.0, 20.0)
+    # Rested: back to the operator's real mouse (both rule, part 2).
+    assert overlay.face_gaze_target(False, (10.0, 20.0), (100, 200)) == (
+        100.0, 200.0)
+    # A malformed pointer falls through to the mouse.
+    assert overlay.face_gaze_target(True, None, (5, 6)) == (5.0, 6.0)
+    assert overlay.face_gaze_target(True, ("a", "b"), (5, 6)) == (5.0, 6.0)
+    # Junk everywhere reads (0, 0), never raises.
+    assert overlay.face_gaze_target(True, None, None) == (0.0, 0.0)
+    assert overlay.face_gaze_target(None, None, None) == (0.0, 0.0)
 
 
 def test_dock_lift_clears_taskbar():
     vrect = (0, 0, 1920, 1080)
     assert overlay.OVERLAY_DOCK_LIFT == 48
-    dock = overlay.dock_corner(vrect, overlay.OVERLAY_HEAD_PX)
-    bottom = dock[1] + overlay.OVERLAY_HEAD_PX
+    dock = overlay.dock_corner(vrect, overlay.OVERLAY_FACE_PX)
+    bottom = dock[1] + overlay.OVERLAY_FACE_PX
     assert bottom <= vrect[1] + vrect[3] - overlay.OVERLAY_DOCK_LIFT
     # Top corners unaffected by the lift.
     assert overlay.dock_corner(vrect, 72, "tl") == (24, 24)
-    assert overlay.tip_alpha() == 0.0  # docked = round head, tip hidden
+    # The face is shifted LEFT of the true dock corner (toast lane) and
+    # the parked pointer sits fully left of the face: neither overlaps
+    # the other and the corner stays clear.
+    fx, fy = overlay.face_box(vrect)
+    assert fx < dock[0]
+    hx, hy = overlay.pointer_home(vrect)
+    assert hx + overlay.OVERLAY_POINTER_W <= fx
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Win32 metrics only")
@@ -983,7 +1053,7 @@ async def test_execute_job_look_queues_near_point(
     monkeypatch.setattr(runner, "ensure_overlay", lambda: _Live())
     monkeypatch.setattr(tool_executor, "_look_at_screen", fake_look)
     monkeypatch.setattr(overlay, "virtual_screen", lambda: vrect)
-    monkeypatch.setattr(runner, "_OVERLAY_HEAD_PX", None)
+    monkeypatch.setattr(runner, "_OVERLAY_POINTER_PX", None)
     out = await runner.execute_job({"type": "look_at_screen",
                                     "args": {}})
     # Result shape untouched; the tour point rides alongside.
@@ -991,9 +1061,9 @@ async def test_execute_job_look_queues_near_point(
     assert out["near"] == {"id": "C2", "kind": "link",
                            "label": "Docs"}
     assert queued == [({"x": 300, "y": 400}, "Docs")]
-    # Item-4b: the queued tour point seeds the dwell head estimate.
+    # Item-4b: the queued tour point seeds the dwell pointer estimate.
     assert overlay.grid_to_pixel(300, 400, vrect) == (
-        runner._OVERLAY_HEAD_PX)
+        runner._OVERLAY_POINTER_PX)
 
 
 async def test_execute_job_look_without_near_skips_queue(
@@ -1156,16 +1226,20 @@ def test_face_geometry_states_shapes():
     err = overlay.face_geometry("error", now)
     assert (err["eyes"], err["track"]) == ("x", False)
     assert err["rx"] == err["ry"] == overlay.OVERLAY_FACE_X_EYE_R
-    # Every state stays finite and inside the head, junk times included.
+    # Every state stays finite and inside the face once the child's
+    # per-draw eye scale is applied, junk times included.
     for kind in overlay.FACE_STATES:
         for moment in (0.0, 1.5, 999.0, float("nan"), "soon", None):
             geom = overlay.face_geometry(kind, moment)
             for key in ("dx", "dy", "rx", "ry", "sweep", "stroke"):
                 assert isinstance(geom[key], float)
                 assert math.isfinite(geom[key])
-            head = overlay.OVERLAY_HEAD_PX
-            assert abs(geom["dx"]) + geom["rx"] + abs(geom["sweep"]) < head
-            assert abs(geom["dy"]) + geom["ry"] < head / 2.0
+            scale = overlay.OVERLAY_FACE_EYE_SCALE
+            reach = (abs(geom["dx"]) + geom["rx"]
+                     + abs(geom["sweep"])) * scale
+            assert reach < overlay.OVERLAY_FACE_PX / 2.0
+            drop = (abs(geom["dy"]) + geom["ry"]) * scale
+            assert drop < overlay.OVERLAY_FACE_PX / 2.0
     # Unknown kinds fall back to the resting face.
     assert overlay.face_geometry("bogus", now)["eyes"] == "oval"
     assert overlay.face_geometry(None, None)["eyes"] == "oval"

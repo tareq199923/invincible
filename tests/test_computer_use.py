@@ -621,13 +621,12 @@ def test_overlay_delay_fn_covers_planned_flight(monkeypatch):
 
     vrect = (0, 0, 1920, 1080)
     monkeypatch.setattr(overlay, "virtual_screen", lambda: vrect)
-    monkeypatch.setattr(runner, "_OVERLAY_HEAD_PX", None)
+    monkeypatch.setattr(runner, "_OVERLAY_POINTER_PX", None)
     delay_for = runner._overlay_delay_fn(False)
     dwell = delay_for({"x": 900, "y": 500})
-    dock = overlay.dock_corner(vrect, overlay.OVERLAY_HEAD_PX)
-    radius = overlay.OVERLAY_HEAD_PX // 2
+    parked = overlay.pointer_home(vrect)
     flight = overlay.plan_flight(
-        (float(dock[0] + radius), float(dock[1] + radius)),
+        (float(parked[0]), float(parked[1])),
         overlay.grid_to_pixel(900, 500, vrect),
         (0.0, 0.0), 0.0, vrect, False)
     assert dwell >= float(flight["duration"])
@@ -643,7 +642,7 @@ def test_overlay_delay_fn_drag_sums_legs(monkeypatch):
 
     monkeypatch.setattr(overlay, "virtual_screen",
                         lambda: (0, 0, 1920, 1080))
-    monkeypatch.setattr(runner, "_OVERLAY_HEAD_PX", None)
+    monkeypatch.setattr(runner, "_OVERLAY_POINTER_PX", None)
     delay_for = runner._overlay_delay_fn(True)
     first = delay_for({"x": 100, "y": 100})
     total = delay_for({"x": 900, "y": 800})
@@ -670,16 +669,16 @@ def test_resolve_drag_delay_covers_both_legs():
         0.35, _raising_estimator, start, end) == 0.35
 
 
-def test_overlay_note_settled_resets_head(monkeypatch):
+def test_overlay_note_settled_resets_pointer(monkeypatch):
     from invincible.agent import runner
 
-    monkeypatch.setattr(runner, "_OVERLAY_HEAD_PX", (10.0, 20.0))
+    monkeypatch.setattr(runner, "_OVERLAY_POINTER_PX", (10.0, 20.0))
     runner._overlay_note_settled()
-    assert runner._OVERLAY_HEAD_PX is None
+    assert runner._OVERLAY_POINTER_PX is None
 
 
 async def test_drag_act_estimates_both_legs(monkeypatch):
-    """Item-1d: the drag branch estimates head->from then from->to so
+    """Item-1d: the drag branch estimates pointer->from then from->to so
     the single dwell covers the full two-leg glide."""
     import invincible.core.tool_executor as te
 
