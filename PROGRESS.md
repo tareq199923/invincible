@@ -5,6 +5,38 @@
 
 ## Current State
 
+- Item-7 done (`passing`): overlay face v1 — the head shows what the
+  agent is doing. `agent/overlay.py`: pure single-slot `face_kind`
+  (working/searching persist until replaced, happy 1.2s + error 1.8s
+  bursts expire to idle, sleeping derived after 60s quiet, junk/unknown
+  reads idle, never raises) + absolute-px `face_geometry` (idle IS the
+  frozen eye constants incl. cursor tracking, working squint + lift,
+  searching ±5px sine sweep, arc windows for happy, X strokes for
+  error, flipped arcs for sleeping) + `face_blink` (0.16s sine, every
+  4.4s, squashes ry only) + `face_apply` (wire → slot; bursts stamp
+  their end on the child's own clock); the child draws it with 6 new Tk
+  items (2 arcs + 4 X strokes, parked off-window when unused) stacked
+  below trail/bubble/rings/glyphs; new `{"type":"face","state":...}`
+  IPC verb with the stdin allowlist extracted to `_INBOUND_TYPES` (that
+  was a silent-drop trap) + an `Overlay.face()` sender. `agent/runner.py`:
+  `execute_job` is now a thin face wrapper over `_execute_job` (start →
+  working, look_at_screen → searching, ok → happy, error/blocked/
+  unavailable → error, raise/cancel → idle) + `handle_handoff` → happy;
+  `_overlay_face` reads the live handle only (a face never spawns a
+  head), `_result_face` claims happy only for a named non-failure
+  status (junk results draw the error). No new env var, zero registry
+  surface, headless latency unchanged, idle look byte-identical.
+  New pins: 13 in `tests/test_overlay.py` (resolver matrix incl. junk /
+  sleeping / burst expiry, idle-draw equality, shape bounds + head
+  containment, blink period, wire slot, allowlist, sender, runner
+  sequence/raise/cancel/headless/burst-replaces-working, handoff happy).
+  Live-verified on this machine with a temp stdin harness + screenshots
+  (idle, blink, working, sweeping, happy, error, sleeping; sweep
+  measured 10px peak-to-peak vs 0–1px idle, still awake at 58s quiet,
+  sleeping at 63s, child stderr clean). Docs: CONFIGURATION
+  `INVINCIBLE_OVERLAY` row now names the face. `ruff` clean, 112 passed
+  overlay/computer slice, full 2023 passed / 11 skipped / 1 deselected.
+  Clean-state checklist 5/5 ticked. Uncommitted — commit on user's word.
 - Item-4b done (`passing`): fly-click fixups (4 review findings + claim
   honesty). (1) Click effects anchor at the clicked point — pure
   `overlay.effect_anchor` (grid→pixel) + `state["bubble_xy"]`: `_draw`
@@ -425,17 +457,23 @@
 
 ## In Progress
 
-- None — Item-4b complete (`passing`).
-  Zero `active`. Next: F05 vector seam at next clock-in.
+- None — Item-7 complete (`passing`).
+  Zero `active`. Next: F05 vector seam (or an Item-7b face v2) at next
+  clock-in.
 
 ## Next Steps
 
 1. F05 vector seam remains `planned` — next candidate; set `active`
-   only at next clock-in.
-2. Live Tk window (glide/dock/click-through visuals) still unverified —
-   needs a visible Windows desktop session; hermetic + read-only live
-   metrics are green.
-3. F04 fan-out (`harness_fanout.py` + 18 tests) stays green, untouched.
+   only at next clock-in. Item-7b (speaking/listening faces) is the
+   natural follow-up but needs a server→agent signal, so it is NOT a
+   free extension of this item (see the plan notes).
+2. The running `invincible connect` agent(s) still hold the pre-Item-7
+   code in memory — restart to see the face live.
+3. Live Tk window: the Item-7 pass verified the face itself on a live
+   Windows desktop (screenshots: idle/blink/working/sweep/happy/error/
+   sleeping). Glide/dock/click-through visuals and the multi-monitor
+   glide-vs-click check are still unverified.
+4. F04 fan-out (`harness_fanout.py` + 18 tests) stays green, untouched.
 
 ## Blockers
 

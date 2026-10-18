@@ -1006,3 +1006,416 @@ async def test_execute_job_look_headless_result_intact(
     assert out["status"] == "look"
     assert set(out) == {"status", "app", "controls", "mouse", "size",
                         "near", "truncated"}
+
+
+# --- Item-7 face: pure resolvers (hermetic) -------------------------
+
+
+def test_face_kind_persistent_expiry_and_junk():
+    now = 500.0
+    # Persistent kinds hold until replaced (their until is not a timer).
+    assert overlay.face_kind({"kind": "working", "until": None}, now) \
+        == "working"
+    assert overlay.face_kind({"kind": "searching", "until": None}, now) \
+        == "searching"
+    assert overlay.face_kind({"kind": "working", "until": now - 99.0},
+                             now) == "working"
+    # Bursts expire into idle.
+    assert overlay.face_kind({"kind": "happy", "until": now + 0.5},
+                             now) == "happy"
+    assert overlay.face_kind({"kind": "happy", "until": now}, now) == "idle"
+    assert overlay.face_kind({"kind": "error", "until": now + 0.5},
+                             now) == "error"
+    assert overlay.face_kind({"kind": "error", "until": now - 0.5},
+                             now) == "idle"
+    # A burst replaces a persistent kind outright (single slot: one job
+    # at a time, so nothing can be squeezed into a stale "working").
+    assert overlay.face_kind({"kind": "happy", "until": now + 1.0},
+                             now, quiet_since=0.0) == "happy"
+    # idle and sleeping are never taken from the wire.
+    assert overlay.face_kind({"kind": "idle", "until": None}, now) == "idle"
+    assert overlay.face_kind({"kind": "sleeping", "until": None},
+                             now) == "idle"
+    # Junk in any argument reads as idle, never raises.
+    for junk in (None, {}, "working", 5, [], {"kind": None},
+                 {"kind": "bogus"}, {"kind": True}, {"kind": "happy"},
+                 {"kind": "happy", "until": "soon"},
+                 {"kind": "happy", "until": float("nan")},
+                 {"kind": "error", "until": None}):
+        assert overlay.face_kind(junk, now) == "idle"
+    for junk_now in (None, "soon", float("nan"), True):
+        assert overlay.face_kind({"kind": "happy", "until": now + 1.0},
+                                 junk_now) == "idle"
+
+
+def test_face_kind_sleeping_after_quiet_window():
+    now = 9000.0
+    window = overlay.OVERLAY_FACE_SLEEP_AFTER_SECONDS
+    # No quiet stamp: unknown is not quiet.
+    assert overlay.face_kind(None, now) == "idle"
+    assert overlay.face_kind({}, now) == "idle"
+    # Under the window idle, at and over it sleeping.
+    assert overlay.face_kind(None, now,
+                             quiet_since=now - window + 0.01) == "idle"
+    assert overlay.face_kind(None, now,
+                             quiet_since=now - window) == "sleeping"
+    assert overlay.face_kind(None, now,
+                             quiet_since=now - window * 2.0) == "sleeping"
+    # An active face always beats a stale quiet stamp.
+    assert overlay.face_kind({"kind": "working", "until": None}, now,
+                             quiet_since=0.0) == "working"
+    # Junk stamps never sleep.
+    for junk in (None, "soon", float("nan"), float("inf"), True):
+        assert overlay.face_kind(None, now, quiet_since=junk) == "idle"
+
+
+def test_face_geometry_idle_matches_today():
+    geom = overlay.face_geometry("idle", 0.0)
+    assert geom["eyes"] == "oval"
+    assert geom["track"] is True
+    assert geom["sweep"] == 0.0
+    assert geom["stroke"] == overlay.OVERLAY_FACE_EYE_STROKE
+    # The idle box IS the frozen eye constants, so the pre-Item-7 draw
+    # (ecx = hx + side*EYE_DX + ex, ecy = hy + EYE_DY + ey) is reproduced
+    # exactly - every F16/Item-1..4b pin and look stays put.
+    assert (geom["dx"], geom["dy"]) == (float(overlay.OVERLAY_EYE_DX),
+                                        float(overlay.OVERLAY_EYE_DY))
+    assert geom["rx"] == geom["ry"] == float(overlay.OVERLAY_EYE_R)
+    for hx, hy, ex, ey in ((100.0, 100.0, 0, 0), (52.0, 30.0, 3, -4)):
+        for side in (-1, 1):
+            before = (hx + side * overlay.OVERLAY_EYE_DX + ex,
+                      hy + overlay.OVERLAY_EYE_DY + ey)
+            after = (hx + side * geom["dx"] + geom["sweep"] + ex,
+                     hy + geom["dy"] + ey)
+            assert after == before
+    # A blink only squashes ry, never rx/dx, and a full blink is a slit.
+    shut = overlay.face_geometry("idle", 0.0, blink=1.0)
+    half = overlay.face_geometry("idle", 0.0, blink=0.5)
+    assert shut["rx"] == geom["rx"] and shut["dx"] == geom["dx"]
+    assert geom["ry"] > half["ry"] > shut["ry"] > 0.0
+    assert shut["ry"] <= 1.2
+    # A junk blink reads as open.
+    assert overlay.face_geometry("idle", 0.0, blink="soon")["ry"] \
+        == geom["ry"]
+    assert overlay.face_geometry("idle", 0.0,
+                                 blink=float("nan"))["ry"] == geom["ry"]
+
+
+def test_face_geometry_states_shapes():
+    now = 7.5
+    radius = float(overlay.OVERLAY_EYE_R)
+    # working: still oval and tracking, but squinted and lifted.
+    work = overlay.face_geometry("working", now)
+    assert work["eyes"] == "oval" and work["track"] is True
+    assert work["ry"] < work["rx"] < radius
+    assert work["dy"] < overlay.OVERLAY_EYE_DY
+    # searching: the eyes sweep both ways, bounded by the gain.
+    sweeps = [overlay.face_geometry("searching", i / 40.0)["sweep"]
+              for i in range(240)]
+    assert max(sweeps) > 0.0 > min(sweeps)
+    assert max(abs(s) for s in sweeps) <= overlay.OVERLAY_FACE_SWEEP_PX
+    # happy / sleeping / error change the eye SHAPE and drop tracking;
+    # a blink never touches a closed-eye shape.
+    happy = overlay.face_geometry("happy", now)
+    assert (happy["eyes"], happy["track"], happy["sweep"]) == \
+        ("arc_top", False, 0.0)
+    assert overlay.face_geometry("happy", now, blink=1.0)["ry"] \
+        == overlay.OVERLAY_FACE_ARC_EYE_RY
+    sleep = overlay.face_geometry("sleeping", now)
+    assert (sleep["eyes"], sleep["track"]) == ("arc_bottom", False)
+    assert sleep["dy"] > overlay.OVERLAY_EYE_DY
+    err = overlay.face_geometry("error", now)
+    assert (err["eyes"], err["track"]) == ("x", False)
+    assert err["rx"] == err["ry"] == overlay.OVERLAY_FACE_X_EYE_R
+    # Every state stays finite and inside the head, junk times included.
+    for kind in overlay.FACE_STATES:
+        for moment in (0.0, 1.5, 999.0, float("nan"), "soon", None):
+            geom = overlay.face_geometry(kind, moment)
+            for key in ("dx", "dy", "rx", "ry", "sweep", "stroke"):
+                assert isinstance(geom[key], float)
+                assert math.isfinite(geom[key])
+            head = overlay.OVERLAY_HEAD_PX
+            assert abs(geom["dx"]) + geom["rx"] + abs(geom["sweep"]) < head
+            assert abs(geom["dy"]) + geom["ry"] < head / 2.0
+    # Unknown kinds fall back to the resting face.
+    assert overlay.face_geometry("bogus", now)["eyes"] == "oval"
+    assert overlay.face_geometry(None, None)["eyes"] == "oval"
+
+
+def test_face_blink_period_and_bounds():
+    period = overlay.OVERLAY_FACE_BLINK_PERIOD_SECONDS
+    window = overlay.OVERLAY_FACE_BLINK_SECONDS
+    mid = window / 2.0
+    # Open between blinks, shut in the middle of the window.
+    assert overlay.face_blink(0.0) == 0.0
+    assert overlay.face_blink(window) == 0.0
+    assert overlay.face_blink(window + 0.5) == 0.0
+    assert overlay.face_blink(mid) > 0.9
+    # Eased both ways - never a step at the window edges.
+    assert 0.0 < overlay.face_blink(mid / 2.0) < 0.75
+    # Periodic and bounded.
+    assert overlay.face_blink(period + mid) == pytest.approx(
+        overlay.face_blink(mid), abs=1e-9)
+    assert all(0.0 <= overlay.face_blink(i / 30.0) <= 1.0
+               for i in range(int(period * 30) + 1))
+    # Junk times read as open, never raise.
+    for junk in ("soon", None, True, float("nan"), float("inf")):
+        assert overlay.face_blink(junk) == 0.0
+
+
+def test_face_apply_wire_slot_and_junk():
+    now = 100.0
+    # Bursts stamp their end on the child's clock.
+    assert overlay.face_apply("happy", now) == {
+        "kind": "happy",
+        "until": now + overlay.OVERLAY_FACE_HAPPY_SECONDS}
+    assert overlay.face_apply("error", now) == {
+        "kind": "error",
+        "until": now + overlay.OVERLAY_FACE_ERROR_SECONDS}
+    # Persistent kinds hold until the next face message.
+    assert overlay.face_apply("working", now) == {"kind": "working",
+                                                  "until": None}
+    assert overlay.face_apply("searching", now) == {"kind": "searching",
+                                                    "until": None}
+    # idle clears with an expired stamp (reads idle immediately).
+    assert overlay.face_apply("idle", now) == {"kind": "idle",
+                                               "until": now}
+    # Unknown, derived and junk states never move the slot.
+    for junk in (None, "sleeping", "bogus", True, 5, [], {}, ""):
+        assert overlay.face_apply(junk, now) is None
+    for junk_now in (None, "soon", float("nan"), float("inf"), True):
+        assert overlay.face_apply("happy", junk_now) is None
+    # ... and what it produces is exactly what face_kind reads back.
+    for wire in overlay.FACE_WIRE_STATES:
+        slot = overlay.face_apply(wire, now)
+        assert slot is not None
+        assert overlay.face_kind(slot, now) == wire
+
+
+def test_face_wire_states_and_inbound_allowlist():
+    # The wire vocabulary is the full set minus the child-derived one.
+    assert set(overlay.FACE_WIRE_STATES) == set(overlay.FACE_STATES) - {
+        "sleeping"}
+    # The child's stdin allowlist must carry "face": _stdin_reader drops
+    # unknown types silently, so a missing entry is a silent no-op.
+    assert "face" in overlay._INBOUND_TYPES
+    assert set(overlay._INBOUND_TYPES) == {
+        "target", "point", "home", "speaking", "effect", "settle", "quit",
+        "face"}
+
+
+def test_face_sender_serializes_and_junk_never_raises():
+    stdin = _FakeStdin()
+    handle = overlay.Overlay()
+    handle._proc = _FakeProc(stdin)
+    for state in overlay.FACE_WIRE_STATES:
+        handle.face(state)
+    assert [json.loads(line) for line in stdin.lines] == [
+        {"type": "face", "state": state}
+        for state in overlay.FACE_WIRE_STATES]
+    before = len(stdin.lines)
+    for junk in (None, "sleeping", "bogus", True, 5, [], {}):
+        handle.face(junk)
+    assert len(stdin.lines) == before
+    # A dead handle stays silent and never raises.
+    stillborn = overlay.Overlay()
+    stillborn.face("working")
+    assert stillborn.alive is False
+
+
+# --- Item-7 face: runner wiring (hermetic) --------------------------
+
+
+class _FaceRecorder:
+    """Overlay stand-in recording faces.
+
+    Deliberately has NO point/announce/effect methods: the code under
+    test must swallow their absence exactly like an Item-1..4b-era stub,
+    which is the same isolation a dead overlay gets in production.
+    """
+
+    def __init__(self):
+        self.calls = []
+        self.settled = 0
+
+    @property
+    def alive(self):
+        return True
+
+    def face(self, state):
+        self.calls.append(state)
+
+    def settle(self):
+        self.settled += 1
+
+
+async def test_execute_job_face_sequence_ok_and_error(
+        monkeypatch, _clean_overlay_state):
+    recorder = _FaceRecorder()
+    monkeypatch.setattr(runner, "_OVERLAY", recorder)
+
+    async def fake_run(command, timeout):
+        return {"status": "ok", "stdout": "", "stderr": "", "exit_code": 0}
+
+    monkeypatch.setattr(tool_executor, "_run_command", fake_run)
+    out = await runner.execute_job({"type": "execute_bash",
+                                    "args": {"command": "echo hi"}})
+    assert out["status"] == "ok"
+    assert recorder.calls == ["working", "happy"]
+
+    async def fake_error(command, timeout):
+        return {"status": "error", "error": "boom"}
+
+    monkeypatch.setattr(tool_executor, "_run_command", fake_error)
+    recorder.calls.clear()
+    out = await runner.execute_job({"type": "execute_bash",
+                                    "args": {"command": "echo hi"}})
+    assert out["status"] == "error"
+    assert recorder.calls == ["working", "error"]
+
+    async def fake_blocked(command, timeout):
+        raise tool_executor.ToolBlocked("denied")
+
+    monkeypatch.setattr(tool_executor, "_run_command", fake_blocked)
+    recorder.calls.clear()
+    out = await runner.execute_job({"type": "execute_bash",
+                                    "args": {"command": "echo hi"}})
+    assert out["status"] == "blocked"
+    assert recorder.calls == ["working", "error"]
+
+    async def fake_unavailable(command, timeout):
+        return {"status": "unavailable", "error": "not windows"}
+
+    monkeypatch.setattr(tool_executor, "_run_command", fake_unavailable)
+    recorder.calls.clear()
+    out = await runner.execute_job({"type": "execute_bash",
+                                    "args": {"command": "echo hi"}})
+    assert out["status"] == "unavailable"
+    assert recorder.calls == ["working", "error"]
+
+
+async def test_execute_job_face_look_searching_and_raise_idle(
+        monkeypatch, _clean_overlay_state):
+    recorder = _FaceRecorder()
+    monkeypatch.setattr(runner, "_OVERLAY", recorder)
+    # The look branch calls ensure_overlay itself for its tour point;
+    # a face never needs that (and tests must not spawn a real head).
+    monkeypatch.setattr(runner, "ensure_overlay", lambda: None)
+
+    async def fake_look():
+        return {"status": "look", "app": "App", "controls": [],
+                "mouse": {"x": 0, "y": 0}, "size": {"w": 1, "h": 1},
+                "near": None, "truncated": False}
+
+    monkeypatch.setattr(tool_executor, "_look_at_screen", fake_look)
+    out = await runner.execute_job({"type": "look_at_screen", "args": {}})
+    assert out["status"] == "look"
+    assert recorder.calls == ["searching", "happy"]
+
+    # A raising job must not leave "working" stuck on the head.
+    async def fake_boom(command, timeout):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(tool_executor, "_run_command", fake_boom)
+    recorder.calls.clear()
+    with pytest.raises(RuntimeError):
+        await runner.execute_job({"type": "execute_bash",
+                                  "args": {"command": "echo hi"}})
+    assert recorder.calls == ["working", "idle"]
+
+    # Cancellation clears it the same way, then re-raises.
+    async def fake_cancel(command, timeout):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(tool_executor, "_run_command", fake_cancel)
+    recorder.calls.clear()
+    with pytest.raises(asyncio.CancelledError):
+        await runner.execute_job({"type": "execute_bash",
+                                  "args": {"command": "echo hi"}})
+    assert recorder.calls == ["working", "idle"]
+
+
+async def test_execute_job_face_no_live_overlay_silent(
+        monkeypatch, _clean_overlay_state):
+    async def fake_run(command, timeout):
+        return {"status": "ok", "stdout": "", "stderr": "", "exit_code": 0}
+
+    monkeypatch.setattr(tool_executor, "_run_command", fake_run)
+    monkeypatch.setattr(runner, "ensure_overlay", lambda: None)
+
+    # No handle at all (headless / off-Windows / kill-switched).
+    assert runner._OVERLAY is None
+    out = await runner.execute_job({"type": "execute_bash",
+                                    "args": {"command": "echo hi"}})
+    assert out["status"] == "ok"
+
+    class _Dead:
+        alive = False
+
+        def face(self, state):  # pragma: no cover - must never run
+            raise AssertionError("a dead overlay must not be painted")
+
+    monkeypatch.setattr(runner, "_OVERLAY", _Dead())
+    out = await runner.execute_job({"type": "execute_bash",
+                                    "args": {"command": "echo hi"}})
+    assert out["status"] == "ok"
+
+    # A stub so old it has no .face at all: swallowed, job unaffected.
+    class _Bare:
+        alive = True
+
+    monkeypatch.setattr(runner, "_OVERLAY", _Bare())
+    out = await runner.execute_job({"type": "execute_bash",
+                                    "args": {"command": "echo hi"}})
+    assert out["status"] == "ok"
+
+
+async def test_execute_job_happy_burst_replaces_working(
+        monkeypatch, _clean_overlay_state):
+    recorder = _FaceRecorder()
+    monkeypatch.setattr(runner, "_OVERLAY", recorder)
+
+    async def fake_run(command, timeout):
+        return {"status": "ok", "stdout": "", "stderr": "", "exit_code": 0}
+
+    monkeypatch.setattr(tool_executor, "_run_command", fake_run)
+    for _ in range(2):
+        await runner.execute_job({"type": "execute_bash",
+                                  "args": {"command": "echo hi"}})
+    # One slot, no queueing: the next job's working simply replaces the
+    # burst the last job left - a burst never outranks a live job.
+    assert recorder.calls == ["working", "happy", "working", "happy"]
+    # The rule itself (claim honesty): only a named non-failure status
+    # earns a happy burst.
+    assert runner._result_face({"status": "ok"}) == "happy"
+    assert runner._result_face({"status": "written"}) == "happy"
+    assert runner._result_face({"status": "look"}) == "happy"
+    assert runner._result_face({"status": "error"}) == "error"
+    assert runner._result_face({"status": "blocked"}) == "error"
+    assert runner._result_face({"status": "unavailable"}) == "error"
+    assert runner._result_face({"no": "status"}) == "error"
+    assert runner._result_face(None) == "error"
+    assert runner._result_face("ok") == "error"
+    # ... and the start rule: look jobs search, everything else works.
+    assert runner._job_face("look_at_screen") == "searching"
+    assert runner._job_face("execute_bash") == "working"
+    assert runner._job_face(None) == "working"
+
+
+def test_handoff_face_happy_when_live(monkeypatch, _clean_overlay_state):
+    recorder = _FaceRecorder()
+    monkeypatch.setattr(runner, "ensure_overlay", lambda: recorder)
+    runner.handle_handoff({"task": "move the report"})
+    assert recorder.calls == ["happy"]
+    assert recorder.settled == 1
+
+    class _Dead:
+        alive = False
+
+        def settle(self):  # pragma: no cover - must never run
+            raise AssertionError("a dead overlay must not be touched")
+
+    monkeypatch.setattr(runner, "ensure_overlay", lambda: _Dead())
+    runner.handle_handoff({"task": "x"})
+    runner.handle_handoff("junk")
+    runner.handle_handoff(None)

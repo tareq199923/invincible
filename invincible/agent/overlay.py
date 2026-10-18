@@ -105,6 +105,35 @@ OVERLAY_PRESS_TYPE = 0.035
 OVERLAY_RING_LEFT_FILL = OVERLAY_BERRY_MID
 OVERLAY_RING_RIGHT_FILL = OVERLAY_BERRY_DEEP
 
+# Item-7 face: the head shows what the agent is doing. Kinds are
+# child-side only; the parent sends working/searching/error/happy/idle
+# and the child derives sleeping from quiet. Wire payloads carry no
+# durations - the child owns every timer, like the effect verb.
+FACE_STATES = ("idle", "working", "searching", "happy", "error",
+               "sleeping")
+FACE_WIRE_STATES = ("idle", "working", "searching", "happy", "error")
+FACE_PERSISTENT_STATES = ("working", "searching")
+OVERLAY_FACE_HAPPY_SECONDS = 1.2
+OVERLAY_FACE_ERROR_SECONDS = 1.8
+OVERLAY_FACE_SLEEP_AFTER_SECONDS = 60.0
+OVERLAY_FACE_BLINK_PERIOD_SECONDS = 4.4
+OVERLAY_FACE_BLINK_SECONDS = 0.16
+OVERLAY_FACE_BLINK_CLOSE = 0.86
+OVERLAY_FACE_SWEEP_RATE = 2.0
+OVERLAY_FACE_SWEEP_PX = 5.0
+OVERLAY_FACE_WORK_EYE_SCALE = (0.95, 0.55)
+OVERLAY_FACE_WORK_EYE_DY = -11.0
+OVERLAY_FACE_ARC_EYE_RY = 6.0
+OVERLAY_FACE_SLEEP_EYE_DY = -4.0
+OVERLAY_FACE_X_EYE_R = 6.5
+OVERLAY_FACE_EYE_STROKE = 2.6
+
+# IPC verbs the child accepts from the parent's stdin pipe. Unknown
+# lines are dropped by _stdin_reader, so a new verb MUST be listed here
+# or it is silently ignored (Item-7 added "face").
+_INBOUND_TYPES = ("target", "point", "home", "speaking", "effect",
+                  "settle", "quit", "face")
+
 # Win32 GetSystemMetrics indices (verified live on Windows - never
 # trusted from memory, per the F09 vtable lesson).
 _SM_XVIRTUALSCREEN = 76
@@ -653,6 +682,153 @@ def eye_offset(hx, hy, cx, cy, r_max: float) -> tuple[int, int]:
     return (int(round(vx / dist * cap)), int(round(vy / dist * cap)))
 
 
+def _face_number(value) -> float | None:
+    """A real finite float, or None for junk/bools (pure, never raises)."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def face_kind(face, now, *, quiet_since=None) -> str:
+    """Resolve the face to draw from the child's single-slot state (pure).
+
+    ``face`` is ``{"kind": str, "until": float | None}``: the persistent
+    kinds (``working``/``searching``) hold until replaced, the bursts
+    (``happy``/``error``) expire into ``idle``, and a burst simply
+    replaces a persistent kind - the runner runs one job at a time, so
+    there is nothing to rank. ``sleeping`` is derived, never sent: it
+    needs a real ``quiet_since`` monotonic stamp (no stamp, no sleep)
+    and only wins when nothing else is active. Junk in any argument
+    reads as ``idle``; never raises.
+    """
+    kind = None
+    until = None
+    if isinstance(face, dict):
+        raw = face.get("kind")
+        if isinstance(raw, str) and raw in FACE_STATES:
+            kind = raw
+        until = face.get("until")
+    if kind in FACE_PERSISTENT_STATES:
+        return kind
+    if kind in ("happy", "error"):
+        now_t = _face_number(now)
+        until_t = _face_number(until)
+        if now_t is not None and until_t is not None and now_t < until_t:
+            return kind
+    now_t = _face_number(now)
+    quiet_t = _face_number(quiet_since)
+    if (now_t is not None and quiet_t is not None
+            and now_t - quiet_t >= OVERLAY_FACE_SLEEP_AFTER_SECONDS):
+        return "sleeping"
+    return "idle"
+
+
+def face_geometry(kind, now, blink=0.0) -> dict:
+    """Per-state eye geometry in px against the head centre (pure).
+
+    The idle values ARE the frozen eye constants (``OVERLAY_EYE_DX`` /
+    ``OVERLAY_EYE_DY`` / ``OVERLAY_EYE_R``), so the resting face is
+    byte-identical to the drawing that shipped before Item-7; ``track``
+    says whether the cursor glance (``eye_offset``) still applies.
+    ``eyes`` picks the item shape the child draws: ``oval`` (as today),
+    ``arc_top`` (happy), ``arc_bottom`` (sleeping) or ``x`` (error).
+    ``blink`` (0 open … 1 shut) only squashes the oval. Unknown kinds
+    and junk times fall back to the resting face; never raises.
+    """
+    radius = float(OVERLAY_EYE_R)
+    geom = {
+        "eyes": "oval",
+        "dx": float(OVERLAY_EYE_DX),
+        "dy": float(OVERLAY_EYE_DY),
+        "rx": radius,
+        "ry": radius,
+        "sweep": 0.0,
+        "track": True,
+        "stroke": float(OVERLAY_FACE_EYE_STROKE),
+    }
+    if kind == "working":
+        scale_x, scale_y = OVERLAY_FACE_WORK_EYE_SCALE
+        geom["rx"] = radius * float(scale_x)
+        geom["ry"] = radius * float(scale_y)
+        geom["dy"] = float(OVERLAY_FACE_WORK_EYE_DY)
+    elif kind == "searching":
+        now_t = _face_number(now)
+        if now_t is not None:
+            geom["sweep"] = math.sin(
+                now_t * OVERLAY_FACE_SWEEP_RATE) * OVERLAY_FACE_SWEEP_PX
+    elif kind == "happy":
+        geom["eyes"] = "arc_top"
+        geom["ry"] = float(OVERLAY_FACE_ARC_EYE_RY)
+        geom["track"] = False
+    elif kind == "sleeping":
+        geom["eyes"] = "arc_bottom"
+        geom["ry"] = float(OVERLAY_FACE_ARC_EYE_RY)
+        geom["dy"] = float(OVERLAY_FACE_SLEEP_EYE_DY)
+        geom["track"] = False
+    elif kind == "error":
+        cross = float(OVERLAY_FACE_X_EYE_R)
+        geom["eyes"] = "x"
+        geom["rx"] = cross
+        geom["ry"] = cross
+        geom["track"] = False
+    if geom["eyes"] == "oval":
+        closed = _face_number(blink)
+        if closed is not None:
+            closed = min(1.0, max(0.0, closed))
+            geom["ry"] = geom["ry"] * (
+                1.0 - OVERLAY_FACE_BLINK_CLOSE * closed)
+    return geom
+
+
+def face_blink(now) -> float:
+    """Eyelid closure 0 (open) … 1 (shut) for the oval eyes (pure).
+
+    One short blink per ``OVERLAY_FACE_BLINK_PERIOD_SECONDS``: shut then
+    open inside ``OVERLAY_FACE_BLINK_SECONDS`` (a sine, so the lid eases
+    both ways), open the rest of the time. Junk times read as open;
+    never raises.
+    """
+    period = float(OVERLAY_FACE_BLINK_PERIOD_SECONDS)
+    window = float(OVERLAY_FACE_BLINK_SECONDS)
+    now_t = _face_number(now)
+    if now_t is None or period <= 0 or window <= 0:
+        return 0.0
+    phase = now_t % period
+    if not 0.0 <= phase < window:
+        return 0.0
+    return min(1.0, max(0.0, math.sin(math.pi * (phase / window))))
+
+
+def face_apply(wire_state, now) -> dict | None:
+    """The slot one wire ``face`` message produces, or None for junk (pure).
+
+    ``working``/``searching`` hold (``until`` None) until the next face
+    message, ``happy``/``error`` stamp their burst's end on the child's
+    clock, ``idle`` clears with an already-expired stamp. Anything
+    outside ``FACE_WIRE_STATES`` (including the child-derived
+    ``sleeping``) and junk times return None so the caller keeps the
+    slot it had; never raises.
+    """
+    if not isinstance(wire_state, str) or wire_state not in FACE_WIRE_STATES:
+        return None
+    now_t = _face_number(now)
+    if now_t is None:
+        return None
+    if wire_state == "happy":
+        until = now_t + OVERLAY_FACE_HAPPY_SECONDS
+    elif wire_state == "error":
+        until = now_t + OVERLAY_FACE_ERROR_SECONDS
+    elif wire_state in FACE_PERSISTENT_STATES:
+        until = None
+    else:  # idle clears
+        until = now_t
+    return {"kind": wire_state, "until": until}
+
+
 def dock_corner(vrect: tuple, head_px: int,
                 corner: str = OVERLAY_DOCK_CORNER,
                 margin: int = OVERLAY_DOCK_MARGIN) -> tuple[int, int]:
@@ -1073,6 +1249,19 @@ class Overlay:
         """
         self._send({"type": "speaking", "on": on is True})
 
+    def face(self, state: str) -> None:
+        """Show what the agent is doing on the head (never raises).
+
+        ``state`` is one of ``FACE_WIRE_STATES``: ``working`` and
+        ``searching`` hold until the next face message, ``happy`` and
+        ``error`` run their own burst on the child's clock, ``idle``
+        clears. Unknown states are dropped, like every other malformed
+        payload - the job's result stands regardless.
+        """
+        if not isinstance(state, str) or state not in FACE_WIRE_STATES:
+            return
+        self._send({"type": "face", "state": state})
+
     def effect(self, kind: str, point=None, button: str = "left",
                text: str = "") -> None:
         """Post-action click/type feedback (child draw only, never raises).
@@ -1135,8 +1324,7 @@ def _stdin_reader(inbox: queue.Queue) -> None:
         except ValueError:
             continue
         if isinstance(message, dict) and message.get("type") in (
-                "target", "point", "home", "speaking", "effect",
-                "settle", "quit"):
+                _INBOUND_TYPES):
             with contextlib.suppress(queue.Full):
                 inbox.put_nowait(message)
     with contextlib.suppress(queue.Full):
@@ -1224,6 +1412,20 @@ def _run_window(tk) -> None:
                                outline=OVERLAY_EYE_FILL)
     eye_r = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_EYE_FILL,
                                outline=OVERLAY_EYE_FILL)
+    # Item-7 face: six extra items stacked right above the ovals - one
+    # arc per eye (happy lids / sleeping) and two X strokes per eye
+    # (error). Idle leaves them parked off-window.
+    eye_arc_ids = [
+        canvas.create_arc(-10, -10, -10, -10, start=0, extent=180,
+                          style="arc", outline=OVERLAY_EYE_FILL,
+                          width=OVERLAY_FACE_EYE_STROKE)
+        for _ in range(2)
+    ]
+    eye_cross_ids = [
+        canvas.create_line(-10, -10, -10, -10, fill=OVERLAY_EYE_FILL,
+                           width=OVERLAY_FACE_EYE_STROKE, capstyle="round")
+        for _ in range(4)
+    ]
     trail_ids = [
         canvas.create_oval(-10, -10, -10, -10,
                            fill=OVERLAY_HEAD_OUTLINE,
@@ -1263,6 +1465,7 @@ def _run_window(tk) -> None:
              "landed_at": now0 - 10.0,
              "press_start": now0 - 10.0, "press_depth": 0.0,
              "dragging": False, "choreo": choreo_state(now0),
+             "face": None, "face_at": now0,
              "ring": None, "glyphs": []}
 
     def _dock() -> None:
@@ -1398,11 +1601,49 @@ def _run_window(tk) -> None:
         sr = max(rx, ry) * 0.16
         canvas.coords(shine, hx - rx * 0.42 - sr, hy - ry * 0.52 - sr,
                       hx - rx * 0.42 + sr, hy - ry * 0.52 + sr)
-        for item, side in ((eye_l, -1), (eye_r, 1)):
-            ecx = hx + side * OVERLAY_EYE_DX + ex
-            ecy = hy + OVERLAY_EYE_DY + ey
-            canvas.coords(item, ecx - OVERLAY_EYE_R, ecy - OVERLAY_EYE_R,
-                          ecx + OVERLAY_EYE_R, ecy + OVERLAY_EYE_R)
+        # Item-7 face: the state resolves on the child's own clock, then
+        # the shape is swapped in place. Idle reproduces the pre-Item-7
+        # eyes exactly (same box constants, same cursor glance); the
+        # arcs and X are items of their own, parked at -10 when unused.
+        face = "idle"
+        with contextlib.suppress(Exception):
+            face = face_kind(state["face"], now,
+                             quiet_since=state["face_at"])
+        blink = 0.0
+        with contextlib.suppress(Exception):
+            blink = face_blink(now)
+        geom = face_geometry(face, now, blink)
+        track = (ex, ey) if geom["track"] else (0, 0)
+        parked = (-10, -10, -10, -10)
+        for oval, arc, cross_a, cross_b, side in (
+                (eye_l, eye_arc_ids[0], eye_cross_ids[0], eye_cross_ids[1],
+                 -1),
+                (eye_r, eye_arc_ids[1], eye_cross_ids[2], eye_cross_ids[3],
+                 1)):
+            ecx = hx + side * geom["dx"] + geom["sweep"] + track[0]
+            ecy = hy + geom["dy"] + track[1]
+            box = (ecx - geom["rx"], ecy - geom["ry"],
+                   ecx + geom["rx"], ecy + geom["ry"])
+            if geom["eyes"] == "oval":
+                canvas.coords(oval, *box)
+                canvas.coords(arc, *parked)
+                canvas.coords(cross_a, *parked)
+                canvas.coords(cross_b, *parked)
+            elif geom["eyes"] == "x":
+                canvas.coords(cross_a, box[0], box[1], box[2], box[3])
+                canvas.coords(cross_b, box[0], box[3], box[2], box[1])
+                canvas.coords(oval, *parked)
+                canvas.coords(arc, *parked)
+            else:
+                with contextlib.suppress(Exception):
+                    canvas.itemconfigure(arc,
+                                         start=(0 if geom["eyes"] == "arc_top"
+                                                else 180),
+                                         extent=180)
+                canvas.coords(arc, *box)
+                canvas.coords(oval, *parked)
+                canvas.coords(cross_a, *parked)
+                canvas.coords(cross_b, *parked)
         if now < state["bubble_until"] and state["bubble_text"]:
             label = state["bubble_text"]
             # Item-4b: a click bubble keeps its anchor (the clicked
@@ -1505,6 +1746,16 @@ def _run_window(tk) -> None:
                             state["choreo"],
                             message.get("on") is True,
                             time.monotonic())
+                elif kind == "face":
+                    with contextlib.suppress(Exception):
+                        now_face = time.monotonic()
+                        applied = face_apply(message.get("state"),
+                                             now_face)
+                        if applied is not None:
+                            state["face"] = applied
+                            # only real face messages reset the quiet
+                            # clock (sleeping is "no work for a while")
+                            state["face_at"] = now_face
                 elif kind == "effect":
                     with contextlib.suppress(Exception):
                         _effect(message)

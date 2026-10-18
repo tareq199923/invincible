@@ -250,5 +250,12 @@
     "state": "passing",
     "title": "Fly-click fixups (anchored effects + pointer warp + parity nits)",
     "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py tests/test_look_at_screen.py tests/test_voice.py tests/test_webchat_agent.py"
+  },
+  {
+    "behavior": "overlay head shows what the agent is doing: pure single-slot face_kind (working/searching persist until replaced, happy 1.2s + error 1.8s bursts expire to idle, sleeping after 60s quiet, junk is idle, never raises) + absolute-px face_geometry/face_blink (idle eyes byte-identical to today incl. cursor tracking, working squint + up, searching sweep, arc eyes for happy, X-eyes for error/blocked/unavailable, flipped arcs for sleeping) drawn by 6 new child-side Tk items stacked below trail/bubble/rings/glyphs; runner drives it from the single execute_job funnel (start -> working, look_at_screen -> searching, ok -> happy, error/blocked/unavailable -> error, raise/cancel -> idle) plus handle_handoff -> happy; additive face IPC verb allowlisted via _INBOUND_TYPES; no new env var, zero registry surface, idle look byte-identical, headless latency unchanged",
+    "id": "Item-7",
+    "state": "passing",
+    "title": "Overlay face (state-driven head, v1)",
+    "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py"
   }
 ]

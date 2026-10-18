@@ -96,6 +96,11 @@ _OVERLAY_DWELL_BUFFER_SECONDS = 0.1
 _OVERLAY_DWELL_MAX_SECONDS = 1.3
 _OVERLAY_DRAG_DWELL_MAX_SECONDS = 2.0
 
+# Item-7 face: result statuses that paint the X-eyes error burst on the
+# overlay head. Any other status a result names is a happy burst; a
+# result that cannot name one is drawn as an error (never a fake win).
+_FACE_ERROR_STATUSES = ("error", "blocked", "unavailable")
+
 
 def _overlay_delay_fn(dragging: bool):
     """Per-point dwell covering the planned flight. Never raises.
@@ -208,6 +213,21 @@ def stop_overlay() -> None:
     _overlay_note_settled()
 
 
+def _overlay_face(state: str) -> None:
+    """Paint a face on the running overlay head (Item-7). Never raises.
+
+    Reads the live handle directly instead of calling ``ensure_overlay``:
+    a face annotates work the agent already started, it must never pop a
+    new head into existence. The overlay comes up with the agent
+    connection, so headless / off-Windows / kill-switched machines and
+    the test suite simply stay silent here.
+    """
+    with contextlib.suppress(Exception):
+        seen = _OVERLAY
+        if seen is not None and seen.alive:
+            seen.face(state)
+
+
 def handle_handoff(handoff: dict | None) -> None:
     """B2 arrival: wake the B1 overlay so Bmax visibly hops to the PC.
 
@@ -224,6 +244,7 @@ def handle_handoff(handoff: dict | None) -> None:
         seen = ensure_overlay()
         if seen is not None and seen.alive:
             seen.settle()
+            seen.face("happy")  # Item-7: the hop lands visibly happy
             _overlay_note_settled()
 
 
@@ -353,9 +374,51 @@ async def run_agent_ws(
             stop_overlay()
 
 
+def _job_face(job_type) -> str:
+    """The face a starting job shows (Item-7). The rule is uniform:
+    every job paints a face — look jobs search, everything else works.
+    """
+    return "searching" if job_type == "look_at_screen" else "working"
+
+
+def _result_face(result) -> str:
+    """The face a finished job paints (Item-7): the error shapes
+    (error/blocked/unavailable) get the X-eyes burst, any other status
+    gets the happy burst. A result that cannot name a non-failure
+    status is drawn as an error — the face never claims a success the
+    result did not."""
+    if isinstance(result, dict):
+        status = result.get("status")
+        if isinstance(status, str) and status not in _FACE_ERROR_STATUSES:
+            return "happy"
+    return "error"
+
+
 async def execute_job(job: dict) -> dict:
     """Run one dispatched job locally. Wall 2 re-check first; a block
-    is the job's result, not an exception."""
+    is the job's result, not an exception.
+
+    Item-7: this wrapper owns the face signal only — the job's work is
+    untouched. It paints the start, the outcome, and an idle clear when
+    the job raises or is cancelled (a crashed job must not leave the
+    head stuck mid-work). Every face call is best-effort, like every
+    other overlay call.
+    """
+    job_type = job.get("type") if isinstance(job, dict) else None
+    _overlay_face(_job_face(job_type))
+    try:
+        result = await _execute_job(job)
+    except BaseException:
+        _overlay_face("idle")
+        raise
+    _overlay_face(_result_face(result))
+    return result
+
+
+async def _execute_job(job: dict) -> dict:
+    """The job body — Item-7 carved it out of ``execute_job`` so the
+    wrapper could own the face. Wall 2 re-check first; a block is the
+    job's result, not an exception."""
     job_type = job.get("type")
     args = job.get("args") or {}
 
