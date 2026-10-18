@@ -40,6 +40,7 @@
   bubble + ring / type glyphs / mid-glide trail), child stderr clean.
   `ruff` clean, 82 passed `tests/test_overlay.py`, full 2041 passed /
   11 skipped / 1 deselected. Clean-state checklist 5/5 ticked.
+  Committed as `55cc955` (pushed).
 - F19 done (`passing`): web Bmax face — robot-heads 0.3.0 ported into
   the web UI as one readable vanilla asset (`/static/robot-head.js`,
   ~2,090 lines; MIT header keeps the upstream commit `58ebf64` +
@@ -498,8 +499,8 @@
   MCP_PROTOCOL §7 tools, SECURITY §12, ROADMAP count 34. Vetted
   plan survived contact: one real find during vetting (the batch
   trap), confirmed in code before building.
-- Last commit: `0d75650` (main) — F19 web Bmax face (chat + phone);
-  the hash-record chore sits on top.
+- Last commit: `55cc955` (main) — F20 overlay Bmax restyle (navy/pink
+  skin parity); the hash-record chore sits on top.
 - F12 done (`passing`, uncommitted): multimodal image parts — the model
   truly sees screenshots (new pure `invincible/core/vision.py`:
   extract/attach around trim, PNG-IHDR token estimates, 4-image +
