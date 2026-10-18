@@ -118,18 +118,44 @@ def test_bowed_waypoints_arc_and_land():
         (1.0, 2.0)] * 3
 
 
-def test_berry_look_helpers():
-    light, mid, deep = overlay.berry_shades()
+def test_shell_look_helpers():
+    light, mid, deep = overlay.shell_shades()
     assert (light, mid, deep) == (
-        overlay.OVERLAY_BERRY_LIGHT,
-        overlay.OVERLAY_BERRY_MID,
-        overlay.OVERLAY_BERRY_DEEP,
+        overlay.OVERLAY_SHELL_LIGHT,
+        overlay.OVERLAY_SHELL_MID,
+        overlay.OVERLAY_SHELL_DEEP,
     )
     pts = overlay.teardrop_points(100.0, 100.0, 36.0, 36.0)
     assert len(pts) == 3
     assert min(y for _, y in pts) < 100.0 - 36.0 * 0.7
     assert overlay.teardrop_points(0, 0, 0, 0) == []
     assert overlay.teardrop_points("a", 0, 1, 1) == []
+
+
+def test_overlay_wears_the_web_bmax_skin():
+    """F20: the desktop head's skin IS the web face's default skin."""
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    js = (repo / "invincible" / "templates" / "static"
+          / "robot-head.js").read_text(encoding="utf-8")
+    # The three web DEFAULTS the overlay copies verbatim stay in sync.
+    assert f'color: "{overlay.OVERLAY_SHELL_MID}"' in js
+    assert f'trimColor: "{overlay.OVERLAY_HEAD_OUTLINE}"' in js
+    assert f'screenColor: "{overlay.OVERLAY_EYE_FILL}"' in js
+    # And the frozen values are the navy / slate / pink trio.
+    assert overlay.OVERLAY_SHELL_MID == "#0d142a"
+    assert overlay.OVERLAY_HEAD_OUTLINE == "#4d5b83"
+    assert overlay.OVERLAY_EYE_FILL == "#ff5fa6"
+    # The LED glow and the primary ring ride the LED colour; the
+    # secondary ring rides the trim.
+    assert overlay.OVERLAY_GLOW_FILL == overlay.OVERLAY_EYE_FILL
+    assert overlay.OVERLAY_RING_LEFT_FILL == overlay.OVERLAY_EYE_FILL
+    assert overlay.OVERLAY_RING_RIGHT_FILL == overlay.OVERLAY_HEAD_OUTLINE
+    # The berry blue is fully retired - no stragglers in the module.
+    src = (repo / "invincible" / "agent" / "overlay.py").read_text(
+        encoding="utf-8")
+    assert "BERRY" not in src and "berry" not in src
 
 
 def test_eye_offset_toward_cursor_and_clamp():

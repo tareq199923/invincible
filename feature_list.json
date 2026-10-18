@@ -275,7 +275,7 @@
   {
     "behavior": "the desktop Tk overlay face wears the same Bmax character as the web face: navy shell + pink LED eyes matching the robot-heads port's default skin, with the eye art and colour constants restyled and their pins updated; face_kind/face_geometry semantics, the face IPC verb, and the runner driving loop stay unchanged",
     "id": "F20",
-    "state": "planned",
+    "state": "passing",
     "title": "Overlay Bmax restyle (navy/pink skin parity)",
     "verification": "ruff check . && pytest tests/test_overlay.py"
   }

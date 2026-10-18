@@ -5,6 +5,41 @@
 
 ## Current State
 
+- F20 done (`passing`): overlay Bmax restyle — the desktop Tk face now
+  wears the web skin's character. `agent/overlay.py`: the berry-blue
+  palette is gone; `OVERLAY_SHELL_MID #0d142a` / `OVERLAY_HEAD_OUTLINE
+  #4d5b83` / `OVERLAY_EYE_FILL #ff5fa6` are copied verbatim from the
+  web `robot-head.js` DEFAULTS and pinned against it; derived shades
+  renamed (`shell_shades()`; `OVERLAY_BERRY_*`/`OVERLAY_HEAD_FILL`
+  deleted, `OVERLAY_GLOW_FILL` rides the LED pink, ring left = pink /
+  right = slate trim, bubble = navy + pink label). Eye art: the eyes
+  are LED blocks now (`create_rectangle`, not ovals) with a stippled
+  bloom behind each block (web-style pink bloom), and the happy/
+  sleeping arcs, error X, blink, sweep, and glance behaviour are
+  untouched; the fat stippled halo became a two-layer neon rim (faint
+  dithered band at 1.20× + crisp 2px pink edge ring at 1.06×); the
+  type glyphs ride the LED pink (slate-on-grey was near-invisible).
+  Two live-harness finds fixed in the same spirit: (1) the trail had no
+  aging, so a settled head's trail collapsed onto its own face — a
+  stray dot between the new pink eyes; the trail items now draw UNDER
+  the head (behind it while gliding, hidden when settled); (2) the
+  `OVERLAY_GLOW` kill switch was dead (the tick re-showed the glow
+  after creation parked it) — the tick now respects it. Recorded, not
+  changed: a direct target never restamps the dock quiet clock, so a
+  settled (>5s-old) head re-docks a frame after landing (matches the
+  documented "settles back to a screen-corner dock"); the clock counts
+  from the child's start / last tour launch. Face semantics
+  (`face_kind`/`face_geometry`, the `face` verb) and the runner driving
+  loop are untouched. Pins: `test_shell_look_helpers` (renamed) + new
+  `test_overlay_wears_the_web_bmax_skin` (overlay constants == the web
+  DEFAULTS hexes read from `robot-head.js`, frozen trio, ring/glow
+  derivations, no berry stragglers). Docs: TESTING §3 row for
+  `test_overlay.py`, CONFIGURATION row names the skin. Live-verified on
+  this machine with a temp stdin harness + screenshots (idle / working
+  squint / searching sweep / happy / error X / sleeping arcs / click
+  bubble + ring / type glyphs / mid-glide trail), child stderr clean.
+  `ruff` clean, 82 passed `tests/test_overlay.py`, full 2041 passed /
+  11 skipped / 1 deselected. Clean-state checklist 5/5 ticked.
 - F19 done (`passing`): web Bmax face — robot-heads 0.3.0 ported into
   the web UI as one readable vanilla asset (`/static/robot-head.js`,
   ~2,090 lines; MIT header keeps the upstream commit `58ebf64` +
@@ -536,19 +571,16 @@
 
 ## In Progress
 
-- None — F19 complete (`passing`). Zero `active`. Next: F20 overlay
-  Bmax restyle at next clock-in (F05 vector seam stays `planned`).
+- None — F20 complete (`passing`). Zero `active`. Next: Item-7b
+  (speaking/listening faces) or F05 (vector seam) at the next clock-in.
 
 ## Next Steps
 
-1. F20 (overlay Bmax restyle) is `planned`: the desktop Tk face should
-   wear the same navy/pink skin as the web face — its eye art/colour
-   constants in `agent/overlay.py` and their pins in
-   `tests/test_overlay.py` get restyled together. F05 vector seam stays
-   `planned`, no longer the next candidate; set exactly one `active`
-   only at clock-in. Item-7b (speaking/listening faces) is the natural
-   follow-up but needs a server→agent signal, so it is NOT a free
-   extension of this item (see the plan notes).
+1. F20 is done (`passing`): the desktop head wears the web Bmax skin.
+   Next candidates: Item-7b (listening/speaking faces) — the natural
+   follow-up, but it needs a server→agent signal, so it is NOT a free
+   extension; F05 vector seam stays `planned`. Set exactly one `active`
+   only at clock-in.
 2. Tests can no longer spawn a real overlay head on any OS: the autouse
    conftest guard forces headless and refuses/records `Overlay.start`.
    Never bypass it — a test that genuinely needs a spawn stubs
@@ -557,12 +589,13 @@
    outliving its parent, the experiments (windowless EOF probe, live
    product-path probe, post-parent process watch) are described in the
    Item-8 entry above — re-run them before adding a watchdog.
-4. The running `invincible connect` agent(s) still hold the pre-Item-7
-   code in memory — restart to see the face live.
-5. Live Tk window: the Item-7 pass verified the face itself on a live
-   Windows desktop (screenshots: idle/blink/working/sweep/happy/error/
-   sleeping). Glide/dock/click-through visuals and the multi-monitor
-   glide-vs-click check are still unverified.
+4. The running `invincible connect` agent(s) still hold pre-F20 code in
+   memory — restart to see the new navy/pink face live.
+5. Live Tk window: the F20 pass re-verified all face states + effects
+   and a mid-glide frame on a live Windows desktop (temp stdin harness +
+   screenshots: idle/working/searching/happy/error/sleeping/click/type/
+   glide). Click-through itself and the multi-monitor glide-vs-click
+   check are still unverified.
 6. F04 fan-out (`harness_fanout.py` + 18 tests) stays green, untouched.
 
 ## Blockers

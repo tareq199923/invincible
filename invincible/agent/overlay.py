@@ -1,14 +1,16 @@
 # invincible/agent/overlay.py
 """B1 head-cursor overlay (F11): a Bmax-head cursor on the paired PC.
 
-A transparent, click-through, always-on-top window draws an original
-soft-white rounded head with two ink eyes (no Disney likeness - the
-canvas echo of the ``.baymax-dot`` CSS concept in
-``invincible/templates/static/app.css``). It glides to each Pack 3
+A transparent, click-through, always-on-top window draws a rounded
+navy head with two pink LED eyes - the web Bmax skin (F20), matching
+the robot-heads port's defaults in
+``invincible/templates/static/robot-head.js`` (navy shell, slate trim,
+pink LEDs) so the desktop head and the web head read as the same
+character. It glides to each Pack 3
 target point BEFORE the action executes (so the user watches Bmax
 "do" the click/type), idles docked at a screen corner, and works
 through a queued point tour (``point()``) on Bluey-style holds when
-it is otherwise free — tools never wait on the head. Its eyes
+it is otherwise free - tools never wait on the head. Its eyes
 track the real mouse at ~30Hz.
 
 Stdlib only (tkinter + ctypes + threading + subprocess) - no new
@@ -36,17 +38,20 @@ import time
 
 OVERLAY_GRID_MAX = 1000
 
-# Look: Bluey-like berry head (original shades, no copied art).
+# Look: the web Bmax skin (F20) - the desktop head wears the same
+# character as the robot-heads port. SHELL_MID / HEAD_OUTLINE /
+# EYE_FILL are copied verbatim from robot-heads.js DEFAULTS
+# (color / trimColor / screenColor) and pinned against it; DEEP and
+# LIGHT are the shell gradient's shaded edge and lit patch.
 OVERLAY_HEAD_PX = 72
-OVERLAY_HEAD_FILL = "#7d9bff"
-OVERLAY_HEAD_OUTLINE = "#ffffff"
-OVERLAY_BERRY_LIGHT = "#b9cbff"
-OVERLAY_BERRY_MID = "#7d9bff"
-OVERLAY_BERRY_DEEP = "#5568d8"
+OVERLAY_SHELL_MID = "#0d142a"
+OVERLAY_SHELL_DEEP = "#0a0f20"
+OVERLAY_SHELL_LIGHT = "#243056"
+OVERLAY_HEAD_OUTLINE = "#4d5b83"
 OVERLAY_SHINE_FILL = "#ffffff"
-OVERLAY_GLOW_FILL = "#7d9bff"
+OVERLAY_GLOW_FILL = "#ff5fa6"
 OVERLAY_GLOW = True
-OVERLAY_EYE_FILL = "#20242b"
+OVERLAY_EYE_FILL = "#ff5fa6"
 OVERLAY_EYE_DX = 14
 OVERLAY_EYE_DY = -6
 OVERLAY_EYE_R = 7
@@ -102,8 +107,8 @@ OVERLAY_EFFECT_TEXT_CAP = 24
 OVERLAY_PRESS_LAND = 0.05
 OVERLAY_PRESS_CLICK = 0.14
 OVERLAY_PRESS_TYPE = 0.035
-OVERLAY_RING_LEFT_FILL = OVERLAY_BERRY_MID
-OVERLAY_RING_RIGHT_FILL = OVERLAY_BERRY_DEEP
+OVERLAY_RING_LEFT_FILL = OVERLAY_EYE_FILL        # primary: LED pink
+OVERLAY_RING_RIGHT_FILL = OVERLAY_HEAD_OUTLINE   # secondary: slate trim
 
 # Item-7 face: the head shows what the agent is doing. Kinds are
 # child-side only; the parent sends working/searching/error/happy/idle
@@ -1068,9 +1073,9 @@ def choreo_step(state: dict, now: float) -> tuple:
     return (None, None)
 
 
-def berry_shades() -> tuple[str, str, str]:
+def shell_shades() -> tuple[str, str, str]:
     """Light→mid→deep fills for the stacked-oval gradient (pure)."""
-    return (OVERLAY_BERRY_LIGHT, OVERLAY_BERRY_MID, OVERLAY_BERRY_DEEP)
+    return (OVERLAY_SHELL_LIGHT, OVERLAY_SHELL_MID, OVERLAY_SHELL_DEEP)
 
 
 def teardrop_points(hx: float, hy: float, rx: float, ry: float) -> list:
@@ -1412,13 +1417,27 @@ def _run_window(tk) -> None:
     radius = OVERLAY_HEAD_PX // 2
     dock = dock_corner(vrect, OVERLAY_HEAD_PX)
     head_xy = [float(dock[0] + radius), float(dock[1] + radius)]
-    light, mid, deep = berry_shades()
+    light, mid, deep = shell_shades()
+    # F20 glow: a faint dithered band plus a crisp LED rim on the head
+    # edge (the single fat stippled disc read as a pink donut).
     glow = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_GLOW_FILL,
-                              outline=OVERLAY_GLOW_FILL, width=1)
+                              outline="", width=0)
     with contextlib.suppress(Exception):
         canvas.itemconfigure(glow, stipple="gray25")
+    glow_ring = canvas.create_oval(0, 0, 1, 1, fill="",
+                                   outline=OVERLAY_GLOW_FILL, width=2)
     if not OVERLAY_GLOW:
         canvas.coords(glow, -10, -10, -10, -10)
+        canvas.coords(glow_ring, -10, -10, -10, -10)
+    # F20: the trail draws UNDER the head. With no aging, a settled
+    # head's trail collapses onto its own face (a stray dot between the
+    # eyes on the new skin); under the head it only reads as motion.
+    trail_ids = [
+        canvas.create_oval(-10, -10, -10, -10,
+                           fill=OVERLAY_HEAD_OUTLINE,
+                           outline=OVERLAY_HEAD_OUTLINE)
+        for _ in range(OVERLAY_TRAIL_POINTS)
+    ]
     head_deep = canvas.create_oval(0, 0, 1, 1, fill=deep,
                                    outline=OVERLAY_HEAD_OUTLINE, width=3)
     head_mid = canvas.create_oval(0, 0, 1, 1, fill=mid,
@@ -1429,10 +1448,20 @@ def _run_window(tk) -> None:
                                 outline=OVERLAY_HEAD_OUTLINE, width=2)
     shine = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_SHINE_FILL,
                                outline=OVERLAY_SHINE_FILL)
-    eye_l = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_EYE_FILL,
-                               outline=OVERLAY_EYE_FILL)
-    eye_r = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_EYE_FILL,
-                               outline=OVERLAY_EYE_FILL)
+    # F20: the eyes are LED blocks (rectangles), not ovals - the web
+    # face's eyes are blocky pixels, so the desktop head matches. A
+    # stippled bloom sits behind each block so they read as lit.
+    eye_bloom_l = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_GLOW_FILL,
+                                     outline="")
+    eye_bloom_r = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_GLOW_FILL,
+                                     outline="")
+    for bloom in (eye_bloom_l, eye_bloom_r):
+        with contextlib.suppress(Exception):
+            canvas.itemconfigure(bloom, stipple="gray25")
+    eye_l = canvas.create_rectangle(0, 0, 1, 1, fill=OVERLAY_EYE_FILL,
+                                    outline=OVERLAY_EYE_FILL)
+    eye_r = canvas.create_rectangle(0, 0, 1, 1, fill=OVERLAY_EYE_FILL,
+                                    outline=OVERLAY_EYE_FILL)
     # Item-7 face: six extra items stacked right above the ovals - one
     # arc per eye (happy lids / sleeping) and two X strokes per eye
     # (error). Idle leaves them parked off-window.
@@ -1447,14 +1476,8 @@ def _run_window(tk) -> None:
                            width=OVERLAY_FACE_EYE_STROKE, capstyle="round")
         for _ in range(4)
     ]
-    trail_ids = [
-        canvas.create_oval(-10, -10, -10, -10,
-                           fill=OVERLAY_HEAD_OUTLINE,
-                           outline=OVERLAY_HEAD_OUTLINE)
-        for _ in range(OVERLAY_TRAIL_POINTS)
-    ]
     bubble_box = canvas.create_rectangle(-10, -10, -10, -10,
-                                         fill=OVERLAY_HEAD_FILL,
+                                         fill=OVERLAY_SHELL_MID,
                                          outline=OVERLAY_HEAD_OUTLINE)
     bubble_label = canvas.create_text(-10, -10, text="",
                                       fill=OVERLAY_EYE_FILL,
@@ -1464,7 +1487,7 @@ def _run_window(tk) -> None:
                                     width=3)
     glyph_ids = [
         canvas.create_text(-10, -10, text="",
-                           fill=OVERLAY_BERRY_DEEP,
+                           fill=OVERLAY_EYE_FILL,
                            font=("Segoe UI", 22, "bold"))
         for _ in range(OVERLAY_GLYPH_CAP)
     ]
@@ -1597,8 +1620,11 @@ def _run_window(tk) -> None:
                 canvas.coords(dot, -10, -10, -10, -10)
         ex, ey = eye_offset(hx, hy, cursor[0], cursor[1],
                             OVERLAY_EYE_TRACK_R)
-        gr = max(rx, ry) * 1.35
-        canvas.coords(glow, hx - gr, hy - gr, hx + gr, hy + gr)
+        if OVERLAY_GLOW:
+            gr = max(rx, ry) * 1.20
+            canvas.coords(glow, hx - gr, hy - gr, hx + gr, hy + gr)
+            rr = max(rx, ry) * 1.06
+            canvas.coords(glow_ring, hx - rr, hy - rr, hx + rr, hy + rr)
         canvas.coords(head_deep, hx - rx, hy - ry, hx + rx, hy + ry)
         canvas.coords(head_mid, hx - rx * 0.86, hy - ry * 0.86,
                       hx + rx * 0.86, hy + ry * 0.86)
@@ -1636,17 +1662,20 @@ def _run_window(tk) -> None:
         geom = face_geometry(face, now, blink)
         track = (ex, ey) if geom["track"] else (0, 0)
         parked = (-10, -10, -10, -10)
-        for oval, arc, cross_a, cross_b, side in (
-                (eye_l, eye_arc_ids[0], eye_cross_ids[0], eye_cross_ids[1],
-                 -1),
-                (eye_r, eye_arc_ids[1], eye_cross_ids[2], eye_cross_ids[3],
-                 1)):
+        for oval, bloom, arc, cross_a, cross_b, side in (
+                (eye_l, eye_bloom_l, eye_arc_ids[0], eye_cross_ids[0],
+                 eye_cross_ids[1], -1),
+                (eye_r, eye_bloom_r, eye_arc_ids[1], eye_cross_ids[2],
+                 eye_cross_ids[3], 1)):
             ecx = hx + side * geom["dx"] + geom["sweep"] + track[0]
             ecy = hy + geom["dy"] + track[1]
             box = (ecx - geom["rx"], ecy - geom["ry"],
                    ecx + geom["rx"], ecy + geom["ry"])
+            bm = max(geom["rx"], geom["ry"]) * 1.30
+            bloom_box = (ecx - bm, ecy - bm, ecx + bm, ecy + bm)
             if geom["eyes"] == "oval":
                 canvas.coords(oval, *box)
+                canvas.coords(bloom, *bloom_box)
                 canvas.coords(arc, *parked)
                 canvas.coords(cross_a, *parked)
                 canvas.coords(cross_b, *parked)
@@ -1654,6 +1683,7 @@ def _run_window(tk) -> None:
                 canvas.coords(cross_a, box[0], box[1], box[2], box[3])
                 canvas.coords(cross_b, box[0], box[3], box[2], box[1])
                 canvas.coords(oval, *parked)
+                canvas.coords(bloom, *parked)
                 canvas.coords(arc, *parked)
             else:
                 with contextlib.suppress(Exception):
@@ -1663,6 +1693,7 @@ def _run_window(tk) -> None:
                                          extent=180)
                 canvas.coords(arc, *box)
                 canvas.coords(oval, *parked)
+                canvas.coords(bloom, *parked)
                 canvas.coords(cross_a, *parked)
                 canvas.coords(cross_b, *parked)
         if now < state["bubble_until"] and state["bubble_text"]:
