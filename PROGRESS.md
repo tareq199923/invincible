@@ -30,7 +30,8 @@
   focus-click warp, bare-type no-touch, raising-warp ok, broken-api
   never-raise, byte round-trip), plus 2 extended (take_control flag,
   look head seed). `ruff` clean, 248 passed targeted slice, full
-  2010 passed / 11 skipped / 1 deselected.
+  2010 passed / 11 skipped / 1 deselected. Clean-state checklist 5/5
+  ticked (template committed blank; record kept here).
 - Item-1d done (`passing`): glide-cover follow-up — drag dwell now covers
   both legs (`core/tool_executor.py`: new pure `_resolve_drag_delay`
   estimates head→from then from→to, drag branch uses it so the single
@@ -351,8 +352,8 @@
   MCP_PROTOCOL §7 tools, SECURITY §12, ROADMAP count 34. Vetted
   plan survived contact: one real find during vetting (the batch
   trap), confirmed in code before building.
-- Last commit: `4350ce2` (main) — deploy: run db upgrade as Railway
-  preDeployCommand.
+- Last commit: `e58174c` (main) — Item-4b fly-click fixups (anchored
+  effects, pointer warp, parity nits).
 - F12 done (`passing`, uncommitted): multimodal image parts — the model
   truly sees screenshots (new pure `invincible/core/vision.py`:
   extract/attach around trim, PNG-IHDR token estimates, 4-image +

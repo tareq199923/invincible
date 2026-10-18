@@ -124,8 +124,8 @@ Compat matrix (fail-closed — a provider without the surface yields
 
 Hold-to-ask rides the same pipeline: a ≥300ms press-and-hold on the
 orb marks the turn `asked:true` (persisted; the model sees it as
-"You asked"), taps send `asked:false`, and the tap acknowledgement
-chirp is generated on-device (WebAudio, fail-silent, never uploaded).
+"You asked"), taps send `asked:false`, and the acknowledgement chirp
+is generated on-device (WebAudio, fail-silent, never uploaded).
 Voice-off is server-gated; the orb's `isMuted` gate is fail-silent
 and unwired (see [SECURITY.md](SECURITY.md) §14).
 
