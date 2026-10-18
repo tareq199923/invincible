@@ -40,6 +40,7 @@
   to chat+phone). Docs: TESTING §3 row. `ruff` clean, 106 passed
   verification command / 187 passed target slice, full 2040 passed /
   11 skipped / 1 deselected. Clean-state checklist 5/5 ticked.
+  Committed as `0d75650` (pushed).
 - Item-8 done (`passing`): overlay lifecycle hygiene — test spawn guard +
   retry cooldown. **A1 (tests can never pop a head):** new autouse
   `overlay_spawn_guard` in `tests/conftest.py` forces
@@ -462,8 +463,8 @@
   MCP_PROTOCOL §7 tools, SECURITY §12, ROADMAP count 34. Vetted
   plan survived contact: one real find during vetting (the batch
   trap), confirmed in code before building.
-- Last commit: `86159f0` (main) — Item-7 overlay face v1; Item-8 is
-  uncommitted on top (commit on user's word).
+- Last commit: `0d75650` (main) — F19 web Bmax face (chat + phone);
+  the hash-record chore sits on top.
 - F12 done (`passing`, uncommitted): multimodal image parts — the model
   truly sees screenshots (new pure `invincible/core/vision.py`:
   extract/attach around trim, PNG-IHDR token estimates, 4-image +
