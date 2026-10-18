@@ -196,17 +196,24 @@ def ensure_overlay() -> overlay.Overlay | None:
         return _OVERLAY
     if time.monotonic() < _OVERLAY_RETRY_AT:
         return None
-    if _OVERLAY.start():
-        return _OVERLAY
+    # Stamp on EVERY spawn attempt, not only failures: a child that
+    # dies right after a successful spawn (no desktop, tkinter gone)
+    # would otherwise bypass the cooldown and respawn once per job.
     _OVERLAY_RETRY_AT = (
         time.monotonic() + OVERLAY_RETRY_COOLDOWN_SECONDS)
+    if _OVERLAY.start():
+        return _OVERLAY
     return None
 
 
 def stop_overlay() -> None:
     """Terminate the overlay child. Never raises; safe to call twice."""
-    global _OVERLAY
+    global _OVERLAY, _OVERLAY_RETRY_AT
     current, _OVERLAY = _OVERLAY, None
+    # An intentional stop (WS teardown -> poll fallback) may bring a
+    # fresh head up immediately; only accidental deaths sit out the
+    # cooldown stamped by ensure_overlay.
+    _OVERLAY_RETRY_AT = 0.0
     if current is not None:
         with contextlib.suppress(Exception):
             current.stop()

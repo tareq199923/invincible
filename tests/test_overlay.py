@@ -9,9 +9,12 @@ alive. Live Win32 metrics run only on Windows and only read state -
 the real mouse is never driven."""
 
 import asyncio
+import io
 import json
 import math
 import os
+import queue
+import time
 
 import pytest
 
@@ -1419,3 +1422,173 @@ def test_handoff_face_happy_when_live(monkeypatch, _clean_overlay_state):
     runner.handle_handoff({"task": "x"})
     runner.handle_handoff("junk")
     runner.handle_handoff(None)
+
+
+# --- Item-8: A1 spawn guard + lifecycle hygiene ----------------------
+
+
+def test_stdin_reader_eof_enqueues_quit(monkeypatch):
+    fake = io.StringIO('{"type": "target", "x": 10, "y": 20}\n'
+                       '{"type": "bogus"}\n')
+    monkeypatch.setattr(overlay.sys, "stdin", fake)
+    inbox = queue.Queue(maxsize=16)
+    overlay._stdin_reader(inbox)
+    # Known verb passes through; unknown verbs are dropped; EOF (the
+    # designed parent-death path) always ends with a quit.
+    assert inbox.get_nowait() == {"type": "target", "x": 10, "y": 20}
+    assert inbox.get_nowait() == {"type": "quit"}
+
+
+def test_stdin_reader_eof_quit_survives_full_inbox(monkeypatch):
+    monkeypatch.setattr(overlay.sys, "stdin", io.StringIO(""))
+    inbox = queue.Queue(maxsize=4)
+    for _ in range(4):
+        inbox.put_nowait({"type": "point", "x": 1, "y": 1})
+    overlay._stdin_reader(inbox)
+    drained = []
+    while not inbox.empty():
+        drained.append(inbox.get_nowait())
+    # The quit made room by dropping the oldest unread message: a
+    # silently dropped quit would leave an orphan head running.
+    assert {"type": "quit"} in drained
+    assert len(drained) == 4
+
+
+def test_destroy_window_never_raises():
+    class _Root:
+        def __init__(self, boom_destroy=False, boom_quit=False):
+            self.destroyed = 0
+            self.quit_calls = 0
+            self._boom_destroy = boom_destroy
+            self._boom_quit = boom_quit
+
+        def destroy(self):
+            self.destroyed += 1
+            if self._boom_destroy:
+                raise RuntimeError("tcl gone")
+
+        def quit(self):
+            self.quit_calls += 1
+            if self._boom_quit:
+                raise RuntimeError("tcl gone")
+
+    # Both teardown calls are attempted even when destroy throws, and
+    # a blowing pair never raises out of the quit path.
+    root = _Root(boom_destroy=True)
+    overlay._destroy_window(root)
+    assert (root.destroyed, root.quit_calls) == (1, 1)
+    both = _Root(boom_destroy=True, boom_quit=True)
+    overlay._destroy_window(both)
+    assert (both.destroyed, both.quit_calls) == (1, 1)
+
+
+async def test_job_paths_never_attempt_a_real_spawn(
+        overlay_spawn_guard, monkeypatch, _clean_overlay_state):
+    """Representative job calls that reach ensure_overlay in production
+    stay headless under the conftest guard: zero spawn attempts."""
+
+    async def fake_look():
+        return {"status": "look", "controls": [], "truncated": False}
+
+    monkeypatch.setattr(tool_executor, "_look_at_screen", fake_look)
+    look = await runner.execute_job({"type": "look_at_screen", "args": {}})
+    assert look["status"] == "look"
+
+    refused = await runner.execute_job(
+        {"type": "click", "args": {"x": 9999, "y": 0}})
+    assert refused["status"] in ("error", "blocked", "unavailable")
+    assert overlay_spawn_guard == []
+
+
+async def test_guard_refuses_real_spawn_when_enabled(
+        overlay_spawn_guard, monkeypatch, _clean_overlay_state):
+    """With the overlay enabled, the guard refuses each real spawn and
+    ensure_overlay degrades to headless with the retry cooldown
+    stamped - no process is ever created."""
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.delenv("INVINCIBLE_OVERLAY", raising=False)
+
+    async def fake_look():
+        return {"status": "look", "controls": [], "truncated": False}
+
+    monkeypatch.setattr(tool_executor, "_look_at_screen", fake_look)
+    look = await runner.execute_job({"type": "look_at_screen", "args": {}})
+    assert look["status"] == "look"
+    assert len(overlay_spawn_guard) == 1  # the one refused attempt
+    assert time.monotonic() < runner._OVERLAY_RETRY_AT
+
+    refused = await runner.execute_job(
+        {"type": "click", "args": {"x": 9999, "y": 0}})
+    assert refused["status"] in ("error", "blocked", "unavailable")
+    # The cooldown blocks the follow-up attempt entirely.
+    assert len(overlay_spawn_guard) == 1
+    overlay_spawn_guard.clear()
+
+
+def test_ensure_overlay_reuses_a_live_handle(
+        monkeypatch, _clean_overlay_state):
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.delenv("INVINCIBLE_OVERLAY", raising=False)
+    calls = []
+
+    class _Handle:
+        alive = True
+
+        def start(self):  # pragma: no cover - must never run
+            calls.append(1)
+            return True
+
+    handle = _Handle()
+    monkeypatch.setattr(runner, "_OVERLAY", handle)
+    assert runner.ensure_overlay() is handle
+    assert calls == []
+
+
+def test_ensure_overlay_cooldown_survives_fast_child_death(
+        monkeypatch, _clean_overlay_state):
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.delenv("INVINCIBLE_OVERLAY", raising=False)
+    calls = []
+
+    class _Proc:
+        code = None
+
+        def poll(self):
+            return self.code
+
+    def start(self):
+        calls.append(1)
+        self._proc = _Proc()
+        return True
+
+    monkeypatch.setattr(overlay.Overlay, "start", start)
+    handle = runner.ensure_overlay()
+    assert handle is not None
+    assert handle.alive is True
+    assert time.monotonic() < runner._OVERLAY_RETRY_AT
+    # A child that dies right after a good spawn must not respawn on
+    # the next job: the cooldown holds.
+    assert handle._proc is not None
+    handle._proc.code = 1
+    assert runner.ensure_overlay() is None
+    assert len(calls) == 1
+
+
+def test_stop_overlay_clears_the_retry_cooldown(
+        monkeypatch, _clean_overlay_state):
+    monkeypatch.setattr(runner, "_OVERLAY_RETRY_AT", time.monotonic() + 60)
+    stopped = []
+
+    class _Handle:
+        alive = False
+
+        def stop(self):
+            stopped.append(1)
+
+    monkeypatch.setattr(runner, "_OVERLAY", _Handle())
+    runner.stop_overlay()
+    # An intentional stop can bring a fresh head up immediately (WS
+    # teardown -> poll fallback), so it clears the cooldown stamp.
+    assert stopped == [1]
+    assert runner._OVERLAY_RETRY_AT == 0.0
+    assert runner._OVERLAY is None

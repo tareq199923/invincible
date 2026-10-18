@@ -80,6 +80,16 @@ every upstream is faked.
   landed. The `executemany` flag is what separates a single multi-VALUES
   statement from a per-row loop.
 - **`provider_body(name, content)`** — a canned OpenAI-shaped success body.
+- **`overlay_spawn_guard`** *(autouse)* — forces the headless overlay
+  path (`INVINCIBLE_OVERLAY=0`) and replaces `Overlay.start` with a
+  recorder that refuses to spawn. A Windows dev machine reaches the real
+  `runner.ensure_overlay()` (`test_look_at_screen.py`,
+  `test_computer_use.py`, the all-tools loops); without the guard those
+  tests popped a real Tk head mid-run. Off Windows the recorder delegates
+  to the real `start` (already a no-op), so Linux CI exercises the same
+  code. The recorded attempts are asserted empty at teardown — a test
+  that deliberately exercises a spawn stubs `Overlay.start` itself (or
+  clears `overlay_spawn_guard` after asserting on it).
 
 ### Pattern: pending-action approval tests
 

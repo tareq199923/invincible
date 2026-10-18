@@ -1327,8 +1327,29 @@ def _stdin_reader(inbox: queue.Queue) -> None:
                 _INBOUND_TYPES):
             with contextlib.suppress(queue.Full):
                 inbox.put_nowait(message)
-    with contextlib.suppress(queue.Full):
+    # Parent death: the quit MUST land even when the inbox is full -
+    # a silently dropped quit would leave a head running forever with
+    # no parent. Make room by dropping the oldest unread message.
+    try:
         inbox.put_nowait({"type": "quit"})
+    except queue.Full:
+        with contextlib.suppress(queue.Empty):
+            inbox.get_nowait()
+        with contextlib.suppress(queue.Full):
+            inbox.put_nowait({"type": "quit"})
+
+
+def _destroy_window(root) -> None:
+    """Close the overlay window on quit; never raises.
+
+    ``destroy`` + ``quit`` are both suppressed: a teardown hiccup must
+    not throw the tick loop dead, which would leave a frozen window
+    and an orphaned process behind.
+    """
+    with contextlib.suppress(Exception):
+        root.destroy()
+    with contextlib.suppress(Exception):
+        root.quit()
 
 
 def overlay_main() -> None:
@@ -1719,7 +1740,7 @@ def _run_window(tk) -> None:
                 message = inbox.get_nowait()
                 kind = message.get("type")
                 if kind == "quit":
-                    root.destroy()
+                    _destroy_window(root)
                     return
                 if kind == "settle":
                     with contextlib.suppress(Exception):

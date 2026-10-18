@@ -5,6 +5,49 @@
 
 ## Current State
 
+- Item-8 done (`passing`): overlay lifecycle hygiene — test spawn guard +
+  retry cooldown. **A1 (tests can never pop a head):** new autouse
+  `overlay_spawn_guard` in `tests/conftest.py` forces
+  `INVINCIBLE_OVERLAY=0` and replaces `Overlay.start` with a recorder
+  that refuses to spawn (delegates to the real no-op off Windows); the
+  recorded attempts are asserted empty at teardown, so a test that tries
+  to spawn fails loudly. Measured before/after on this machine
+  (image-aware count: one logical head = venv redirector + real
+  interpreter): pre-guard `pytest tests/test_look_at_screen.py` spawned
+  pair 14176→11836 and the 5-file slice spawned 17524→12908 +
+  4940→11168 (all exited); post-guard the 6-file slice spawned ZERO over
+  a 90s watch, and the full suite left the process table byte-identical
+  (only the live agent's 12948→11120). A deliberately-spawning temp test
+  failed at teardown with "test attempted to spawn a real overlay head"
+  (self-check; file deleted). **A2 (lifecycle):** (1) cooldown defect
+  fixed — `ensure_overlay` now stamps `_OVERLAY_RETRY_AT` BEFORE every
+  spawn attempt (a child that dies right after a good spawn bypassed
+  the 60s cooldown and respawned once per job) and `stop_overlay`
+  clears the stamp so an intentional stop (WS→poll fallback) respawns
+  immediately. (2) Orphan (head outliving a dead parent) NOT
+  reproduced: a windowless probe with the exact Popen kwargs saw EOF at
+  +1.9s and both processes exited; the real Tk pair spawned by pytest
+  exited ~2s after the parent; a 5-minute watch after the 88-test slice
+  saw nothing linger; a product-path `Overlay.start()` probe
+  (`start: True`, no `stop()`) exited on EOF — the earlier "orphan ≥90s"
+  reading was the live agent's own pair (next). No watchdog added. (3)
+  "Two heads under one agent" = the venv `Scripts\python.exe`
+  redirector: every spawn is shim + real interpreter (12948→11120;
+  255,200 B shim vs 106,208 B base, distinct sha256) — not a bug, no
+  fix. (4) In-process double-spawn race: impossible by construction
+  (sync `ensure_overlay`, one event loop, sequential WS→poll fallback) —
+  documented, no fix. (5) Two defensive hardenings for the
+  parent-death path (pinned): a full inbox can no longer silently drop
+  the EOF quit (makes room by dropping the oldest message) and
+  `_destroy_window` suppresses destroy+quit so a teardown hiccup cannot
+  kill the tick loop. New pins: 8 in `tests/test_overlay.py` (reader
+  EOF quit, full-inbox quit, destroy-window never raises, job paths
+  never attempt a spawn, guard refusal + cooldown stamp, live-handle
+  reuse, cooldown survives fast child death, stop clears cooldown).
+  Docs: TESTING §2 documents the guard; the CONFIGURATION row is
+  unchanged (no env change). `ruff` clean, 169 passed 6-file slice,
+  full 2031 passed / 11 skipped / 1 deselected. Clean-state checklist
+  5/5 ticked. Uncommitted — commit on user's word.
 - Item-7 done (`passing`): overlay face v1 — the head shows what the
   agent is doing. `agent/overlay.py`: pure single-slot `face_kind`
   (working/searching persist until replaced, happy 1.2s + error 1.8s
@@ -384,8 +427,8 @@
   MCP_PROTOCOL §7 tools, SECURITY §12, ROADMAP count 34. Vetted
   plan survived contact: one real find during vetting (the batch
   trap), confirmed in code before building.
-- Last commit: `e58174c` (main) — Item-4b fly-click fixups (anchored
-  effects, pointer warp, parity nits).
+- Last commit: `86159f0` (main) — Item-7 overlay face v1; Item-8 is
+  uncommitted on top (commit on user's word).
 - F12 done (`passing`, uncommitted): multimodal image parts — the model
   truly sees screenshots (new pure `invincible/core/vision.py`:
   extract/attach around trim, PNG-IHDR token estimates, 4-image +
@@ -457,9 +500,8 @@
 
 ## In Progress
 
-- None — Item-7 complete (`passing`).
-  Zero `active`. Next: F05 vector seam (or an Item-7b face v2) at next
-  clock-in.
+- None — Item-8 complete (`passing`). Zero `active`. Next: F05 vector
+  seam at next clock-in.
 
 ## Next Steps
 
@@ -467,13 +509,21 @@
    only at next clock-in. Item-7b (speaking/listening faces) is the
    natural follow-up but needs a server→agent signal, so it is NOT a
    free extension of this item (see the plan notes).
-2. The running `invincible connect` agent(s) still hold the pre-Item-7
+2. Tests can no longer spawn a real overlay head on any OS: the autouse
+   conftest guard forces headless and refuses/records `Overlay.start`.
+   Never bypass it — a test that genuinely needs a spawn stubs
+   `Overlay.start` itself and clears `overlay_spawn_guard`.
+3. The overlay orphan was disproven, not fixed; if a head is ever seen
+   outliving its parent, the experiments (windowless EOF probe, live
+   product-path probe, post-parent process watch) are described in the
+   Item-8 entry above — re-run them before adding a watchdog.
+4. The running `invincible connect` agent(s) still hold the pre-Item-7
    code in memory — restart to see the face live.
-3. Live Tk window: the Item-7 pass verified the face itself on a live
+5. Live Tk window: the Item-7 pass verified the face itself on a live
    Windows desktop (screenshots: idle/blink/working/sweep/happy/error/
    sleeping). Glide/dock/click-through visuals and the multi-monitor
    glide-vs-click check are still unverified.
-4. F04 fan-out (`harness_fanout.py` + 18 tests) stays green, untouched.
+6. F04 fan-out (`harness_fanout.py` + 18 tests) stays green, untouched.
 
 ## Blockers
 

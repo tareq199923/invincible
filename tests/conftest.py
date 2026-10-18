@@ -11,6 +11,7 @@ from cryptography.fernet import Fernet
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
+from invincible.agent import overlay as agent_overlay
 from invincible.core.agent_registry import AgentRegistry
 from invincible.core.continuity import ContinuityEngine
 from invincible.core.credential_store import ByokCredentialStore
@@ -72,6 +73,44 @@ def make_transport(handlers):
         return callback(request) if callable(callback) else callback
 
     return httpx.MockTransport(handler)
+
+
+# --- Item-8: no test may spawn a real overlay head -------------------
+#
+# A Windows dev run reaches the real runner.ensure_overlay() and would
+# pop a real Bmax head (a Tk window + child process) mid-test; CI never
+# does because ensure_overlay() is a no-op off Windows. Every test gets
+# the headless kill switch forced on AND a refusal recorder on
+# Overlay.start: a spawn becomes impossible, the attempt is recorded,
+# and the teardown check fails the offending test loudly. Tests that
+# deliberately exercise a start/refusal must patch Overlay.start
+# themselves or clear the recorder after asserting on it.
+
+_OVERLAY_SPAWN_ATTEMPTS: list = []
+
+
+@pytest.fixture(autouse=True)
+def overlay_spawn_guard(monkeypatch):
+    """Force headless overlay runs; refuse and record real spawns."""
+    _OVERLAY_SPAWN_ATTEMPTS.clear()
+    real_start = agent_overlay.Overlay.start
+
+    def refuse_or_delegate(self):
+        # Off Windows the real start is already a no-op (returns
+        # False); delegate so those pins keep exercising real code.
+        if os.name != "nt":
+            return real_start(self)
+        _OVERLAY_SPAWN_ATTEMPTS.append(self)
+        return False
+
+    monkeypatch.setattr(
+        agent_overlay.Overlay, "start", refuse_or_delegate)
+    monkeypatch.setenv("INVINCIBLE_OVERLAY", "0")
+    yield _OVERLAY_SPAWN_ATTEMPTS
+    assert not _OVERLAY_SPAWN_ATTEMPTS, (
+        "test attempted to spawn a real overlay head; patch Overlay.start "
+        "inside the test (and clear overlay_spawn_guard) if intended")
+    _OVERLAY_SPAWN_ATTEMPTS.clear()
 
 
 @pytest.fixture

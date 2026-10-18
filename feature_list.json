@@ -257,5 +257,12 @@
     "state": "passing",
     "title": "Overlay face (state-driven head, v1)",
     "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py"
+  },
+  {
+    "behavior": "tests can never spawn a real overlay head on Windows: an autouse conftest guard forces INVINCIBLE_OVERLAY=0 and records+refuses any Overlay.start attempt with a loud teardown check, proven by identical head process counts before/after the risky slice; ensure_overlay stamps the retry cooldown on every spawn attempt (stop_overlay clears it) so a child that dies right after a successful spawn cannot respawn per job; the live 'two heads under one agent' reading is documented as the venv python.exe redirector pair (one head = two processes), and parent-death exit is verified with a clean repro",
+    "id": "Item-8",
+    "state": "passing",
+    "title": "Overlay lifecycle hygiene (test spawn guard + retry cooldown)",
+    "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py tests/test_look_at_screen.py tests/test_cli_agent.py tests/test_harness_tools_golden.py tests/test_harness_tools_registry.py"
   }
 ]
