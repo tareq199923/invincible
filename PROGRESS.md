@@ -5,6 +5,42 @@
 
 ## Current State
 
+- F21 done (`passing`): overlay pointer + companion face — the single
+  gliding head split in two. `agent/overlay.py`: the moving piece is a
+  cursor-like pointer (classic up-left arrow, tip = hotspot, so an
+  announce lands the TIP on the action pixel) carrying the pink robot
+  face (two eyes, a wink slash, a zigzag mouth), and every F16 effect
+  moves with it (Bluey flights, landing tap via `press_scale` + land
+  ring, coordinate bubble, 18pt typing glyphs, fading trail drawn
+  under it). The stationary piece is a web-style squircle face,
+  `OVERLAY_FACE_PX` 110, shifted `OVERLAY_FACE_SHIFT_LEFT` 52 left of
+  the dock corner (toast lane clear); glow + ring are squircle
+  polygons (a circular glow crossed the corners); face eyes draw at
+  `OVERLAY_FACE_EYE_SCALE` 1.5 so the Bmax proportions hold; the shine
+  nudged up-left out of the enlarged eye; the face owns every Item-7
+  state (working squint / searching sweep / happy bounce in place /
+  error X / sleeping / 60s doze). Eyes follow the travelling pointer,
+  then the real mouse once it rests (`face_gaze_target`). The parked
+  pointer waits `OVERLAY_PARK_GAP` 14 beside the face (`pointer_home`);
+  the runner dwell estimator seeds from the same helper
+  (`_OVERLAY_HEAD_PX` → `_OVERLAY_POINTER_PX`, `_overlay_note_head` →
+  `_overlay_note_pointer`). Retired with the head: `OVERLAY_HEAD_PX`,
+  `head_radii` + squish/hover-grow constants, `tip_alpha`,
+  `teardrop_points`. Choreo/IPC verbs, the `Overlay` API, the face
+  `face` verb semantics and headless latency untouched. Recorded, not
+  changed: a direct target still never restamps the dock quiet clock
+  (a settled pointer re-docks a frame after landing). Pins:
+  squish/teardrop/tip-alpha tests retired; new squircle-sampler,
+  tip-anchored arrow + pointer-face-parts (linear under press), face
+  box + park geometry, happy bounce, gaze-target tests; the dock test
+  now proves the face shift + park non-overlap; dwell pins updated in
+  `test_computer_use.py`. Docs: CONFIGURATION + TESTING rows
+  retargeted. Live-verified on this machine with a temp stdin harness +
+  screenshots (parked pair / face working/happy/error / mid-flight
+  trail + bubble / landing ring / typing glyphs / re-park), child
+  stderr clean. `ruff` clean, 85 passed `tests/test_overlay.py`, full
+  2044 passed / 11 skipped / 1 deselected. Clean-state checklist 5/5
+  ticked. Committed as `3ea34d9`.
 - F20 done (`passing`): overlay Bmax restyle — the desktop Tk face now
   wears the web skin's character. `agent/overlay.py`: the berry-blue
   palette is gone; `OVERLAY_SHELL_MID #0d142a` / `OVERLAY_HEAD_OUTLINE
@@ -572,16 +608,17 @@
 
 ## In Progress
 
-- None — F20 complete (`passing`). Zero `active`. Next: Item-7b
-  (speaking/listening faces) or F05 (vector seam) at the next clock-in.
+- None — F21 complete (`passing`). Zero `active`. Next: F22 (face
+  voice states; needs the server→agent signal) or F05 (vector seam)
+  at the next clock-in.
 
 ## Next Steps
 
-1. F20 is done (`passing`): the desktop head wears the web Bmax skin.
-   Next candidates: Item-7b (listening/speaking faces) — the natural
-   follow-up, but it needs a server→agent signal, so it is NOT a free
-   extension; F05 vector seam stays `planned`. Set exactly one `active`
-   only at clock-in.
+1. F21 is done (`passing`): pointer + companion face split. Next
+   candidates: F22 (listening/speaking faces) — the natural follow-up,
+   but it needs a server→agent signal, so it is NOT a free extension;
+   F05 vector seam stays `planned`. Set exactly one `active` only at
+   clock-in.
 2. Tests can no longer spawn a real overlay head on any OS: the autouse
    conftest guard forces headless and refuses/records `Overlay.start`.
    Never bypass it — a test that genuinely needs a spawn stubs
@@ -590,13 +627,13 @@
    outliving its parent, the experiments (windowless EOF probe, live
    product-path probe, post-parent process watch) are described in the
    Item-8 entry above — re-run them before adding a watchdog.
-4. The running `invincible connect` agent(s) still hold pre-F20 code in
-   memory — restart to see the new navy/pink face live.
-5. Live Tk window: the F20 pass re-verified all face states + effects
-   and a mid-glide frame on a live Windows desktop (temp stdin harness +
-   screenshots: idle/working/searching/happy/error/sleeping/click/type/
-   glide). Click-through itself and the multi-monitor glide-vs-click
-   check are still unverified.
+4. The running `invincible connect` agent(s) still hold pre-F21 code in
+   memory — restart to see the pointer + companion face live.
+5. Live Tk window: the F21 pass re-verified the split on a live Windows
+   desktop (temp stdin harness + screenshots: parked pair, face
+   working/happy/error, mid-flight trail + bubble, landing ring, typing
+   glyphs, re-park). Click-through itself and the multi-monitor
+   glide-vs-click check are still unverified.
 6. F04 fan-out (`harness_fanout.py` + 18 tests) stays green, untouched.
 
 ## Blockers
