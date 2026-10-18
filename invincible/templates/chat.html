@@ -3,6 +3,7 @@
 {% block head_extra %}
 <link rel="stylesheet" href="/static/voice-orb.css?v={{ asset_rev('voice-orb.css') }}">
 <script src="/static/voice-orb.js?v={{ asset_rev('voice-orb.js') }}" defer></script>
+<script src="/static/robot-head.js?v={{ asset_rev('robot-head.js') }}" defer></script>
 {% endblock %}
 {% block content %}
 <div class="chat-topbar">
@@ -20,7 +21,8 @@
 
 {% if not history %}
 <div class="chat-hero">
-  <span class="brand-mark brand-mark-hero" aria-hidden="true">I/</span>
+  <span class="chat-face" id="chat-face" aria-hidden="true"
+        data-head='{"size":112,"antenna":true,"interactive":false,"pose":{"yaw":0.5,"pitch":0.08,"roll":0.2,"antennaX":0.15,"antennaZ":0},"ariaLabel":null}'></span>
   <h2>What can I help with?</h2>
   <p class="muted">Ask anything below. Your chats live in the left sidebar.</p>
 </div>
@@ -57,6 +59,8 @@
         </select>
       </label>
       {% endif %}
+      <span class="chat-face-sm" id="chat-face-status" aria-hidden="true"
+            data-head='{"size":30,"antenna":false,"floorShadow":false,"interactive":false,"ariaLabel":null}'></span>
       <span id="chat-status"></span>
     </div>
     <div class="composer-actions">
@@ -112,6 +116,40 @@
     var toolGroup = null;
     var toolGroupSeq = 0;
     if (!form || !input || !log) return;
+
+    // F19 web Bmax face: robot-heads (MIT, see /static/robot-head.js)
+    // ported to a readable vanilla asset. Every [data-head] span mounts a
+    // head — the posed still on the empty-chat hero and the small one by
+    // the status line — driven by the turn lifecycle below. turnActive
+    // keeps the orb's states off the head while a chat turn is in flight
+    // (the turn's own events win). Bursts mirror the desktop overlay:
+    // happy 1.2s, error 1.8s.
+    var heads = [];
+    var turnActive = false;
+    var ORB_FACES = {
+      "is-listening": "listening",
+      "is-asking": "listening",
+      "is-working": "working",
+      "is-speaking": "speaking"
+    };
+    function faceSet(state) {
+      heads.forEach(function (h) { h.setState(state); });
+    }
+    function faceFlash(state) {
+      heads.forEach(function (h) { h.flash(state); });
+    }
+    function faceTurnEnd(state) {
+      turnActive = false;
+      if (state) faceFlash(state);
+      else faceSet("idle");
+    }
+    function initFaces() {
+      if (!window.RobotHead) return;
+      heads = window.RobotHead.mountAll("[data-head]");
+    }
+    if (document.readyState === "complete") initFaces();
+    else window.addEventListener("load", initFaces);
+
     var MODE_HINTS = {
       plan: "plan \u2014 reads only, changes nothing.",
       manual: "manual \u2014 asks approval before each action.",
@@ -157,6 +195,11 @@
       voiceOrb = window.VoiceOrb.create({
         orb: orbEl,
         status: status,
+        onState: function (state) {
+          // The head mirrors the orb only while no chat turn is in flight.
+          if (turnActive) return;
+          faceSet(ORB_FACES[state] || "idle");
+        },
         onText: function (text, asked) {
           input.value = text;
           voiceNext = true;
@@ -407,6 +450,8 @@
       var pending = bubble("assistant", "…");
       pending.classList.add("pending");
       if (status) status.textContent = "streaming…";
+      turnActive = true;
+      faceSet("thinking");
 
       fetch("/dashboard/chat/stream", {
         method: "POST",
@@ -434,6 +479,7 @@
           }).then(function () {
             send.disabled = false;
             if (status) status.textContent = "";
+            faceTurnEnd("error");
           });
           return null;
         }
@@ -446,6 +492,8 @@
             if (res.done) {
               send.disabled = false;
               if (status) status.textContent = "";
+              // Stream ended without a done/error event: settle to idle.
+              if (turnActive) faceTurnEnd(null);
               return;
             }
             buf += decoder.decode(res.value, {stream: true});
@@ -470,6 +518,7 @@
                   });
                   pending.classList.remove("pending");
                   started = true;
+                  faceSet("speaking");
                   if (turnShouldSpeak && voiceOrb && voiceOrb.chirp) {
                     try { voiceOrb.chirp(payload.text); } catch (e) { /* silent */ }
                   }
@@ -478,6 +527,13 @@
                 pending.scrollIntoView({block: "nearest"});
               } else if (name === "tool_call" && payload) {
                 if (status) status.textContent = "working…";
+                // The head leans into sensing tools: the sweeping
+                // "searching" beam for look_at_screen / web_research,
+                // the progress bar for everything else.
+                var toolName = payload.name || "";
+                var sensing = toolName.indexOf("look_at_screen") !== -1 ||
+                  toolName.indexOf("web_research") !== -1;
+                faceSet(sensing ? "searching" : "working");
                 if (!toolGroup) toolGroup = buildToolGroup();
                 toolGroup.total += 1;
                 toolGroup.running = true;
@@ -490,6 +546,7 @@
                 toolGroup.el.scrollIntoView({block: "nearest"});
               } else if (name === "approval" && payload) {
                 if (status) status.textContent = "waiting for your approval…";
+                faceSet("listening");
                 renderApprovalCard(payload);
               } else if (name === "tool_result" && payload) {
                 var item = toolGroup && payload.call_id
@@ -522,6 +579,7 @@
                 if (status) status.textContent = "working…";
               } else if (name === "done" && payload) {
                 pending.classList.remove("pending");
+                faceTurnEnd("happy");
                 // B8: speak only orb-initiated (mic) turns; typed turns
                 // stay text-only. Any failure stays silent — the bubble
                 // is the record.
@@ -556,6 +614,7 @@
                 send.disabled = false;
                 if (status) status.textContent = "";
               } else if (name === "error" && payload) {
+                faceTurnEnd("error");
                 if (toolGroup) {
                   toolGroup.running = false;
                   if (toolGroup.total && !toolGroup.failed) toolGroup.failed = 1;
@@ -579,6 +638,7 @@
         pending.classList.add("error");
         send.disabled = false;
         if (status) status.textContent = "";
+        faceTurnEnd("error");
       });
     });
   })();

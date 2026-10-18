@@ -77,6 +77,8 @@
   //   transcribe(blob) -> Promise<string> (throw on failure)
   //   synthesize(text) -> Promise<Blob|null> (null = silent fallback)
   //   onText(text) — transcript ready, send like typed input
+  //   onState(state) — optional: mirrors the orb's class state
+  //     ("is-listening" | "is-working" | "is-speaking" | "is-asking" | "")
   function createVoiceOrb(opts) {
     var orb = opts.orb;
     var statusEl = opts.status || null;
@@ -141,10 +143,15 @@
 
     // Orb state plus its mirror on the screen-corner border. The orb
     // takes is-asking while held; the border mirrors it as is-listening
-    // (no new border color — blue listening edge in CSS).
+    // (no new border color — blue listening edge in CSS). Callers may
+    // pass onState(state) to mirror the orb onto other UI (the Bmax
+    // head on chat.html / phone.html); null arrives as "".
     function setOrbState(state) {
       var borderState = state === "is-asking" ? "is-listening" : state;
       setState(orb, state);
+      if (opts.onState) {
+        try { opts.onState(state || ""); } catch (e) { /* face keeps its state */ }
+      }
       if (border) {
         border.classList.remove("is-listening", "is-working",
           "is-speaking");

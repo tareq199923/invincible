@@ -5,12 +5,14 @@
 <meta name="theme-color" content="#ffffff">
 <link rel="stylesheet" href="/static/voice-orb.css?v={{ asset_rev('voice-orb.css') }}">
 <script src="/static/voice-orb.js?v={{ asset_rev('voice-orb.js') }}" defer></script>
+<script src="/static/robot-head.js?v={{ asset_rev('robot-head.js') }}" defer></script>
 {% endblock %}
 {% block content %}
 <div class="phone-wrap">
   <div id="mode-border" class="mode-border" aria-hidden="true"></div>
   <div class="phone-face" aria-hidden="true">
-    <span class="baymax-dot baymax-dot-lg"></span>
+    <span class="phone-face-head" id="phone-face-head"
+          data-head='{"size":64,"antenna":false,"interactive":true,"ariaLabel":null}'></span>
     <span class="baymax-name">Bmax</span>
   </div>
   <h2>Hey Baymax</h2>
@@ -69,6 +71,31 @@
     var hopBtn = document.getElementById("phone-hop");
     var status = document.getElementById("phone-status");
     if (!log || !input || !sendBtn) return;
+
+    // F19 web Bmax face: the phone's face is the robot-heads port (MIT,
+    // /static/robot-head.js) instead of the flat dot. It wears the turn
+    // lifecycle: thinking while a request is out, a happy burst when the
+    // answer lands, an error burst on failure, and the orb's states
+    // whenever no send is in flight.
+    var heads = [];
+    var ORB_FACES = {
+      "is-listening": "listening",
+      "is-asking": "listening",
+      "is-working": "working",
+      "is-speaking": "speaking"
+    };
+    function faceSet(state) {
+      heads.forEach(function (h) { h.setState(state); });
+    }
+    function faceFlash(state) {
+      heads.forEach(function (h) { h.flash(state); });
+    }
+    function initFaces() {
+      if (!window.RobotHead) return;
+      heads = window.RobotHead.mountAll("[data-head]");
+    }
+    if (document.readyState === "complete") initFaces();
+    else window.addEventListener("load", initFaces);
 
     var voiceOrb = null;
     // B8: speak only orb (mic) turns; typed send stays silent.
@@ -190,6 +217,7 @@
       var pending = bubble("assistant", "…");
       pending.classList.add("pending");
       if (status) status.textContent = "thinking…";
+      faceSet("thinking");
       fetch("/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -204,6 +232,7 @@
         var answer = out.body && out.body.choices && out.body.choices[0] &&
           out.body.choices[0].message && out.body.choices[0].message.content;
         if (out.ok && answer) {
+          faceFlash("happy");
           pending.textContent = "";
           var dot = document.createElement("span");
           dot.className = "baymax-dot";
@@ -230,6 +259,7 @@
           pending.textContent = "error: " + msg;
           pending.classList.add("error");
           if (status) status.textContent = "";
+          faceFlash("error");
         }
         sendBtn.disabled = false;
       }).catch(function () {
@@ -237,6 +267,7 @@
         pending.classList.add("error");
         sendBtn.disabled = false;
         if (status) status.textContent = "";
+        faceFlash("error");
       });
     }
 
@@ -256,6 +287,12 @@
       voiceOrb = window.VoiceOrb.create({
         orb: orbEl,
         status: status,
+        onState: function (state) {
+          // No head takeover mid-send; the send's own states win. While
+          // a hop is out sendBtn is free, so the orb still speaks.
+          if (sendBtn.disabled) return;
+          faceSet(ORB_FACES[state] || "idle");
+        },
         panel: document.getElementById("phone-panel"),
         border: document.getElementById("mode-border"),
         onText: function (text, asked) { voiceNext = true; askedNext = !!asked; send(text); },
@@ -312,6 +349,7 @@
       }).join("\n").slice(0, 8000);
       hopBtn.disabled = true;
       if (status) status.textContent = "hopping to PC…";
+      faceSet("working");
       fetch("/agent/handoff", {
         method: "POST",
         headers: {
@@ -332,13 +370,16 @@
             : "Queued for your PC — it will pick this up on its next poll.");
           if (status) status.textContent = "";
           input.value = "";
+          faceFlash("happy");
         } else {
           if (status) status.textContent = "hop failed — is handoff on?";
+          faceFlash("error");
         }
         hopBtn.disabled = false;
       }).catch(function () {
         if (status) status.textContent = "hop failed — network?";
         hopBtn.disabled = false;
+        faceFlash("error");
       });
     });
   })();

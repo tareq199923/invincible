@@ -5,6 +5,41 @@
 
 ## Current State
 
+- F19 done (`passing`): web Bmax face — robot-heads 0.3.0 ported into
+  the web UI as one readable vanilla asset (`/static/robot-head.js`,
+  ~2,090 lines; MIT header keeps the upstream commit `58ebf64` +
+  © Fayaz Ahmed) exposing `RobotHead.{mount, mountAll, states, shapes,
+  flashMs, defaults}` + the controller lifecycle
+  (`setState`/`flash`/`poke`/`setPaused`/`destroy`). The default skin IS
+  the Bmax look: a `bmax` squircle preset (squarer corners, deeper
+  body), navy `#0d142a` shell / `#4d5b83` trim / `#ff5fa6` LEDs, a new
+  energy-driven glow wash over the bezel and a flatter front plate
+  (`plateDome`); burst timings 1200/1800ms mirror the Tk overlay's
+  constants, bursts expire to idle the same way, and
+  `prefers-reduced-motion` parks the loop on the still pose.
+  `chat.html`: posed 112px hero still on the empty state + a 30px head
+  beside the composer status line, driven by the existing turn
+  lifecycle (thinking → speaking → searching/working by tool name →
+  listening on approval; happy/error bursts; orb states mapped through
+  a new fail-silent `onState` hook in `voice-orb.js`; `turnActive`
+  keeps the orb off the face while a turn runs). `phone.html`: the
+  64px face replaces the flat dot (send + hop reactions, orb yields
+  while send is disabled); the assistant bubble dot is pink `#ff5fa6`
+  and the dead `.baymax-dot-lg` rule is gone. Three finds while wiring:
+  a partial `{yaw,pitch,roll}` hero pose NaN'd the floor-shadow
+  gradient (pose overrides now normalise against the rest pose);
+  file:// masked JS errors, so verification ran on HTTP-served stub
+  renders (Jinja render + headless Edge: both heads mount,
+  `canvases=2 heads=2`, zero console errors; the phone page's layout
+  numbers identical to the pre-change page; all nine states checked
+  against the reference); and the burst revert stranded the head on its
+  pre-burst state, so bursts now expire to idle. New:
+  `tests/test_web_face.py` (9 static pins: provenance/API/states, skin
+  defaults, overlay-timing + idle-expiry parity, reduced-motion
+  parking, chat + phone wiring, orb hook, dot colour, scope confined
+  to chat+phone). Docs: TESTING §3 row. `ruff` clean, 106 passed
+  verification command / 187 passed target slice, full 2040 passed /
+  11 skipped / 1 deselected. Clean-state checklist 5/5 ticked.
 - Item-8 done (`passing`): overlay lifecycle hygiene — test spawn guard +
   retry cooldown. **A1 (tests can never pop a head):** new autouse
   `overlay_spawn_guard` in `tests/conftest.py` forces
@@ -500,15 +535,19 @@
 
 ## In Progress
 
-- None — Item-8 complete (`passing`). Zero `active`. Next: F05 vector
-  seam at next clock-in.
+- None — F19 complete (`passing`). Zero `active`. Next: F20 overlay
+  Bmax restyle at next clock-in (F05 vector seam stays `planned`).
 
 ## Next Steps
 
-1. F05 vector seam remains `planned` — next candidate; set `active`
-   only at next clock-in. Item-7b (speaking/listening faces) is the
-   natural follow-up but needs a server→agent signal, so it is NOT a
-   free extension of this item (see the plan notes).
+1. F20 (overlay Bmax restyle) is `planned`: the desktop Tk face should
+   wear the same navy/pink skin as the web face — its eye art/colour
+   constants in `agent/overlay.py` and their pins in
+   `tests/test_overlay.py` get restyled together. F05 vector seam stays
+   `planned`, no longer the next candidate; set exactly one `active`
+   only at clock-in. Item-7b (speaking/listening faces) is the natural
+   follow-up but needs a server→agent signal, so it is NOT a free
+   extension of this item (see the plan notes).
 2. Tests can no longer spawn a real overlay head on any OS: the autouse
    conftest guard forces headless and refuses/records `Overlay.start`.
    Never bypass it — a test that genuinely needs a spawn stubs

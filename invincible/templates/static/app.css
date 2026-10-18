@@ -538,8 +538,9 @@ main.bare .panel { background: var(--surface); border: 1px solid var(--border); 
 .bubble .md th, .bubble .md td { border: 1px solid var(--border); padding: 0.35rem 0.6rem; text-align: left; }
 .bubble .md th { background: var(--raise); }
 .bubble .md a { color: var(--accent-ink); }
-/* B0.2 Bmax marker: original soft-white dot + name (no image assets,
-   no Disney likeness). Dot eyes use theme ink; ring uses theme accent. */
+/* B0.2 Bmax marker: soft dot + name (no image assets, no Disney
+   likeness). F19: the dot wears the web face's pink — navy ink eyes,
+   theme-accent ring. */
 .baymax-dot {
   display: inline-block;
   width: 1.05rem; height: 1.05rem;
@@ -549,7 +550,7 @@ main.bare .panel { background: var(--surface); border: 1px solid var(--border); 
   background:
     radial-gradient(circle at 35% 42%, var(--ink) 0 0.14rem, transparent 0.15rem),
     radial-gradient(circle at 65% 42%, var(--ink) 0 0.14rem, transparent 0.15rem),
-    #fff;
+    #ff5fa6;
   border: 2px solid var(--accent);
 }
 .baymax-name {
@@ -557,6 +558,13 @@ main.bare .panel { background: var(--surface); border: 1px solid var(--border); 
   font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em;
   color: var(--faint);
 }
+/* F19 web Bmax face (robot-heads port, /static/robot-head.js): a mount is
+   a sized box whose canvas bleeds outside it for hops, the antenna glow
+   and the floor shadow. The chat hero shows the still reference pose;
+   the small head beside the status line reacts to the turn lifecycle. */
+.chat-face { display: inline-block; margin-bottom: 0.4rem; }
+.chat-face-sm { display: inline-flex; flex: none; }
+.phone-face-head { display: inline-flex; flex: none; }
 /* B0.3 simulated pointing: screenshot preview inside the collapsed tool
    item detail. Bounded, lazy-loaded, theme-border. */
 .shot-preview {
@@ -785,7 +793,6 @@ label:focus-visible, [tabindex]:focus-visible {
    the Bmax marker (no new assets, no Disney likeness). */
 .phone-wrap { max-width: 34rem; margin: 0 auto; padding-bottom: 2rem; }
 .phone-face { display: flex; align-items: center; gap: 0.2rem; margin: 0.6rem 0 0; }
-.baymax-dot-lg { width: 2.2rem; height: 2.2rem; }
 #phone-log { display: flex; flex-direction: column; gap: 0.6rem; margin: 1rem 0; }
 #phone-composer { display: flex; gap: 0.5rem; align-items: flex-end; }
 #phone-input { flex: 1; min-height: 2.6rem; }

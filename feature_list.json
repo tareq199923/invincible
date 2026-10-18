@@ -264,5 +264,19 @@
     "state": "passing",
     "title": "Overlay lifecycle hygiene (test spawn guard + retry cooldown)",
     "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py tests/test_look_at_screen.py tests/test_cli_agent.py tests/test_harness_tools_golden.py tests/test_harness_tools_registry.py"
+  },
+  {
+    "behavior": "web Bmax face: robot-heads 0.3.0 ported to a readable vanilla static asset (no build step) with the navy/pink default skin — bmax squircle shape, pink LEDs, emissive glow wash over the bezel, fixed-pose override for hero stills; chat.html and phone.html mount it and drive states from the existing stream/tool/voice lifecycle (thinking/speaking/working/searching/listening, flash happy/error, turn-active guard); voice-orb.js exposes onState; static pins cover the port provenance, wiring, defaults, and reduced-motion posture",
+    "id": "F19",
+    "state": "passing",
+    "title": "Web Bmax face (robot-heads port, navy/pink)",
+    "verification": "ruff check . && pytest tests/test_web_face.py tests/test_voice.py tests/test_webchat.py tests/test_handoff.py"
+  },
+  {
+    "behavior": "the desktop Tk overlay face wears the same Bmax character as the web face: navy shell + pink LED eyes matching the robot-heads port's default skin, with the eye art and colour constants restyled and their pins updated; face_kind/face_geometry semantics, the face IPC verb, and the runner driving loop stay unchanged",
+    "id": "F20",
+    "state": "planned",
+    "title": "Overlay Bmax restyle (navy/pink skin parity)",
+    "verification": "ruff check . && pytest tests/test_overlay.py"
   }
 ]
