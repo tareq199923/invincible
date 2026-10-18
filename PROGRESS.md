@@ -47,7 +47,7 @@
   Docs: TESTING §2 documents the guard; the CONFIGURATION row is
   unchanged (no env change). `ruff` clean, 169 passed 6-file slice,
   full 2031 passed / 11 skipped / 1 deselected. Clean-state checklist
-  5/5 ticked. Uncommitted — commit on user's word.
+  5/5 ticked. Committed as `41271df` (pushed).
 - Item-7 done (`passing`): overlay face v1 — the head shows what the
   agent is doing. `agent/overlay.py`: pure single-slot `face_kind`
   (working/searching persist until replaced, happy 1.2s + error 1.8s
