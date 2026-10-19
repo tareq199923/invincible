@@ -5,6 +5,37 @@
 
 ## Current State
 
+- F25 done (`passing`): `open_app` launch wait (Tier 2a follow-up of the
+  repeat-app efficiency plan). New optional
+  `window`/`wait_kind`/`wait_label`/`timeout_ms` on `open_app` using
+  `look_at_screen`'s selector/wait vocabulary (launch default 8000 ms,
+  cap 10000; `timeout_ms` alone is ignored). `look_call_args` gained
+  `default_ms`/`wait_window`; `normalize_computer_args` validates and
+  stages the wait spec (raw selector + resolved kind/label/timeout/flag)
+  and is idempotent under the agent's Wall 2 re-normalization;
+  `_look_walk` polls for the selected window itself when `wait_window`
+  (a bare selector is ready as soon as the window exists; controls may
+  still be rendering); `_computer_act` merges the first look payload
+  flat into the `ok` launch result (look `status` dropped, launch fields
+  win, `verified: false` kept) and degrades to `ready: false` + `note`
+  when the readiness read fails (the app did open). Plain
+  `open_app(name, args)` is unchanged in behavior, result shape, and
+  staged shape; look's 3000 ms default and wire shape are untouched.
+  Guidance: `COMPUTER_EFFICIENCY` prefers one-call
+  `open_app(window=..., wait_kind/wait_label=...)` with
+  `look_at_screen`'s wait as the already-open fallback; plan stays
+  read-only; F13/F14/F17 preserved. Docs: MCP_PROTOCOL open_app section,
+  ROADMAP MCP + Dashboard rows, ARCHITECTURE environment_note sentence,
+  SECURITY §12 readiness-snapshot note. Tests: wait-arg
+  normalization/idempotency, merge shape + drift pins, plain launch
+  never reads, timeout/reader-failure honesty, stage→confirm forwarding,
+  look helper/schema pins, webchat guidance pin; MCP/webchat goldens
+  updated additively. `ruff` clean; targeted 141 passed; FULL suite 2074
+  passed / 11 skipped / 1 deselected (Windows); live Windows checks:
+  launch+filter matched Notepad's text field (C12) and the bare-selector
+  mode returned `ready` with 20 controls. Clean-state checklist 5/5
+  ticked (build, tests, feature list, no artifacts, PROGRESS).
+  Committed as `4574e36`.
 - F24 done (`passing`): Tier 1 lean-turn computer-use guidance (repeat-app
   efficiency plan). New `COMPUTER_EFFICIENCY` constant in
   `core/webchat_agent.py`, appended to the manual/auto `environment_note`
@@ -674,28 +705,28 @@
 
 ## In Progress
 
-- None — F24 complete (`passing`). Zero `active`. Next:
-  `open_app(wait_for_window)` (the remaining cold-launch turn) or F22
-  (face voice states; needs the server→agent signal) at the next
-  clock-in.
+- None — F25 complete (`passing`). Zero `active`. Next: F22 (face
+  voice states; needs the server→agent signal) at the next clock-in;
+  `open_url` launch wait is the small symmetric follow-up if wanted.
 
 ## Next Steps
 
-1. `open_app(wait_for_window)` is the natural follow-up: the first
-   look after a cold launch still costs a model turn and can land on
-   an empty tree.
-2. F22 (face voice states, `planned`) needs the server→agent voice
+1. F22 (face voice states, `planned`) needs the server→agent voice
    signal; text stays source of truth and silent when voice is off.
-3. Running `invincible connect` agents hold pre-F23 code — restart
-   to get `window`/`wait_kind`/`wait_label`. F24 itself is server-side
-   guidance: a new dashboard chat turn picks it up with no agent
-   restart.
+2. Running `invincible connect` agents hold pre-F23/pre-F25 code —
+   restart to get `look_at_screen`'s window/wait args and `open_app`'s
+   launch wait. F24 guidance is server-side: a new dashboard chat turn
+   picks it up with no agent restart.
+3. `open_url` has no wait: a launch wait there is the symmetric
+   follow-up (reuse `_open_wait_result` + the look selector), if the
+   repeat-app plan calls for it.
 4. Tests must never spawn a real overlay head (autouse conftest
    guard); a test needing a spawn stubs `Overlay.start` and clears
    `overlay_spawn_guard`.
 5. Overlay multi-monitor canvas fix is in `e6adf38`; live
    click-through and the multi-monitor glide-vs-click check remain
-   unverified.
+   unverified. The user's overlay WIP (`overlay.py`,
+   `test_overlay.py`, `.vscode/`) is still unstaged.
 6. F04 fan-out (`harness_fanout.py` + 18 tests) stays green,
    untouched.
 
