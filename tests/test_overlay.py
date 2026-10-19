@@ -73,6 +73,20 @@ def test_face_box_and_pointer_home_relate():
     assert math.isfinite(hy2)
 
 
+def test_pointer_at_home_tolerance_and_junk():
+    vrect = (0, 0, 1920, 1080)
+    hx, hy = overlay.pointer_home(vrect)
+    assert overlay.pointer_at_home(hx, hy, vrect) is True
+    assert overlay.pointer_at_home(hx + 0.75, hy - 0.75, vrect) is True
+    assert overlay.pointer_at_home(hx + 5.0, hy, vrect) is False
+    assert overlay.pointer_at_home(hx, hy, vrect, tolerance=0.0) is True
+    assert overlay.pointer_at_home(hx, hy, vrect, tolerance=-1.0) is False
+    # Junk never raises and is never home.
+    assert overlay.pointer_at_home("a", hy, vrect) is False
+    assert overlay.pointer_at_home(None, None, None) is False
+    assert overlay.pointer_at_home(hx, hy, vrect, tolerance="big") is False
+
+
 def test_squircle_points_shape_and_bounds():
     pts = overlay.squircle_points(50.0, 60.0, 20.0, 10.0, samples=64)
     assert len(pts) == 64
@@ -90,6 +104,10 @@ def test_squircle_points_shape_and_bounds():
     assert overlay.squircle_points(0, 0, -1, 5) == []
     assert overlay.squircle_points("a", 0, 1, 1) == []
     assert overlay.squircle_points(0, 0, 1, 1, samples="x") == []
+    # Zero power used to escape as ZeroDivisionError; never raises.
+    assert overlay.squircle_points(0, 0, 1, 1, power=0) == []
+    assert overlay.squircle_points(0, 0, 1, 1, power=-2) == []
+    assert overlay.squircle_points(0, 0, 1, 1, power="x") == []
 
 
 def test_pointer_arrow_points_tip_anchor():
@@ -648,9 +666,13 @@ def test_face_gaze_target_pointer_then_mouse():
     # A malformed pointer falls through to the mouse.
     assert overlay.face_gaze_target(True, None, (5, 6)) == (5.0, 6.0)
     assert overlay.face_gaze_target(True, ("a", "b"), (5, 6)) == (5.0, 6.0)
+    # Dict-like junk (KeyError) also falls through, never raises.
+    assert overlay.face_gaze_target(True, {0: 1}, (5, 6)) == (5.0, 6.0)
+    assert overlay.face_gaze_target(False, (1, 2), {}) == (0.0, 0.0)
     # Junk everywhere reads (0, 0), never raises.
     assert overlay.face_gaze_target(True, None, None) == (0.0, 0.0)
     assert overlay.face_gaze_target(None, None, None) == (0.0, 0.0)
+    assert overlay.face_gaze_target(True, {0: 1}, {}) == (0.0, 0.0)
 
 
 def test_dock_lift_clears_taskbar():

@@ -902,6 +902,24 @@ def pointer_home(vrect: tuple) -> tuple[float, float]:
         return (0.0, 0.0)
 
 
+def pointer_at_home(px, py, vrect: tuple, tolerance: float = 1.0) -> bool:
+    """Whether a pointer position is the parked spot (pure, hermetic).
+
+    F21 hover follow-up: "home" for the hover bob means the pointer is
+    actually parked beside the face - not merely "not flying to a
+    target". A settled tour/click point still bobs gently; the parked
+    pointer stays still. Junk reads as ``False``; never raises.
+    """
+    try:
+        hx, hy = pointer_home(vrect)
+        reach = float(tolerance)
+        return (math.isfinite(reach) and reach >= 0
+                and abs(float(px) - hx) <= reach
+                and abs(float(py) - hy) <= reach)
+    except (TypeError, ValueError):
+        return False
+
+
 def squircle_points(cx, cy, rx, ry, samples: int = 32,
                     power: float = 3.6) -> list:
     """Superellipse ring sampled clockwise (pure, hermetic).
@@ -916,14 +934,17 @@ def squircle_points(cx, cy, rx, ry, samples: int = 32,
         fcx, fcy = float(cx), float(cy)
         frx, fry = float(rx), float(ry)
         count = int(samples)
-        exponent = 2.0 / float(power)
+        exponent_power = float(power)
     except (TypeError, ValueError):
         return []
     if not all(math.isfinite(v) for v in (fcx, fcy, frx, fry)):
         return []
-    if frx <= 0 or fry <= 0 or count < 3 or not math.isfinite(
-            exponent) or exponent <= 0:
+    # Validate the exponent source BEFORE dividing: power=0 used to
+    # escape as ZeroDivisionError under a never-raises contract.
+    if (frx <= 0 or fry <= 0 or count < 3
+            or not math.isfinite(exponent_power) or exponent_power <= 0):
         return []
+    exponent = 2.0 / exponent_power
     count = min(count, 256)
     points = []
     for i in range(count):
@@ -1030,11 +1051,11 @@ def face_gaze_target(pointer_travelling, pointer_xy, mouse_xy) -> tuple:
     try:
         if pointer_travelling is True:
             return (float(pointer_xy[0]), float(pointer_xy[1]))
-    except (TypeError, ValueError, IndexError):
+    except (TypeError, ValueError, IndexError, KeyError):
         pass
     try:
         return (float(mouse_xy[0]), float(mouse_xy[1]))
-    except (TypeError, ValueError, IndexError):
+    except (TypeError, ValueError, IndexError, KeyError):
         return (0.0, 0.0)
 
 
@@ -1553,7 +1574,7 @@ def _run_window(tk) -> None:
     face_r = OVERLAY_FACE_PX / 2.0
     home = pointer_home(vrect)
     pointer_xy = [float(home[0]), float(home[1])]
-    light, mid, deep = shell_shades()
+    _, mid, deep = shell_shades()
     # F20 glow, F21 shape: a faint dithered squircle band plus a crisp
     # LED rim hugging the face's shell (a circular glow crossed the
     # squircle's corners).
@@ -1568,6 +1589,16 @@ def _run_window(tk) -> None:
     if not OVERLAY_GLOW:
         canvas.coords(glow, -10, -10, -10, -10, -10, -10)
         canvas.coords(glow_ring, -10, -10, -10, -10, -10, -10)
+    # F20/F21: the trail draws UNDER both pieces. With no aging, a
+    # settled pointer's trail collapses onto its own art; underneath
+    # it only reads as motion. It must also stay under the companion
+    # face, or a crossing flight smears dots across the face.
+    trail_ids = [
+        canvas.create_oval(-10, -10, -10, -10,
+                           fill=OVERLAY_HEAD_OUTLINE,
+                           outline=OVERLAY_HEAD_OUTLINE)
+        for _ in range(OVERLAY_TRAIL_POINTS)
+    ]
     face_shell = canvas.create_polygon(0, 0, 1, 1, 2, 2, fill=mid,
                                        outline=OVERLAY_HEAD_OUTLINE,
                                        width=3, smooth=True)
@@ -1604,15 +1635,6 @@ def _run_window(tk) -> None:
         canvas.create_line(-10, -10, -10, -10, fill=OVERLAY_EYE_FILL,
                            width=eye_stroke, capstyle="round")
         for _ in range(4)
-    ]
-    # F20/F21: the trail draws UNDER the pointer. With no aging, a
-    # settled pointer's trail collapses onto its own art; underneath
-    # it only reads as motion.
-    trail_ids = [
-        canvas.create_oval(-10, -10, -10, -10,
-                           fill=OVERLAY_HEAD_OUTLINE,
-                           outline=OVERLAY_HEAD_OUTLINE)
-        for _ in range(OVERLAY_TRAIL_POINTS)
     ]
     # F21 pointer: a classic up-left cursor carrying the pink robot
     # face; every coordinate draws relative to the tip (the hotspot).
@@ -1758,7 +1780,10 @@ def _run_window(tk) -> None:
             if math.isfinite(ps) and ps > 0:
                 press = ps
         settled = state["flight"] is None and not state["path"]
-        is_home = (not bool(state["to_target"]) and settled)
+        # F21 hover follow-up: "home" means the pointer is actually
+        # parked beside the face, not merely "not flying". A settled
+        # tour/click point still bobs; the parked pointer is still.
+        is_home = settled and pointer_at_home(px, py, vrect)
         if settled and not is_home:
             with contextlib.suppress(Exception):
                 bob = hover_offset(now, state["landed_at"],
