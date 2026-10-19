@@ -131,6 +131,217 @@ def test_computer_tools_registered_agent_only_approval():
         COMPUTER_TOOLS)
 
 
+# --- F25: open_app launch wait (window + first controls) --------------------
+
+
+def test_normalize_open_app_wait_args():
+    te = tool_executor
+    # No wait trigger: today's exact shape, no wait keys.
+    assert te.normalize_computer_args(
+        "open_app", {"name": "notepad"}) == {"name": "notepad", "args": ""}
+    assert te.normalize_computer_args(
+        "open_app", {"name": "notepad", "timeout_ms": 5000}) == {
+            "name": "notepad", "args": ""}
+    assert te.normalize_computer_args(
+        "open_app", {"name": "notepad", "window": "   "}) == {
+            "name": "notepad", "args": ""}
+    # A bare selector waits for the window itself, with the launch
+    # default (8000), not the look default (3000).
+    bare = te.normalize_computer_args(
+        "open_app", {"name": "spotify", "window": "process:spotify"})
+    assert bare == {
+        "name": "spotify", "args": "", "window": "process:spotify",
+        "wait_kind": None, "wait_label": None,
+        "timeout_ms": te.OPEN_APP_WAIT_DEFAULT_MS, "wait_window": True}
+    # Wait filters without a selector target the foreground window.
+    filtered = te.normalize_computer_args(
+        "open_app", {"name": "spotify", "wait_kind": "Button",
+                     "wait_label": "  Play ", "timeout_ms": 5000})
+    assert filtered["wait_kind"] == "button"
+    assert filtered["wait_label"] == "Play"
+    assert filtered["timeout_ms"] == 5000
+    assert filtered["wait_window"] is False
+    assert filtered["window"] is None
+    # Staged dicts are re-normalized at execution (Wall 2): idempotent.
+    for raw in ({"name": "spotify", "window": "process:spotify"},
+                {"name": "spotify", "wait_label": "Play"}):
+        once = te.normalize_computer_args("open_app", raw)
+        assert te.normalize_computer_args("open_app", once) == once
+    for bad in ({"name": "x", "window": "pid:abc"},
+                {"name": "x", "window": "process:"},
+                {"name": "x", "wait_kind": "not-a-kind"},
+                {"name": "x", "wait_label": "Play", "timeout_ms": -1},
+                {"name": "x", "wait_label": "Play", "timeout_ms": "soon"},
+                {"name": "x", "timeout_ms": 5000, "window": 123}):
+        with pytest.raises(ValueError):
+            te.normalize_computer_args("open_app", bad)
+
+
+def test_open_wait_result_merge_shape():
+    opened = {"status": "ok", "action": "open_app", "name": "notepad",
+              "verified": False}
+    look = {
+        "status": "look", "app": "Untitled - Notepad",
+        "controls": [{"id": "C1", "kind": "text field", "label": "Text",
+                      "x": 10, "y": 20}],
+        "matched": {"id": "C1", "kind": "text field", "label": "Text",
+                    "x": 10, "y": 20},
+        "ready": True, "waited_ms": 120,
+        "window": {"title": "Untitled - Notepad",
+                   "process": "notepad.exe", "pid": 42},
+        "mouse": {"x": 1, "y": 2}, "size": {"w": 1000, "h": 1000},
+        "near": None, "truncated": False,
+    }
+    merged = tool_executor._open_wait_result(opened, look)
+    assert merged["status"] == "ok"
+    assert merged["action"] == "open_app"
+    assert merged["verified"] is False
+    assert merged["matched"]["id"] == "C1"
+    assert merged["ready"] is True
+    assert set(merged) == {
+        "status", "action", "name", "verified", "app", "controls",
+        "matched", "ready", "waited_ms", "window", "mouse", "size",
+        "near", "truncated"}
+    # Optional look keys ride along untouched.
+    hinted = tool_executor._open_wait_result(
+        opened, {**look, "note": "waiting note", "mouse_hint": "hint"})
+    assert hinted["note"] == "waiting note"
+    assert hinted["mouse_hint"] == "hint"
+    # A failed readiness read keeps the launch and admits the miss.
+    failed = tool_executor._open_wait_result(
+        opened, {"status": "error", "error": "reader crashed"})
+    assert failed["status"] == "ok"
+    assert failed["ready"] is False
+    assert failed["matched"] is None
+    assert "readiness read failed" in failed["note"]
+    assert "reader crashed" in failed["note"]
+    assert set(failed) == {"status", "action", "name", "verified",
+                           "ready", "matched", "note"}
+
+
+def _open_app_env(monkeypatch, open_result):
+    import invincible.core.tool_executor as te
+
+    monkeypatch.setattr(te.os, "name", "nt")
+    monkeypatch.setattr(te, "_computer_input_api",
+                        lambda: {"sentinel": True})
+    monkeypatch.setattr(te, "_computer_open",
+                        lambda api, name, extra: dict(open_result))
+    return te
+
+
+async def test_computer_open_app_plain_never_reads(monkeypatch):
+    te = _open_app_env(monkeypatch, {
+        "status": "ok", "action": "open_app", "name": "notepad",
+        "verified": False})
+    calls = []
+
+    async def fake_look(**kwargs):
+        calls.append(kwargs)
+        return {"status": "look"}
+
+    monkeypatch.setattr(te, "_look_at_screen", fake_look)
+    result = await te._computer_act("open_app", {"name": "notepad"})
+    assert result == {"status": "ok", "action": "open_app",
+                      "name": "notepad", "verified": False}
+    assert calls == []
+
+
+async def test_computer_open_app_wait_merges_look(monkeypatch):
+    te = _open_app_env(monkeypatch, {
+        "status": "ok", "action": "open_app", "name": "spotify",
+        "verified": False})
+    seen = {}
+
+    async def fake_look(**kwargs):
+        seen.update(kwargs)
+        return {"status": "look", "app": "Spotify",
+                "controls": [{"id": "C7", "kind": "button",
+                              "label": "Play", "x": 5, "y": 6}],
+                "matched": {"id": "C7", "kind": "button",
+                            "label": "Play", "x": 5, "y": 6},
+                "ready": True, "waited_ms": 3100,
+                "window": {"title": "Spotify", "process": "Spotify.exe",
+                           "pid": 99},
+                "mouse": {"x": 0, "y": 0}, "size": {"w": 800, "h": 600},
+                "near": None, "truncated": False}
+
+    monkeypatch.setattr(te, "_look_at_screen", fake_look)
+    result = await te._computer_act(
+        "open_app", {"name": "spotify", "window": "process:spotify",
+                     "wait_label": "Play"})
+    assert seen == {"window": "process:spotify", "wait_kind": None,
+                    "wait_label": "Play",
+                    "timeout_ms": te.OPEN_APP_WAIT_DEFAULT_MS,
+                    "wait_window": True}
+    assert result["status"] == "ok"
+    assert result["action"] == "open_app"
+    assert result["name"] == "spotify"
+    assert result["verified"] is False
+    assert result["matched"] == {"id": "C7", "kind": "button",
+                                 "label": "Play", "x": 5, "y": 6}
+    assert result["ready"] is True
+    assert result["waited_ms"] == 3100
+
+
+async def test_computer_open_app_wait_timeout_keeps_launch(monkeypatch):
+    te = _open_app_env(monkeypatch, {
+        "status": "ok", "action": "open_app", "name": "spotify",
+        "verified": False})
+    note = "no window matched process:spotify before the wait expired"
+
+    async def fake_look(**kwargs):
+        return {"status": "look", "app": None, "controls": [],
+                "matched": None, "ready": False, "waited_ms": 8001,
+                "window": None, "mouse": {"x": 0, "y": 0},
+                "size": {"w": 800, "h": 600}, "near": None,
+                "truncated": False, "note": note}
+
+    monkeypatch.setattr(te, "_look_at_screen", fake_look)
+    result = await te._computer_act(
+        "open_app", {"name": "spotify", "window": "process:spotify"})
+    assert result["status"] == "ok"
+    assert result["verified"] is False
+    assert result["ready"] is False
+    assert result["matched"] is None
+    assert result["note"] == note
+
+
+async def test_computer_open_app_reader_failure_keeps_launch(monkeypatch):
+    te = _open_app_env(monkeypatch, {
+        "status": "ok", "action": "open_app", "name": "spotify",
+        "verified": False})
+
+    async def fake_look(**kwargs):
+        return {"status": "error", "error": "reader crashed"}
+
+    monkeypatch.setattr(te, "_look_at_screen", fake_look)
+    result = await te._computer_act(
+        "open_app", {"name": "spotify", "wait_label": "Play"})
+    assert result["status"] == "ok"
+    assert result["verified"] is False
+    assert result["ready"] is False
+    assert result["matched"] is None
+    assert "readiness read failed" in result["note"]
+    assert "reader crashed" in result["note"]
+
+
+async def test_computer_open_app_launch_failure_never_reads(monkeypatch):
+    error = {"status": "error", "error": "could not open 'spotify'"}
+    te = _open_app_env(monkeypatch, error)
+    calls = []
+
+    async def fake_look(**kwargs):
+        calls.append(kwargs)
+        return {"status": "look"}
+
+    monkeypatch.setattr(te, "_look_at_screen", fake_look)
+    result = await te._computer_act(
+        "open_app", {"name": "spotify", "window": "process:spotify"})
+    assert result == error
+    assert calls == []
+
+
 def test_policy_press_keys_gated_rest_passthrough():
     assert _outcome("press_keys", {"keys": "win+l"}) == "blocked"
     assert _outcome("press_keys", {"keys": "ctrl+s"}) == "pass"
@@ -196,6 +407,36 @@ async def test_stage_and_confirm_round_trip():
         else:
             raise AssertionError(f"{name} staged {args}")
         assert len(store) == before
+
+
+async def test_open_app_wait_survives_stage_and_confirm():
+    """F25: the staged wait spec survives confirm forwarding and the
+    agent-side Wall 2 re-normalization (it is its own fixed point)."""
+    store = tool_executor.PendingActionStore()
+    staged = tool_executor.stage_computer_action(
+        "open_app",
+        {"name": "spotify", "window": "process:spotify",
+         "wait_label": "Play"},
+        store, owner_subject=7)
+    assert staged["status"] == "pending_confirmation"
+    seen = {}
+
+    async def fake_executor(action_type, args):
+        seen["action"], seen["args"] = action_type, args
+        return {"status": "ok", "action": action_type}
+
+    result = await tool_executor.confirm_action(
+        store, staged["token"], True, requester_subject=7,
+        executor=fake_executor)
+    assert result["status"] == "ok"
+    assert seen["action"] == "open_app"
+    assert seen["args"] == {
+        "name": "spotify", "args": "", "window": "process:spotify",
+        "wait_kind": None, "wait_label": "Play",
+        "timeout_ms": tool_executor.OPEN_APP_WAIT_DEFAULT_MS,
+        "wait_window": True}
+    assert tool_executor.normalize_computer_args(
+        "open_app", seen["args"]) == seen["args"]
 
 
 async def test_runner_refusals_never_touch_input():

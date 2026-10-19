@@ -303,7 +303,8 @@ over `/v1/*` that carry tool payloads are skipped by the template
 `environment_note()` appends OS/shell facts plus per-mode guidance after
 the static prompt, with manual/auto adding the lean-turn computer-use
 ladder, 3+ deterministic-step batching through one `execute_bash` script,
-cold-app window waits, and a single final verification look, while plan
+cold-app waits through `open_app`'s launch wait or `look_at_screen`'s
+readiness wait, and a single final verification look, while plan
 mode stays read-only.
 
 ---

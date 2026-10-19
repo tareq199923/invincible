@@ -1033,13 +1033,34 @@ only.
 
 ```json
 "arguments": {"name": "notepad"}
+"arguments": {"name": "spotify", "window": "process:spotify", "wait_kind": "button", "wait_label": "Play", "timeout_ms": 8000}
 ```
 
 Open an app or file by name on the paired machine (OS launcher).
-Staged for approval, agent-only, manual/auto only.
+Staged for approval, agent-only, manual/auto only. Optional
+`window`/`wait_kind`/`wait_label` take the same selector and wait
+vocabulary as `look_at_screen` and block inside the same approved job:
+a bare `window` selector waits for that window to exist (its controls
+may still be rendering); `wait_kind`/`wait_label` wait for the first
+matching control (label is a case-insensitive substring). The wait
+defaults to 8000 ms and caps at 10000; `timeout_ms` is ignored without
+a wait trigger.
 
 ```json
-{"status": "ok", "action": "open_app", "name": "notepad"}
+{"status": "ok", "action": "open_app", "name": "spotify", "verified": false, "window": {"title": "Spotify", "process": "Spotify.exe", "pid": 4242}, "controls": [{"id": "C1", "kind": "button", "label": "Play", "x": 512, "y": 640}], "matched": {"id": "C1", "kind": "button", "label": "Play", "x": 512, "y": 640}, "ready": true, "waited_ms": 3100, "mouse": {"x": 233, "y": 689}, "size": {"w": 1920, "h": 1080}, "near": null, "truncated": false}
+```
+
+A wait merges the first look payload (controls, `matched`, `ready`,
+`waited_ms`, `window`, `mouse`, `near`, ...) flat into the launch
+result; `ready` is true when the window appeared (bare-selector wait)
+or the control filter matched. A timeout is not an error: the launch
+still answers `status: "ok"` with `ready: false`, the last walked
+controls, and a `note`. A failed readiness read keeps the launch
+result and adds `ready: false` plus a `note` — the app did open.
+Without wait args the result is launch-only, exactly as before:
+
+```json
+{"status": "ok", "action": "open_app", "name": "notepad", "verified": false}
 ```
 
 #### `open_url`

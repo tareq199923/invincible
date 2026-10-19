@@ -1012,6 +1012,22 @@ def test_environment_note_efficiency_plan_stays_read_only():
             assert phrase not in note, (phrase, execution)
 
 
+def test_environment_note_efficiency_open_app_launch_wait():
+    """F25: manual/auto teach the one-call launch wait; plan stays out."""
+    from invincible.core.webchat_agent import environment_note
+
+    for execution in ("local", "agent"):
+        for mode in ("manual", "auto"):
+            note = environment_note(execution, mode=mode)
+            assert "open_app(window=" in note, (mode, execution)
+            assert "launches and returns the first controls" in note, (
+                mode, execution)
+            assert "look_at_screen(window=" in note, (mode, execution)
+        plan = environment_note(execution, mode="plan")
+        assert "open_app(window=" not in plan, execution
+        assert "first controls" not in plan, execution
+
+
 def test_environment_note_one_verify_keeps_f13_f17():
     """F24 adds the final-look rule without weakening F13/F17: ok is
     still dispatched-not-verified, looks stay fresh, C ids still go

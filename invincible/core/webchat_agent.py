@@ -211,12 +211,15 @@ COMPUTER_EFFICIENCY = (
     "script with waits inside, then verify once at the end; do not "
     "re-look between script steps. A C-id click still needs its "
     "grounding look (ids go stale on a re-read), so look again after a "
-    "screen change. After a cold launch, wait for the window inside the "
-    "script or with look_at_screen(window=process:..., wait_kind=..., "
-    "wait_label=...). Playbook: launch/focus, target by process:/title:, "
-    "anchor on a stable label/kind, act keyboard-first, one verify. "
-    "Keep hard-to-undo steps (send/post/delete/buy/submit) out of "
-    "batches; only the final look proves it worked."
+    "screen change. After a cold launch, pass window/wait_kind/"
+    "wait_label to open_app so one call launches and returns the first "
+    "controls (open_app(window=process:..., wait_label=...)); "
+    "look_at_screen(window=..., wait_kind=..., wait_label=...) does the "
+    "same wait for a window already open. Playbook: launch/focus, "
+    "target by process:/title:, anchor on a stable label/kind, act "
+    "keyboard-first, one verify. Keep hard-to-undo steps "
+    "(send/post/delete/buy/submit) out of batches; only the final look "
+    "proves it worked."
 )
 MODE_SYSTEM_PROMPTS = {
     "plan": (

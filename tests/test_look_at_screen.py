@@ -121,28 +121,42 @@ def test_look_wait_match_kind_and_label():
 def test_look_wait_kind_schema_matches_executor():
     """The metadata enum is literal (no executor import); pin it to the
     walk's own kind vocabulary so the two can never drift."""
-    tool = harness_tools.get_tool("look_at_screen")
-    assert tuple(tool.properties["wait_kind"]["enum"]) == (
-        tool_executor.LOOK_KIND_NAMES)
+    for name in ("look_at_screen", "open_app"):
+        tool = harness_tools.get_tool(name)
+        assert tuple(tool.properties["wait_kind"]["enum"]) == (
+            tool_executor.LOOK_KIND_NAMES), name
 
 
 def test_look_call_args_normalize_and_bounds():
     plain = tool_executor.look_call_args()
     assert plain == {
         "window": {"kind": "foreground", "value": None},
-        "wait_kind": None, "wait_label": None, "timeout_ms": 0}
+        "wait_kind": None, "wait_label": None, "timeout_ms": 0,
+        "wait_window": False}
     spec = tool_executor.look_call_args(
         "process:spotify", " Button ", "  Play  ", 99999)
     assert spec["window"] == {"kind": "process", "value": "spotify"}
     assert spec["wait_kind"] == "button"
     assert spec["wait_label"] == "Play"
     assert spec["timeout_ms"] == tool_executor.LOOK_WAIT_MAX_MS
+    assert spec["wait_window"] is False
     assert tool_executor.look_call_args(
         None, None, "Play")["timeout_ms"] == (
             tool_executor.LOOK_WAIT_DEFAULT_MS)
     # timeout without a wait filter stays a single read
     assert tool_executor.look_call_args(
         None, None, None, 5000)["timeout_ms"] == 0
+    # F25: a bare selector can wait for the window itself, using the
+    # launch default; the foreground target never sets the flag.
+    launch = tool_executor.look_call_args(
+        "process:spotify",
+        default_ms=tool_executor.OPEN_APP_WAIT_DEFAULT_MS,
+        wait_window=True)
+    assert launch["wait_window"] is True
+    assert launch["timeout_ms"] == tool_executor.OPEN_APP_WAIT_DEFAULT_MS
+    assert tool_executor.look_call_args(
+        default_ms=tool_executor.OPEN_APP_WAIT_DEFAULT_MS,
+        wait_window=True)["wait_window"] is False
     for args in ((None, "not-a-kind", None, None),
                  (None, None, "Play", -1),
                  (None, None, "Play", "soon")):

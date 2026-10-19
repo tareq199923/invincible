@@ -626,9 +626,12 @@ GOLDEN_MCP_TOOLS = [
         'name': 'open_app',
         'description': (
         'Open an app or file on the paired machine by name (via the OS '
-        'launcher). Staged for approval like execute_bash. Runs ONLY on your '
-        'paired machine (agent routing must be on); nothing on the server '
-        'opens.'
+        'launcher). Optional window/wait_kind/wait_label block until the '
+        'launched window appears or a matching control renders, and return '
+        'that first look (controls as C ids, window, ready) in the same '
+        'result; timeout_ms defaults to 8000 (cap 10000). Staged for '
+        'approval like execute_bash. Runs ONLY on your paired machine (agent '
+        'routing must be on); nothing on the server opens.'
         ),
         'inputSchema': {
             'type': 'object',
@@ -640,6 +643,46 @@ GOLDEN_MCP_TOOLS = [
                 'args': {
                     'type': 'string',
                     'description': 'Optional launch arguments',
+                },
+                'window': {
+                    'type': 'string',
+                    'description': (
+                        'Window selector to wait for after launch: '
+                        'process:spotify, title:Back In Black, pid:1234, '
+                        'or a bare process/title name. A bare selector '
+                        'waits for the window itself.'
+                    ),
+                },
+                'wait_kind': {
+                    'type': 'string',
+                    'description': (
+                        'Control kind to wait for after launch (button, '
+                        'text field, link, ...).'
+                    ),
+                    'enum': [
+                        'button', 'calendar', 'checkbox', 'combo box',
+                        'control', 'document', 'grid', 'group', 'header',
+                        'image', 'item', 'link', 'list', 'list item',
+                        'menu', 'menu bar', 'menu item', 'option',
+                        'progress', 'slider', 'spinner', 'tab', 'tab item',
+                        'table', 'text', 'text field', 'toolbar',
+                        'tooltip', 'tree', 'tree item',
+                    ],
+                },
+                'wait_label': {
+                    'type': 'string',
+                    'description': (
+                        'Wait until a control label contains this text '
+                        '(case-insensitive).'
+                    ),
+                },
+                'timeout_ms': {
+                    'type': 'integer',
+                    'description': (
+                        'Wait timeout in milliseconds (default 8000, max '
+                        '10000). Ignored without window/wait_kind/'
+                        'wait_label.'
+                    ),
                 },
             },
             'required': [
@@ -1635,8 +1678,10 @@ GOLDEN_WEBCHAT_SCHEMAS = [
         'function': {
             'name': 'open_app',
             'description': (
-            'Open an app or file by name on the paired machine. Staged for '
-            'approval.'
+            'Open an app or file by name on the paired machine. Optional '
+            'window selector plus wait_kind/wait_label to block for the '
+            'launched window or its first matching control and return that '
+            'first look (C ids). Staged for approval.'
             ),
             'parameters': {
                 'type': 'object',
@@ -1646,6 +1691,28 @@ GOLDEN_WEBCHAT_SCHEMAS = [
                     },
                     'args': {
                         'type': 'string',
+                    },
+                    'window': {
+                        'type': 'string',
+                    },
+                    'wait_kind': {
+                        'type': 'string',
+                        'enum': [
+                            'button', 'calendar', 'checkbox', 'combo box',
+                            'control', 'document', 'grid', 'group',
+                            'header', 'image', 'item', 'link', 'list',
+                            'list item', 'menu', 'menu bar', 'menu item',
+                            'option', 'progress', 'slider', 'spinner',
+                            'tab', 'tab item', 'table', 'text',
+                            'text field', 'toolbar', 'tooltip', 'tree',
+                            'tree item',
+                        ],
+                    },
+                    'wait_label': {
+                        'type': 'string',
+                    },
+                    'timeout_ms': {
+                        'type': 'integer',
                     },
                 },
                 'required': [

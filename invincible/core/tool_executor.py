@@ -1699,6 +1699,9 @@ LOOK_KIND_NAMES = tuple(sorted(set(_LOOK_KINDS.values()) | {"control"}))
 LOOK_WAIT_DEFAULT_MS = 3000
 LOOK_WAIT_MAX_MS = 10000
 LOOK_WAIT_POLL_SECONDS = 0.15
+# F25: a launch wait defaults longer than a look wait - cold app windows
+# routinely need more than three seconds before their controls render.
+OPEN_APP_WAIT_DEFAULT_MS = 8000
 
 _UIA_NAME = 30005
 _UIA_RECT = 30001
@@ -1932,8 +1935,15 @@ def look_window_label(target: dict) -> str:
 
 
 def look_call_args(window=None, wait_kind=None, wait_label=None,
-                   timeout_ms=None) -> dict:
+                   timeout_ms=None, *, default_ms=LOOK_WAIT_DEFAULT_MS,
+                   wait_window=False) -> dict:
     """Normalize look_at_screen args for the child walk (pure).
+
+    ``default_ms`` is the wait timeout used when the caller gave none
+    (look keeps LOOK_WAIT_DEFAULT_MS; open_app's launch wait passes
+    OPEN_APP_WAIT_DEFAULT_MS). ``wait_window`` (open_app only) makes a
+    bare selector poll for the window to appear; it never applies to
+    the foreground target.
 
     Raises ValueError for a malformed selector/kind/timeout; clamps the
     wait to LOOK_WAIT_MAX_MS and ignores timeout without a wait filter.
@@ -1953,11 +1963,13 @@ def look_call_args(window=None, wait_kind=None, wait_label=None,
         if not isinstance(wait_label, str):
             raise ValueError("wait_label must be a string")
         label = _look_collapse(wait_label) or None
-    wait = bool(kind or label)
+    wait_window = (wait_window is True
+                   and target.get("kind") != "foreground")
+    wait = bool(kind or label) or wait_window
     timeout = 0
     if wait:
         if timeout_ms is None:
-            timeout = LOOK_WAIT_DEFAULT_MS
+            timeout = default_ms
         else:
             try:
                 timeout = int(timeout_ms)
@@ -1967,7 +1979,8 @@ def look_call_args(window=None, wait_kind=None, wait_label=None,
                 raise ValueError("timeout_ms must be >= 0")
             timeout = min(timeout, LOOK_WAIT_MAX_MS)
     return {"window": target, "wait_kind": kind,
-            "wait_label": label, "timeout_ms": timeout}
+            "wait_label": label, "timeout_ms": timeout,
+            "wait_window": wait_window}
 
 
 def _look_assemble(app, kept: list, vrect: tuple, mouse_px,
@@ -2208,13 +2221,17 @@ def _resolve_window(api: dict, target: dict) -> dict | None:
 
 
 def _look_walk(api: dict, *, window=None, wait_kind=None,
-               wait_label=None, timeout_ms=None) -> dict:
+               wait_label=None, timeout_ms=None,
+               wait_window=False) -> dict:
     """Window control walk with an optional readiness wait.
 
     ``window`` is a parsed selector; the default frontmost read keeps
     the F09 control order and wire keys. A wait re-walks the same
     child process until a control matches or the timeout expires, so
     late-rendering apps cost one tool call instead of model polling.
+    ``wait_window`` (F25 open_app launches) polls for the selected
+    window itself; with no control filter the walk returns as soon as
+    the window exists (ready True even before controls render).
     Raises on COM failure.
     """
     ctypes = api["ctypes"]
@@ -2333,7 +2350,8 @@ def _look_walk(api: dict, *, window=None, wait_kind=None,
         vrect = (ox, oy, vw, vh)
         target = window if isinstance(window, dict) else {
             "kind": "foreground", "value": None}
-        wait = bool(wait_kind or wait_label)
+        wait_controls = bool(wait_kind or wait_label)
+        wait = wait_controls or bool(wait_window)
         timeout = 0
         if wait:
             try:
@@ -2439,13 +2457,16 @@ def _look_walk(api: dict, *, window=None, wait_kind=None,
                 matched = (look_wait_match(
                     payload["controls"], wait_kind, wait_label)
                     if wait else None)
-                if not wait:
+                if not wait_controls:
                     note = None
                     if not payload["controls"]:
                         note = ("window is up but exposes no controls "
                                 "yet (the app may still be rendering)")
-                    return finish(payload, info, None,
-                                  bool(payload["controls"]), note)
+                    # A window wait is satisfied by the window itself;
+                    # a plain look still keys ready off visible controls.
+                    ready = (True if wait_window
+                             else bool(payload["controls"]))
+                    return finish(payload, info, None, ready, note)
                 if matched is not None:
                     return finish(payload, info, matched, True)
                 last_payload, last_info = payload, info
@@ -2480,8 +2501,11 @@ def _look_walk(api: dict, *, window=None, wait_kind=None,
 
 
 async def _look_at_screen(*, window=None, wait_kind=None, wait_label=None,
-                          timeout_ms=None) -> dict:
+                          timeout_ms=None, wait_window=None) -> dict:
     """Window controls via Windows UI Automation (optional wait).
+
+    ``wait_window`` (F25 open_app) additionally polls for the window
+    itself; look_at_screen callers never pass it.
 
     Agent-only shape (no paths, no URLs, no sandbox surface): the
     runner calls this on the user's own machine. The walk (and any
@@ -2497,7 +2521,8 @@ async def _look_at_screen(*, window=None, wait_kind=None, wait_label=None,
                           "machine: set INVINCIBLE_AGENT_ROUTING=1 and "
                           "start one with: invincible connect"}
     try:
-        spec = look_call_args(window, wait_kind, wait_label, timeout_ms)
+        spec = look_call_args(window, wait_kind, wait_label, timeout_ms,
+                              wait_window=wait_window)
     except ValueError as e:
         return {"status": "error", "error": str(e)}
     try:
@@ -2807,7 +2832,31 @@ def normalize_computer_args(name: str, args: dict) -> dict:
         extra = argv.get("args", "")
         if extra is not None and not isinstance(extra, str):
             raise ValueError("open_app 'args' must be a string")
-        return {"name": app, "args": (extra or "").strip()}
+        norm = {"name": app, "args": (extra or "").strip()}
+        # F25: launch wait - the same selector/wait vocabulary as
+        # look_at_screen, validated here so a bad shape never gets a
+        # token. A bare selector waits for the window itself; wait
+        # filters wait for the first matching control. timeout_ms
+        # alone is ignored (look parity).
+        spec = look_call_args(
+            argv.get("window"), argv.get("wait_kind"),
+            argv.get("wait_label"), argv.get("timeout_ms"),
+            default_ms=OPEN_APP_WAIT_DEFAULT_MS,
+            wait_window=(
+                isinstance(argv.get("window"), str)
+                and bool(argv.get("window").strip())))
+        if spec["wait_kind"] or spec["wait_label"] or spec["wait_window"]:
+            # Keep the raw selector: the agent re-parses it, and this
+            # dict is stored staged then re-normalized at execution.
+            norm.update({
+                "window": (argv.get("window")
+                           if spec["wait_window"] else None),
+                "wait_kind": spec["wait_kind"],
+                "wait_label": spec["wait_label"],
+                "timeout_ms": spec["timeout_ms"],
+                "wait_window": spec["wait_window"],
+            })
+        return norm
     if name == "open_url":
         url = argv.get("url")
         if not isinstance(url, str) or not re.match(
@@ -3117,6 +3166,28 @@ def _computer_open(api: dict, name: str, args: str) -> dict:
             "verified": False}
 
 
+def _open_wait_result(opened: dict, look) -> dict:
+    """Merge a launch result with its first look payload (pure, F25).
+
+    A real look merges flat with its own ``status`` dropped so the
+    launch's ``ok`` wins. A failed readiness read keeps the launch
+    result and admits the miss (``ready`` False + note, never an
+    error): the app did open - only the follow-up read failed.
+    """
+    merged = dict(opened)
+    if isinstance(look, dict) and look.get("status") == "look":
+        merged.update({k: v for k, v in look.items() if k != "status"})
+        return merged
+    reason = ""
+    if isinstance(look, dict):
+        reason = str(look.get("error") or look.get("reason") or "").strip()
+    note = "launched, but the readiness read failed"
+    if reason:
+        note += f": {reason}"
+    merged.update({"ready": False, "matched": None, "note": note})
+    return merged
+
+
 async def _focus_is_password() -> bool | None:
     """Focused-element IsPassword probe via a child process.
 
@@ -3352,6 +3423,9 @@ async def _computer_act(name: str, args: dict, *,
     ``ok`` means dispatched to the OS input queue / launcher, NOT
     pixels verified: callers must confirm with a fresh look_at_screen
     (every ``ok`` result carries ``verified: False`` for that reason).
+    ``open_app``'s optional launch wait performs that first look inside
+    the same job, but ``verified`` stays False: the launch itself is
+    never pixel-verified.
 
     ``on_point`` announces each resolved grid point to the F11 overlay
     (never breaks the job); ``pre_action_delay`` pauses once before
@@ -3475,7 +3549,20 @@ async def _computer_act(name: str, args: dict, *,
             return {"status": "ok", "action": "drag",
                     "from": echo_from, "to": echo_to, "verified": False}
         if name == "open_app":
-            return _computer_open(api, norm["name"], norm["args"])
+            opened = _computer_open(api, norm["name"], norm["args"])
+            if opened.get("status") != "ok" or "wait_window" not in norm:
+                return opened
+            # F25: launch + first look in one approved job. The raw
+            # selector rides norm["window"]; _look_at_screen validates
+            # and walks it in the same isolated child process.
+            look = await _look_at_screen(
+                window=norm.get("window"),
+                wait_kind=norm.get("wait_kind"),
+                wait_label=norm.get("wait_label"),
+                timeout_ms=norm.get("timeout_ms"),
+                wait_window=norm.get("wait_window"),
+            )
+            return _open_wait_result(opened, look)
         if name == "open_url":
             opened = _computer_open(api, norm["url"], "")
             if opened.get("status") != "ok":
