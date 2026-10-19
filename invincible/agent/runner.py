@@ -125,8 +125,7 @@ def _overlay_delay_fn(dragging: bool):
         start = _OVERLAY_POINTER_PX
         if start is None:
             try:
-                dock, lift = overlay.dock_area(vrect, overlay.work_area())
-                start = overlay.pointer_home(dock, lift)
+                start = overlay.pointer_home(vrect)
             except Exception:
                 return overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS
         with contextlib.suppress(Exception):
