@@ -5,6 +5,29 @@
 
 ## Current State
 
+- F24 done (`passing`): Tier 1 lean-turn computer-use guidance (repeat-app
+  efficiency plan). New `COMPUTER_EFFICIENCY` constant in
+  `core/webchat_agent.py`, appended to the manual/auto `environment_note`
+  guidance in both executions (local + agent): capability ladder
+  (open_url/open_app or CLI launch/deep link > press_keys > look_at_screen
+  + C-id click > pixel/vision guessing), 3+ deterministic-step batching
+  into one `execute_bash` script with in-script waits (hard-to-undo steps
+  stay out), cold-app window waits via
+  `look_at_screen(window=process:..., wait_kind/wait_label=...)`, the
+  launch/focus -> process:/title: -> stable anchor -> keyboard-first ->
+  one verify playbook, and one final look instead of a look after every
+  action. Reconciliation stays explicit: a C-id click still needs its
+  grounding look (ids go stale on a re-read) and a fresh look follows a
+  screen change. Static `MODE_SYSTEM_PROMPTS`, plan-mode read-only
+  guidance, F13/F14/F17 wording, tool schemas/goldens, approvals, and
+  agent/runner code are untouched; the user's overlay WIP stayed
+  unstaged. Tests: three new pins in `tests/test_webchat_agent.py`
+  (manual/auto x local/agent ladder + batching + cold-app + playbook +
+  final-look; plan read-only; F13/F17 preservation). Docs: ARCHITECTURE
+  webchat agent-modes sentence + ROADMAP webchat row clause. `ruff`
+  clean; audit 11/11; targeted 83 passed; FULL suite 2065 passed /
+  11 skipped / 1 deselected (Windows). Clean-state checklist 5/5 ticked.
+  Committed as `f3bf22f`.
 - CI fix (`98cba4e`, follow-up to F23): the F23 commit accidentally
   swept in one uncommitted `runner._overlay_delay_fn` hunk from the
   work-area docking branch (`overlay.dock_area`/`work_area`) without
@@ -651,23 +674,22 @@
 
 ## In Progress
 
-- None — F23 complete (`passing`). Zero `active`. Next: F24 (Tier 1
-  lean-turn guidance/playbooks) or F22 (face voice states; needs the
-  server→agent signal) at the next clock-in.
+- None — F24 complete (`passing`). Zero `active`. Next:
+  `open_app(wait_for_window)` (the remaining cold-launch turn) or F22
+  (face voice states; needs the server→agent signal) at the next
+  clock-in.
 
 ## Next Steps
 
-1. F23 shipped the capability; the next lever is F24 (Tier 1):
-   capability ladder (URI/CLI > keyboard > UIA > vision), batch ≥3
-   UI steps into one `execute_bash`, poll cold apps inside a script,
-   app playbooks (launch/focus, process match, anchor, verify
-   predicate), and one verify at the end instead of after every
-   action. Do not weaken F13/F14/F17.
-2. `open_app(wait_for_window)` is the natural follow-up: the first
+1. `open_app(wait_for_window)` is the natural follow-up: the first
    look after a cold launch still costs a model turn and can land on
    an empty tree.
+2. F22 (face voice states, `planned`) needs the server→agent voice
+   signal; text stays source of truth and silent when voice is off.
 3. Running `invincible connect` agents hold pre-F23 code — restart
-   to get `window`/`wait_kind`/`wait_label`.
+   to get `window`/`wait_kind`/`wait_label`. F24 itself is server-side
+   guidance: a new dashboard chat turn picks it up with no agent
+   restart.
 4. Tests must never spawn a real overlay head (autouse conftest
    guard); a test needing a spawn stubs `Overlay.start` and clears
    `overlay_spawn_guard`.
