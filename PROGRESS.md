@@ -5,6 +5,19 @@
 
 ## Current State
 
+- CI fix (`98cba4e`, follow-up to F23): the F23 commit accidentally
+  swept in one uncommitted `runner._overlay_delay_fn` hunk from the
+  work-area docking branch (`overlay.dock_area`/`work_area`) without
+  the matching `overlay.py` helpers, so CI run #320 fell back to the
+  0.35s base dwell and failed
+  `test_overlay_delay_fn_covers_planned_flight` on all five Pythons.
+  Reproduced on Linux (WSL Ubuntu 26, Python 3.14, PostgreSQL 18):
+  `dwell 0.35 < flight 0.8956`; reverted the hunk to
+  `overlay.pointer_home(vrect)`. The user's work-area overlay WIP
+  (`overlay.py`, `test_overlay.py`, uncommitted) stays untouched —
+  re-apply the dock-aware dwell when that feature lands. CI-exact
+  Linux run (coverage): 2061 passed / 5 skipped / 1 deselected.
+  Committed as `98cba4e`; pushed; CI run #321 pending.
 - F23 done (`passing`): `look_at_screen` window targeting + readiness
   wait (Tier 2a of the repeat-app efficiency plan). New pure helpers:
   `look_window_target` (`process:spotify`, `title:<substring>`,
