@@ -125,7 +125,8 @@ def _overlay_delay_fn(dragging: bool):
         start = _OVERLAY_POINTER_PX
         if start is None:
             try:
-                start = overlay.pointer_home(vrect)
+                dock, lift = overlay.dock_area(vrect, overlay.work_area())
+                start = overlay.pointer_home(dock, lift)
             except Exception:
                 return overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS
         with contextlib.suppress(Exception):
@@ -540,7 +541,13 @@ async def _execute_job(job: dict) -> dict:
             # control (stdin write only, suppressed like every
             # overlay call) - tools run immediately, the pointer
             # catches up on its own holds.
-            result = await tool_executor._look_at_screen()
+            look_args = {
+                key: args[key]
+                for key in ("window", "wait_kind", "wait_label",
+                            "timeout_ms")
+                if key in args
+            }
+            result = await tool_executor._look_at_screen(**look_args)
             with contextlib.suppress(Exception):
                 seen = ensure_overlay()
                 if (seen is not None and seen.alive

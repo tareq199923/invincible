@@ -618,11 +618,17 @@ def _preview_look(result: dict) -> str:
 def _look_result_key(result: dict) -> str | None:
     """Canonical key for the F14 no-change guard: canonical JSON of a
     successful look_at_screen result. None for anything else (errors,
-    unavailable, malformed) — those never count toward the spiral."""
+    unavailable, malformed) — those never count toward the spiral.
+
+    ``waited_ms`` is wall-time diagnostics, not screen state: exclude
+    it so two reads of an unchanged window still compare identical
+    (F23 waits made that field vary on every call)."""
     if not isinstance(result, dict) or result.get("status") != "look":
         return None
+    keyed = {key: value for key, value in result.items()
+             if key != "waited_ms"}
     try:
-        return json.dumps(result, sort_keys=True, ensure_ascii=False,
+        return json.dumps(keyed, sort_keys=True, ensure_ascii=False,
                           default=str)
     except (TypeError, ValueError):
         return None
@@ -1165,7 +1171,7 @@ async def _execute_call(
         if name == "web_fetch":
             result = await _run_web_fetch(executor, args)
         elif name == "look_at_screen":
-            result = await _run_look_at_screen(executor)
+            result = await _run_look_at_screen(executor, args)
         else:
             result = await _run_screenshot(executor, args)
         outcome["result"], outcome["ok"] = result, _result_ok(result)

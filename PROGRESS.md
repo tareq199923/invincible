@@ -5,6 +5,35 @@
 
 ## Current State
 
+- F23 done (`passing`): `look_at_screen` window targeting + readiness
+  wait (Tier 2a of the repeat-app efficiency plan). New pure helpers:
+  `look_window_target` (`process:spotify`, `title:<substring>`,
+  `pid:<n>`, or a bare process/title; foreground by default),
+  `look_window_match` (process basename, so a player's changing track
+  title no longer breaks the target), `look_wait_match` (kind + a
+  case-insensitive collapsed-label substring), `look_call_args`
+  (wait defaults 3000ms, caps 10000, ignored without a filter), and
+  `look_window_label` for honest timeout notes. The isolated child
+  walk now resolves the window and re-walks in place every 0.15s
+  until a control matches; the payload adds `window`
+  `{title,process,pid}`, `ready`, `matched`, `waited_ms`, and a
+  `note` on an empty/timeout read. A timeout is a `status: "look"`
+  result (last walk + `ready:false`), not an error. Named targets
+  prefer the foreground match, then the largest visible window;
+  process names come from `QueryFullProcessImageNameW` (no new dep).
+  Runner forwards only the supplied args; dispatch/webchat/MCP pass
+  the job args through. Regression guard: F14 `_look_result_key`
+  drops `waited_ms` (timing noise) so unchanged-screen detection
+  still fires; `harness_tools` keeps the wait-kind enum literal and a
+  pin test ties it to `LOOK_KIND_NAMES`. Docs: MCP_PROTOCOL (args,
+  result, truncated/wait caveat), SECURITY (readiness is not a
+  lock), ROADMAP. Live-verified: process-targeted read (brave.exe,
+  117 controls), wait hit `C1` in 264ms, 300ms miss → `ready:false`
+  + note, malformed pid refused. `ruff` clean; targeted 187 passed;
+  FULL suite 2055 passed / 11 skipped / 1 deselected. (Two later
+  reruns lost random DB-backed tests to another session truncating
+  `invincible_test` — 8 then 7 unrelated failures, each green in
+  isolation.) Clean-state checklist 5/5 ticked.
 - F21 done (`passing`): overlay pointer + companion face — the single
   gliding head split in two. `agent/overlay.py`: the moving piece is a
   cursor-like pointer (classic up-left arrow, tip = hotspot, so an
@@ -608,33 +637,31 @@
 
 ## In Progress
 
-- None — F21 complete (`passing`). Zero `active`. Next: F22 (face
-  voice states; needs the server→agent signal) or F05 (vector seam)
-  at the next clock-in.
+- None — F23 complete (`passing`). Zero `active`. Next: F24 (Tier 1
+  lean-turn guidance/playbooks) or F22 (face voice states; needs the
+  server→agent signal) at the next clock-in.
 
 ## Next Steps
 
-1. F21 is done (`passing`): pointer + companion face split. Next
-   candidates: F22 (listening/speaking faces) — the natural follow-up,
-   but it needs a server→agent signal, so it is NOT a free extension;
-   F05 vector seam stays `planned`. Set exactly one `active` only at
-   clock-in.
-2. Tests can no longer spawn a real overlay head on any OS: the autouse
-   conftest guard forces headless and refuses/records `Overlay.start`.
-   Never bypass it — a test that genuinely needs a spawn stubs
-   `Overlay.start` itself and clears `overlay_spawn_guard`.
-3. The overlay orphan was disproven, not fixed; if a head is ever seen
-   outliving its parent, the experiments (windowless EOF probe, live
-   product-path probe, post-parent process watch) are described in the
-   Item-8 entry above — re-run them before adding a watchdog.
-4. The running `invincible connect` agent(s) still hold pre-F21 code in
-   memory — restart to see the pointer + companion face live.
-5. Live Tk window: the F21 pass re-verified the split on a live Windows
-   desktop (temp stdin harness + screenshots: parked pair, face
-   working/happy/error, mid-flight trail + bubble, landing ring, typing
-   glyphs, re-park). Click-through itself and the multi-monitor
-   glide-vs-click check are still unverified.
-6. F04 fan-out (`harness_fanout.py` + 18 tests) stays green, untouched.
+1. F23 shipped the capability; the next lever is F24 (Tier 1):
+   capability ladder (URI/CLI > keyboard > UIA > vision), batch ≥3
+   UI steps into one `execute_bash`, poll cold apps inside a script,
+   app playbooks (launch/focus, process match, anchor, verify
+   predicate), and one verify at the end instead of after every
+   action. Do not weaken F13/F14/F17.
+2. `open_app(wait_for_window)` is the natural follow-up: the first
+   look after a cold launch still costs a model turn and can land on
+   an empty tree.
+3. Running `invincible connect` agents hold pre-F23 code — restart
+   to get `window`/`wait_kind`/`wait_label`.
+4. Tests must never spawn a real overlay head (autouse conftest
+   guard); a test needing a spawn stubs `Overlay.start` and clears
+   `overlay_spawn_guard`.
+5. Overlay multi-monitor canvas fix is in `e6adf38`; live
+   click-through and the multi-monitor glide-vs-click check remain
+   unverified.
+6. F04 fan-out (`harness_fanout.py` + 18 tests) stays green,
+   untouched.
 
 ## Blockers
 

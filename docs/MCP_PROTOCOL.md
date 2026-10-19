@@ -897,27 +897,52 @@ answers `{"status": "unavailable", ...}`; providers without a
 "arguments": {}
 ```
 
-Read the frontmost window on the paired machine: app title plus
-clickable controls as `C` ids with kinds, labels, and 0–1000 grid
-positions (pointing coordinates for a later `click`). **Agent-only
-by design, same posture as `screenshot`**: without routing it
-answers `{"status": "unavailable", ...}` — the server never touches
-its own desktop. Windows UI Automation (unavailable elsewhere); the
-read runs isolated so a dying window cannot take down the agent.
-No confirmation (read-only). Offered in every mode including plan.
+Optional window targeting + readiness wait:
 
 ```json
-{"status": "look", "app": "...", "controls": [{"id": "C1", "kind": "button", "label": "Save", "x": 940, "y": 27}], "mouse": {"x": 233, "y": 689}, "size": {"w": 1920, "h": 1080}, "near": {"id": "C1", "kind": "button", "label": "Save"}, "mouse_hint": "The mouse pointer is at @233,689, on C1 \"Save\". When they say \"this\", \"that\" or \"here\", they mean what's at the mouse pointer.", "truncated": false}
+"arguments": {"window": "process:spotify", "wait_label": "Play", "timeout_ms": 3000}
 ```
 
-`mouse` is the cursor on the same 0–1000 grid. `near` names the
-control under (or within 60px of) the cursor — smallest-area hit
-wins — with its `kind` so a `click` can go straight at it; it is
-`null` when nothing is near. `mouse_hint` is the one-line grounding
-sentence for "this"/"that"/"here" (omitted when the cursor cannot
-be read — never an error). `truncated` is `true` when the walk hit
-its node/time/control caps and the list was cut. Reads carry no
-`verified` flag (that honesty marker is computer-use only).
+Read a window on the paired machine: app title plus clickable
+controls as `C` ids with kinds, labels, and 0–1000 grid positions
+(pointing coordinates for a later `click`). Reads the frontmost
+window by default. `window` targets another by `process:<name>`,
+`title:<substring>`, `pid:<n>`, or a bare process/title name; a
+process match survives title changes (e.g. a player showing the
+current track). `wait_kind`/`wait_label` block inside the same
+isolated read until a control matches (label is a case-insensitive
+substring; kind is one of the reported kinds) — use this for apps
+that expose their controls late instead of polling with repeated
+reads. `timeout_ms` defaults to 3000 and caps at 10000; it is
+ignored without a wait filter. **Agent-only by design, same posture
+as `screenshot`**: without routing it answers `{"status":
+"unavailable", ...}` — the server never touches its own desktop.
+Windows UI Automation (unavailable elsewhere); the read runs
+isolated so a dying window cannot take down the agent. No
+confirmation (read-only). Offered in every mode including plan.
+
+```json
+{"status": "look", "app": "...", "window": {"title": "...", "process": "spotify.exe", "pid": 4242}, "controls": [{"id": "C1", "kind": "button", "label": "Save", "x": 940, "y": 27}], "matched": {"id": "C1", "kind": "button", "label": "Save", "x": 940, "y": 27}, "ready": true, "waited_ms": 264, "mouse": {"x": 233, "y": 689}, "size": {"w": 1920, "h": 1080}, "near": {"id": "C1", "kind": "button", "label": "Save"}, "mouse_hint": "The mouse pointer is at @233,689, on C1 \"Save\". When they say \"this\", \"that\" or \"here\", they mean what's at the mouse pointer.", "truncated": false}
+```
+
+`window` names the resolved target (`null` when none matched).
+`ready` is `true` when the requested condition was met: the wait
+filter matched, or (without a wait) the window exposed at least one
+control. `matched` is the first matching control row (same shape as
+a `controls` entry, with its `C` id), or `null`. `waited_ms` is the
+wall time spent; a timeout read still returns `status: "look"` with
+`ready: false`, the last walked controls, and a `note` explaining
+the miss — it is not an error. `mouse` is the cursor on the same
+0–1000 grid. `near` names the control under (or within 60px of) the
+cursor — smallest-area hit wins — with its `kind` so a `click` can
+go straight at it; it is `null` when nothing is near. `mouse_hint`
+is the one-line grounding sentence for "this"/"that"/"here"
+(omitted when the cursor cannot be read — never an error).
+`truncated` is `true` when the walk hit its node/time/control caps
+and the list was cut; a wait matches only the returned list, so a
+truncated read can miss a control beyond the cap — narrow the window
+or scroll. Reads carry no `verified` flag (that honesty marker is
+computer-use only).
 
 #### `click`
 

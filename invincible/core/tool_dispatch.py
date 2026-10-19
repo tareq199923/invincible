@@ -225,11 +225,12 @@ async def run_web_research(engine, user_id: int, args: dict) -> dict:
     return await web_research.run_research(engine, user_id, args or {})
 
 
-async def run_look_at_screen(executor) -> dict:
+async def run_look_at_screen(executor, args: dict | None = None) -> dict:
     """Agent-only controls readout: never falls back to local.
 
     Mirrors screenshot/web_fetch: without routing, report
     unavailability instead of touching the server host's desktop.
+    ``args`` (window selector / wait) ride the job unchanged.
     """
     if executor is None:
         return {
@@ -240,7 +241,7 @@ async def run_look_at_screen(executor) -> dict:
                 "one with: invincible connect"
             ),
         }
-    return await executor("look_at_screen", {})
+    return await executor("look_at_screen", args or {})
 
 
 async def run_data_tool(

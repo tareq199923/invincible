@@ -813,7 +813,7 @@ async def _dispatch(method, rpc_id, params, request,
                 # touches its own desktop. Without routing, report
                 # unavailability instead of failing the call shape.
                 result = await run_look_at_screen(
-                    await _agent_executor(request, owner_subject))
+                    await _agent_executor(request, owner_subject), args)
                 status = result.get("status")
                 if status in ("agent_offline", "agent_timeout"):
                     await _audit_action(request, name, status,

@@ -287,6 +287,13 @@
     "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py tests/test_look_at_screen.py"
   },
   {
+    "behavior": "look_at_screen targets a named window (process:/title:/pid:/bare, process match survives title changes) and blocks until a control appears (wait_kind enum + wait_label substring + timeout_ms 0-10000) inside the same child-process walk instead of model polling; payload adds window {title,process,pid}, ready, matched, waited_ms and a note for an empty tree; the no-arg frontmost read keeps its C ids and wire keys; runner/dispatch/webchat/MCP pass the new args through and the tool descriptions teach waiting over re-reading",
+    "id": "F23",
+    "state": "passing",
+    "title": "look_at_screen window targeting + readiness wait",
+    "verification": "ruff check . && pytest tests/test_look_at_screen.py tests/test_harness_tools_golden.py tests/test_harness_tools_registry.py tests/test_computer_use.py"
+  },
+  {
     "behavior": "the desktop companion face mirrors voice turns (listening while the user talks, speaking while the reply is spoken) once a server->agent signal exists: voice state rides the agent queue as a control message, the runner forwards the new face states, and the face art gains the two poses; text stays source of truth, silent when voice is off",
     "id": "F22",
     "state": "planned",

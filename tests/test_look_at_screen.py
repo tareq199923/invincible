@@ -49,11 +49,156 @@ def test_look_grid_virtual_matches_overlay_round_trip():
         0, 0)
 
 
+def test_look_window_target_forms():
+    assert tool_executor.look_window_target(None) == {
+        "kind": "foreground", "value": None}
+    assert tool_executor.look_window_target("  ") == {
+        "kind": "foreground", "value": None}
+    assert tool_executor.look_window_target("pid:1234") == {
+        "kind": "pid", "value": 1234}
+    assert tool_executor.look_window_target("1234") == {
+        "kind": "pid", "value": 1234}
+    assert tool_executor.look_window_target("process:spotify") == {
+        "kind": "process", "value": "spotify"}
+    assert tool_executor.look_window_target("title:Back In Black") == {
+        "kind": "title", "value": "Back In Black"}
+    assert tool_executor.look_window_target("Spotify") == {
+        "kind": "any", "value": "Spotify"}
+    assert tool_executor.look_window_target("weird:thing") == {
+        "kind": "any", "value": "weird:thing"}
+    for junk in ("pid:", "pid:abc", "pid:0", "process:", "title:", 7):
+        with pytest.raises(ValueError):
+            tool_executor.look_window_target(junk)
+
+
+def test_look_window_match_selectors():
+    info = {"title": "AC/DC - Back In Black", "process": "Spotify.exe",
+            "pid": 4242}
+    assert tool_executor.look_window_match(
+        info, {"kind": "foreground", "value": None})
+    assert tool_executor.look_window_match(
+        info, {"kind": "pid", "value": 4242})
+    assert not tool_executor.look_window_match(
+        info, {"kind": "pid", "value": 1})
+    assert tool_executor.look_window_match(
+        info, {"kind": "process", "value": "spotify"})
+    assert tool_executor.look_window_match(
+        info, {"kind": "process", "value": "Spotify.exe"})
+    assert tool_executor.look_window_match(
+        info, {"kind": "title", "value": "back in black"})
+    assert tool_executor.look_window_match(
+        info, {"kind": "any", "value": "spotify"})
+    assert tool_executor.look_window_match(
+        info, {"kind": "any", "value": "black"})
+    assert not tool_executor.look_window_match(
+        info, {"kind": "title", "value": "Spotify"})
+    assert not tool_executor.look_window_match(
+        {"title": "x", "process": None, "pid": None},
+        {"kind": "process", "value": "spotify"})
+
+
+def test_look_wait_match_kind_and_label():
+    controls = [
+        {"id": "C1", "kind": "text", "label": "Search"},
+        {"id": "C2", "kind": "button", "label": "Play"},
+        {"id": "C3", "kind": "button", "label": "Play next"},
+    ]
+    assert tool_executor.look_wait_match(
+        controls, "Button", "play")["id"] == "C2"
+    assert tool_executor.look_wait_match(
+        controls, None, "play next")["id"] == "C3"
+    assert tool_executor.look_wait_match(
+        controls, "button")["id"] == "C2"
+    assert tool_executor.look_wait_match(
+        controls, label="search")["id"] == "C1"
+    assert tool_executor.look_wait_match(
+        controls, "link", "play") is None
+    assert tool_executor.look_wait_match([], "button") is None
+    assert tool_executor.look_wait_match(["junk"], "button") is None
+    assert tool_executor.look_wait_match(controls) is None
+
+
+def test_look_wait_kind_schema_matches_executor():
+    """The metadata enum is literal (no executor import); pin it to the
+    walk's own kind vocabulary so the two can never drift."""
+    tool = harness_tools.get_tool("look_at_screen")
+    assert tuple(tool.properties["wait_kind"]["enum"]) == (
+        tool_executor.LOOK_KIND_NAMES)
+
+
+def test_look_call_args_normalize_and_bounds():
+    plain = tool_executor.look_call_args()
+    assert plain == {
+        "window": {"kind": "foreground", "value": None},
+        "wait_kind": None, "wait_label": None, "timeout_ms": 0}
+    spec = tool_executor.look_call_args(
+        "process:spotify", " Button ", "  Play  ", 99999)
+    assert spec["window"] == {"kind": "process", "value": "spotify"}
+    assert spec["wait_kind"] == "button"
+    assert spec["wait_label"] == "Play"
+    assert spec["timeout_ms"] == tool_executor.LOOK_WAIT_MAX_MS
+    assert tool_executor.look_call_args(
+        None, None, "Play")["timeout_ms"] == (
+            tool_executor.LOOK_WAIT_DEFAULT_MS)
+    # timeout without a wait filter stays a single read
+    assert tool_executor.look_call_args(
+        None, None, None, 5000)["timeout_ms"] == 0
+    for args in ((None, "not-a-kind", None, None),
+                 (None, None, "Play", -1),
+                 (None, None, "Play", "soon")):
+        with pytest.raises(ValueError):
+            tool_executor.look_call_args(*args)
+
+
 async def test_look_unavailable_off_windows(monkeypatch):
     monkeypatch.setattr(os, "name", "posix")
     out = await tool_executor._look_at_screen()
     assert out["status"] == "unavailable"
     assert "paired Windows machine" in out["reason"]
+
+
+async def test_look_bad_args_never_spawn(monkeypatch):
+    monkeypatch.setattr(os, "name", "nt")
+    out = await tool_executor._look_at_screen(
+        window="pid:abc", wait_label="Play")
+    assert out["status"] == "error"
+    assert "pid" in out["error"]
+
+
+async def test_run_look_at_screen_passes_args():
+    from invincible.core.tool_dispatch import run_look_at_screen
+
+    seen = {}
+
+    async def executor(name, args):
+        seen["name"], seen["args"] = name, args
+        return {"status": "look", "controls": []}
+
+    args = {"window": "title:Clock", "wait_label": "OK"}
+    assert await run_look_at_screen(executor, args) == {
+        "status": "look", "controls": []}
+    assert seen == {"name": "look_at_screen", "args": args}
+    assert (await run_look_at_screen(None, args))["status"] == (
+        "unavailable")
+
+
+async def test_runner_passes_look_args(monkeypatch):
+    from invincible.agent import runner
+
+    seen = {}
+
+    async def fake_look(**kwargs):
+        seen.update(kwargs)
+        return {"status": "look", "controls": []}
+
+    monkeypatch.setattr(tool_executor, "_look_at_screen", fake_look)
+    out = await runner._execute_job({
+        "type": "look_at_screen",
+        "args": {"window": "process:spotify", "wait_kind": "button",
+                 "wait_label": "Play", "timeout_ms": 1500}})
+    assert out["status"] == "look"
+    assert seen == {"window": "process:spotify", "wait_kind": "button",
+                    "wait_label": "Play", "timeout_ms": 1500}
 
 
 def test_look_at_screen_registered_agent_only():
@@ -81,10 +226,31 @@ async def test_look_live_shape_on_windows():
     assert isinstance(out["controls"], list)
     assert isinstance(out["mouse"], dict)
     assert isinstance(out["size"], dict)
+    assert isinstance(out["ready"], bool)
+    assert isinstance(out["waited_ms"], int)
+    assert out["matched"] is None
+    assert out["window"] is None or isinstance(out["window"], dict)
+    if isinstance(out["window"], dict):
+        assert set(out["window"]) == {"title", "process", "pid"}
     for control in out["controls"][:5]:
         assert set(control) == {"id", "kind", "label", "x", "y"}
         assert 0 <= control["x"] <= 1000
         assert 0 <= control["y"] <= 1000
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows UI Automation only")
+async def test_look_wait_times_out_with_note():
+    from invincible.agent import runner
+
+    out = await runner.execute_job({
+        "type": "look_at_screen",
+        "args": {"wait_label": "zzz-no-such-control-xyz",
+                 "timeout_ms": 200}})
+    assert out["status"] == "look"
+    assert out["ready"] is False
+    assert out["matched"] is None
+    assert "wait expired" in out.get("note", "")
+    assert out["waited_ms"] >= 150
 
 
 async def test_webchat_streams_look_result(
@@ -120,7 +286,7 @@ async def test_webchat_streams_look_result(
 
     router_setter({"w1.example.com": handler})
 
-    async def fake_look(executor):
+    async def fake_look(executor, args=None):
         return {"status": "look", "app": "App",
                 "controls": [{"id": "C1", "kind": "button",
                               "label": "OK", "x": 500, "y": 500}],

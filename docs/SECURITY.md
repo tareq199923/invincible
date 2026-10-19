@@ -1107,7 +1107,9 @@ screen may have changed since the last `look_at_screen`:
 - *C-id staleness race.* A control id names a position in one
   `look_at_screen` read; the window may change before the click. The
   model convention is re-look before acting (in the manual/auto
-  prompts); the echo is the backstop, not a lock.
+  prompts); the echo is the backstop, not a lock. A `wait_kind`/
+  `wait_label` read can block until a control appears, but its ids are
+  still a snapshot — readiness is not a lock either.
 - *`near`/`mouse_hint` are grounding aids, not locks.* They describe
   where the cursor was during that same read (smallest-area hit, else
   nearest within 60px, else `null`/omitted). A `null` near or a

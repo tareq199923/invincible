@@ -1692,6 +1692,14 @@ _LOOK_SKIP_TYPES = frozenset({50032, 50033, 50037, 50014, 50017})
 # Unlabeled controls are noise, except fields (Bluey keeps those too).
 _LOOK_FIELD_TYPES = frozenset({50004, 50003, 50030})
 
+# F23: window selectors + readiness waits. The pure helpers below are
+# hermetic; the Win32/UIA half runs in the child process with the walk.
+# One definition feeds the tool schema enum and arg validation.
+LOOK_KIND_NAMES = tuple(sorted(set(_LOOK_KINDS.values()) | {"control"}))
+LOOK_WAIT_DEFAULT_MS = 3000
+LOOK_WAIT_MAX_MS = 10000
+LOOK_WAIT_POLL_SECONDS = 0.15
+
 _UIA_NAME = 30005
 _UIA_RECT = 30001
 _UIA_TYPE = 30003
@@ -1822,6 +1830,146 @@ def look_mouse_hint(mx: int, my: int, near: dict | None) -> str:
             "they mean what's at the mouse pointer.")
 
 
+def look_window_target(text) -> dict:
+    """Parse a window selector into ``{kind, value}`` (pure).
+
+    Forms: ``pid:1234``, ``process:spotify``, ``title:Back In Black``,
+    a bare number (pid) or a bare process/title name (``any``). None
+    or blank reads the foreground window. Raises ValueError on junk.
+    """
+    if text is None:
+        return {"kind": "foreground", "value": None}
+    if not isinstance(text, str):
+        raise ValueError("window must be a string")
+    raw = text.strip()
+    if not raw:
+        return {"kind": "foreground", "value": None}
+    prefix, sep, value = raw.partition(":")
+    named = prefix.strip().lower()
+    if sep and named in ("pid", "process", "title"):
+        value = value.strip()
+        if not value:
+            raise ValueError(f"window {named!r} selector needs a value")
+        if named == "pid":
+            try:
+                pid = int(value)
+            except ValueError as exc:
+                raise ValueError(
+                    "window pid selector must be a number") from exc
+            if pid <= 0:
+                raise ValueError("window pid selector must be positive")
+            return {"kind": "pid", "value": pid}
+        return {"kind": named, "value": value}
+    if raw.isdigit():
+        pid = int(raw)
+        if pid <= 0:
+            raise ValueError("window pid selector must be positive")
+        return {"kind": "pid", "value": pid}
+    return {"kind": "any", "value": raw}
+
+
+def _look_process_stem(name) -> str:
+    """Lowercase process basename with any ``.exe`` stripped (pure)."""
+    base = " ".join(str(name or "").split()).lower()
+    return base[:-4] if base.endswith(".exe") else base
+
+
+def look_window_match(info: dict, target: dict) -> bool:
+    """Does one window record satisfy a parsed selector? (pure)"""
+    if not isinstance(info, dict) or not isinstance(target, dict):
+        return False
+    kind = target.get("kind")
+    value = target.get("value")
+    title = str(info.get("title") or "").lower()
+    if kind == "foreground":
+        return True
+    if kind == "pid":
+        return info.get("pid") == value
+    if kind == "process":
+        needle = _look_process_stem(value)
+        return bool(needle) and needle in _look_process_stem(
+            info.get("process"))
+    if kind == "title":
+        return bool(value) and str(value).lower() in title
+    if kind == "any":
+        needle = _look_process_stem(value)
+        return bool(needle) and (
+            needle in _look_process_stem(info.get("process"))
+            or needle in title)
+    return False
+
+
+def look_wait_match(controls, kind=None, label=None) -> dict | None:
+    """First control matching both filters; None filters are ignored.
+
+    ``kind`` is an exact kind name (case-insensitive); ``label`` is a
+    collapsed case-insensitive substring. Returns the control row (with
+    its C id) unchanged so callers can click it, or None. Pure.
+    """
+    kind_needle = str(kind or "").strip().lower()
+    label_needle = _look_collapse(label).lower() if label else ""
+    if not kind_needle and not label_needle:
+        return None
+    for control in controls or []:
+        if not isinstance(control, dict):
+            continue
+        if kind_needle and str(
+                control.get("kind") or "").lower() != kind_needle:
+            continue
+        if label_needle and label_needle not in _look_collapse(
+                control.get("label")).lower():
+            continue
+        return control
+    return None
+
+
+def look_window_label(target: dict) -> str:
+    """Human selector label for timeout notes (pure)."""
+    kind = target.get("kind") if isinstance(target, dict) else None
+    if kind == "foreground" or not kind:
+        return "the foreground window"
+    return f"{kind}:{target.get('value')}"
+
+
+def look_call_args(window=None, wait_kind=None, wait_label=None,
+                   timeout_ms=None) -> dict:
+    """Normalize look_at_screen args for the child walk (pure).
+
+    Raises ValueError for a malformed selector/kind/timeout; clamps the
+    wait to LOOK_WAIT_MAX_MS and ignores timeout without a wait filter.
+    """
+    target = look_window_target(window)
+    kind = None
+    if wait_kind not in (None, ""):
+        if not isinstance(wait_kind, str):
+            raise ValueError("wait_kind must be a string")
+        kind = wait_kind.strip().lower() or None
+        if kind is not None and kind not in LOOK_KIND_NAMES:
+            raise ValueError(
+                f"unknown wait_kind {wait_kind!r}; valid kinds: "
+                + ", ".join(LOOK_KIND_NAMES))
+    label = None
+    if wait_label not in (None, ""):
+        if not isinstance(wait_label, str):
+            raise ValueError("wait_label must be a string")
+        label = _look_collapse(wait_label) or None
+    wait = bool(kind or label)
+    timeout = 0
+    if wait:
+        if timeout_ms is None:
+            timeout = LOOK_WAIT_DEFAULT_MS
+        else:
+            try:
+                timeout = int(timeout_ms)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("timeout_ms must be a number") from exc
+            if timeout < 0:
+                raise ValueError("timeout_ms must be >= 0")
+            timeout = min(timeout, LOOK_WAIT_MAX_MS)
+    return {"window": target, "wait_kind": kind,
+            "wait_label": label, "timeout_ms": timeout}
+
+
 def _look_assemble(app, kept: list, vrect: tuple, mouse_px,
                    truncated: bool) -> dict:
     """Build the look result payload from walked controls (pure wire).
@@ -1940,17 +2088,135 @@ def _look_uia_interfaces() -> dict:
     user32.GetSystemMetrics.restype = ctypes.c_int
     user32.GetCursorPos.argtypes = [ctypes.c_void_p]
     user32.GetCursorPos.restype = ctypes.c_int
+    kernel32 = ctypes.windll.kernel32
+
+    class RECT(ctypes.Structure):
+        _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                    ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+    wnd_enum = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    user32.EnumWindows.argtypes = [wnd_enum, ctypes.c_void_p]
+    user32.EnumWindows.restype = ctypes.c_bool
+    user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+    user32.IsWindowVisible.restype = ctypes.c_bool
+    user32.GetWindowThreadProcessId.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
+    user32.GetWindowRect.argtypes = [ctypes.c_void_p,
+                                     ctypes.POINTER(RECT)]
+    user32.GetWindowRect.restype = ctypes.c_bool
+    kernel32.OpenProcess.argtypes = [
+        ctypes.c_ulong, ctypes.c_bool, ctypes.c_ulong]
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        ctypes.c_void_p, ctypes.c_ulong, ctypes.c_wchar_p,
+        ctypes.POINTER(ctypes.c_ulong)]
+    kernel32.QueryFullProcessImageNameW.restype = ctypes.c_bool
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = ctypes.c_bool
 
     return {
         "ctypes": ctypes, "ole32": ole32, "oleaut32": oleaut32,
-        "user32": user32, "Variant": Variant, "method": method,
+        "user32": user32, "kernel32": kernel32, "RECT": RECT,
+        "WNDENUMPROC": wnd_enum, "Variant": Variant, "method": method,
         "CLSID_UIA": guid("FF48DBA4-60EF-4201-AA87-54103EEF594E"),
         "IID_UIA": guid("30CBE57D-D9D0-452A-AB13-7AC5AC4825EE"),
     }
 
 
-def _look_walk(api: dict) -> dict:
-    """Foreground-window control walk. Raises on COM failure."""
+def _window_process_name(api: dict, pid: int) -> str | None:
+    """Best-effort process basename for one pid (never raises)."""
+    ctypes = api["ctypes"]
+    kernel32 = api["kernel32"]
+    handle = kernel32.OpenProcess(0x1000, False, int(pid))
+    if not handle:
+        return None
+    try:
+        size = ctypes.c_ulong(1024)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(
+                handle, 0, buf, ctypes.byref(size)):
+            return None
+        name = buf.value.rsplit("\\", 1)[-1].strip()
+        return name or None
+    except Exception:
+        return None
+    finally:
+        with contextlib.suppress(Exception):
+            kernel32.CloseHandle(handle)
+
+
+def _window_info(api: dict, hwnd) -> dict:
+    """Title + owning process record for one hwnd (child side)."""
+    ctypes = api["ctypes"]
+    user32 = api["user32"]
+    pid = ctypes.c_ulong()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    length = user32.GetWindowTextLengthW(hwnd)
+    buf = ctypes.create_unicode_buffer(length + 1)
+    user32.GetWindowTextW(hwnd, buf, length + 1)
+    return {
+        "hwnd": int(hwnd),
+        "title": buf.value.strip() or None,
+        "pid": int(pid.value) or None,
+        "process": _window_process_name(api, int(pid.value)),
+    }
+
+
+def _resolve_window(api: dict, target: dict) -> dict | None:
+    """Resolve a parsed selector to a window record (child side).
+
+    The foreground target keeps F09 semantics. A named target walks
+    top-level windows in z-order, prefers the foreground match, then
+    the largest visible match (a process can own tool windows).
+    """
+    ctypes = api["ctypes"]
+    user32 = api["user32"]
+    if target.get("kind") == "foreground":
+        hwnd = user32.GetForegroundWindow()
+        return _window_info(api, hwnd) if hwnd else None
+    matches: list = []
+
+    def collect(hwnd, _lparam):
+        try:
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            info = _window_info(api, hwnd)
+            if not info["title"]:
+                return True
+            if look_window_match(info, target):
+                rect = api["RECT"]()
+                if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                    info["area"] = (max(0, rect.right - rect.left)
+                                    * max(0, rect.bottom - rect.top))
+                else:
+                    info["area"] = 0
+                matches.append(info)
+            return True
+        except Exception:
+            return True
+
+    user32.EnumWindows(api["WNDENUMPROC"](collect), 0)
+    if not matches:
+        return None
+    foreground = user32.GetForegroundWindow()
+    for info in matches:
+        if info.get("hwnd") == foreground:
+            return info
+    return max(matches, key=lambda item: item.get("area", 0))
+
+
+def _look_walk(api: dict, *, window=None, wait_kind=None,
+               wait_label=None, timeout_ms=None) -> dict:
+    """Window control walk with an optional readiness wait.
+
+    ``window`` is a parsed selector; the default frontmost read keeps
+    the F09 control order and wire keys. A wait re-walks the same
+    child process until a control matches or the timeout expires, so
+    late-rendering apps cost one tool call instead of model polling.
+    Raises on COM failure.
+    """
     ctypes = api["ctypes"]
     ole32 = api["ole32"]
     oleaut32 = api["oleaut32"]
@@ -2000,15 +2266,6 @@ def _look_walk(api: dict) -> dict:
                 or not walker.value:
             raise OSError("ControlViewWalker unavailable")
         keep(walker.value)
-
-        hwnd = user32.GetForegroundWindow()
-        if not hwnd:
-            raise OSError("no foreground window")
-        root = ctypes.c_void_p()
-        if from_handle(auto.value, hwnd, ctypes.byref(root)) < 0 \
-                or not root.value:
-            raise OSError("foreground window not automatable")
-        keep(root.value)
 
         def prop_text(element, prop) -> str | None:
             var = Variant()
@@ -2074,71 +2331,145 @@ def _look_walk(api: dict) -> dict:
             vw = user32.GetSystemMetrics(0) or 1
             vh = user32.GetSystemMetrics(1) or 1
         vrect = (ox, oy, vw, vh)
-        length = user32.GetWindowTextLengthW(hwnd)
-        buf = ctypes.create_unicode_buffer(length + 1)
-        user32.GetWindowTextW(hwnd, buf, length + 1)
-        app = buf.value.strip() or None
+        target = window if isinstance(window, dict) else {
+            "kind": "foreground", "value": None}
+        wait = bool(wait_kind or wait_label)
+        timeout = 0
+        if wait:
+            try:
+                timeout = (LOOK_WAIT_DEFAULT_MS if timeout_ms is None
+                           else int(timeout_ms))
+            except (TypeError, ValueError):
+                timeout = LOOK_WAIT_DEFAULT_MS
+            timeout = max(0, min(timeout, LOOK_WAIT_MAX_MS))
+        started = time.monotonic()
+        deadline = started + timeout / 1000.0
 
-        found: list = []
-        deadline = time.monotonic() + LOOK_TIME_BUDGET_SECONDS
-        timed_out = False
-        visited = 0
-        stack = [root.value]
-        while stack and visited < LOOK_NODE_BUDGET:
-            if time.monotonic() > deadline:
-                timed_out = True
-                break
-            element = stack.pop()
-            visited += 1
-            type_id = prop_int(element, _UIA_TYPE)
-            if type_id is None:
-                type_id = -1
-            rect = prop_rect(element)
-            if (type_id not in _LOOK_SKIP_TYPES and rect is not None
-                    and rect[2] > 3 and rect[3] > 3
-                    and rect[0] < ox + vw and rect[1] < oy + vh
-                    and rect[0] + rect[2] > ox
-                    and rect[1] + rect[3] > oy
-                    and prop_int(element, _UIA_OFFSCREEN) != 1):
-                label = (prop_text(element, _UIA_NAME) or "").strip()
-                label = " ".join(label.split())
-                if label or type_id in _LOOK_FIELD_TYPES:
-                    found.append({
-                        "kind": look_kind_name(type_id),
-                        "label": label,
-                        "rect": rect,
-                    })
-            child = ctypes.c_void_p()
-            if first_child(walker.value, element,
-                           ctypes.byref(child)) == 0 and child.value:
-                keep(child.value)
-                siblings = [child.value]
-                while len(siblings) < LOOK_MAX_CHILDREN_PER_NODE:
-                    nxt = ctypes.c_void_p()
-                    if next_sibling(walker.value, siblings[-1],
-                                    ctypes.byref(nxt)) != 0 \
-                            or not nxt.value:
-                        break
-                    keep(nxt.value)
-                    siblings.append(nxt.value)
-                stack.extend(reversed(siblings))
+        def cursor_px():
+            point = ctypes.create_string_buffer(8)
+            if user32.GetCursorPos(point):
+                mx, my = ctypes.cast(
+                    point, ctypes.POINTER(ctypes.c_long * 2)).contents
+                return (int(mx), int(my))
+            # Unknown cursor: hint omitted + near None in
+            # _look_assemble, never an error (the mouse field keeps
+            # its legacy shape).
+            return None
 
-        found.sort(key=lambda c: (
-            round(c["rect"][1] / 6), round(c["rect"][0] / 6)))
-        truncated = (timed_out or len(found) > LOOK_MAX_CONTROLS
-                     or (visited >= LOOK_NODE_BUDGET and bool(stack)))
-        kept = found[:LOOK_MAX_CONTROLS]
+        def walk_once(info) -> tuple[list, bool]:
+            root = ctypes.c_void_p()
+            if from_handle(auto.value, info["hwnd"],
+                           ctypes.byref(root)) < 0 or not root.value:
+                raise OSError("window not automatable")
+            keep(root.value)
+            found: list = []
+            walk_deadline = time.monotonic() + LOOK_TIME_BUDGET_SECONDS
+            timed_out = False
+            visited = 0
+            stack = [root.value]
+            while stack and visited < LOOK_NODE_BUDGET:
+                if time.monotonic() > walk_deadline:
+                    timed_out = True
+                    break
+                element = stack.pop()
+                visited += 1
+                type_id = prop_int(element, _UIA_TYPE)
+                if type_id is None:
+                    type_id = -1
+                rect = prop_rect(element)
+                if (type_id not in _LOOK_SKIP_TYPES and rect is not None
+                        and rect[2] > 3 and rect[3] > 3
+                        and rect[0] < ox + vw and rect[1] < oy + vh
+                        and rect[0] + rect[2] > ox
+                        and rect[1] + rect[3] > oy
+                        and prop_int(element, _UIA_OFFSCREEN) != 1):
+                    label = (prop_text(element, _UIA_NAME) or "").strip()
+                    label = " ".join(label.split())
+                    if label or type_id in _LOOK_FIELD_TYPES:
+                        found.append({
+                            "kind": look_kind_name(type_id),
+                            "label": label,
+                            "rect": rect,
+                        })
+                child = ctypes.c_void_p()
+                if first_child(walker.value, element,
+                               ctypes.byref(child)) == 0 and child.value:
+                    keep(child.value)
+                    siblings = [child.value]
+                    while len(siblings) < LOOK_MAX_CHILDREN_PER_NODE:
+                        nxt = ctypes.c_void_p()
+                        if next_sibling(walker.value, siblings[-1],
+                                        ctypes.byref(nxt)) != 0 \
+                                or not nxt.value:
+                            break
+                        keep(nxt.value)
+                        siblings.append(nxt.value)
+                    stack.extend(reversed(siblings))
 
-        point = ctypes.create_string_buffer(8)
-        if user32.GetCursorPos(point):
-            mx, my = ctypes.cast(
-                point, ctypes.POINTER(ctypes.c_long * 2)).contents
-            mouse_px = (int(mx), int(my))
-        else:
-            # Unknown cursor: hint omitted + near None in _look_assemble,
-            # never an error (the mouse field keeps its legacy shape).
-            mouse_px = None
-        return _look_assemble(app, kept, vrect, mouse_px, truncated)
+            found.sort(key=lambda c: (
+                round(c["rect"][1] / 6), round(c["rect"][0] / 6)))
+            truncated = (timed_out or len(found) > LOOK_MAX_CONTROLS
+                         or (visited >= LOOK_NODE_BUDGET and bool(stack)))
+            return found[:LOOK_MAX_CONTROLS], truncated
+
+        def finish(payload: dict, info, matched, ready: bool,
+                   note: str | None = None) -> dict:
+            payload["window"] = (None if info is None else {
+                "title": info.get("title"),
+                "process": info.get("process"),
+                "pid": info.get("pid"),
+            })
+            payload["matched"] = matched
+            payload["waited_ms"] = int(
+                (time.monotonic() - started) * 1000)
+            payload["ready"] = ready
+            if note:
+                payload["note"] = note
+            return payload
+
+        last_payload = None
+        last_info = None
+        while True:
+            info = _resolve_window(api, target)
+            if info is not None:
+                kept, truncated = walk_once(info)
+                payload = _look_assemble(
+                    info.get("title"), kept, vrect, cursor_px(),
+                    truncated)
+                matched = (look_wait_match(
+                    payload["controls"], wait_kind, wait_label)
+                    if wait else None)
+                if not wait:
+                    note = None
+                    if not payload["controls"]:
+                        note = ("window is up but exposes no controls "
+                                "yet (the app may still be rendering)")
+                    return finish(payload, info, None,
+                                  bool(payload["controls"]), note)
+                if matched is not None:
+                    return finish(payload, info, matched, True)
+                last_payload, last_info = payload, info
+            now = time.monotonic()
+            if now >= deadline:
+                if last_payload is not None:
+                    return finish(
+                        last_payload, last_info, None, False,
+                        "window found but no control matched before the "
+                        "wait expired")
+                payload = _look_assemble(
+                    None, [], vrect, cursor_px(), False)
+                if not wait:
+                    note = ("no foreground window"
+                            if target.get("kind") == "foreground"
+                            else "no window matched "
+                                 f"{look_window_label(target)}")
+                else:
+                    note = ("no window matched "
+                            f"{look_window_label(target)} before the "
+                            "wait expired")
+                return finish(payload, None, None, False, note)
+            time.sleep(min(LOOK_WAIT_POLL_SECONDS,
+                           max(0.0, deadline - now)))
     finally:
         for iface in held:
             with contextlib.suppress(Exception):
@@ -2148,15 +2479,16 @@ def _look_walk(api: dict) -> dict:
                 ole32.CoUninitialize()
 
 
-async def _look_at_screen() -> dict:
-    """Frontmost-window controls via Windows UI Automation.
+async def _look_at_screen(*, window=None, wait_kind=None, wait_label=None,
+                          timeout_ms=None) -> dict:
+    """Window controls via Windows UI Automation (optional wait).
 
     Agent-only shape (no paths, no URLs, no sandbox surface): the
-    runner calls this on the user's own machine. The walk itself runs
-    in a child process - raw UIA COM calls can fail fatal
-    (RPC_E_DISCONNECTED during teardown takes down the whole
-    interpreter, uncatchable), so a crash surfaces as a non-zero exit
-    mapped to an error result instead of killing the agent loop.
+    runner calls this on the user's own machine. The walk (and any
+    readiness wait) runs in a child process - raw UIA COM calls can
+    fail fatal (RPC_E_DISCONNECTED during teardown takes down the
+    whole interpreter, uncatchable), so a crash surfaces as a non-zero
+    exit mapped to an error result instead of killing the agent loop.
     Anywhere non-Windows answers ``unavailable`` - never raises.
     """
     if os.name != "nt":
@@ -2165,10 +2497,15 @@ async def _look_at_screen() -> dict:
                           "machine: set INVINCIBLE_AGENT_ROUTING=1 and "
                           "start one with: invincible connect"}
     try:
+        spec = look_call_args(window, wait_kind, wait_label, timeout_ms)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+    try:
         proc = await asyncio.create_subprocess_exec(
             sys.executable, "-c",
             "from invincible.core.tool_executor import _look_main; "
             "_look_main()",
+            json.dumps(spec, ensure_ascii=False),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -2206,12 +2543,23 @@ async def _look_at_screen() -> dict:
 def _look_main() -> None:
     """Subprocess entry for :func:`_look_at_screen` (stdout JSON).
 
-    Bytes, not print(): the Windows console codec cannot encode the
-    private-use icon glyphs control labels carry (e.g. Segoe MDL2).
+    The normalized call spec arrives as ``sys.argv[1]`` (JSON) so every
+    child invocation carries its window selector/wait without touching
+    the parent's process state. Bytes, not print(): the Windows console
+    codec cannot encode the private-use icon glyphs control labels
+    carry (e.g. Segoe MDL2).
     """
+    spec: dict = {}
+    if len(sys.argv) > 1:
+        try:
+            parsed = json.loads(sys.argv[1])
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            spec = parsed
     try:
         payload = {"status": "look",
-                   **_look_walk(_look_uia_interfaces())}
+                   **_look_walk(_look_uia_interfaces(), **spec)}
     except Exception as e:
         payload = {"status": "error",
                    "error": f"Could not read the screen: {e}"}

@@ -382,16 +382,62 @@ GOLDEN_MCP_TOOLS = [
     {
         'name': 'look_at_screen',
         'description': (
-        'Look at the frontmost window on the paired machine and get '
-        'back its app title plus clickable controls as C ids with '
-        'kinds, labels, and 0-1000 grid positions (like pointing '
-        'coordinates for a later click). Runs ONLY on your paired '
-        'machine (agent routing must be on) - Windows UI Automation, '
-        'unavailable elsewhere. No confirmation required.'
+        'Look at a window on the paired machine and get back its app '
+        'title plus clickable controls as C ids with kinds, labels, '
+        'and 0-1000 grid positions (like pointing coordinates for a '
+        'later click). Reads the frontmost window by default; pass '
+        'window to target another (process:spotify, title:Back In '
+        'Black, pid:1234, or a bare name) and wait_kind/wait_label '
+        'to block until a control appears (timeout_ms, default '
+        '3000, cap 10000) instead of re-reading. Runs ONLY on your '
+        'paired machine (agent routing must be on) - Windows UI '
+        'Automation, unavailable elsewhere. No confirmation '
+        'required.'
         ),
         'inputSchema': {
             'type': 'object',
-            'properties': {},
+            'properties': {
+                'window': {
+                    'type': 'string',
+                    'description': (
+                    'Window selector: process:spotify, '
+                    'title:Back In Black, pid:1234, or a bare '
+                    'process/title name. Omit for the frontmost '
+                    'window.'
+                    ),
+                },
+                'wait_kind': {
+                    'type': 'string',
+                    'description': (
+                    'Control kind to wait for (button, text field, '
+                    'link, ...).'
+                    ),
+                    'enum': [
+                        'button', 'calendar', 'checkbox', 'combo box',
+                        'control', 'document', 'grid', 'group',
+                        'header', 'image', 'item', 'link', 'list',
+                        'list item', 'menu', 'menu bar', 'menu item',
+                        'option', 'progress', 'slider', 'spinner',
+                        'tab', 'tab item', 'table', 'text',
+                        'text field', 'toolbar', 'tooltip', 'tree',
+                        'tree item',
+                    ],
+                },
+                'wait_label': {
+                    'type': 'string',
+                    'description': (
+                    'Wait until a control label contains this text '
+                    '(case-insensitive).'
+                    ),
+                },
+                'timeout_ms': {
+                    'type': 'integer',
+                    'description': (
+                    'Wait timeout in milliseconds (default 3000, max '
+                    '10000). Ignored without wait_kind/wait_label.'
+                    ),
+                },
+            },
         },
     },
     {
@@ -1375,13 +1421,37 @@ GOLDEN_WEBCHAT_SCHEMAS = [
         'function': {
             'name': 'look_at_screen',
             'description': (
-            'Look at the frontmost window on the paired machine: app '
-            'title plus controls as C ids on a 0-1000 grid. Runs ONLY '
-            'on your paired machine.'
+            'Look at a window on the paired machine: app title plus '
+            'controls as C ids on a 0-1000 grid. Optional window '
+            'selector and wait_kind/wait_label to block until a control '
+            'appears. Runs ONLY on your paired machine.'
             ),
             'parameters': {
                 'type': 'object',
-                'properties': {},
+                'properties': {
+                    'window': {
+                        'type': 'string',
+                    },
+                    'wait_kind': {
+                        'type': 'string',
+                        'enum': [
+                            'button', 'calendar', 'checkbox',
+                            'combo box', 'control', 'document', 'grid',
+                            'group', 'header', 'image', 'item', 'link',
+                            'list', 'list item', 'menu', 'menu bar',
+                            'menu item', 'option', 'progress',
+                            'slider', 'spinner', 'tab', 'tab item',
+                            'table', 'text', 'text field', 'toolbar',
+                            'tooltip', 'tree', 'tree item',
+                        ],
+                    },
+                    'wait_label': {
+                        'type': 'string',
+                    },
+                    'timeout_ms': {
+                        'type': 'integer',
+                    },
+                },
                 'required': [],
             },
         },

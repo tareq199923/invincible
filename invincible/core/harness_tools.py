@@ -43,6 +43,17 @@ PROJECT_CAP = 50
 
 WEBCHAT_MODES = ("plan", "manual", "auto")
 
+# Control kinds accepted by look_at_screen's wait_kind (F23). Kept
+# literal so this metadata module never imports the executor; pinned
+# against tool_executor.LOOK_KIND_NAMES by tests/test_look_at_screen.py.
+LOOK_KINDS = (
+    "button", "calendar", "checkbox", "combo box", "control",
+    "document", "grid", "group", "header", "image", "item", "link",
+    "list", "list item", "menu", "menu bar", "menu item", "option",
+    "progress", "slider", "spinner", "tab", "tab item", "table",
+    "text", "text field", "toolbar", "tooltip", "tree", "tree item",
+)
+
 
 @dataclass(frozen=True)
 class HarnessTool:
@@ -468,19 +479,45 @@ TOOLS: tuple[HarnessTool, ...] = (
     HarnessTool(
         name="look_at_screen",
         description_mcp=(
-            "Look at the frontmost window on the paired machine and get "
-            "back its app title plus clickable controls as C ids with "
-            "kinds, labels, and 0-1000 grid positions (like pointing "
-            "coordinates for a later click). Runs ONLY on your paired "
-            "machine (agent routing must be on) - Windows UI Automation, "
-            "unavailable elsewhere. No confirmation required."
+            "Look at a window on the paired machine and get back its app "
+            "title plus clickable controls as C ids with kinds, labels, "
+            "and 0-1000 grid positions (like pointing coordinates for a "
+            "later click). Reads the frontmost window by default; pass "
+            "window to target another (process:spotify, title:Back In "
+            "Black, pid:1234, or a bare name) and wait_kind/wait_label "
+            "to block until a control appears (timeout_ms, default "
+            "3000, cap 10000) instead of re-reading. Runs ONLY on your "
+            "paired machine (agent routing must be on) - Windows UI "
+            "Automation, unavailable elsewhere. No confirmation "
+            "required."
         ),
         description_webchat=(
-            "Look at the frontmost window on the paired machine: app "
-            "title plus controls as C ids on a 0-1000 grid. Runs ONLY "
-            "on your paired machine."
+            "Look at a window on the paired machine: app title plus "
+            "controls as C ids on a 0-1000 grid. Optional window "
+            "selector and wait_kind/wait_label to block until a control "
+            "appears. Runs ONLY on your paired machine."
         ),
-        properties={},
+        properties={
+            "window": _str(
+                description=(
+                    "Window selector: process:spotify, "
+                    "title:Back In Black, pid:1234, or a bare "
+                    "process/title name. Omit for the frontmost "
+                    "window.")),
+            "wait_kind": _str(
+                description=(
+                    "Control kind to wait for (button, text field, "
+                    "link, ...)."),
+                enum=list(LOOK_KINDS)),
+            "wait_label": _str(
+                description=(
+                    "Wait until a control label contains this text "
+                    "(case-insensitive).")),
+            "timeout_ms": _int(
+                description=(
+                    "Wait timeout in milliseconds (default 3000, max "
+                    "10000). Ignored without wait_kind/wait_label.")),
+        },
         required=(),
         read_only=True,
         needs_approval=False,

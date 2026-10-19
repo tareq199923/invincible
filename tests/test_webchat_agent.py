@@ -680,8 +680,13 @@ def test_look_result_key_ignores_non_looks():
     from invincible.core.webchat_agent import _look_result_key
 
     good = {"status": "look", "app": "Brave", "controls": [],
-            "mouse": {"x": 1, "y": 1}}
+            "mouse": {"x": 1, "y": 1}, "waited_ms": 10}
     assert _look_result_key(good) == _look_result_key(dict(good))
+    # F23: timing diagnostics vary per read and must not defeat F14.
+    assert _look_result_key(good) == _look_result_key(
+        {**good, "waited_ms": 480})
+    assert _look_result_key(good) != _look_result_key(
+        {**good, "controls": [{"id": "C1"}]})
     assert _look_result_key({"status": "error", "error": "x"}) is None
     assert _look_result_key({"status": "unavailable"}) is None
     assert _look_result_key("not-a-dict") is None
@@ -706,12 +711,18 @@ async def test_identical_looks_withhold_tools_after_third(
     bodies, handler = scripted(seq)
     router_setter({"w1.example.com": handler})
 
-    async def fake_look(executor):
+    look_reads = {"n": 0}
+
+    async def fake_look(executor, args=None):
+        # F23 results carry a per-read timing field; F14 must still
+        # see the unchanged screen behind it.
+        look_reads["n"] += 1
         return {"status": "look", "app": "Brave",
                 "controls": [{"id": "C1", "kind": "button",
                               "label": "Play", "x": 500, "y": 500}],
                 "mouse": {"x": 1, "y": 1},
-                "size": {"w": 100, "h": 100}}
+                "size": {"w": 100, "h": 100},
+                "waited_ms": 40 * look_reads["n"]}
 
     async def fake_read(path, *args):
         return {"status": "read", "path": path, "content": "same"}
@@ -757,7 +768,7 @@ async def test_differing_looks_do_not_trip_guard(
     ]
     state = {"i": 0}
 
-    async def fake_look(executor):
+    async def fake_look(executor, args=None):
         resp = states[min(state["i"], len(states) - 1)]
         state["i"] += 1
         return resp
@@ -1017,7 +1028,7 @@ async def test_look_flows_through_loop_verbatim_no_queue_surface(
         "truncated": False,
     }
 
-    async def fake_look(executor):
+    async def fake_look(executor, args=None):
         return dict(look_result)
 
     import invincible.core.webchat_agent as webchat_agent
