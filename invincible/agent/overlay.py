@@ -1276,6 +1276,38 @@ def virtual_screen() -> tuple[int, int, int, int]:
     return (int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3]))
 
 
+def canvas_rect(vrect: tuple) -> tuple[int, int, int, int]:
+    """Canvas-space rect for the overlay window (pure, hermetic).
+
+    The Tk window covers the virtual desktop at ``+ox+oy``, so canvas
+    coordinates are window-relative while every pixel helper returns
+    absolute virtual-screen pixels. Drawing must hand those helpers
+    THIS rect: same width/height, origin at ``(0, 0)``. On a single
+    monitor the two rects are identical (a strict no-op); on a
+    multi-monitor desktop it folds the origin back out. Malformed
+    rects read ``(0, 0, 0, 0)``; never raises.
+    """
+    try:
+        _ox, _oy, width, height = vrect
+        return (0, 0, int(width), int(height))
+    except (TypeError, ValueError):
+        return (0, 0, 0, 0)
+
+
+def screen_to_canvas(px, py, vrect: tuple) -> tuple[float, float]:
+    """Absolute virtual-screen point in canvas coordinates (pure).
+
+    Cursor polling is absolute; the child's canvas is window-relative,
+    so every gaze comparison needs this shift. Junk reads
+    ``(0.0, 0.0)``; never raises.
+    """
+    try:
+        ox, oy = float(vrect[0]), float(vrect[1])
+        return (float(px) - ox, float(py) - oy)
+    except (TypeError, ValueError, IndexError):
+        return (0.0, 0.0)
+
+
 def cursor_pos() -> tuple[int, int]:
     """Live cursor position via GetCursorPos (Windows only, read-only)."""
     if os.name != "nt":
@@ -1535,6 +1567,12 @@ def _run_window(tk) -> None:
 
     vrect = virtual_screen()
     ox, oy, width, height = vrect
+    # F21 follow-up: the window spans the virtual desktop at +ox+oy,
+    # so Tk canvas coordinates are window-relative. Every pixel helper
+    # below returns ABSOLUTE virtual-screen pixels; drawing through
+    # ``crect`` folds the origin out. Single monitor: crect == vrect
+    # (a strict no-op).
+    crect = canvas_rect(vrect)
     root = tk.Tk()
     try:
         root.overrideredirect(True)
@@ -1570,9 +1608,9 @@ def _run_window(tk) -> None:
     # F21: the face sits in the bottom-right dock box (shifted left);
     # the pointer parks beside it, and its TIP - the hotspot - is what
     # every flight targets.
-    face_x, face_y = face_box(vrect)
+    face_x, face_y = face_box(crect)
     face_r = OVERLAY_FACE_PX / 2.0
-    home = pointer_home(vrect)
+    home = pointer_home(crect)
     pointer_xy = [float(home[0]), float(home[1])]
     _, mid, deep = shell_shades()
     # F20 glow, F21 shape: a faint dithered squircle band plus a crisp
@@ -1674,10 +1712,16 @@ def _run_window(tk) -> None:
     reader = threading.Thread(target=_stdin_reader, args=(inbox,),
                               daemon=True)
     reader.start()
+
+    def _poll_cursor() -> tuple[float, float]:
+        """Absolute cursor px in canvas space (window sits at +ox+oy)."""
+        raw_x, raw_y = cursor_pos()
+        return screen_to_canvas(raw_x, raw_y, vrect)
+
     try:
-        cursor = cursor_pos()
+        cursor = _poll_cursor()
     except OSError:
-        cursor = (ox + width // 2, oy + height // 2)
+        cursor = (width / 2.0, height / 2.0)
     steps = max(2, int(round(
         OVERLAY_GLIDE_SECONDS / OVERLAY_POLL_SECONDS)))
     now0 = time.monotonic()
@@ -1692,7 +1736,7 @@ def _run_window(tk) -> None:
              "ring": None, "glyphs": []}
 
     def _dock() -> None:
-        target = pointer_home(vrect)
+        target = pointer_home(crect)
         state["to_target"] = False
         state["flight"] = None
         state["velocity"] = [0.0, 0.0]
@@ -1704,12 +1748,12 @@ def _run_window(tk) -> None:
     def _launch(gx, gy, label, dragging,
                 bubble_seconds: float) -> None:
         now_child = time.monotonic()
-        px, py = grid_to_pixel(gx, gy, vrect)
+        px, py = grid_to_pixel(gx, gy, crect)
         state["flight"] = plan_flight(
             (pointer_xy[0], pointer_xy[1]),
             (float(px), float(py)),
             tuple(state["velocity"]),
-            now_child, vrect, dragging)
+            now_child, crect, dragging)
         state["path"] = []
         state["to_target"] = True
         state["dragging"] = dragging
@@ -1736,7 +1780,7 @@ def _run_window(tk) -> None:
             grid = _choreo_grid(message.get("x"), message.get("y"))
             if grid is None:
                 return
-            anchor = effect_anchor(grid, vrect)
+            anchor = effect_anchor(grid, crect)
             if anchor is None:
                 return
             state["press_start"] = now_fx
@@ -1783,7 +1827,7 @@ def _run_window(tk) -> None:
         # F21 hover follow-up: "home" means the pointer is actually
         # parked beside the face, not merely "not flying". A settled
         # tour/click point still bobs; the parked pointer is still.
-        is_home = settled and pointer_at_home(px, py, vrect)
+        is_home = settled and pointer_at_home(px, py, crect)
         if settled and not is_home:
             with contextlib.suppress(Exception):
                 bob = hover_offset(now, state["landed_at"],
@@ -2027,7 +2071,7 @@ def _run_window(tk) -> None:
         except queue.Empty:
             pass
         with contextlib.suppress(OSError):
-            cursor = cursor_pos()
+            cursor = _poll_cursor()
         if state["flight"] is not None:
             with contextlib.suppress(Exception):
                 flight = state["flight"]
@@ -2087,7 +2131,7 @@ def _run_window(tk) -> None:
                             OVERLAY_POINT_FLIGHT_SECONDS
                             + OVERLAY_POINT_MIN_HOLD_SECONDS)
             elif action == "dock":
-                home_now = pointer_home(vrect)
+                home_now = pointer_home(crect)
                 if (pointer_xy[0], pointer_xy[1]) != home_now:
                     with contextlib.suppress(Exception):
                         _dock()

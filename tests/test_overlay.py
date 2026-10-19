@@ -87,6 +87,38 @@ def test_pointer_at_home_tolerance_and_junk():
     assert overlay.pointer_at_home(hx, hy, vrect, tolerance="big") is False
 
 
+def test_canvas_rect_multi_monitor_translation():
+    """The child draws in canvas space: helper output on ``crect`` is
+    the absolute output shifted by the virtual-screen origin."""
+    vrect = (-1920, 0, 3840, 1080)
+    crect = overlay.canvas_rect(vrect)
+    assert crect == (0, 0, 3840, 1080)
+    # Same size, origin zeroed; a single monitor is the identity.
+    assert overlay.canvas_rect((0, 0, 1920, 1080)) == (0, 0, 1920, 1080)
+    for point in ((0, 0), (250, 750), (1000, 1000)):
+        abs_px = overlay.grid_to_pixel(*point, vrect)
+        canvas_px = overlay.grid_to_pixel(*point, crect)
+        assert canvas_px == (abs_px[0] - vrect[0], abs_px[1] - vrect[1])
+    fx, fy = overlay.face_box(vrect)
+    assert overlay.face_box(crect) == (fx - vrect[0], fy - vrect[1])
+    hx, hy = overlay.pointer_home(vrect)
+    assert overlay.pointer_home(crect) == (hx - vrect[0], hy - vrect[1])
+    assert overlay.effect_anchor((250, 750), crect) == (
+        overlay.grid_to_pixel(250, 750, crect))
+    assert overlay.pointer_at_home(*overlay.pointer_home(crect), crect)
+    # Cursor polling is absolute; the child shifts it into canvas space
+    # exactly once.
+    assert overlay.screen_to_canvas(1500, 500, vrect) == (3420.0, 500.0)
+    assert overlay.screen_to_canvas(-1920, 0, vrect) == (0.0, 0.0)
+    # Junk never raises.
+    assert overlay.canvas_rect(None) == (0, 0, 0, 0)
+    assert overlay.canvas_rect((1, 2, 3)) == (0, 0, 0, 0)
+    assert overlay.canvas_rect("abcd") == (0, 0, 0, 0)
+    assert overlay.screen_to_canvas(1, 2, None) == (0.0, 0.0)
+    assert overlay.screen_to_canvas("a", 2, vrect) == (0.0, 0.0)
+    assert overlay.screen_to_canvas(1, 2, (1,)) == (0.0, 0.0)
+
+
 def test_squircle_points_shape_and_bounds():
     pts = overlay.squircle_points(50.0, 60.0, 20.0, 10.0, samples=64)
     assert len(pts) == 64
