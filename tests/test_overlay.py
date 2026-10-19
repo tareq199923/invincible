@@ -119,6 +119,108 @@ def test_canvas_rect_multi_monitor_translation():
     assert overlay.screen_to_canvas(1, 2, (1,)) == (0.0, 0.0)
 
 
+def test_dock_corner_lift_default_unchanged_and_overridable():
+    vrect = (0, 0, 1920, 1080)
+    size = overlay.OVERLAY_FACE_PX
+    pad = overlay.OVERLAY_DOCK_MARGIN
+    old = (1920 - pad - size,
+           1080 - pad - size - overlay.OVERLAY_DOCK_LIFT)
+    # No lift argument: exactly the pre-work-area behavior.
+    assert overlay.dock_corner(vrect, size) == old
+    assert overlay.dock_corner(vrect, size, lift=24) == (old[0], old[1] + 24)
+    # Junk lift falls back to the default; negative clamps to zero.
+    assert overlay.dock_corner(vrect, size, lift="x") == old
+    assert overlay.dock_corner(vrect, size, lift=-5) == (
+        old[0], 1080 - pad - size)
+
+
+def test_dock_area_uses_primary_work_area_not_empty_corner():
+    # Tall primary (2560x1440) with a SHORTER 1920x1080 monitor on its
+    # right: the desktop's bottom-right corner is empty space.
+    vrect = (0, 0, 4480, 1440)
+    work = (0, 0, 2560, 1392)  # primary minus a 48px taskbar
+    rect, lift = overlay.dock_area(vrect, work)
+    assert rect == (0, 0, 2560, 1392)
+    assert lift == overlay.OVERLAY_WORKAREA_LIFT
+    fx, fy = overlay.face_box(rect, lift)
+    assert fx >= 0 and fx + overlay.OVERLAY_FACE_PX <= 2560
+    assert fy >= 0 and fy + overlay.OVERLAY_FACE_PX <= 1392
+    # The old bounding-box dock parked the face below the short monitor.
+    _old_x, old_y = overlay.face_box(vrect)
+    assert old_y + overlay.OVERLAY_FACE_PX > 1080
+
+
+def test_dock_area_face_sits_a_little_higher_on_one_screen():
+    vrect = (0, 0, 1920, 1080)
+    old_x, old_y = overlay.face_box(vrect)
+    rect, lift = overlay.dock_area(vrect, (0, 0, 1920, 1032))
+    new_x, new_y = overlay.face_box(rect, lift)
+    assert new_x == old_x
+    # 48px taskbar: the face rides 24px higher than before.
+    assert old_y - new_y == (
+        overlay.OVERLAY_DOCK_LIFT - overlay.OVERLAY_WORKAREA_LIFT)
+    assert new_y < old_y
+
+
+def test_dock_area_falls_back_to_bounding_box():
+    vrect = (-1920, 0, 3840, 1080)
+    expected = (vrect, overlay.OVERLAY_DOCK_LIFT)
+    assert overlay.dock_area(vrect, None) == expected
+    assert overlay.dock_area(vrect, "abcd") == expected
+    assert overlay.dock_area(vrect, (1, 2, 3)) == expected
+    assert overlay.dock_area(vrect, (0, 0, 0, 0)) == expected
+    assert overlay.dock_area(vrect, (0, 0, 5000, 1000)) == expected
+    assert overlay.dock_area(None, (0, 0, 1, 1)) == (
+        None, overlay.OVERLAY_DOCK_LIFT)
+
+
+def test_dock_area_negative_origin_canvas_shift():
+    vrect = (-1920, 0, 3840, 1080)  # second screen left of the primary
+    rect, lift = overlay.dock_area(vrect, (0, 0, 1920, 1032))
+    assert rect == (0, 0, 1920, 1032)
+    drect = overlay.shift_rect(rect, vrect)
+    assert drect == (1920, 0, 1920, 1032)
+    ax, ay = overlay.face_box(rect, lift)
+    assert overlay.face_box(drect, lift) == (ax - vrect[0], ay - vrect[1])
+    hx, hy = overlay.pointer_home(rect, lift)
+    assert overlay.pointer_home(drect, lift) == (
+        hx - vrect[0], hy - vrect[1])
+    assert overlay.pointer_at_home(
+        *overlay.pointer_home(drect, lift), drect, lift=lift)
+    # Without the work-area fallback the canvas rect is unchanged.
+    full, full_lift = overlay.dock_area(vrect, None)
+    assert overlay.shift_rect(full, vrect) == overlay.canvas_rect(vrect)
+    assert full_lift == overlay.OVERLAY_DOCK_LIFT
+    # Junk never raises.
+    assert overlay.shift_rect(None, vrect) == (0, 0, 0, 0)
+    assert overlay.shift_rect((1, 2, 3), vrect) == (0, 0, 0, 0)
+    assert overlay.shift_rect((1, 2, 3, 4), None) == (0, 0, 0, 0)
+    assert overlay.shift_rect(("a", 2, 3, 4), vrect) == (0, 0, 0, 0)
+
+
+def test_work_area_reads_real_rect_or_none():
+    got = overlay.work_area()
+    # Off Windows (or on any failure) None; on Windows a real rect.
+    assert got is None or (
+        len(got) == 4 and got[2] > got[0] and got[3] > got[1])
+
+
+def test_dpi_awareness_is_opt_in(monkeypatch):
+    from invincible.core.settings import OVERLAY_DPI_ENV, settings
+
+    monkeypatch.delenv(OVERLAY_DPI_ENV, raising=False)
+    assert overlay._dpi_opt_in() is False
+    assert settings.overlay_dpi_aware() is False
+    for value in ("1", "true", "YES", " on "):
+        monkeypatch.setenv(OVERLAY_DPI_ENV, value)
+        assert overlay._dpi_opt_in() is True
+        assert settings.overlay_dpi_aware() is True
+    for value in ("0", "", "no", "off"):
+        monkeypatch.setenv(OVERLAY_DPI_ENV, value)
+        assert overlay._dpi_opt_in() is False
+        assert settings.overlay_dpi_aware() is False
+
+
 def test_squircle_points_shape_and_bounds():
     pts = overlay.squircle_points(50.0, 60.0, 20.0, 10.0, samples=64)
     assert len(pts) == 64

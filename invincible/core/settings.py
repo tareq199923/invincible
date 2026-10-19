@@ -82,6 +82,8 @@ DEFAULT_TUNNEL_MAX_PER_USER = 3
 
 # Off-switch vocabulary shared by every INVINCIBLE_* boolean toggle.
 _OFF_VALUES = ("0", "false", "off")
+# Opt-in physical-pixel rendering for the B1 overlay child (F26).
+OVERLAY_DPI_ENV = "INVINCIBLE_OVERLAY_DPI_AWARE"
 
 
 def _env_flag(name: str) -> bool:
@@ -153,6 +155,15 @@ class Settings:
         Set INVINCIBLE_OVERLAY=0/off/false to run headless (useful on
         servers or when no desktop session is visible)."""
         return _env_flag("INVINCIBLE_OVERLAY")
+
+    def overlay_dpi_aware(self) -> bool:
+        """Opt-in physical-pixel rendering for the B1 overlay child.
+        Off by default: a DPI-aware process draws the pixel-sized face
+        smaller on 125%/150% displays. Set
+        INVINCIBLE_OVERLAY_DPI_AWARE=1/true/yes/on to enable before the
+        overlay child starts."""
+        return os.getenv(OVERLAY_DPI_ENV, "").strip().lower() in (
+            "1", "true", "yes", "on")
 
     def handoff_enabled(self) -> bool:
         """Phone→PC handoff control messages (B2). Default on:

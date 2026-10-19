@@ -109,6 +109,11 @@ OVERLAY_POINT_LABEL_CAP = 60
 OVERLAY_DOCK_MARGIN = 24
 OVERLAY_DOCK_CORNER = "br"
 OVERLAY_DOCK_LIFT = 48
+# The face docks into the PRIMARY monitor's work area (screen minus the
+# real taskbar), so the extra rise above that edge is small: with the
+# usual 48px taskbar this sits the face 24px higher than the old
+# bounding-box dock (DOCK_LIFT 48 counted the taskbar itself).
+OVERLAY_WORKAREA_LIFT = 24
 OVERLAY_TRANSPARENT_KEY = "magenta"
 
 # F16 Bluey states, retargeted by F21 (child-side drawing only - no
@@ -174,6 +179,7 @@ _SM_CXVIRTUALSCREEN = 78
 _SM_CYVIRTUALSCREEN = 79
 _SM_CXSCREEN = 0
 _SM_CYSCREEN = 1
+_SPI_GETWORKAREA = 0x0030
 _GWL_EXSTYLE = -20
 _WS_EX_TRANSPARENT = 0x20
 _WS_EX_LAYERED = 0x80000
@@ -840,13 +846,17 @@ def face_apply(wire_state, now) -> dict | None:
 
 def dock_corner(vrect: tuple, size_px: int,
                 corner: str = OVERLAY_DOCK_CORNER,
-                margin: int = OVERLAY_DOCK_MARGIN) -> tuple[int, int]:
+                margin: int = OVERLAY_DOCK_MARGIN,
+                lift: int = OVERLAY_DOCK_LIFT) -> tuple[int, int]:
     """Top-left pixel of a ``size_px`` box in the dock corner (pure).
 
-    Bottom corners ride ``OVERLAY_DOCK_LIFT`` px above the full vrect
-    bottom so the box clears the Windows taskbar; top corners are
-    unchanged. ``size_px`` was named ``head_px`` before F21; all
-    in-repo callers pass it positionally.
+    Bottom corners ride ``lift`` px above the rect's bottom (default
+    ``OVERLAY_DOCK_LIFT``, sized to clear the Windows taskbar when the
+    rect is the full desktop); top corners are unchanged. When the
+    rect is the primary work area the taskbar is already excluded and
+    the caller passes the smaller ``OVERLAY_WORKAREA_LIFT``.
+    ``size_px`` was named ``head_px`` before F21; all in-repo callers
+    pass it positionally.
     """
     ox, oy, width, height = vrect
     try:
@@ -857,10 +867,14 @@ def dock_corner(vrect: tuple, size_px: int,
         pad = max(0, int(margin))
     except (TypeError, ValueError):
         pad = 0
+    try:
+        rise = max(0, int(lift))
+    except (TypeError, ValueError):
+        rise = OVERLAY_DOCK_LIFT
     spots = {
         "br": (ox + width - pad - size,
-               oy + height - pad - size - OVERLAY_DOCK_LIFT),
-        "bl": (ox + pad, oy + height - pad - size - OVERLAY_DOCK_LIFT),
+               oy + height - pad - size - rise),
+        "bl": (ox + pad, oy + height - pad - size - rise),
         "tr": (ox + width - pad - size, oy + pad),
         "tl": (ox + pad, oy + pad),
     }
@@ -868,23 +882,25 @@ def dock_corner(vrect: tuple, size_px: int,
     return (int(picked[0]), int(picked[1]))
 
 
-def face_box(vrect: tuple) -> tuple[int, int]:
+def face_box(vrect: tuple,
+             lift: int = OVERLAY_DOCK_LIFT) -> tuple[int, int]:
     """Top-left pixel of the companion face's box (pure, hermetic).
 
-    The face lives in the bottom-right dock spot (``OVERLAY_DOCK_LIFT``
-    above the taskbar, ``OVERLAY_DOCK_MARGIN`` from the edges) shifted
+    The face lives in the bottom-right dock spot (``lift`` above the
+    rect's bottom, ``OVERLAY_DOCK_MARGIN`` from the edges) shifted
     ``OVERLAY_FACE_SHIFT_LEFT`` px left so Windows notification toasts
     keep the true corner. Malformed rects read as ``(0, 0)``; never
     raises.
     """
     try:
-        x, y = dock_corner(vrect, OVERLAY_FACE_PX)
+        x, y = dock_corner(vrect, OVERLAY_FACE_PX, lift=lift)
     except (TypeError, ValueError):
         return (0, 0)
     return (int(x) - OVERLAY_FACE_SHIFT_LEFT, int(y))
 
 
-def pointer_home(vrect: tuple) -> tuple[float, float]:
+def pointer_home(vrect: tuple,
+                 lift: int = OVERLAY_DOCK_LIFT) -> tuple[float, float]:
     """Parked pointer TIP position: beside the face's left edge (pure).
 
     The tip is the hotspot, so "parked" is the tip of the pointer box
@@ -893,7 +909,7 @@ def pointer_home(vrect: tuple) -> tuple[float, float]:
     origin; never raises.
     """
     try:
-        fx, fy = face_box(vrect)
+        fx, fy = face_box(vrect, lift)
         width = float(OVERLAY_POINTER_W)
         height = float(OVERLAY_POINTER_PX)
         return (float(fx) - OVERLAY_PARK_GAP - width,
@@ -902,7 +918,8 @@ def pointer_home(vrect: tuple) -> tuple[float, float]:
         return (0.0, 0.0)
 
 
-def pointer_at_home(px, py, vrect: tuple, tolerance: float = 1.0) -> bool:
+def pointer_at_home(px, py, vrect: tuple, tolerance: float = 1.0,
+                    lift: int = OVERLAY_DOCK_LIFT) -> bool:
     """Whether a pointer position is the parked spot (pure, hermetic).
 
     F21 hover follow-up: "home" for the hover bob means the pointer is
@@ -911,7 +928,7 @@ def pointer_at_home(px, py, vrect: tuple, tolerance: float = 1.0) -> bool:
     pointer stays still. Junk reads as ``False``; never raises.
     """
     try:
-        hx, hy = pointer_home(vrect)
+        hx, hy = pointer_home(vrect, lift)
         reach = float(tolerance)
         return (math.isfinite(reach) and reach >= 0
                 and abs(float(px) - hx) <= reach
@@ -1308,6 +1325,106 @@ def screen_to_canvas(px, py, vrect: tuple) -> tuple[float, float]:
         return (0.0, 0.0)
 
 
+def shift_rect(rect: tuple, vrect: tuple) -> tuple[int, int, int, int]:
+    """Absolute ``(x, y, w, h)`` rect into canvas space (pure).
+
+    Folds the virtual-screen origin out of ``rect``'s corner, same as
+    ``screen_to_canvas`` does for a point. Malformed input reads
+    ``(0, 0, 0, 0)``; never raises.
+    """
+    try:
+        x, y, w, h = rect
+        return (int(x - vrect[0]), int(y - vrect[1]), int(w), int(h))
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return (0, 0, 0, 0)
+
+
+def dock_area(vrect: tuple, work=None) -> tuple[tuple, int]:
+    """Rect the companion face docks into, plus its lift (pure).
+
+    ``work`` is the primary monitor's work area ``(left, top, right,
+    bottom)`` in absolute virtual-screen pixels (see ``work_area``).
+    A usable work area (positive size, inside the desktop) wins: the
+    face then sits on a real screen, above the real taskbar, with the
+    small ``OVERLAY_WORKAREA_LIFT``. Missing, junk, degenerate or
+    out-of-desktop values fall back to the old bounding-box dock
+    (``vrect`` with ``OVERLAY_DOCK_LIFT``). Never raises.
+    """
+    try:
+        ox, oy, vw, vh = (int(v) for v in vrect)
+    except (TypeError, ValueError, OverflowError):
+        return (vrect, OVERLAY_DOCK_LIFT)
+    full = (ox, oy, vw, vh)
+    try:
+        left, top, right, bottom = (int(v) for v in work)
+    except (TypeError, ValueError, OverflowError):
+        return (full, OVERLAY_DOCK_LIFT)
+    width, height = right - left, bottom - top
+    inside = (left >= ox and top >= oy
+              and right <= ox + vw and bottom <= oy + vh)
+    if width <= 0 or height <= 0 or not inside:
+        return (full, OVERLAY_DOCK_LIFT)
+    return ((left, top, width, height), OVERLAY_WORKAREA_LIFT)
+
+
+def work_area() -> tuple[int, int, int, int] | None:
+    """Primary monitor work area ``(left, top, right, bottom)``.
+
+    Screen minus the taskbar, in absolute virtual-screen pixels
+    (SPI_GETWORKAREA). ``None`` off Windows or on any failure - the
+    caller then falls back to the bounding-box dock. Never raises.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        if not ctypes.windll.user32.SystemParametersInfoW(
+                _SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+            return None
+        return (int(rect.left), int(rect.top),
+                int(rect.right), int(rect.bottom))
+    except Exception:
+        return None
+
+
+def _dpi_opt_in() -> bool:
+    """Whether the opt-in physical-pixel switch is on (never raises)."""
+    try:
+        from invincible.core.settings import settings
+        return bool(settings.overlay_dpi_aware())
+    except Exception:
+        return False
+
+
+def _enable_dpi_awareness() -> None:
+    """Best-effort: make this process report PHYSICAL pixels.
+
+    Must run before the first window exists. Tries per-monitor v2,
+    then per-monitor, then system-aware; each failure is swallowed so
+    a missing API just leaves the overlay as it was. Never raises.
+    """
+    if os.name != "nt":
+        return
+    import ctypes
+
+    with contextlib.suppress(Exception):
+        user32 = ctypes.windll.user32
+        user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        user32.SetProcessDpiAwarenessContext.restype = ctypes.c_int
+        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 == -4
+        if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    with contextlib.suppress(Exception):
+        # PROCESS_PER_MONITOR_DPI_AWARE == 2; 0 is S_OK
+        if ctypes.windll.shcore.SetProcessDpiAwareness(2) == 0:
+            return
+    with contextlib.suppress(Exception):
+        ctypes.windll.user32.SetProcessDPIAware()
+
+
 def cursor_pos() -> tuple[int, int]:
     """Live cursor position via GetCursorPos (Windows only, read-only)."""
     if os.name != "nt":
@@ -1552,6 +1669,8 @@ def overlay_main() -> None:
     """
     if os.name != "nt":
         return
+    if _dpi_opt_in():
+        _enable_dpi_awareness()
     try:
         import tkinter as tk
     except Exception:
@@ -1573,6 +1692,13 @@ def _run_window(tk) -> None:
     # ``crect`` folds the origin out. Single monitor: crect == vrect
     # (a strict no-op).
     crect = canvas_rect(vrect)
+    # Dock the face on the PRIMARY monitor's work area, not the corner
+    # of the whole desktop (that corner can be empty space between
+    # monitors of different sizes). ``drect`` is canvas-space like
+    # ``crect``; with no usable work area it equals ``crect`` and
+    # ``dock_lift`` is the old ``OVERLAY_DOCK_LIFT`` (strict no-op).
+    dock_abs, dock_lift = dock_area(vrect, work_area())
+    drect = shift_rect(dock_abs, vrect)
     root = tk.Tk()
     try:
         root.overrideredirect(True)
@@ -1608,9 +1734,9 @@ def _run_window(tk) -> None:
     # F21: the face sits in the bottom-right dock box (shifted left);
     # the pointer parks beside it, and its TIP - the hotspot - is what
     # every flight targets.
-    face_x, face_y = face_box(crect)
+    face_x, face_y = face_box(drect, dock_lift)
     face_r = OVERLAY_FACE_PX / 2.0
-    home = pointer_home(crect)
+    home = pointer_home(drect, dock_lift)
     pointer_xy = [float(home[0]), float(home[1])]
     _, mid, deep = shell_shades()
     # F20 glow, F21 shape: a faint dithered squircle band plus a crisp
@@ -1736,7 +1862,7 @@ def _run_window(tk) -> None:
              "ring": None, "glyphs": []}
 
     def _dock() -> None:
-        target = pointer_home(crect)
+        target = pointer_home(drect, dock_lift)
         state["to_target"] = False
         state["flight"] = None
         state["velocity"] = [0.0, 0.0]
@@ -1827,7 +1953,7 @@ def _run_window(tk) -> None:
         # F21 hover follow-up: "home" means the pointer is actually
         # parked beside the face, not merely "not flying". A settled
         # tour/click point still bobs; the parked pointer is still.
-        is_home = settled and pointer_at_home(px, py, crect)
+        is_home = settled and pointer_at_home(px, py, drect, lift=dock_lift)
         if settled and not is_home:
             with contextlib.suppress(Exception):
                 bob = hover_offset(now, state["landed_at"],
@@ -2131,7 +2257,7 @@ def _run_window(tk) -> None:
                             OVERLAY_POINT_FLIGHT_SECONDS
                             + OVERLAY_POINT_MIN_HOLD_SECONDS)
             elif action == "dock":
-                home_now = pointer_home(crect)
+                home_now = pointer_home(drect, dock_lift)
                 if (pointer_xy[0], pointer_xy[1]) != home_now:
                     with contextlib.suppress(Exception):
                         _dock()

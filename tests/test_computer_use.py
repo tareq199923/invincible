@@ -862,6 +862,7 @@ def test_overlay_delay_fn_covers_planned_flight(monkeypatch):
 
     vrect = (0, 0, 1920, 1080)
     monkeypatch.setattr(overlay, "virtual_screen", lambda: vrect)
+    monkeypatch.setattr(overlay, "work_area", lambda: None)
     monkeypatch.setattr(runner, "_OVERLAY_POINTER_PX", None)
     delay_for = runner._overlay_delay_fn(False)
     dwell = delay_for({"x": 900, "y": 500})
@@ -878,11 +879,52 @@ def test_overlay_delay_fn_covers_planned_flight(monkeypatch):
         overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS)
 
 
+def test_overlay_delay_fn_docks_into_primary_work_area(monkeypatch):
+    """F26: the runner seeds the pre-action glide from the same
+    work-area dock the child draws (not the empty virtual-desktop
+    corner of a mismatched multi-monitor layout)."""
+    from invincible.agent import overlay, runner
+
+    # Tall primary (2560x1440) with a shorter 1920x1080 monitor on its
+    # right: the virtual-desktop bottom-right corner is empty space.
+    vrect = (0, 0, 4480, 1440)
+    work = (0, 0, 2560, 1392)
+    monkeypatch.setattr(overlay, "virtual_screen", lambda: vrect)
+    monkeypatch.setattr(overlay, "work_area", lambda: work)
+    monkeypatch.setattr(runner, "_OVERLAY_POINTER_PX", None)
+
+    delay_for = runner._overlay_delay_fn(False)
+    dwell = delay_for({"x": 900, "y": 500})
+
+    dock_abs, lift = overlay.dock_area(vrect, work)
+    parked = overlay.pointer_home(dock_abs, lift)
+    flight = overlay.plan_flight(
+        (float(parked[0]), float(parked[1])),
+        overlay.grid_to_pixel(900, 500, vrect),
+        (0.0, 0.0), 0.0, vrect, False)
+    expected = min(
+        max(float(flight["duration"])
+            + runner._OVERLAY_DWELL_BUFFER_SECONDS,
+            overlay.OVERLAY_PRE_ACTION_DWELL_SECONDS),
+        runner._OVERLAY_DWELL_MAX_SECONDS)
+    assert dwell == pytest.approx(expected)
+
+    # The parked point is on the primary work area, not the empty
+    # virtual-desktop corner to the right of the short monitor.
+    fx, fy = overlay.face_box(dock_abs, lift)
+    assert fx + overlay.OVERLAY_FACE_PX <= work[2]
+    assert fy + overlay.OVERLAY_FACE_PX <= work[3]
+    old_x, _old_y = overlay.face_box(vrect)
+    assert old_x + overlay.OVERLAY_FACE_PX > work[2]
+    assert parked != overlay.pointer_home(vrect)
+
+
 def test_overlay_delay_fn_drag_sums_legs(monkeypatch):
     from invincible.agent import overlay, runner
 
     monkeypatch.setattr(overlay, "virtual_screen",
                         lambda: (0, 0, 1920, 1080))
+    monkeypatch.setattr(overlay, "work_area", lambda: None)
     monkeypatch.setattr(runner, "_OVERLAY_POINTER_PX", None)
     delay_for = runner._overlay_delay_fn(True)
     first = delay_for({"x": 100, "y": 100})
