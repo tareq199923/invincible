@@ -5,6 +5,35 @@
 
 ## Current State
 
+- F26 done (`passing`): overlay work-area docking + opt-in DPI. The
+  companion face and parked pointer now dock on the PRIMARY monitor's
+  work area (screen minus the real taskbar) instead of the virtual-
+  desktop bounding-box corner, which can be empty space when monitor
+  heights differ. New pure helpers: `work_area()` (`SPI_GETWORKAREA`,
+  `None` off Windows/on failure), `dock_area()` (validates the work
+  area is positive and inside the virtual screen, returns it with
+  `OVERLAY_WORKAREA_LIFT`; junk/missing/out-of-desktop falls back to
+  the old `vrect` + `OVERLAY_DOCK_LIFT`), and `shift_rect()` (absolute
+  rect -> child canvas space). `dock_corner`/`face_box`/`pointer_home`/
+  `pointer_at_home` take an optional lift; `_run_window` uses
+  `drect`/`dock_lift` for the face, home, dock, and hover checks. The
+  runner's pre-action dwell now seeds from the same `dock_area` +
+  `pointer_home(..., lift)` so the glide estimate matches the child.
+  DPI is strictly opt-in: `settings.overlay_dpi_aware()` owns
+  `INVINCIBLE_OVERLAY_DPI_AWARE` (`1`/`true`/`on`/`yes`; default off),
+  and `overlay_main` calls the best-effort per-monitor-v2 ->
+  per-monitor -> system-aware setup before Tk starts only when set.
+  No tool, registry, approval, or model-visible surface changes; a
+  missing work area is a strict no-op. Docs: CONFIGURATION overlay row
+  (work-area dock + fallback) and new DPI row, TESTING F26 pins.
+  Tests: seven overlay helper/settings pins (lift override, multi-
+  monitor empty corner, one-screen 24px rise, fallbacks, negative
+  origin canvas shift, live shape, DPI opt-in) plus the runner's
+  work-area dwell seed. `ruff` clean; audit 11/11; targeted 166 passed;
+  FULL suite 2075 passed / 11 skipped / 1 deselected (Windows; CI-shaped
+  passwordless test DSN + `PGPASSWORD`). Live click-through and the
+  multi-monitor glide-vs-click check were not run (no paired desktop
+  session). Clean-state checklist 5/5 ticked. Committed as `262746b`.
 - F25 done (`passing`): `open_app` launch wait (Tier 2a follow-up of the
   repeat-app efficiency plan). New optional
   `window`/`wait_kind`/`wait_label`/`timeout_ms` on `open_app` using
@@ -705,28 +734,28 @@
 
 ## In Progress
 
-- None — F25 complete (`passing`). Zero `active`. Next: F22 (face
-  voice states; needs the server→agent signal) at the next clock-in;
+- None - F26 complete (`passing`). Zero `active`. Next: F22 (face
+  voice states; needs the server->agent signal) at the next clock-in;
   `open_url` launch wait is the small symmetric follow-up if wanted.
 
 ## Next Steps
 
-1. F22 (face voice states, `planned`) needs the server→agent voice
+1. F22 (face voice states, `planned`) needs the server->agent voice
    signal; text stays source of truth and silent when voice is off.
-2. Running `invincible connect` agents hold pre-F23/pre-F25 code —
-   restart to get `look_at_screen`'s window/wait args and `open_app`'s
-   launch wait. F24 guidance is server-side: a new dashboard chat turn
-   picks it up with no agent restart.
+2. Running `invincible connect` agents hold pre-F23/pre-F25/pre-F26
+   code - restart to get `look_at_screen`'s window/wait args,
+   `open_app`'s launch wait, and the work-area dock + opt-in DPI.
+   F24 guidance is server-side: a new dashboard chat turn picks it up
+   with no agent restart.
 3. `open_url` has no wait: a launch wait there is the symmetric
    follow-up (reuse `_open_wait_result` + the look selector), if the
    repeat-app plan calls for it.
 4. Tests must never spawn a real overlay head (autouse conftest
    guard); a test needing a spawn stubs `Overlay.start` and clears
    `overlay_spawn_guard`.
-5. Overlay multi-monitor canvas fix is in `e6adf38`; live
-   click-through and the multi-monitor glide-vs-click check remain
-   unverified. The user's overlay WIP (`overlay.py`,
-   `test_overlay.py`, `.vscode/`) is still unstaged.
+5. F26 live verification remains: click-through and the
+   multi-monitor glide-vs-click check on a real paired Windows
+   desktop. `.vscode/` is local-only and must stay untracked.
 6. F04 fan-out (`harness_fanout.py` + 18 tests) stays green,
    untouched.
 
