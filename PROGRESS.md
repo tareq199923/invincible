@@ -33,7 +33,8 @@
   FULL suite 2055 passed / 11 skipped / 1 deselected. (Two later
   reruns lost random DB-backed tests to another session truncating
   `invincible_test` — 8 then 7 unrelated failures, each green in
-  isolation.) Clean-state checklist 5/5 ticked.
+  isolation.) Clean-state checklist 5/5 ticked. Committed as
+  `2c6a570`.
 - F21 done (`passing`): overlay pointer + companion face — the single
   gliding head split in two. `agent/overlay.py`: the moving piece is a
   cursor-like pointer (classic up-left arrow, tip = hotspot, so an
