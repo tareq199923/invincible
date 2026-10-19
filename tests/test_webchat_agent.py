@@ -952,6 +952,90 @@ def test_environment_note_lean_turn_discipline():
             assert "only when the user asks" in note, (mode, execution)
 
 
+def test_environment_note_efficiency_ladder_manual_auto():
+    """F24: manual/auto carry the lean-turn ladder, batching, cold-app
+    wait, playbook, and one-final-look rules in both executions."""
+    from invincible.core.webchat_agent import environment_note
+
+    for execution in ("local", "agent"):
+        for mode in ("manual", "auto"):
+            note = environment_note(execution, mode=mode)
+            assert "cheapest route" in note, (mode, execution)
+            assert "open_url/open_app" in note, (mode, execution)
+            assert "press_keys" in note, (mode, execution)
+            assert "pixel/vision guessing last" in note, (mode, execution)
+            assert "Batch 3+ deterministic steps" in note, (
+                mode, execution)
+            assert "single execute_bash script" in note, (
+                mode, execution)
+            assert "waits inside" in note, (mode, execution)
+            assert "verify once at the end" in note, (mode, execution)
+            assert "do not re-look between script steps" in note, (
+                mode, execution)
+            assert (
+                "A C-id click still needs its grounding look"
+                in note
+            ), (mode, execution)
+            assert "ids go stale on a re-read" in note, (
+                mode, execution)
+            assert "look again after a screen change" in note, (
+                mode, execution)
+            assert "cold launch" in note, (mode, execution)
+            assert "wait_kind" in note, (mode, execution)
+            assert "wait_label" in note, (mode, execution)
+            assert "Playbook" in note, (mode, execution)
+            assert "keyboard-first" in note, (mode, execution)
+            assert "one verify" in note, (mode, execution)
+            assert "hard-to-undo steps" in note, (mode, execution)
+            assert "only the final look proves it worked" in note, (
+                mode, execution)
+            assert "desktop screenshot" not in note.lower(), (
+                mode, execution)
+
+
+def test_environment_note_efficiency_plan_stays_read_only():
+    """F24: plan keeps the shared read guidance and never receives the
+    execute_bash/batching/desktop-action guidance."""
+    from invincible.core.webchat_agent import environment_note
+
+    banned = (
+        "cheapest route", "execute_bash", "Batch 3+", "keyboard-first",
+        "cold launch", "hard-to-undo steps",
+    )
+    for execution in ("local", "agent"):
+        note = environment_note(execution, mode="plan")
+        assert (
+            "Prefer find_files/code_search/read_file/list_dir over "
+            "shell reads."
+        ) in note, execution
+        for phrase in banned:
+            assert phrase not in note, (phrase, execution)
+
+
+def test_environment_note_one_verify_keeps_f13_f17():
+    """F24 adds the final-look rule without weakening F13/F17: ok is
+    still dispatched-not-verified, looks stay fresh, C ids still go
+    stale, and unchanged-screen retries stay forbidden."""
+    from invincible.core.webchat_agent import environment_note
+
+    for execution in ("local", "agent"):
+        for mode in ("manual", "auto"):
+            note = environment_note(execution, mode=mode)
+            assert "dispatched, not pixels verified" in note, (
+                mode, execution)
+            assert "fresh look_at_screen" in note, (mode, execution)
+            assert "never retry identical coordinates" in note, (
+                mode, execution)
+            assert "only when the user asks" in note, (mode, execution)
+            assert "verify once at the end" in note, (mode, execution)
+            assert "only the final look proves it worked" in note, (
+                mode, execution)
+            assert (
+                "A C-id click still needs its grounding look"
+                in note
+            ), (mode, execution)
+
+
 def test_mode_prompts_unified_brevity():
     """Verify-then-reply-in-a-few-lines tails are identical; plan keeps
     its 'end with the plan' tail."""

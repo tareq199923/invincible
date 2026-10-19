@@ -198,6 +198,26 @@ COMPUTER_GROUNDING = (
     "ground every target with a fresh look_at_screen first "
     "(control ids go stale on every re-read) and never type into password fields."
 )
+# Tier 1 lean-turn guidance: cheapest capable route, one batched script
+# for deterministic UI work, wait for cold windows, one final verify.
+# Guidance only - no tool/schema/approval change. C-id clicks stay
+# grounded (ids go stale on every re-read); batching is for keyboard/
+# script steps, not for skipping the look behind a control id.
+COMPUTER_EFFICIENCY = (
+    "Pick the cheapest route: open_url/open_app or a CLI launch/deep "
+    "link first, then press_keys shortcuts, then look_at_screen plus a "
+    "C-id click for an unknown layout, and pixel/vision guessing last. "
+    "Batch 3+ deterministic steps in one app into a single execute_bash "
+    "script with waits inside, then verify once at the end; do not "
+    "re-look between script steps. A C-id click still needs its "
+    "grounding look (ids go stale on a re-read), so look again after a "
+    "screen change. After a cold launch, wait for the window inside the "
+    "script or with look_at_screen(window=process:..., wait_kind=..., "
+    "wait_label=...). Playbook: launch/focus, target by process:/title:, "
+    "anchor on a stable label/kind, act keyboard-first, one verify. "
+    "Keep hard-to-undo steps (send/post/delete/buy/submit) out of "
+    "batches; only the final look proves it worked."
+)
 MODE_SYSTEM_PROMPTS = {
     "plan": (
         BAYMAX_VOICE
@@ -315,6 +335,7 @@ def environment_note(
             "with a fresh look_at_screen and never retry identical "
             "coordinates on an unchanged screen; probe volume or the "
             "filesystem for media playback only when the user asks. "
+            f"{COMPUTER_EFFICIENCY} "
             "Never use inline `python -c` to edit files. If a tool call "
             "is declined or blocked, do not retry another way, tell "
             "the user."

@@ -300,6 +300,12 @@ text) in one append, so follow-up turns replay paired. Turns created
 over `/v1/*` that carry tool payloads are skipped by the template
 (their text still routes).
 
+`environment_note()` appends OS/shell facts plus per-mode guidance after
+the static prompt, with manual/auto adding the lean-turn computer-use
+ladder, 3+ deterministic-step batching through one `execute_bash` script,
+cold-app window waits, and a single final verification look, while plan
+mode stays read-only.
+
 ---
 
 ## 3a. Anthropic request flow (`/v1/messages`)
