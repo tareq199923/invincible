@@ -5,6 +5,42 @@
 
 ## Current State
 
+- F22 done (`passing`): the desktop companion face now mirrors voice
+  listening/speaking. The webchat orb's existing `onState` posts
+  `listening`/`speaking`/`idle` to a new session-cookie
+  `POST /dashboard/voice/state` (display-only; voice-off 503; no
+  job/result/DB write). `AgentRegistry` keeps one latest-wins `_voice`
+  slot per user with a 30s TTL, wakes a held poll, and the endpoint
+  pushes WS-first (`{"type":"voice_state",...}`) then drops only the
+  relayed `voice_id` so a newer signal survives; WS-less agents get the
+  additive `voice_state` field from `/agent/poll`.
+  `runner.handle_voice_state` forwards to `overlay.set_speaking(...)` +
+  `face(...)`; the overlay adds `listening` (wide attentive eyes) and
+  `speaking` (narrowed eyes + pulsing mouth) to
+  `FACE_STATES`/`FACE_WIRE_STATES`, with a 300s child-side watchdog
+  that also releases the homing pause. `chat.html` serializes signals
+  before the `turnActive` guard and sends an idle beacon on pagehide.
+  Text remains canonical; typed turns and voice-off servers signal
+  nothing, and a missing/dead overlay never breaks the agent. Tests:
+  225 focused passed; FULL suite 2088 passed / 11 skipped / 1 deselected
+  (Windows, default 5433 test DB). `ruff check .` clean; clean-state
+  checklist 5/5 ticked. Committed as `c03a501`.
+- F27 done (`passing`): mode-aware reply shape + clean speech text. The
+  old one-size-fits-all "reply in a few lines" tail is gone:
+  `webchat_agent.py` now composes `TOOL_GUIDE` (verify + file:line) with
+  `PLAN_REPLY_GUIDE` (detailed ordered steps, files/commands, risks,
+  verification, `End with the plan`), `MANUAL_REPLY_GUIDE` (outcome
+  first, no routine tool narration), or `AUTO_REPLY_GUIDE` (1-3 short
+  sentences, no play-by-play/restatement/optional background), plus a
+  shared `REPLY_SAFETY` rule that never trims warnings, errors, denials,
+  or failed verification. `voice-orb.js` adds `speechText()` before both
+  TTS paths: fenced code becomes "Code is in the chat.", while inline
+  code, links/URLs, headings, bullets, blockquotes, and emphasis markers
+  are cleaned; `chat.html` still speaks the verbatim bubble text through
+  the cleaned helper. No tool, approval, protocol, auth, or persistence
+  change. Tests: 105 focused passed; FULL suite 2076 passed / 11 skipped
+  / 1 deselected (Windows, default 5433 test DB). `ruff check .` clean;
+  clean-state checklist 5/5 ticked. Committed as `9404f99`.
 - F26 done (`passing`): overlay work-area docking + opt-in DPI. The
   companion face and parked pointer now dock on the PRIMARY monitor's
   work area (screen minus the real taskbar) instead of the virtual-
@@ -734,30 +770,31 @@
 
 ## In Progress
 
-- None - F26 complete (`passing`). Zero `active`. Next: F22 (face
-  voice states; needs the server->agent signal) at the next clock-in;
-  `open_url` launch wait is the small symmetric follow-up if wanted.
+- None. F22 is closed; F05 is the only `planned` feature and is not
+  active yet.
 
 ## Next Steps
 
-1. F22 (face voice states, `planned`) needs the server->agent voice
-   signal; text stays source of truth and silent when voice is off.
-2. Running `invincible connect` agents hold pre-F23/pre-F25/pre-F26
-   code - restart to get `look_at_screen`'s window/wait args,
-   `open_app`'s launch wait, and the work-area dock + opt-in DPI.
-   F24 guidance is server-side: a new dashboard chat turn picks it up
-   with no agent restart.
-3. `open_url` has no wait: a launch wait there is the symmetric
+1. Restart any paired `invincible connect` agent to pick up F22's voice
+   poses plus the earlier F23/F25/F26 runner/overlay changes
+   (`look_at_screen` window/wait args, `open_app` launch wait, work-area
+   dock + opt-in DPI, and now `voice_state` forwarding). F24/F27 guidance
+   is server-side: a new dashboard chat turn picks it up with no agent
+   restart.
+2. F22 still needs a live mic turn on a real paired Windows desktop to
+   confirm the listening/speaking poses read well; the transport and
+   pose logic are covered hermetically. F26's click-through and
+   multi-monitor glide-vs-click checks are also still live-only.
+3. F05 (semantic retrieval seam) is the only planned feature; activate
+   it deliberately before starting work.
+4. `open_url` has no wait: a launch wait there is the symmetric
    follow-up (reuse `_open_wait_result` + the look selector), if the
    repeat-app plan calls for it.
-4. Tests must never spawn a real overlay head (autouse conftest
+5. Tests must never spawn a real overlay head (autouse conftest
    guard); a test needing a spawn stubs `Overlay.start` and clears
    `overlay_spawn_guard`.
-5. F26 live verification remains: click-through and the
-   multi-monitor glide-vs-click check on a real paired Windows
-   desktop. `.vscode/` is local-only and must stay untracked.
-6. F04 fan-out (`harness_fanout.py` + 18 tests) stays green,
-   untouched.
+6. `.vscode/` is local-only and must stay untracked. F04 fan-out
+   (`harness_fanout.py` + 18 tests) stays green, untouched.
 
 ## Blockers
 
