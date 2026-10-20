@@ -190,12 +190,63 @@
     function speak(text) {
       if (voiceOrb) voiceOrb.speak(text);
     }
+    // F22: mirror the orb's voice state on the paired desktop face.
+    // Display-only (no job/result), serialized so a fast
+    // listening→speaking→idle sequence cannot arrive out of order, and
+    // silent on failure so chat/audio never wait for the face.
+    var voiceSignalChain = Promise.resolve();
+    var lastVoiceSignal = "";
+    var voicePageHidden = false;
+    function postVoiceState(state) {
+      // A queued signal that lands after pagehide must not outrun the
+      // idle beacon; convert it so the last write is always idle.
+      if (voicePageHidden) state = "idle";
+      return fetch("/dashboard/voice/state", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({state: state}),
+        keepalive: true
+      }).catch(function () {});
+    }
+    function signalVoice(state) {
+      var mapped = (state === "is-listening" || state === "is-asking")
+        ? "listening"
+        : (state === "is-speaking" ? "speaking" : "idle");
+      if (mapped === lastVoiceSignal) return;
+      lastVoiceSignal = mapped;
+      voiceSignalChain = voiceSignalChain.then(function () {
+        return postVoiceState(mapped);
+      }).catch(function () { /* display-only */ });
+    }
+    window.addEventListener("pagehide", function () {
+      voicePageHidden = true;
+      lastVoiceSignal = "idle";
+      try {
+        var sent = false;
+        if (navigator.sendBeacon) {
+          sent = navigator.sendBeacon(
+            "/dashboard/voice/state",
+            new Blob([JSON.stringify({state: "idle"})],
+                     {type: "application/json"}));
+        }
+        if (!sent) postVoiceState("idle");
+      } catch (e) { /* display-only */ }
+    });
+    window.addEventListener("pageshow", function (event) {
+      if (!event.persisted) return;
+      voicePageHidden = false;
+      lastVoiceSignal = "";
+    });
     function initVoiceOrb() {
       if (!orbEl || !window.VoiceOrb) return;
       voiceOrb = window.VoiceOrb.create({
         orb: orbEl,
         status: status,
         onState: function (state) {
+          // Signal before the turn guard: idle/speaking must still clear
+          // while a turn is in flight.
+          signalVoice(state);
           // The head mirrors the orb only while no chat turn is in flight.
           if (turnActive) return;
           faceSet(ORB_FACES[state] || "idle");

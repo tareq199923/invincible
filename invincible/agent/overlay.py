@@ -144,14 +144,20 @@ OVERLAY_RING_RIGHT_FILL = OVERLAY_HEAD_OUTLINE   # secondary: slate trim
 
 # Item-7 face: the face shows what the agent is doing. Kinds are
 # child-side only; the parent sends working/searching/error/happy/idle
-# and the child derives sleeping from quiet. Wire payloads carry no
-# durations - the child owns every timer, like the effect verb.
-FACE_STATES = ("idle", "working", "searching", "happy", "error",
-               "sleeping")
-FACE_WIRE_STATES = ("idle", "working", "searching", "happy", "error")
+# plus F22 listening/speaking and the child derives sleeping from quiet.
+# Wire payloads carry no durations - the child owns every timer, like
+# the effect verb. Voice states are display-only and expire on their own
+# (a crashed tab must not leave the face listening forever); the normal
+# browser pagehide/idle signal clears them immediately.
+FACE_STATES = ("idle", "working", "searching", "listening", "speaking",
+               "happy", "error", "sleeping")
+FACE_WIRE_STATES = ("idle", "working", "searching", "listening",
+                    "speaking", "happy", "error")
 FACE_PERSISTENT_STATES = ("working", "searching")
+FACE_VOICE_STATES = ("listening", "speaking")
 OVERLAY_FACE_HAPPY_SECONDS = 1.2
 OVERLAY_FACE_ERROR_SECONDS = 1.8
+OVERLAY_FACE_VOICE_SECONDS = 300.0
 OVERLAY_FACE_SLEEP_AFTER_SECONDS = 60.0
 OVERLAY_FACE_BLINK_PERIOD_SECONDS = 4.4
 OVERLAY_FACE_BLINK_SECONDS = 0.16
@@ -160,6 +166,15 @@ OVERLAY_FACE_SWEEP_RATE = 2.0
 OVERLAY_FACE_SWEEP_PX = 5.0
 OVERLAY_FACE_WORK_EYE_SCALE = (0.95, 0.55)
 OVERLAY_FACE_WORK_EYE_DY = -11.0
+OVERLAY_FACE_LISTEN_EYE_SCALE = (1.18, 1.22)
+OVERLAY_FACE_LISTEN_EYE_DY = -7.0
+OVERLAY_FACE_SPEAK_EYE_SCALE = (0.96, 0.86)
+OVERLAY_FACE_SPEAK_EYE_DY = -7.0
+OVERLAY_FACE_MOUTH_W = 7.0
+OVERLAY_FACE_MOUTH_DY = 20.0
+OVERLAY_FACE_MOUTH_MIN = 1.2
+OVERLAY_FACE_MOUTH_MAX = 5.0
+OVERLAY_FACE_MOUTH_RATE = 8.0
 OVERLAY_FACE_ARC_EYE_RY = 6.0
 OVERLAY_FACE_SLEEP_EYE_DY = -4.0
 OVERLAY_FACE_X_EYE_R = 6.5
@@ -713,10 +728,12 @@ def face_kind(face, now, *, quiet_since=None) -> str:
     kinds (``working``/``searching``) hold until replaced, the bursts
     (``happy``/``error``) expire into ``idle``, and a burst simply
     replaces a persistent kind - the runner runs one job at a time, so
-    there is nothing to rank. ``sleeping`` is derived, never sent: it
-    needs a real ``quiet_since`` monotonic stamp (no stamp, no sleep)
-    and only wins when nothing else is active. Junk in any argument
-    reads as ``idle``; never raises.
+    there is nothing to rank. F22 voice states hold only until their
+    stamp (a crashed tab's last signal must not stick) and then fall
+    back to idle/sleeping. ``sleeping`` is derived, never sent: it needs
+    a real ``quiet_since`` monotonic stamp (no stamp, no sleep) and only
+    wins when nothing else is active. Junk in any argument reads as
+    ``idle``; never raises.
     """
     kind = None
     until = None
@@ -727,6 +744,11 @@ def face_kind(face, now, *, quiet_since=None) -> str:
         until = face.get("until")
     if kind in FACE_PERSISTENT_STATES:
         return kind
+    if kind in FACE_VOICE_STATES:
+        now_t = _face_number(now)
+        until_t = _face_number(until)
+        if now_t is not None and until_t is not None and now_t < until_t:
+            return kind
     if kind in ("happy", "error"):
         now_t = _face_number(now)
         until_t = _face_number(until)
@@ -751,8 +773,10 @@ def face_geometry(kind, now, blink=0.0) -> dict:
     says whether the cursor glance (``eye_offset``) still applies.
     ``eyes`` picks the item shape the child draws: ``oval`` (as today),
     ``arc_top`` (happy), ``arc_bottom`` (sleeping) or ``x`` (error).
-    ``blink`` (0 open … 1 shut) only squashes the oval. Unknown kinds
-    and junk times fall back to the resting face; never raises.
+    ``mouth`` is ``None`` except for the speaking pose, where it carries
+    a pulsing open-mouth geometry. ``blink`` (0 open … 1 shut) only
+    squashes the oval. Unknown kinds and junk times fall back to the
+    resting face; never raises.
     """
     radius = float(OVERLAY_EYE_R)
     geom = {
@@ -764,6 +788,7 @@ def face_geometry(kind, now, blink=0.0) -> dict:
         "sweep": 0.0,
         "track": True,
         "stroke": float(OVERLAY_FACE_EYE_STROKE),
+        "mouth": None,
     }
     if kind == "working":
         scale_x, scale_y = OVERLAY_FACE_WORK_EYE_SCALE
@@ -775,6 +800,27 @@ def face_geometry(kind, now, blink=0.0) -> dict:
         if now_t is not None:
             geom["sweep"] = math.sin(
                 now_t * OVERLAY_FACE_SWEEP_RATE) * OVERLAY_FACE_SWEEP_PX
+    elif kind == "listening":
+        scale_x, scale_y = OVERLAY_FACE_LISTEN_EYE_SCALE
+        geom["rx"] = radius * float(scale_x)
+        geom["ry"] = radius * float(scale_y)
+        geom["dy"] = float(OVERLAY_FACE_LISTEN_EYE_DY)
+    elif kind == "speaking":
+        scale_x, scale_y = OVERLAY_FACE_SPEAK_EYE_SCALE
+        geom["rx"] = radius * float(scale_x)
+        geom["ry"] = radius * float(scale_y)
+        geom["dy"] = float(OVERLAY_FACE_SPEAK_EYE_DY)
+        now_t = _face_number(now)
+        phase = (0.5 if now_t is None
+                 else 0.5 + 0.5 * math.sin(
+                     now_t * OVERLAY_FACE_MOUTH_RATE))
+        geom["mouth"] = {
+            "w": float(OVERLAY_FACE_MOUTH_W),
+            "h": float(OVERLAY_FACE_MOUTH_MIN)
+            + (float(OVERLAY_FACE_MOUTH_MAX)
+               - float(OVERLAY_FACE_MOUTH_MIN)) * phase,
+            "dy": float(OVERLAY_FACE_MOUTH_DY),
+        }
     elif kind == "happy":
         geom["eyes"] = "arc_top"
         geom["ry"] = float(OVERLAY_FACE_ARC_EYE_RY)
@@ -823,10 +869,11 @@ def face_apply(wire_state, now) -> dict | None:
 
     ``working``/``searching`` hold (``until`` None) until the next face
     message, ``happy``/``error`` stamp their burst's end on the child's
-    clock, ``idle`` clears with an already-expired stamp. Anything
-    outside ``FACE_WIRE_STATES`` (including the child-derived
-    ``sleeping``) and junk times return None so the caller keeps the
-    slot it had; never raises.
+    clock, F22 voice states get a stale-signal watchdog, and ``idle``
+    clears with an already-expired stamp. Anything outside
+    ``FACE_WIRE_STATES`` (including the child-derived ``sleeping``) and
+    junk times return None so the caller keeps the slot it had; never
+    raises.
     """
     if not isinstance(wire_state, str) or wire_state not in FACE_WIRE_STATES:
         return None
@@ -837,6 +884,8 @@ def face_apply(wire_state, now) -> dict | None:
         until = now_t + OVERLAY_FACE_HAPPY_SECONDS
     elif wire_state == "error":
         until = now_t + OVERLAY_FACE_ERROR_SECONDS
+    elif wire_state in FACE_VOICE_STATES:
+        until = now_t + OVERLAY_FACE_VOICE_SECONDS
     elif wire_state in FACE_PERSISTENT_STATES:
         until = None
     else:  # idle clears
@@ -1560,10 +1609,11 @@ class Overlay:
         """Show what the agent is doing on the face (never raises).
 
         ``state`` is one of ``FACE_WIRE_STATES``: ``working`` and
-        ``searching`` hold until the next face message, ``happy`` and
-        ``error`` run their own burst on the child's clock, ``idle``
-        clears. Unknown states are dropped, like every other malformed
-        payload - the job's result stands regardless.
+        ``searching`` hold until the next face message, ``listening``
+        and ``speaking`` hold until their stale-signal watchdog expires,
+        ``happy`` and ``error`` run their own burst on the child's
+        clock, ``idle`` clears. Unknown states are dropped, like every
+        other malformed payload - the job's result stands regardless.
         """
         if not isinstance(state, str) or state not in FACE_WIRE_STATES:
             return
@@ -1784,6 +1834,9 @@ def _run_window(tk) -> None:
                                     outline=OVERLAY_EYE_FILL)
     eye_r = canvas.create_rectangle(0, 0, 1, 1, fill=OVERLAY_EYE_FILL,
                                     outline=OVERLAY_EYE_FILL)
+    # F22: one LED mouth for the speaking pose; listening/idle park it.
+    mouth_lamp = canvas.create_oval(0, 0, 1, 1, fill=OVERLAY_EYE_FILL,
+                                    outline=OVERLAY_EYE_FILL)
     # Item-7 face: six extra items stacked right above the blocks - one
     # arc per eye (happy lids / sleeping) and two X strokes per eye
     # (error). Idle leaves them parked off-window.
@@ -1967,6 +2020,13 @@ def _run_window(tk) -> None:
         with contextlib.suppress(Exception):
             face = face_kind(state["face"], now,
                              quiet_since=state["face_at"])
+        # F22 watchdog: an expired speaking face must also release the
+        # homing pause, otherwise a crashed tab leaves the pointer parked
+        # forever even though the mouth has already gone idle.
+        if (face != "speaking"
+                and state["choreo"].get("speaking") is True):
+            with contextlib.suppress(Exception):
+                choreo_set_speaking(state["choreo"], False, now)
         blink = 0.0
         with contextlib.suppress(Exception):
             blink = face_blink(now)
@@ -2042,6 +2102,18 @@ def _run_window(tk) -> None:
                 canvas.coords(bloom, *parked)
                 canvas.coords(cross_a, *parked)
                 canvas.coords(cross_b, *parked)
+        # F22: the speaking mouth pulses open/closed under the eyes.
+        mouth = geom.get("mouth") if isinstance(geom, dict) else None
+        mouth_box = None
+        if isinstance(mouth, dict):
+            with contextlib.suppress(Exception):
+                mw = float(mouth["w"]) * scale
+                mh = float(mouth["h"]) * scale
+                mdy = float(mouth["dy"]) * scale
+                mouth_box = (fcx - mw, fcy + mdy - mh,
+                             fcx + mw, fcy + mdy + mh)
+        canvas.coords(mouth_lamp, *(mouth_box if mouth_box is not None
+                                    else parked))
         trail = state["trail"]
         for i, dot in enumerate(trail_ids):
             if i < len(trail):

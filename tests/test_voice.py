@@ -467,6 +467,94 @@ async def test_dashboard_ignores_voice_bearer(client, byok_env,
     assert "No connected provider" in resp.text
 
 
+class _FakeAgentWS:
+    def __init__(self):
+        self.sent = []
+
+    async def send_json(self, message):
+        self.sent.append(message)
+
+
+async def _login_voice_state_user(client, email):
+    await register_account(client, email)
+    login = await client.post(
+        "/auth/login",
+        json={"email": email, "password": "longenough1"})
+    return int(login.json()["id"])
+
+
+async def test_dashboard_voice_state_relays_ws_first(
+        client, byok_env, monkeypatch):
+    """F22: the cookie realm signals listening/speaking/idle to the paired
+    agent's WS; the text/chat path is untouched."""
+    import invincible.endpoints.agents as agents_mod
+
+    monkeypatch.setattr(agents_mod, "AGENT_POLL_HOLD_SECONDS", 0.05)
+    uid = await _login_voice_state_user(client, "voice-state@example.com")
+    ws = _FakeAgentWS()
+    registry = app.state.agent_registry
+    registry.attach_ws(uid, ws)
+    try:
+        first = await client.post(
+            "/dashboard/voice/state", json={"state": "listening"})
+        assert first.status_code == 200, first.text
+        assert first.json() == {
+            "ok": True, "state": "listening", "relayed": True}
+        assert ws.sent[-1]["type"] == "voice_state"
+        assert ws.sent[-1]["state"] == "listening"
+        assert ws.sent[-1]["voice_id"]
+
+        second = await client.post(
+            "/dashboard/voice/state", json={"state": "speaking"})
+        assert second.json()["relayed"] is True
+        assert ws.sent[-1]["state"] == "speaking"
+        third = await client.post(
+            "/dashboard/voice/state", json={"state": "idle"})
+        assert third.json()["relayed"] is True
+        assert ws.sent[-1]["state"] == "idle"
+    finally:
+        registry.detach_ws(uid, ws)
+
+    # No WS: latest-wins poll fallback, delivered once.
+    queued = await client.post(
+        "/dashboard/voice/state", json={"state": "speaking"})
+    assert queued.json() == {
+        "ok": True, "state": "speaking", "relayed": False}
+    raw = (await ApiKeyStore(app.state.engine).create(
+        uid, label="agent"))["raw"]
+    polled = await client.post("/agent/poll", headers=_auth(raw))
+    assert polled.status_code == 200
+    assert polled.json()["voice_state"] == "speaking"
+    again = await client.post("/agent/poll", headers=_auth(raw))
+    assert "voice_state" not in again.json()
+
+
+async def test_dashboard_voice_state_validation_and_realm(
+        client, byok_env):
+    uid = await _login_voice_state_user(client, "voice-state-bad@example.com")
+    missing = await client.post("/dashboard/voice/state", json={})
+    assert missing.status_code == 400
+    bad = await client.post(
+        "/dashboard/voice/state", json={"state": "dancing"})
+    assert bad.status_code == 400
+    raw = (await ApiKeyStore(app.state.engine).create(
+        uid, label="not-a-session"))["raw"]
+    client.cookies.clear()
+    realm = await client.post(
+        "/dashboard/voice/state", json={"state": "idle"},
+        headers=_auth(raw))
+    assert realm.status_code == 401
+
+
+async def test_dashboard_voice_state_respects_kill_switch(
+        client, byok_env, monkeypatch):
+    await _login_voice_state_user(client, "voice-state-off@example.com")
+    monkeypatch.setenv("INVINCIBLE_VOICE", "0")
+    resp = await client.post(
+        "/dashboard/voice/state", json={"state": "listening"})
+    assert resp.status_code == 503
+
+
 # --- B4: audio failover + model pinning ---------------------------------------
 
 
@@ -670,6 +758,30 @@ def test_speak_strips_markdown_before_tts():
     # The browser bubble is still the unfiltered source of truth.
     assert "var finalText = pending.textContent;" in chat
     assert "if (shouldSpeak) speak(finalText);" in chat
+
+
+def test_chat_signals_desktop_voice_state():
+    """F22: chat posts listening/speaking/idle for the paired face,
+    serialized and before the turn guard; pagehide clears it."""
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    chat = (repo / "invincible" / "templates" / "chat.html").read_text(
+        encoding="utf-8")
+    assert '"/dashboard/voice/state"' in chat
+    assert "function postVoiceState(state)" in chat
+    assert "function signalVoice(state)" in chat
+    assert "voiceSignalChain = voiceSignalChain.then" in chat
+    assert "signalVoice(state);" in chat
+    # Signal before the turnActive guard, not after it.
+    assert chat.index("signalVoice(state);") < chat.index(
+        "// The head mirrors the orb only while no chat turn is in flight.")
+    assert "navigator.sendBeacon" in chat
+    assert 'JSON.stringify({state: "idle"})' in chat
+    assert 'window.addEventListener("pagehide"' in chat
+    # A queued signal that lands after pagehide must still end idle.
+    assert "voicePageHidden" in chat
+    assert 'if (voicePageHidden) state = "idle";' in chat
 
 
 def test_gemini_style_composer_bar():

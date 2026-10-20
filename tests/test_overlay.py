@@ -1283,6 +1283,14 @@ def test_face_kind_persistent_expiry_and_junk():
                              now) == "error"
     assert overlay.face_kind({"kind": "error", "until": now - 0.5},
                              now) == "idle"
+    # F22 voice states hold only until their watchdog stamp, then fall
+    # back to idle instead of sticking on a crashed tab.
+    assert overlay.face_kind({"kind": "listening", "until": now + 1.0},
+                             now) == "listening"
+    assert overlay.face_kind({"kind": "speaking", "until": now + 1.0},
+                             now) == "speaking"
+    assert overlay.face_kind({"kind": "speaking", "until": now},
+                             now) == "idle"
     # A burst replaces a persistent kind outright (single slot: one job
     # at a time, so nothing can be squeezed into a stale "working").
     assert overlay.face_kind({"kind": "happy", "until": now + 1.0},
@@ -1369,6 +1377,29 @@ def test_face_geometry_states_shapes():
               for i in range(240)]
     assert max(sweeps) > 0.0 > min(sweeps)
     assert max(abs(s) for s in sweeps) <= overlay.OVERLAY_FACE_SWEEP_PX
+    # F22 listening: wide, attentive oval eyes; no mouth.
+    listen = overlay.face_geometry("listening", now)
+    assert (listen["eyes"], listen["track"], listen["mouth"]) == \
+        ("oval", True, None)
+    assert listen["rx"] > radius and listen["ry"] > radius
+    assert listen["dy"] < overlay.OVERLAY_EYE_DY
+    # F22 speaking: slightly narrowed eyes plus an animated mouth.
+    speak = overlay.face_geometry("speaking", now)
+    assert (speak["eyes"], speak["track"]) == ("oval", True)
+    assert speak["rx"] < radius and speak["ry"] < radius
+    mouth = speak["mouth"]
+    assert isinstance(mouth, dict)
+    assert mouth["w"] == overlay.OVERLAY_FACE_MOUTH_W
+    assert mouth["dy"] == overlay.OVERLAY_FACE_MOUTH_DY
+    heights = [overlay.face_geometry("speaking", i / 20.0)["mouth"]["h"]
+               for i in range(80)]
+    assert max(heights) > min(heights)
+    assert min(heights) >= overlay.OVERLAY_FACE_MOUTH_MIN
+    assert max(heights) <= overlay.OVERLAY_FACE_MOUTH_MAX
+    # Non-speaking poses park the mouth.
+    for kind in ("idle", "working", "searching", "happy", "sleeping",
+                 "error"):
+        assert overlay.face_geometry(kind, now)["mouth"] is None
     # happy / sleeping / error change the eye SHAPE and drop tracking;
     # a blink never touches a closed-eye shape.
     happy = overlay.face_geometry("happy", now)
@@ -1396,6 +1427,14 @@ def test_face_geometry_states_shapes():
             assert reach < overlay.OVERLAY_FACE_PX / 2.0
             drop = (abs(geom["dy"]) + geom["ry"]) * scale
             assert drop < overlay.OVERLAY_FACE_PX / 2.0
+            mouth = geom["mouth"]
+            assert mouth is None or isinstance(mouth, dict)
+            if mouth is not None:
+                for key in ("w", "h", "dy"):
+                    assert isinstance(mouth[key], float)
+                    assert math.isfinite(mouth[key])
+                assert (abs(mouth["dy"]) + mouth["h"]) * scale \
+                    < overlay.OVERLAY_FACE_PX / 2.0
     # Unknown kinds fall back to the resting face.
     assert overlay.face_geometry("bogus", now)["eyes"] == "oval"
     assert overlay.face_geometry(None, None)["eyes"] == "oval"
@@ -1436,6 +1475,19 @@ def test_face_apply_wire_slot_and_junk():
                                                   "until": None}
     assert overlay.face_apply("searching", now) == {"kind": "searching",
                                                     "until": None}
+    # F22 voice states get a watchdog stamp and then clear themselves.
+    assert overlay.face_apply("listening", now) == {
+        "kind": "listening",
+        "until": now + overlay.OVERLAY_FACE_VOICE_SECONDS}
+    assert overlay.face_apply("speaking", now) == {
+        "kind": "speaking",
+        "until": now + overlay.OVERLAY_FACE_VOICE_SECONDS}
+    speak_slot = overlay.face_apply("speaking", now)
+    assert overlay.face_kind(
+        speak_slot, now + overlay.OVERLAY_FACE_VOICE_SECONDS - 0.01
+    ) == "speaking"
+    assert overlay.face_kind(
+        speak_slot, now + overlay.OVERLAY_FACE_VOICE_SECONDS) == "idle"
     # idle clears with an expired stamp (reads idle immediately).
     assert overlay.face_apply("idle", now) == {"kind": "idle",
                                                "until": now}
@@ -1495,6 +1547,7 @@ class _FaceRecorder:
 
     def __init__(self):
         self.calls = []
+        self.speaking = []
         self.settled = 0
 
     @property
@@ -1503,6 +1556,9 @@ class _FaceRecorder:
 
     def face(self, state):
         self.calls.append(state)
+
+    def set_speaking(self, on):
+        self.speaking.append(bool(on))
 
     def settle(self):
         self.settled += 1
@@ -1678,6 +1734,60 @@ def test_handoff_face_happy_when_live(monkeypatch, _clean_overlay_state):
     runner.handle_handoff({"task": "x"})
     runner.handle_handoff("junk")
     runner.handle_handoff(None)
+
+
+def test_handle_voice_state_sets_face_and_speaking(
+        monkeypatch, _clean_overlay_state):
+    """F22: listening/speaking/idle drive both the face and homing pause."""
+    recorder = _FaceRecorder()
+    monkeypatch.setattr(runner, "_OVERLAY", recorder)
+    for state in ("listening", "speaking", "idle"):
+        runner.handle_voice_state(state)
+    assert recorder.calls == ["listening", "speaking", "idle"]
+    assert recorder.speaking == [False, True, False]
+    # Whitespace/case are tolerated; junk never moves the face.
+    recorder.calls.clear()
+    recorder.speaking.clear()
+    runner.handle_voice_state(" SPeaking ")
+    assert recorder.calls == ["speaking"]
+    assert recorder.speaking == [True]
+    for bad in (None, "", "sleeping", "bogus", 5, True, [], {}):
+        runner.handle_voice_state(bad)
+    assert recorder.calls == ["speaking"]
+    assert recorder.speaking == [True]
+
+
+def test_runner_wires_voice_state_on_both_transports():
+    """The WS branch and the poll fallback both reach handle_voice_state."""
+    from pathlib import Path
+
+    source = Path(runner.__file__).read_text(encoding="utf-8")
+    assert 'message.get("type") == "voice_state"' in source
+    assert 'handle_voice_state(message.get("state"))' in source
+    assert 'voice_state = payload.get("voice_state")' in source
+    assert "handle_voice_state(voice_state)" in source
+
+
+def test_handle_voice_state_never_spawns_or_raises(
+        monkeypatch, _clean_overlay_state):
+    monkeypatch.setattr(runner, "ensure_overlay",
+                        lambda: (_ for _ in ()).throw(
+                            AssertionError("voice state must not spawn")))
+    monkeypatch.setattr(runner, "_OVERLAY", None)
+    runner.handle_voice_state("listening")
+
+    class _Dead:
+        alive = False
+
+        def set_speaking(self, on):  # pragma: no cover - must never run
+            raise AssertionError("dead overlay must not speak")
+
+        def face(self, state):  # pragma: no cover - must never run
+            raise AssertionError("dead overlay must not draw")
+
+    monkeypatch.setattr(runner, "_OVERLAY", _Dead())
+    runner.handle_voice_state("speaking")
+    runner.handle_voice_state("idle")
 
 
 # --- Item-8: A1 spawn guard + lifecycle hygiene ----------------------

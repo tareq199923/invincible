@@ -255,6 +255,35 @@ def handle_handoff(handoff: dict | None) -> None:
             _overlay_note_settled()
 
 
+# F22: the browser's voice state is display-only. Unknown/malformed
+# values are ignored; every overlay touch is independently best-effort
+# so a missing method on an older/dead overlay never breaks the agent.
+_VOICE_FACE_STATES = ("listening", "speaking", "idle")
+
+
+def handle_voice_state(state) -> None:
+    """Mirror the browser's voice state on the running companion face.
+
+    ``speaking`` pauses pointer homing through ``set_speaking(True)``
+    and paints the speaking face; ``listening`` stays/resumes homing and
+    paints the attentive face; ``idle`` clears both. This never spawns
+    an overlay (the face only annotates an agent that is already
+    connected) and never raises.
+    """
+    if not isinstance(state, str):
+        return
+    state = state.strip().lower()
+    if state not in _VOICE_FACE_STATES:
+        return
+    with contextlib.suppress(Exception):
+        seen = _OVERLAY
+        if seen is not None and seen.alive:
+            with contextlib.suppress(Exception):
+                seen.set_speaking(state == "speaking")
+            with contextlib.suppress(Exception):
+                seen.face(state)
+
+
 def _silence(task: asyncio.Task) -> None:
     """Swallow a background task's exception on completion (stream pumps
     report failure by closing the stream, never by raising into the WS
@@ -356,6 +385,11 @@ async def run_agent_ws(
             # so the hop is visible, then the loop keeps waiting.
             with contextlib.suppress(Exception):
                 handle_handoff(message.get("handoff"))
+            return
+        if message.get("type") == "voice_state":
+            # F22: display-only voice control; no job/result protocol.
+            with contextlib.suppress(Exception):
+                handle_voice_state(message.get("state"))
             return
         job = (message.get("job")
                if message.get("type") == "job" else None)
@@ -994,14 +1028,20 @@ async def run_agent(base_url: str, api_key: str,
         if not announced:
             announced = True
             print("[agent] connected - waiting for jobs from your AI")
-        job = polled.json().get("job")
-        handoff = polled.json().get("handoff")
+        payload = polled.json()
+        job = payload.get("job")
+        handoff = payload.get("handoff")
         if handoff is not None:
             # B2 poll fallback: WS-less PCs hop here. Fire-and-forget
             # (no result posts back); a dead overlay never breaks jobs.
             with contextlib.suppress(Exception):
                 handle_handoff(handoff.get("handoff")
                                if isinstance(handoff, dict) else None)
+        voice_state = payload.get("voice_state")
+        if voice_state is not None:
+            # F22 poll fallback: display-only, same isolation as faces.
+            with contextlib.suppress(Exception):
+                handle_voice_state(voice_state)
         if job is None:
             return
         print(f"[agent] job {job.get('job_id')}: {job.get('type')}")

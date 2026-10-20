@@ -102,7 +102,8 @@ invincible/
     ├── tool_executor.py        MCP tool execution + denylists + approval
     ├── agent_registry.py       Per-user agent queues/futures (in-memory; long-poll
     │                           + WS relay transports since harness H1;
-    │                           B2 adds a per-user handoff queue, same keying)
+    │                           B2 adds a per-user handoff queue, F22 a
+    │                           latest-wins voice-state slot, same keying)
     ├── harness_events.py       Harness event contract (H0)
     ├── harness_bus.py          In-memory harness event bus: emit/subscribe/history (H0)
     ├── harness_policy.py       Unified pre-execution policy gate (H2; no new patterns)
@@ -763,6 +764,34 @@ device-bound, zero tables). `settings.voice_enabled()`
 (`INVINCIBLE_VOICE`) + the per-user `voice` override gate every
 route (503 when off); client mute is localStorage rendering state.
 Threat model: [SECURITY.md](SECURITY.md) §14.
+
+### 6d. Voice face states (F22): display-only control
+
+The desktop companion mirrors the browser orb, but the signal is
+deliberately **not** a tool job: no future, no result, no approval, no
+DB write, and no new entry in the tool registry.
+
+```
+chat.html onState ──POST /dashboard/voice/state──▶ voice endpoint
+  (session cookie; listening/speaking/idle)          │ voice-off 503
+                                                     ▼
+registry._voice[user] = {state, at, voice_id}   // one latest-wins slot,
+  │                                                // 30s TTL, wakes poll
+  ├── WS-first: {"type":"voice_state", state} → one socket
+  │             → drop only that voice_id (newer copy survives)
+  └── poll fallback: /agent/poll returns {"job":…, "voice_state":…}
+                                                     ▼
+runner.handle_voice_state → overlay.set_speaking(state == "speaking")
+                          → overlay.face("listening"|"speaking"|"idle")
+```
+
+The browser serializes signals so a fast listening→speaking→idle
+transition cannot arrive out of order, and sends `idle` on
+pagehide/stop/TTS failure. The overlay's voice poses are wide attentive
+eyes for listening and narrowed eyes plus a pulsing mouth for speaking;
+a 300s child-side watchdog expires a crashed tab's last pose. Typed
+turns never signal, voice-off refuses at the endpoint, and the text
+bubble remains the source of truth.
 
 ---
 

@@ -33,6 +33,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
+from invincible.core.agent_registry import VOICE_SIGNAL_STATES
 from invincible.core.identity import ensure_default_project
 from invincible.core.principal import Principal
 from invincible.core.voice import (
@@ -374,3 +375,50 @@ async def dashboard_synthesize(
     except VoiceError as e:
         return _voice_error_response(e)
     return Response(content=audio, media_type=content_type)
+
+
+@router.post("/dashboard/voice/state")
+async def dashboard_voice_state(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    """Relay the browser's voice state to this user's paired desktop (F22).
+
+    Display-only control message for the companion face: the webchat orb
+    posts ``listening``/``speaking``/``idle`` as it changes, and the
+    agent runner paints the matching face. Nothing is persisted, queued
+    as work, or executed, and the text bubble stays the source of truth.
+    WS-first with a latest-wins poll fallback; a missing agent simply
+    answers ``relayed: False``. Voice-off stays fail-closed (503), so a
+    muted server never animates a face.
+    """
+    refused = await _refuse_when_voice_off(request, principal)
+    if refused is not None:
+        return refused
+    try:
+        body = await _payload(request)
+    except Exception:
+        body = None
+    state = str(body.get("state") or "").strip().lower() \
+        if isinstance(body, dict) else ""
+    if state not in VOICE_SIGNAL_STATES:
+        return JSONResponse(
+            {"error": {"message": "state must be one of: listening, "
+                                  "speaking, idle.",
+                       "type": "invalid_request_error"}}, status_code=400)
+    registry = getattr(request.app.state, "agent_registry", None)
+    relayed = False
+    if registry is not None:
+        envelope = registry.post_voice_state(principal.user_id, state)
+        if envelope is not None:
+            relayed = await registry.push_ws(
+                principal.user_id,
+                {"type": "voice_state", "state": state,
+                 "voice_id": envelope["voice_id"]},
+            )
+            if relayed:
+                # Drop only this copy: a newer signal may have replaced
+                # the slot while the socket send was in flight.
+                registry.drop_voice_state(
+                    principal.user_id, envelope["voice_id"])
+    return {"ok": True, "state": state, "relayed": bool(relayed)}

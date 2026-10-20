@@ -294,11 +294,11 @@
     "verification": "ruff check . && pytest tests/test_look_at_screen.py tests/test_harness_tools_golden.py tests/test_harness_tools_registry.py tests/test_computer_use.py"
   },
   {
-    "behavior": "the desktop companion face mirrors voice turns (listening while the user talks, speaking while the reply is spoken) once a server->agent signal exists: voice state rides the agent queue as a control message, the runner forwards the new face states, and the face art gains the two poses; text stays source of truth, silent when voice is off",
+    "behavior": "the desktop companion face mirrors voice turns (listening while the user talks, speaking while the reply is spoken): the browser posts listening/speaking/idle to a session-cookie display-only endpoint, the registry keeps one latest-wins state with a 30s TTL, WS-first delivery with a held-poll fallback, the runner forwards it (set_speaking + face) without a job/result or DB write, and the overlay adds wide-eyed listening + animated-mouth speaking poses with a 300s stale-signal watchdog; pagehide/idle clears, text stays the source of truth, silent when voice is off",
     "id": "F22",
-    "state": "planned",
+    "state": "passing",
     "title": "Face voice states (listening/speaking + signal)",
-    "verification": "ruff check . && pytest tests/test_overlay.py tests/test_voice.py"
+    "verification": "ruff check . && pytest tests/test_overlay.py tests/test_voice.py tests/test_agent_registry.py tests/test_agent_endpoints.py tests/test_agent_ws.py tests/test_handoff.py"
   },
   {
     "behavior": "environment_note (manual/auto) teaches the capability ladder (URI/CLI > keyboard > UIA > vision), batches 3+ deterministic UI steps into one execute_bash script with in-script waits, waits for cold-app windows via look_at_screen(window=..., wait_kind/wait_label), follows a launch/focus -> process target -> anchor -> act -> verify playbook shape, and verifies once at the end instead of after every action; plan keeps read-only guidance, and F13/F14/F17 semantics plus tool goldens stay unchanged",

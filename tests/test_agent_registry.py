@@ -2,7 +2,10 @@ import asyncio
 
 import pytest
 
-from invincible.core.agent_registry import AgentRegistry
+from invincible.core.agent_registry import (
+    VOICE_STATE_TTL_SECONDS,
+    AgentRegistry,
+)
 
 
 class FakeClock:
@@ -288,3 +291,59 @@ async def test_the_sweep_is_rate_limited(registry):
     clock.advance(1)
     reg.heartbeat(2)
     assert reg._last_prune == first  # not swept again yet
+
+
+# --- F22 voice state: latest-wins, display-only ---------------------------
+
+
+async def test_voice_state_latest_wins_and_isolated(registry):
+    reg, _ = registry
+    assert reg.post_voice_state(42, "bogus") is None
+    assert reg.take_voice_state(42) is None
+
+    first = reg.post_voice_state(42, "listening")
+    second = reg.post_voice_state(42, "speaking")
+    assert first["voice_id"] != second["voice_id"]
+    assert reg.take_voice_state(1) is None  # cross-user isolation
+    got = reg.take_voice_state(42)
+    assert got is not None
+    assert got["state"] == "speaking"  # newest, never a queued replay
+    assert reg.take_voice_state(42) is None
+
+
+async def test_voice_state_drop_is_identity_checked(registry):
+    reg, _ = registry
+    first = reg.post_voice_state(42, "listening")
+    reg.post_voice_state(42, "speaking")
+    # An older WS send finishing late must not delete the newer copy.
+    reg.drop_voice_state(42, first["voice_id"])
+    assert (reg.take_voice_state(42) or {}).get("state") == "speaking"
+    reg.drop_voice_state(42, first["voice_id"])  # idempotent
+    reg.drop_voice_state(99, "missing")  # unknown user never raises
+    reg.post_voice_state(42, "idle")
+    reg.drop_voice_state(42, "not-the-latest")
+    assert reg.take_voice_state(42)["state"] == "idle"
+
+
+async def test_voice_state_expires_and_wakes_held_poll(registry):
+    reg, clock = registry
+    reg.post_voice_state(42, "speaking")
+    clock.advance(VOICE_STATE_TTL_SECONDS + 0.01)
+    assert reg.take_voice_state(42) is None
+
+    held = asyncio.ensure_future(reg.poll(42, hold=5))
+    await asyncio.sleep(0.01)  # let the poll park
+    reg.post_voice_state(42, "listening")
+    job = await asyncio.wait_for(held, timeout=1)
+    assert job is None
+    assert (reg.take_voice_state(42) or {}).get("state") == "listening"
+
+
+async def test_voice_state_slot_is_pruned_without_a_reader(registry):
+    """A signal for a user whose agent never polls must not leak forever."""
+    reg, clock = registry
+    reg.post_voice_state(7, "listening")  # no heartbeat / no poll
+    clock.advance(reg.PRUNE_INTERVAL_SECONDS + 1)
+    reg.heartbeat(99)  # another user runs the sweep
+    assert 7 not in reg._voice
+    assert reg.take_voice_state(7) is None

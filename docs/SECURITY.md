@@ -1213,6 +1213,16 @@ tokens that authorize it.
   refuses per user the same way. Either off leaves text chat
   byte-identical (pinned by the fail-safe test). Tapping the orb while
   it speaks stops playback locally; there is no separate mute button.
+- **Voice face state is display-only.** `POST /dashboard/voice/state`
+  is session-cookie only (like every `/dashboard/voice/*` route) and
+  accepts exactly `listening`, `speaking`, or `idle`. It writes one
+  in-memory latest-wins slot (30s TTL, no tables, no queue/future), is
+  delivered WS-first or through the normal agent poll, and can only
+  animate the caller's own paired face. It never carries audio or
+  transcript text and never stages/executes a tool; a forged signal is
+  at worst a brief face pose on the owner's own machine. The browser
+  sends `idle` on pagehide/stop, and the overlay watchdog expires a
+  crashed tab's last pose. Voice-off refuses it with the same 503.
 - **Hold-to-ask marks the turn; the chirp stays local.** A ≥300ms
   press-and-hold on the orb submits the transcribed turn with
   `asked:true` (persisted on the user turn; prompt assembly renders it

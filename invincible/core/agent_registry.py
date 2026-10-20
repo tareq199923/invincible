@@ -74,6 +74,14 @@ HANDOFF_CONTEXT_MAX_CHARS = 16000
 HANDOFF_FROM_DEVICE_MAX_CHARS = 128
 MAX_HANDOFFS_PER_USER = 10
 
+# F22: browser voice state is display-only control data, not a job. One
+# latest-wins slot per user (no queue, futures, results, or DB write).
+# The TTL only bounds a stale fallback copy: a WS push or the next held
+# poll usually drains it immediately, and a crashed tab's last state
+# disappears instead of sticking on the face forever.
+VOICE_SIGNAL_STATES = ("listening", "speaking", "idle")
+VOICE_STATE_TTL_SECONDS = 30.0
+
 
 class AgentRegistry:
     """Liveness + dispatch table for paired agents.
@@ -95,6 +103,9 @@ class AgentRegistry:
       by WS push or the next poll. Fire-and-forget: no futures, no
       results, no golden/drift surface. Keyed by user_id like every
       other table (structural isolation falls out of the keying).
+    - ``_voice`` - F22 latest-wins browser voice state per user
+      (listening/speaking/idle) for the companion face. Display-only:
+      no queue, no futures, no result, no persistence.
 
     Events are created lazily and *kept* (not popped after a wake) so
     concurrent dispatches and the next held poll can share one event;
@@ -121,6 +132,8 @@ class AgentRegistry:
         self._machines: dict[int, dict[str, dict]] = {}
         # B2: user_id -> queued handoff envelopes (fire-and-forget).
         self._handoffs: dict[int, deque] = {}
+        # F22: user_id -> latest voice-state envelope (display-only).
+        self._voice: dict[int, dict] = {}
         self._last_prune = 0.0
         self._clock = clock
 
@@ -156,6 +169,11 @@ class AgentRegistry:
         if now - self._last_prune < self.PRUNE_INTERVAL_SECONDS:
             return
         self._last_prune = now
+        # F22: a signal can arrive for a user whose agent never polls.
+        # Expire those slots on the sweep clock even without a reader.
+        for user_id, envelope in list(self._voice.items()):
+            if now - envelope.get("at", now) > VOICE_STATE_TTL_SECONDS:
+                self._voice.pop(user_id, None)
         cutoff = now - self.STALE_USER_SECONDS
         for user_id, seen in list(self._last_seen.items()):
             if seen > cutoff:
@@ -165,7 +183,8 @@ class AgentRegistry:
                     or self._futures.get(user_id)
                     or self._ws.get(user_id)
                     or self._machines.get(user_id)
-                    or self._handoffs.get(user_id)):
+                    or self._handoffs.get(user_id)
+                    or self._voice.get(user_id)):
                 continue
             self._last_seen.pop(user_id, None)
             self._events.pop(user_id, None)
@@ -173,6 +192,7 @@ class AgentRegistry:
             self._ws.pop(user_id, None)
             self._machines.pop(user_id, None)
             self._handoffs.pop(user_id, None)
+            self._voice.pop(user_id, None)
 
     def online(self, user_id: int) -> bool:
         last = self._last_seen.get(user_id)
@@ -343,6 +363,56 @@ class AgentRegistry:
 
     def pending_handoffs(self, user_id: int) -> int:
         return len(self._handoffs.get(user_id) or ())
+
+    # --- voice face state (F22) -----------------------------------------
+
+    def post_voice_state(self, user_id: int, state: str) -> dict | None:
+        """Record the browser's latest voice state (display-only).
+
+        Latest-wins: a new signal replaces the previous slot rather than
+        queueing, so a fast listening→speaking→idle sequence can never
+        replay out of order. Unknown states are ignored (``None``). The
+        ``voice_id`` lets the WS-first endpoint drop only the copy it
+        relayed, never a newer state that arrived during the send. A held
+        poll is woken so a WS-less agent sees the state immediately.
+        """
+        if state not in VOICE_SIGNAL_STATES:
+            return None
+        envelope = {
+            "voice_id": secrets.token_urlsafe(12),
+            "state": state,
+            "at": self._clock(),
+        }
+        self._voice[user_id] = envelope
+        event = self._events.get(user_id)
+        if event is not None:
+            event.set()
+        return envelope
+
+    def take_voice_state(self, user_id: int) -> dict | None:
+        """Pop the latest unexpired voice state, or ``None``.
+
+        Expired signals are dropped rather than delivered late: the face
+        must never start listening or speaking after the browser stopped.
+        """
+        envelope = self._voice.get(user_id)
+        if envelope is None:
+            return None
+        if self._clock() - envelope["at"] > VOICE_STATE_TTL_SECONDS:
+            self._voice.pop(user_id, None)
+            return None
+        return self._voice.pop(user_id, None)
+
+    def drop_voice_state(self, user_id: int, voice_id: str) -> None:
+        """Drop one relayed state only while it is still the latest.
+
+        The identity check is the race guard: if a newer signal replaced
+        the slot during the WS send, that newer copy must survive for the
+        poll fallback (or the next WS push). Never raises.
+        """
+        current = self._voice.get(user_id)
+        if current is not None and current.get("voice_id") == voice_id:
+            self._voice.pop(user_id, None)
 
     # --- long-poll ------------------------------------------------------
 

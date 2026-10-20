@@ -111,6 +111,24 @@ async def test_poll_hands_out_dispatched_job(client):
     assert (await task)["stdout"] == "hi"
 
 
+async def test_poll_carries_latest_voice_state_additively(
+        client, monkeypatch):
+    """F22: the poll fallback delivers the latest voice state exactly
+    once, alongside the unchanged job key, then the slot is empty."""
+    import invincible.endpoints.agents as agents_mod
+
+    monkeypatch.setattr(agents_mod, "AGENT_POLL_HOLD_SECONDS", 0.05)
+    uid, key = await _mint_key(client, "voice-state@example.com")
+    registry = app.state.agent_registry
+    registry.post_voice_state(uid, "listening")
+    registry.post_voice_state(uid, "speaking")
+    polled = await client.post("/agent/poll", headers=agent_headers(key))
+    assert polled.status_code == 200
+    assert polled.json() == {"job": None, "voice_state": "speaking"}
+    again = await client.post("/agent/poll", headers=agent_headers(key))
+    assert again.json() == {"job": None}
+
+
 async def test_result_accept_and_replay(client):
     uid, key = await _mint_key(client)
     task = await _stage_job(uid)

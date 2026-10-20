@@ -166,8 +166,10 @@ async def agent_poll(request: Request,
 
     B2: a queued phone→PC handoff rides along additively (``"handoff"``
     key present ONLY when one is waiting) so WS-less PCs still hop.
-    Job-only consumers keep their exact ``{"job": ...}`` shape when no
-    handoff waits.
+    F22: the browser's latest voice state rides along the same way
+    (``"voice_state"`` present ONLY when waiting) for WS-less agents.
+    Job-only consumers keep their exact ``{"job": ...}`` shape when
+    neither extra waits.
     """
     registry = request.app.state.agent_registry
     try:
@@ -178,14 +180,14 @@ async def agent_poll(request: Request,
             detail="Too many concurrent polls for this account",
             headers={"Retry-After": "5"},
         ) from None
+    extra: dict = {}
     handoff = registry.take_handoff(user_id)
-    if handoff is None:
-        if job is None:
-            return {"job": None}
-        return {"job": job}
-    if job is None:
-        return {"job": None, "handoff": handoff}
-    return {"job": job, "handoff": handoff}
+    if handoff is not None:
+        extra["handoff"] = handoff
+    voice = registry.take_voice_state(user_id)
+    if voice is not None:
+        extra["voice_state"] = voice["state"]
+    return {"job": job, **extra}
 
 
 @router.post("/agent/handoff")
