@@ -307,6 +307,13 @@ cold-app waits through `open_app`'s launch wait or `look_at_screen`'s
 readiness wait, and a single final verification look, while plan
 mode stays read-only.
 
+Reply shape is mode-aware (F27): plan returns a detailed step-by-step
+plan, while manual/auto return an outcome-first brief reply that skips
+play-by-play and restatement. Every mode keeps `file:line` evidence and
+must never trim warnings, errors, denials, or failed verification for
+brevity. The browser speech path cleans markdown, fenced code, and URLs
+before TTS; the text bubble remains the verbatim source of truth.
+
 ---
 
 ## 3a. Anthropic request flow (`/v1/messages`)
@@ -743,6 +750,11 @@ assistant reply persists as text, then optionally:
   → core/voice.synthesize_audio → {base_url}/audio/speech bytes
   → client plays them; 502 = keep the text bubble (fail-closed)
 ```
+
+F27 cleans the spoken copy in `voice-orb.js` before either TTS path:
+fenced code becomes "Code is in the chat.", while inline-code markers,
+headings, bullets, emphasis, and URLs are removed. The text bubble is
+untouched.
 
 Ephemeral tokens: `mint_voice_token(user, device, scope)` /
 `verify_voice_token` in `core/voice.py` — stateless HMAC

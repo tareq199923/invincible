@@ -320,5 +320,12 @@
     "state": "passing",
     "title": "Overlay work-area docking + opt-in DPI",
     "verification": "ruff check . && pytest tests/test_overlay.py tests/test_computer_use.py"
+  },
+  {
+    "behavior": "webchat replies split by mode instead of one shared brevity tail: plan gets a detailed step-by-step contract (files/commands, risks, verification, End with the plan), manual/auto get an outcome-first brief contract (manual approval explanation, auto 1-3 sentences, no play-by-play/restatement/optional background) with a shared never-omit-warnings/errors/denials/failed-verification rule and file:line evidence; the browser speech path strips markdown/code/URLs before TTS so the spoken reply is concise while the text bubble stays the source of truth; no tool, approval, protocol, or persistence change",
+    "id": "F27",
+    "state": "passing",
+    "title": "Mode-aware reply shape + clean speech text",
+    "verification": "ruff check . && pytest tests/test_webchat_agent.py tests/test_baymax_prompt.py tests/test_voice.py tests/test_web_face.py"
   }
 ]

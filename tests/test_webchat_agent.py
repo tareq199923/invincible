@@ -1052,17 +1052,40 @@ def test_environment_note_one_verify_keeps_f13_f17():
             ), (mode, execution)
 
 
-def test_mode_prompts_unified_brevity():
-    """Verify-then-reply-in-a-few-lines tails are identical; plan keeps
-    its 'end with the plan' tail."""
-    from invincible.core.webchat_agent import MODE_SYSTEM_PROMPTS
+def test_mode_prompts_reply_contract():
+    """F27: plan is detailed, manual/auto are outcome-first, and the
+    never-omit-safety rule survives every mode."""
+    from invincible.core.webchat_agent import (
+        AUTO_REPLY_GUIDE,
+        MANUAL_REPLY_GUIDE,
+        MODE_SYSTEM_PROMPTS,
+        PLAN_REPLY_GUIDE,
+        REPLY_SAFETY,
+    )
 
-    tail = "Verify afterwards, then reply in a few lines with file:line evidence."
-    for mode in ("plan", "manual", "auto"):
-        assert tail in MODE_SYSTEM_PROMPTS[mode], mode
+    assert PLAN_REPLY_GUIDE in MODE_SYSTEM_PROMPTS["plan"]
+    assert "detailed, concrete plan" in MODE_SYSTEM_PROMPTS["plan"]
     assert "End with the plan" in MODE_SYSTEM_PROMPTS["plan"]
+    assert "1-3 short sentences" not in MODE_SYSTEM_PROMPTS["plan"]
+    assert "reply briefly" not in MODE_SYSTEM_PROMPTS["plan"]
+
+    assert MANUAL_REPLY_GUIDE in MODE_SYSTEM_PROMPTS["manual"]
+    assert "outcome first" in MODE_SYSTEM_PROMPTS["manual"]
+    assert "detailed, concrete plan" not in MODE_SYSTEM_PROMPTS["manual"]
+    assert "1-3 short sentences" not in MODE_SYSTEM_PROMPTS["manual"]
+
+    assert AUTO_REPLY_GUIDE in MODE_SYSTEM_PROMPTS["auto"]
+    assert "1-3 short sentences" in MODE_SYSTEM_PROMPTS["auto"]
+    assert "Skip play-by-play" in MODE_SYSTEM_PROMPTS["auto"]
+    assert "detailed, concrete plan" not in MODE_SYSTEM_PROMPTS["auto"]
+
     assert "End with the plan" not in MODE_SYSTEM_PROMPTS["manual"]
     assert "End with the plan" not in MODE_SYSTEM_PROMPTS["auto"]
+    assert "reply in a few lines" not in "".join(
+        MODE_SYSTEM_PROMPTS.values())
+    for mode in ("plan", "manual", "auto"):
+        assert REPLY_SAFETY in MODE_SYSTEM_PROMPTS[mode], mode
+        assert "file:line" in MODE_SYSTEM_PROMPTS[mode], mode
 
 
 def test_stage_mutating_edit_file_null_safety(tmp_path):

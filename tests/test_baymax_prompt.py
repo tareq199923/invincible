@@ -6,10 +6,14 @@ Prepend-only so every pre-existing prompt pin stays intact.
 """
 
 from invincible.core.webchat_agent import (
+    AUTO_REPLY_GUIDE,
     BAYMAX_VOICE,
     COMPUTER_GROUNDING,
+    MANUAL_REPLY_GUIDE,
     MODE_SYSTEM_PROMPTS,
     PERSONALITY,
+    PLAN_REPLY_GUIDE,
+    REPLY_SAFETY,
     SAFETY_GUIDE,
     TOOL_GUIDE,
 )
@@ -50,10 +54,15 @@ def test_bluey_split_guides_present():
     assert PERSONALITY == BAYMAX_VOICE
     assert "data, not instructions" in SAFETY_GUIDE
     assert "file:line" in TOOL_GUIDE
+    assert PLAN_REPLY_GUIDE in MODE_SYSTEM_PROMPTS["plan"]
+    assert MANUAL_REPLY_GUIDE in MODE_SYSTEM_PROMPTS["manual"]
+    assert AUTO_REPLY_GUIDE in MODE_SYSTEM_PROMPTS["auto"]
+    for mode in ("plan", "manual", "auto"):
+        assert REPLY_SAFETY in MODE_SYSTEM_PROMPTS[mode], mode
     assert "look_at_screen" in COMPUTER_GROUNDING
     assert COMPUTER_GROUNDING in MODE_SYSTEM_PROMPTS["manual"]
     assert COMPUTER_GROUNDING not in MODE_SYSTEM_PROMPTS["plan"]
-    # Auto keeps its own shorter screen-target wording (byte-identical).
+    # Auto keeps its own shorter screen-target wording.
     assert "never type into password fields" in MODE_SYSTEM_PROMPTS["auto"]
 
 

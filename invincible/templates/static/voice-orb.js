@@ -37,6 +37,24 @@
     return /no transcription surface|no connected provider|connect openai for mic|no speech surface/i.test(msg);
   }
 
+  // F27: speech is a cleaned version of the persisted text. Markdown,
+  // fenced code, links, and list markers sound like noise in TTS; the
+  // bubble keeps the verbatim text. Fail-safe: junk input becomes "".
+  function speechText(text) {
+    return String(text || "")
+      .replace(/```[\s\S]*?```/g, " Code is in the chat. ")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/^#{1,6}\s+/gm, "")
+      .replace(/^\s*[-*+]\s+/gm, "")
+      .replace(/^\s*>\s?/gm, "")
+      .replace(/[*~]/g, "")
+      .replace(/https?:\/\/\S+/g, " link ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
   // Drives --level on the orb from mic RMS while recording.
   function attachLevel(stream, orb) {
     var ctx = null;
@@ -633,7 +651,7 @@
         if (isMuted()) return;
         stopAudio();
         stopRecog();
-        text = (text || "").trim().slice(0, 4000);
+        text = speechText(text).slice(0, 4000);
         if (!text || !opts.synthesize) return;
         var blob = null;
         try {

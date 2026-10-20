@@ -654,6 +654,24 @@ def test_speak_only_on_mic_turns():
     assert "voiceOrb.chirp(" in phone
 
 
+def test_speak_strips_markdown_before_tts():
+    """F27: speech cleans markdown/code/URLs; the bubble stays verbatim."""
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    orb_js = (repo / "invincible" / "templates" / "static" /
+              "voice-orb.js").read_text(encoding="utf-8")
+    chat = (repo / "invincible" / "templates" / "chat.html").read_text(
+        encoding="utf-8")
+    assert "function speechText(text)" in orb_js
+    assert "Code is in the chat." in orb_js
+    assert "https?:\\/\\/" in orb_js
+    assert "text = speechText(text).slice(0, 4000);" in orb_js
+    # The browser bubble is still the unfiltered source of truth.
+    assert "var finalText = pending.textContent;" in chat
+    assert "if (shouldSpeak) speak(finalText);" in chat
+
+
 def test_gemini_style_composer_bar():
     from pathlib import Path
 
