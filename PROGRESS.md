@@ -5,6 +5,22 @@
 
 ## Current State
 
+- F28 active (implementation complete, committed): `docs/HARNESS_PLAN.md`
+  is now a verified status document. It separates live phases from dormant
+  modules (`run_workflow`, hydration, `harness_router.handle_tool_call`,
+  `ApprovalStore` have no production caller), corrects the stale facts
+  (34 MCP tools, 17 event types, 3000-token injection budget, `websockets`
+  is a core dependency, `workflow_events` has no `seq` column, agent paths
+  are `invincible/agent/*`), and marks the Workflows page missing. A staged
+  machine action now emits `approval.requested` (metadata only: tool name,
+  subject, action; never token/command/path/content); `confirm_action`
+  still emits `approval.resolved`. `docs/MCP_PROTOCOL.md` section 8 now
+  documents the WS-first relay (4401 auth close, 20 s heartbeat, WS result
+  frame, poll fallback) and the read-only `/harness/events` inspector.
+  `ruff check .` clean; focused 54 passed; FULL suite green (2118
+  passed / 11 skipped / 1 deselected on the F28-only tree; an earlier run
+  hit 20 transient pg_trgm failures, the clean rerun passed). Committed on
+  `main` after the F05 merge (`011ec2c`); F05 stage 2 is `b28b775`.
 - F22 done (`passing`): the desktop companion face now mirrors voice
   listening/speaking. The webchat orb's existing `onState` posts
   `listening`/`speaking`/`idle` to a new session-cookie
@@ -770,10 +786,18 @@
 
 ## In Progress
 
-- None. F22 is closed; F05 is the only `planned` feature and is not
-  active yet.
+- F28 (`active`): harness plan truth + `approval.requested` + WS transport
+  docs. Implementation and tests are green; this commit lands it on `main`
+  after the F05 merge (`011ec2c`).
+- F05 note: stage 1 (`60dfa8f`) and stage 2 (`b28b775`) are committed on
+  `f05-stage2-trgm-fuzzy`, but `feature_list.json` still says `planned`.
+  The F05 owner should activate or close it before a third stage starts.
 
 ## Next Steps
+
+Harness follow-up (F28): committed on `main` after the F05 merge
+(`011ec2c`). Next build: add `workflow_events.user_id` + the Workflows
+page.
 
 1. Restart any paired `invincible connect` agent to pick up F22's voice
    poses plus the earlier F23/F25/F26 runner/overlay changes
@@ -785,8 +809,8 @@
    confirm the listening/speaking poses read well; the transport and
    pose logic are covered hermetically. F26's click-through and
    multi-monitor glide-vs-click checks are also still live-only.
-3. F05 (semantic retrieval seam) is the only planned feature; activate
-   it deliberately before starting work.
+3. F05 (semantic retrieval seam) remains `planned` despite being merged;
+   the F05 owner should activate/close it.
 4. `open_url` has no wait: a launch wait there is the symmetric
    follow-up (reuse `_open_wait_result` + the look selector), if the
    repeat-app plan calls for it.

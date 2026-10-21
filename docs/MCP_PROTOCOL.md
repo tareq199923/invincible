@@ -1323,3 +1323,34 @@ staging, no approval, no result. Kill-switch `INVINCIBLE_HANDOFF`
 (fail-closed 503 when off). Routing detail:
 [ARCHITECTURE.md](ARCHITECTURE.md) §6b; threat model:
 [SECURITY.md](SECURITY.md) §13.
+
+### Agent transport: WebSocket relay (WS-first, poll fallback)
+
+The paired machine agent is not an MCP client. It holds an outbound-only
+connection; nothing listens on the user's PC.
+
+- **Connect:** `WS /agent/ws`. Authenticate with
+  `Authorization: Bearer inv_...` (preferred) or `?api_key=inv_...`.
+  A failed key closes the socket with `4401` before accept; a server with
+  the relay disabled closes with `4400`.
+- **Hello:** the first frame is
+  `{type: "hello", machine_id, machine_name, platform, capabilities}`.
+  `capabilities` currently reports `ripgrep`, `docker`, and `chrome`.
+- **Jobs:** the server pushes `{type: "job", job: {...}}`; the agent
+  replies on the same socket with `{job_id, result}`. One job goes to
+  exactly one socket (never broadcast), so a confirmed command cannot
+  run on two machines.
+- **Keepalive:** 20 s WebSocket ping/pong
+  (`INVINCIBLE_HARNESS_WS_HEARTBEAT`). Set `INVINCIBLE_HARNESS_WS=0` to
+  force poll-only.
+- **Fallback:** without a socket, the agent uses `POST /agent/poll`
+  (25 s hold) and `POST /agent/result`; job and result payloads are
+  identical to the WS frames.
+- **Multiplexing:** the same relay carries tunnel frames (H6b), phone
+  handoffs (B2), and display-only voice state (F22), tagged by `type`.
+  No frame is ever interpreted as an MCP request.
+
+`WS /harness/events` is a separate, read-only inspector for the account
+dashboard: it authenticates with the session cookie, replays the bounded
+in-memory history (500 events), then follows new events about once a
+second. It accepts no commands and exposes no tool or model access.

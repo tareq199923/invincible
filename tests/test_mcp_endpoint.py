@@ -207,6 +207,48 @@ async def test_mcp_execute_bash_stages_pending(client, bearer_headers, monkeypat
     assert executed == []  # nothing ran until confirmed
 
 
+async def test_mcp_staging_emits_approval_requested(
+        client, bearer_headers, monkeypatch):
+    """H0: a staged action announces itself, metadata only."""
+
+    async def probe(command, timeout):
+        return {"stdout": "", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(tool_executor, "_run_command", probe)
+
+    body = (await _call_bash(client, bearer_headers, "echo hi")).json()
+    token = _pending_token(body)
+
+    events = [
+        event for event in app.state.harness_bus.history()
+        if event["type"] == "approval.requested"
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event["name"] == "execute_bash"
+    assert event["action"] == "execute_bash"
+    # Metadata only: the token and the command text never enter the stream.
+    payload = json.dumps(event)
+    assert token not in payload
+    assert "echo hi" not in payload
+
+
+async def test_mcp_read_only_call_emits_no_approval_event(
+        client, bearer_headers, tmp_path):
+    """H0: non-staged tools stay quiet (no phantom approval)."""
+    target = tmp_path / "note.txt"
+    target.write_text("hello", encoding="utf-8")
+
+    await _call_tool(
+        client, bearer_headers, "read_file", {"path": str(target)})
+
+    events = [
+        event for event in app.state.harness_bus.history()
+        if event["type"] == "approval.requested"
+    ]
+    assert events == []
+
+
 async def test_mcp_execute_bash_approve_flow(client, bearer_headers, monkeypatch):
     staged = await _call_bash(client, bearer_headers, "echo hi")
     token = _pending_token(staged.json())

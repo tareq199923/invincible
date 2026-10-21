@@ -67,6 +67,25 @@ def _emit_harness(request: Request, type: HarnessEventType, **fields) -> None:
     with contextlib.suppress(Exception):
         bus.emit(type, **fields)
 
+
+def _emit_staged(request: Request, name: str, result, subject) -> None:
+    """H0: this action is now waiting for a human confirmation.
+
+    Emitted only when the staging call actually produced a pending action.
+    Metadata only: the token, command, path, and content stay out of the
+    event stream.
+    """
+    if not isinstance(result, dict):
+        return
+    if result.get("status") != "pending_confirmation":
+        return
+    _emit_harness(
+        request, HarnessEventType.APPROVAL_REQUESTED,
+        name=str(name), user_id=subject,
+        action=str(result.get("action") or name),
+    )
+
+
 # Response caps for the memory tools: MCP results land in an AI's context
 # window, so they obey the same token discipline as prompt injection.
 # Single definition lives in core/harness_tools.py; these aliases keep
@@ -435,6 +454,7 @@ async def _dispatch(method, rpc_id, params, request,
                     args.get("command", ""), pending_actions,
                     owner_subject=owner_subject,
                 )
+                _emit_staged(request, name, result, owner_subject)
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "write_file":
@@ -445,6 +465,7 @@ async def _dispatch(method, rpc_id, params, request,
                     args.get("path", ""), args.get("content", ""),
                     pending_actions, owner_subject=owner_subject,
                 )
+                _emit_staged(request, name, result, owner_subject)
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "edit_file":
@@ -465,6 +486,7 @@ async def _dispatch(method, rpc_id, params, request,
                     replace_all=args.get("replace_all", False) is True,
                     owner_subject=owner_subject,
                 )
+                _emit_staged(request, name, result, owner_subject)
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "expose_port":
@@ -482,7 +504,7 @@ async def _dispatch(method, rpc_id, params, request,
                     owner_subject=owner_subject,
                 )
                 print(f"[MCP] Pending {token}: expose_port {port}")
-                return _result(rpc_id, _tool_content(json.dumps({
+                staged = {
                     "status": "pending_confirmation",
                     "token": token,
                     "action": "expose_port",
@@ -491,7 +513,9 @@ async def _dispatch(method, rpc_id, params, request,
                         "Call confirm_action with this token "
                         "(approve=true/false) to proceed."
                     ),
-                })))
+                }
+                _emit_staged(request, name, staged, owner_subject)
+                return _result(rpc_id, _tool_content(json.dumps(staged)))
 
             if name == "tunnel_close":
                 # F03: safe direction — single call, no staging. Owner-
@@ -860,6 +884,7 @@ async def _dispatch(method, rpc_id, params, request,
                         f"{harness_tools.expected_args_hint(name)}",
                         is_error=True,
                     ))
+                _emit_staged(request, name, result, owner_subject)
                 return _result(rpc_id, _tool_content(json.dumps(result)))
 
             if name == "confirm_action":
