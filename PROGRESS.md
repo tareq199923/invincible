@@ -37,7 +37,8 @@
   / 11 skipped / 1 deselected (Windows, default 5433 test DB). An earlier
   run's 7 failures were DB-concurrency artifacts from an overlapping
   focused run against the same `invincible_test` database; all 81 passed
-  in isolation. Clean-state checklist 5/5 ticked.
+  in isolation. Clean-state checklist 5/5 ticked. Committed as
+  `ef13140`.
 - F29 done (`passing`): `workflow_events` now has a nullable `user_id`
   (migration 0017, backfilled from `sessions.client_session_id`), the bus
   persists the event's owner, and live fan-out events carry `user_id`.
@@ -755,8 +756,8 @@
   MCP_PROTOCOL §7 tools, SECURITY §12, ROADMAP count 34. Vetted
   plan survived contact: one real find during vetting (the batch
   trap), confirmed in code before building.
-- Last commit: `55cc955` (main) — F20 overlay Bmax restyle (navy/pink
-  skin parity); the hash-record chore sits on top.
+- Last commit: `ef13140` (main) — F29/F05 bookkeeping close-out (both
+  now `passing`, F30 opened); the hash-record chore sits on top.
 - F12 done (`passing`, uncommitted): multimodal image parts — the model
   truly sees screenshots (new pure `invincible/core/vision.py`:
   extract/attach around trim, PNG-IHDR token estimates, 4-image +
