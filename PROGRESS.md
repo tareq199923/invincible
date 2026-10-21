@@ -22,18 +22,47 @@
   passed / 11 skipped / 1 deselected on the F28-only tree; an earlier run
   hit 20 transient pg_trgm failures, the clean rerun passed). Committed on
   `main` after the F05 merge (`011ec2c`); F05 stage 2 is `b28b775`.
-- F29 active (implementation complete, committed): `workflow_events`
-  now has a nullable `user_id` (migration 0017, backfilled from
-  `sessions.client_session_id`), the bus persists the event's owner, and
-  live fan-out events carry `user_id`. New `core/workflow_store.py` reads
-  owner-scoped timelines; `GET /dashboard/workflows` + the detail page
-  render metadata-only summaries (never task text/tool output/paths), and
-  a foreign or unknown workflow id returns the same 404. Nav link +
-  templates added. `ruff check .` clean; targeted 63 passed (7 dashboard,
-  16 CLI/migration, 40 bus/MCP); FULL suite 2116 passed / 11 skipped /
-  1 deselected. Committed on `main` after the F05 merge (`011ec2c`); local
+- Bookkeeping done (`passing`): F29 flipped `active` → `passing` (it was
+  already pushed as `f2021d9`; `origin/main` == `f2021d9`) and F05 flipped
+  `planned` → `passing` after rescoping it to the lexical seam hardening
+  that actually shipped (`60dfa8f` + `b28b775`, merged `011ec2c`); the
+  vector/embedding half is now tracked as F30 (`planned`). F05's
+  verification command was corrected to the tests that actually cover its
+  stages (`test_retrieval.py` + `test_phase4_schema.py` + `test_memory.py`
+  — the old `test_memory.py` alone missed both stages).
+  `docs/HARNESS_PLAN.md` no longer claims nothing reads `workflow_events`
+  (F29 reads it back); `docs/ROADMAP.md` states the F05 lexical stages
+  landed while the vector/embedding backend stays deferred. `ruff check .`
+  clean; F05 slice 54 passed, F29 slice 41 passed, FULL suite 2125 passed
+  / 11 skipped / 1 deselected (Windows, default 5433 test DB). An earlier
+  run's 7 failures were DB-concurrency artifacts from an overlapping
+  focused run against the same `invincible_test` database; all 81 passed
+  in isolation. Clean-state checklist 5/5 ticked.
+- F29 done (`passing`): `workflow_events` now has a nullable `user_id`
+  (migration 0017, backfilled from `sessions.client_session_id`), the bus
+  persists the event's owner, and live fan-out events carry `user_id`.
+  New `core/workflow_store.py` reads owner-scoped timelines;
+  `GET /dashboard/workflows` + the detail page render metadata-only
+  summaries (never task text/tool output/paths), and a foreign or unknown
+  workflow id returns the same 404. Nav link + templates added.
+  `ruff check .` clean; targeted 63 passed (7 dashboard, 16 CLI/migration,
+  40 bus/MCP); FULL suite 2116 passed / 11 skipped / 1 deselected.
+  Committed as `f2021d9` and pushed (`origin/main` == `f2021d9`); local
   `invincible_test` got the additive
   `user_id` column/index because `create_all` does not ALTER old tables.
+- F05 done (`passing`): the `RetrievalService` seam is hardened while
+  lexical stays the default. Stage 1 (`60dfa8f`) tokenizes query text
+  Unicode-aware into quoted prefix terms (so `postgres` still finds a
+  stored `PostgreSQL`) and ranks by per-kind recency half-lives (task
+  14d, fact 45d, decision 60d, preference 90d). Stage 2 (`b28b775`) adds
+  a typo-tolerant `pg_trgm` fallback: only when strict AND finds no rows,
+  up to six tokens of length >= 5 each get one `<%` candidate branch
+  (migration `0016` installs the extension + the content trigram index);
+  `INVINCIBLE_MEMORY_FUZZY=0` restores the Stage 1 formula exactly.
+  Merged as `011ec2c` (PR #25). The feature entry was rescoped to the
+  shipped lexical scope — no semantic/vector backend landed, and that
+  half is now tracked as F30 (`planned`). `ruff check .` clean; the F05
+  slice (retrieval + phase-4 schema + memory) is green.
 - F22 done (`passing`): the desktop companion face now mirrors voice
   listening/speaking. The webchat orb's existing `onState` posts
   `listening`/`speaking`/`idle` to a new session-cookie
@@ -799,19 +828,21 @@
 
 ## In Progress
 
-- F29 (`active`): per-account Workflows dashboard timeline. Implementation
-  and tests are green (FULL suite 2116 passed / 11 skipped / 1 deselected);
-  committed on `main` after the F05 merge (`011ec2c`).
+- No active feature. F29 and F05 are both `passing`; F30 (embedding/
+  semantic retrieval backend) is `planned` and not started.
+- F29 (`passing`): per-account Workflows dashboard timeline.
 - F28 (`passing`): harness plan truth + `approval.requested`
   + WS transport docs.
-- F05 note: stage 1 (`60dfa8f`) and stage 2 (`b28b775`) are committed on
-  `f05-stage2-trgm-fuzzy`, but `feature_list.json` still says `planned`.
-  The F05 owner should activate or close it before a third stage starts.
+- F05 (`passing`): retrieval seam hardening — stage 1 (`60dfa8f`) and
+  stage 2 (`b28b775`), merged as `011ec2c`.
 
 ## Next Steps
 
-Harness follow-up (F29): the full suite is green; F28 and F29 are committed
-on `main` after the F05 merge (`011ec2c`). No push has been made.
+Bookkeeping follow-through (this session): F29 is pushed (`origin/main` ==
+`f2021d9`) and F29 + F05 are both `passing` in `feature_list.json`;
+`docs/HARNESS_PLAN.md` no longer claims nothing reads `workflow_events`,
+and `docs/ROADMAP.md` states the F05 lexical stages landed while the
+vector/embedding backend stays deferred.
 
 1. Restart any paired `invincible connect` agent to pick up F22's voice
    poses plus the earlier F23/F25/F26 runner/overlay changes
@@ -823,8 +854,10 @@ on `main` after the F05 merge (`011ec2c`). No push has been made.
    confirm the listening/speaking poses read well; the transport and
    pose logic are covered hermetically. F26's click-through and
    multi-monitor glide-vs-click checks are also still live-only.
-3. F05 (semantic retrieval seam) remains `planned` despite being merged;
-   the F05 owner should activate/close it.
+3. F05 is closed as the lexical retrieval seam hardening. The vector /
+   embedding half is tracked as F30 (`planned`): flip it to `active`
+   when you want a real semantic candidate branch (pgvector column +
+   BYOK embeddings provider + blended scoring).
 4. `open_url` has no wait: a launch wait there is the symmetric
    follow-up (reuse `_open_wait_result` + the look selector), if the
    repeat-app plan calls for it.

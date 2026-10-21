@@ -195,7 +195,8 @@ Migrations `0011` and `0012` add `workflow_events` and the
 `suspended_workflow_id`/deadline columns. `harness_approvals` implements
 `suspend`/`resolve` with structural separation from the fast path. The
 module is dormant: no production path constructs `ApprovalStore`.
-`workflow_events` receives fan-out events; nothing reads it yet.
+`workflow_events` receives fan-out events; since F29 the Workflows page
+reads them back as owner-scoped timelines.
 
 ### H6a — parity tools, safe set
 

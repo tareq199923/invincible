@@ -123,8 +123,10 @@ Honest limitations remaining:
 - The legacy per-session `facts` table was dropped by revision `0013`
   (2026-09-25) after a production audit found it empty; no backfill into
   `memories` was ever performed.
-- Retrieval is lexical only; semantic/vector retrieval remains a designed
-  seam behind `RetrievalService`.
+- Retrieval is lexical only. F05 hardened that path (Unicode-aware
+  prefix terms, per-kind recency half-lives, and a typo-tolerant
+  `pg_trgm` fallback behind `RetrievalService`); a semantic/vector
+  backend remains a designed seam.
 - Streaming usage on `runs` rows is estimated and flagged
   (`meta.usage_estimated`); real in-stream counts would require a wire
   change (`stream_options.include_usage`) that some compatible providers
@@ -370,7 +372,9 @@ caps, expiry, audit).
 Design seams exist; implementation deliberately postponed:
 
 - Vector/semantic retrieval (behind `RetrievalService` /
-  `EmbeddingProvider`).
+  `EmbeddingProvider`). F05 shipped the lexical hardening of that seam
+  (prefix/Unicode tokenization + `pg_trgm` typo tolerance); the embedding
+  provider and vector column are what is still deferred.
 - Teams/workspaces/collaboration.
 - Predictive quota/context-limit saving (token accounting groundwork
   lands in Phase 4; prediction does not).

@@ -28,11 +28,11 @@
     "verification": "ruff check . && pytest tests/test_harness_fanout.py tests/test_harness_router.py tests/test_harness_explore.py"
   },
   {
-    "behavior": "Semantic retrieval lands behind RetrievalService seam; lexical stays default",
+    "behavior": "the RetrievalService seam is hardened while lexical stays the default: query text is tokenized Unicode-aware into quoted prefix terms (stage 1), ranking uses per-kind recency half-lives, and a typo-tolerant pg_trgm fallback adds near-miss candidates only when strict AND finds nothing (stage 2, migration 0016, INVINCIBLE_MEMORY_FUZZY); no semantic/vector backend ships here",
     "id": "F05",
-    "state": "planned",
-    "title": "Vector/semantic retrieval seam",
-    "verification": "ruff check . && pytest tests/test_memory.py"
+    "state": "passing",
+    "title": "Retrieval seam hardening (prefix/Unicode lexical + pg_trgm typo tolerance)",
+    "verification": "ruff check . && pytest tests/test_retrieval.py tests/test_phase4_schema.py tests/test_memory.py"
   },
   {
     "behavior": "tools/audit_harness.py scores the five subsystems and templates/clean-state-checklist.md gates clock-out; hermetic tests pin pass/fail",
@@ -338,8 +338,15 @@
   {
     "behavior": "Workflow timelines become a real per-account dashboard surface: workflow_events gains a nullable user_id (backfilled from sessions.client_session_id), the bus persists each event's user_id, and live fan-out events carry it. GET /dashboard/workflows plus /dashboard/workflows/{workflow_id} render owner-scoped, metadata-only timelines; a foreign or unknown workflow id returns the same 404; task objectives, findings previews, commands, paths, and file contents never render. Migration 0017 adds the column/index and create_all parity is asserted.",
     "id": "F29",
-    "state": "active",
+    "state": "passing",
     "title": "Per-account Workflows dashboard timeline",
     "verification": "ruff check . && pytest tests/test_dashboard_workflows.py tests/test_harness_fanout.py tests/test_cli_db.py"
+  },
+  {
+    "behavior": "an embeddings provider plus a pgvector column back a semantic candidate branch behind RetrievalService, blended with the lexical score; lexical stays default until a provider is configured",
+    "id": "F30",
+    "state": "planned",
+    "title": "Embedding/semantic retrieval backend (pgvector + BYOK embeddings)",
+    "verification": "ruff check . && pytest tests/test_retrieval.py"
   }
 ]
