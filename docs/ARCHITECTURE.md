@@ -13,7 +13,7 @@ invincible/
 ├── cli.py                      Click CLI (setup / start / login / doctor / dev-db / db / oauth / secret / api-key / users)
 ├── providers.yaml              Static provider config (packaged test fixture)
 ├── templates/                  Jinja2 UI (public landing + docs site, login/register/account/device pages + dashboard)
-├── migrations/                 Packaged Alembic environment (0001 baseline … 0015 session_title_pin)
+├── migrations/                 Packaged Alembic environment (0001 baseline … 0016 memories_trgm)
 ├── endpoints/
 │   ├── auth.py                 require_auth: per-user inv_ API-key Principal resolution for /v1/* (fail closed)
 │   ├── accounts.py             Phase 3: /auth/*, /projects, /api-keys, /sessions,
@@ -527,11 +527,20 @@ retrieval on the next request:
     scope:   user_id + (project_id OR NULL)   — never another user/owner
     match:   generated tsvector @@ to_tsquery(query)
              query text is tokenized (Unicode-aware, 1000 chars / 12
-             tokens) into quoted prefix terms; AND-first, then an OR of
-             the same terms when strict matching finds nothing
-    rank:    ts_rank x recency(per-kind half-lives) x kind weight x confidence
+             tokens) into quoted prefix terms. Strict AND first; when it
+             finds no rows, OR of the same terms. With
+             INVINCIBLE_MEMORY_FUZZY on (default), up to six tokens of
+             length >= 5 also get one pg_trgm `<%` candidate branch each
+             (per-token UNION; scoped; stopword-guarded). The trigram
+             branch only adds near-miss spellings — it never runs while
+             strict AND has a hit.
+    rank:    (ts_rank + 0.03 * min(fuzzy_sum, 1.0)) x recency(per-kind
+             half-lives) x kind weight x confidence
              (task 14d, fact 45d, decision 60d, preference 90d; note and
-             unknown kinds keep the 14-day default)
+             unknown kinds keep the 14-day default). fuzzy_sum only counts
+             tokens that did not already match full-text, so an exact term
+             is never double-counted; `INVINCIBLE_MEMORY_FUZZY=0` restores
+             the Stage 1 ts_rank-only formula exactly.
     cut:     top INVINCIBLE_MEMORY_TOP_N above INVINCIBLE_MEMORY_MIN_SCORE
 
 budget (context_builder.assemble):
@@ -539,6 +548,14 @@ budget (context_builder.assemble):
     memory block fills the remainder;
     either may be truncated to fit — total never exceeds budget.
 ```
+
+Typo tolerance is still lexical: `pg_trgm` trigram similarity, not
+embeddings or vector search. Migration `0016` installs the trusted
+`pg_trgm` extension and a GIN `gin_trgm_ops` index on `memories.content`;
+`core.db` declares the same index, and the `memories` table-level
+`before_create` hook installs the extension before a fresh `create_all`
+builds that index. The runtime role only calls the function/operator
+(PUBLIC execute); it never creates the extension.
 
 The budget exists because trimming keeps system messages unconditionally:
 without a shared cap, oversized injections would blow small providers'

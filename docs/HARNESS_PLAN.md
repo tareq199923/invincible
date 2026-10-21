@@ -19,7 +19,7 @@ structure, auth realms, wire protocols, or conventions.
 
 1. Schema truth in `invincible/core/db.py` metadata. Migrations under
    `invincible/migrations/versions/`, run ONLY via `invincible db upgrade`.
-  Never auto-run at startup. Verify against `create_all`. Current head: `0015`.
+  Never auto-run at startup. Verify against `create_all`. Current head: `0016`.
 2. All in-app env reads via `invincible/core/settings.py` (live-read
    accessors). `cli.py` is the only exemption.
 3. Exactly one provider failover loop: `core/router.py::_iter_attempts`.

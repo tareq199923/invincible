@@ -5,13 +5,16 @@ Scores ``memories`` rows against the incoming user text so only a bounded,
 relevant slice reaches the prompt (locked principle: maximize continuity
 per token, never dump stores).
 
-Score = full-text rank x recency x kind weight x confidence.
+Score = (ts_rank + FUZZY_TERM_BASE_RANK * min(fuzzy_sum, 1.0))
+        x recency x kind weight x confidence.
 
 The SQL half uses the migration-0005 generated tsvector + GIN index for
-the match path; ranking happens in Python (:func:`score_memory`) so the
-weighting model stays hermetically testable and tunable without touching
-the query. The regconfig constant is shared with the schema - a mismatch
-would silently bypass the index.
+the match path and, when strict/OR lexical matching finds no rows, the
+migration-0016 ``pg_trgm`` extension + content trigram index for a
+typo-tolerant fallback. Ranking happens in Python (:func:`score_memory`)
+so the weighting model stays hermetically testable and tunable without
+touching the query. The regconfig constant is shared with the schema - a
+mismatch would silently bypass the index.
 
 Query text is tokenized here rather than handed to ``websearch_to_tsquery``:
 chat messages are not search syntax (``or``, a leading ``-``, quotes), and
@@ -93,6 +96,20 @@ _PREFIX_MIN_CHARS = 4
 _MARK_CATEGORIES = frozenset({"Mn", "Mc", "Me"})
 _JOINERS = frozenset({"\u200c", "\u200d"})
 
+# Typo-tolerant fallback (revision 0016). Only the no-exact-match OR stage
+# uses this; strict AND matching is untouched. The base is deliberately
+# below the measured exact ranks (0.0607927106320858 single-term and
+# 0.0303963553160429 in a two-term OR) so an exact candidate still wins
+# over a fuzzy-only one in either shape. Similarity is capped at 1.0.
+_MIN_FUZZY_TOKEN_CHARS = 5
+_MAX_FUZZY_TOKENS = 6
+FUZZY_MIN_SIMILARITY = 0.6
+FUZZY_TERM_BASE_RANK = 0.03
+_FUZZY_SET_LOCAL = (
+    "SET LOCAL pg_trgm.word_similarity_threshold = "
+    f"{FUZZY_MIN_SIMILARITY}"
+)
+
 
 def _is_word_char(ch: str) -> bool:
     """True for letters/digits, combining marks, and ZWJ/ZWNJ."""
@@ -138,6 +155,20 @@ def tokenize_query(query: str) -> list[str]:
     return tokens[:_MAX_QUERY_TOKENS]
 
 
+def fuzzy_tokens(tokens: list[str]) -> list[str]:
+    """Query tokens eligible for the trigram fallback.
+
+    First-seen order, length >= 5, capped at six. Stopwords still pass this
+    filter (the text-search configuration decides them at query time), so
+    the SQL adds its own non-empty-tsquery guard to keep a token like
+    "about" from entering the fuzzy pool.
+    """
+    return [
+        token for token in tokens
+        if len(token) >= _MIN_FUZZY_TOKEN_CHARS
+    ][:_MAX_FUZZY_TOKENS]
+
+
 def prefix_tsquery(tokens: list[str], operator: str) -> str | None:
     """Join tokens as quoted tsquery terms (prefix when long enough).
 
@@ -154,6 +185,90 @@ def prefix_tsquery(tokens: list[str], operator: str) -> str | None:
     return f" {operator} ".join(parts)
 
 
+def _build_fuzzy_sql(fuzzy: list[str]):
+    """Build the per-token UNION fallback and its bound parameters.
+
+    The FTS branch keeps the OR-ranked candidate pool. Each fuzzy branch
+    contributes up to ``:pool`` IDs for one token, so one token's matches
+    cannot starve another's; the final scored query ranks the union and
+    cuts to the same pool size. Every token is a bind parameter, never
+    interpolated SQL.
+    """
+    if not fuzzy:
+        raise ValueError("fuzzy token list must not be empty")
+
+    branches: list[str] = []
+    bonus_parts: list[str] = []
+    params: dict[str, str] = {}
+    for index, token in enumerate(fuzzy):
+        prefix = prefix_tsquery([token], "&")
+        assert prefix is not None
+        params[f"t{index}"] = token
+        params[f"p{index}"] = prefix
+        branches.append(f"""f{index} AS (
+    SELECT id FROM memories
+    WHERE user_id = :uid
+      AND (project_id IS NULL OR project_id = :pid)
+      AND to_tsquery(CAST(:cfg AS regconfig), :p{index})
+          <> ''::tsquery
+      AND NOT (search_vector @@
+               to_tsquery(CAST(:cfg AS regconfig), :p{index}))
+      AND (:t{index} <% content)
+    LIMIT :pool
+)""")
+        bonus_parts.append(f"""(CASE
+        WHEN to_tsquery(CAST(:cfg AS regconfig), :p{index})
+             <> ''::tsquery
+          AND NOT (search_vector @@
+                   to_tsquery(CAST(:cfg AS regconfig), :p{index}))
+          AND word_similarity(:t{index}, content) >= :threshold
+        THEN word_similarity(:t{index}, content)
+        ELSE 0
+    END)""")
+
+    union_sql = " UNION ".join(
+        ["SELECT id FROM fts"]
+        + [f"SELECT id FROM f{index}" for index in range(len(fuzzy))]
+    )
+    bonus_sql = " + ".join(bonus_parts)
+    branch_sql = ",\n".join(branches)
+    sql = text(f"""
+WITH fts AS (
+    SELECT id FROM memories
+    WHERE user_id = :uid
+      AND (project_id IS NULL OR project_id = :pid)
+      AND search_vector @@ to_tsquery(CAST(:cfg AS regconfig), :q)
+    ORDER BY ts_rank(
+        search_vector,
+        to_tsquery(CAST(:cfg AS regconfig), :q)
+    ) DESC
+    LIMIT :pool
+),
+{branch_sql},
+cand AS (
+    {union_sql}
+),
+scored AS (
+    SELECT m.id, m.content, m.kind, m.layer, m.confidence,
+           m.created_at,
+           ts_rank(
+               m.search_vector,
+               to_tsquery(CAST(:cfg AS regconfig), :q)
+           ) AS rank,
+           LEAST(({bonus_sql}), 1.0) AS fuzzy_sum
+    FROM memories m
+    JOIN cand ON cand.id = m.id
+    WHERE m.user_id = :uid
+      AND (m.project_id IS NULL OR m.project_id = :pid)
+)
+SELECT id, content, kind, layer, confidence, created_at, rank, fuzzy_sum
+FROM scored
+ORDER BY rank + :base * fuzzy_sum DESC
+LIMIT :pool
+""")
+    return sql, params
+
+
 @dataclass(frozen=True)
 class RetrievedMemory:
     id: int
@@ -165,18 +280,30 @@ class RetrievedMemory:
     score: float
 
 
+def lexical_relevance(ts_rank: float, fuzzy_sum: float) -> float:
+    """Full-text rank plus the capped trigram bonus.
+
+    Similarity is capped at 1.0 and the base stays below the measured exact
+    ranks, so any number of fuzzy tokens cannot outrank an otherwise
+    identical exact hit. A zero fuzzy sum is exactly Stage 1.
+    """
+    capped = min(max(fuzzy_sum, 0.0), 1.0)
+    return max(ts_rank, 0.0) + FUZZY_TERM_BASE_RANK * capped
+
+
 def score_memory(
     *,
     ts_rank: float,
     age_seconds: float,
     kind: str,
     confidence: float,
+    fuzzy_sum: float = 0.0,
 ) -> float:
-    """Pure Phase 4 ranking function."""
+    """Pure Phase 4 ranking function (fuzzy bonus defaults to zero)."""
     half_life = half_life_for(kind)
     recency = 0.5 ** (max(age_seconds, 0.0) / half_life)
     return (
-        max(ts_rank, 0.0)
+        lexical_relevance(ts_rank, fuzzy_sum)
         * recency
         * KIND_WEIGHTS.get(kind, 1.0)
         * max(confidence, 0.0)
@@ -241,6 +368,11 @@ class RetrievalService:
         )
         and_expr = prefix_tsquery(tokens, "&")
         or_expr = prefix_tsquery(tokens, "|")
+        fuzzy = (
+            fuzzy_tokens(tokens)
+            if settings.memory_fuzzy_enabled()
+            else []
+        )
         params = {
             "cfg": MEMORY_FTS_CONFIG,
             "q": and_expr,
@@ -261,6 +393,7 @@ class RetrievalService:
                     created_at=float(r["created_at"]),
                     score=score_memory(
                         ts_rank=float(r["rank"]),
+                        fuzzy_sum=float(r.get("fuzzy_sum", 0.0) or 0.0),
                         age_seconds=max(now - float(r["created_at"]), 0.0),
                         kind=r["kind"],
                         confidence=float(r["confidence"]),
@@ -271,10 +404,27 @@ class RetrievalService:
             scored.sort(key=lambda m: m.score, reverse=True)
             return [m for m in scored if m.score >= floor][:limit]
 
-        async with self.engine.connect() as conn:
+        async with self.engine.connect() as conn, conn.begin():
             rows = (await conn.execute(sql, params)).mappings().all()
-            if not rows and or_expr != and_expr:
-                rows = (await conn.execute(
-                    sql, {**params, "q": or_expr}
-                )).mappings().all()
+            if not rows and (or_expr != and_expr or fuzzy):
+                if fuzzy:
+                    # SET LOCAL scopes the GUC to this transaction;
+                    # asyncpg rejects it in a multi-command prepared
+                    # statement, so it is a separate execute.
+                    await conn.execute(text(_FUZZY_SET_LOCAL))
+                    fuzzy_sql, fuzzy_params = _build_fuzzy_sql(fuzzy)
+                    rows = (await conn.execute(
+                        fuzzy_sql,
+                        {
+                            **params,
+                            **fuzzy_params,
+                            "q": or_expr,
+                            "threshold": FUZZY_MIN_SIMILARITY,
+                            "base": FUZZY_TERM_BASE_RANK,
+                        },
+                    )).mappings().all()
+                else:
+                    rows = (await conn.execute(
+                        sql, {**params, "q": or_expr}
+                    )).mappings().all()
         return _to_memories(rows)

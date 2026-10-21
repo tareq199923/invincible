@@ -38,6 +38,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
@@ -68,6 +69,43 @@ def run_coro_sync(coro):
         return asyncio.run(coro)
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coro).result()
+
+
+def ensure_pg_trgm_extension(connection) -> None:
+    """Ensure the ``pg_trgm`` extension exists on the target database.
+
+    Shared by Alembic revision 0016 and the ``memories`` table's
+    ``before_create`` hook. The extension is trusted on PostgreSQL 13+, so
+    a non-superuser database owner (the deployment's migration role) can
+    install it; managed providers that restrict extension creation need
+    it pre-created by an admin.
+    """
+    installed = connection.execute(text(
+        "SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'"
+    )).scalar()
+    if installed:
+        return
+
+    available = connection.execute(text(
+        "SELECT 1 FROM pg_available_extensions WHERE name = 'pg_trgm'"
+    )).scalar()
+    if not available:
+        raise RuntimeError(
+            "PostgreSQL extension 'pg_trgm' is required for typo-tolerant "
+            "memory retrieval but is not available on this server. Install "
+            "the PostgreSQL contrib package or enable pg_trgm on the "
+            "managed provider, then retry."
+        )
+
+    try:
+        connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not create the 'pg_trgm' extension. Run "
+            "`CREATE EXTENSION pg_trgm;` as the database owner (or "
+            "provider admin), or grant CREATE on the database to the "
+            "migration role, then retry."
+        ) from exc
 
 
 async def create_all_from_metadata(engine) -> None:
@@ -348,6 +386,25 @@ Index(
     memories.c.created_at.desc(),
 )
 Index("idx_memories_search", memories.c.search_vector, postgresql_using="gin")
+# Typo-tolerant fallback (revision 0016): word_similarity/`<%` against a
+# trigram index. The extension is created by the table-level
+# before_create hook so a fresh create_all database gets it before this
+# index; migrated databases get it from 0016. The hook deliberately sits
+# on `memories`, not MetaData: the app lifespan calls create_all on every
+# start, and an existing table must not trigger DDL as the runtime role.
+Index(
+    "idx_memories_content_trgm",
+    memories.c.content,
+    postgresql_using="gin",
+    postgresql_ops={"content": "gin_trgm_ops"},
+)
+
+
+def _ensure_pg_trgm_before_memories(_target, connection, **_kwargs) -> None:
+    ensure_pg_trgm_extension(connection)
+
+
+event.listen(memories, "before_create", _ensure_pg_trgm_before_memories)
 
 
 # ---------------------------------------------------------------------------

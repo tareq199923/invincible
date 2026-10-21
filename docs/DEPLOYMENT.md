@@ -26,7 +26,7 @@ keys**. Users connect their own keys on the dashboard's Providers page.
 | Need | Notes |
 |---|---|
 | A host that runs a container (or a Python process) | Railway, Azure Container Apps/App Service, Fly, Render, a VPS — anything that can run the shipped `Dockerfile` and expose a port |
-| A **persistent, managed** PostgreSQL | Neon, RDS, Azure Database for PostgreSQL, or your own cluster. Never a temp-directory or otherwise ephemeral cluster — all state lives here |
+| A **persistent, managed** PostgreSQL | Neon, RDS, Azure Database for PostgreSQL, or your own cluster. Never a temp-directory or otherwise ephemeral cluster — all state lives here. It must provide the `pg_trgm` extension (standard contrib; a managed provider may require an admin to enable it) |
 | A domain + TLS | The platform's default domain is fine; a custom domain is a DNS record away (`invincible-ai.me` is a Cloudflare CNAME in DNS-only mode pointing at the app host) |
 | A secret store for env vars | The platform's environment-variable UI/CLI. Never commit them |
 
@@ -111,6 +111,16 @@ the model is [SECURITY.md](SECURITY.md) §8.
    (the image runs exactly one at startup). The app never auto-migrates;
    startup logs a loud warning when `alembic_version` is missing or behind
    head, and `invincible doctor` fails on a stale or unmanaged schema.
+5. **`pg_trgm` for typo-tolerant memory retrieval.** Revision `0016`
+   installs the trusted `pg_trgm` extension and a GIN trigram index on
+   `memories.content`. The non-superuser `invincible_migrate` role (database
+   owner) can create it on PostgreSQL 13+; if the provider blocks
+   `CREATE EXTENSION`, pre-create it once as an admin before the first
+   upgrade. The runtime role never runs DDL — it only executes
+   `word_similarity` / `<%`. `CREATE INDEX` is not concurrent, so schedule
+   the upgrade for a quiet window on a large `memories` table; the
+   migration refreshes planner statistics with `ANALYZE memories` after
+   the build.
 
 `invincible dev-db` is not a provisioning path here — it is loopback-only
 with dev-credential roles, meant for laptops and the test suite.
@@ -188,6 +198,8 @@ this is the operational version.
       restore tested once.
 - [ ] Two roles created (`invincible_migrate`, `invincible_app`) with the
       grants from `docker/db-init/01-roles.sh`; password auth enforced.
+- [ ] PostgreSQL has `pg_trgm` available; it is enabled (or an admin is
+      ready to pre-create it) before `invincible db upgrade` reaches 0016.
 - [ ] All secrets generated for this environment and stored in the
       platform's env settings (never reused from dev).
 - [ ] `INVINCIBLE_AGENT_ROUTING=1` set.

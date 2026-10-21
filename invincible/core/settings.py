@@ -299,6 +299,16 @@ class Settings:
         auto-extraction can be silenced while deliberate saves still land."""
         return _env_flag("INVINCIBLE_MEMORY_EXPLICIT")
 
+    def memory_fuzzy_enabled(self) -> bool:
+        """Typo-tolerant lexical fallback via pg_trgm (default on).
+
+        Only the no-exact-match OR stage uses ``word_similarity`` / ``<%``;
+        strict AND matching and the stored-history path are unchanged. Set
+        INVINCIBLE_MEMORY_FUZZY=0/off/false to restore Stage 1 retrieval
+        exactly (no pg_trgm query, no SET LOCAL). The schema still installs
+        the extension/index via migration 0016 or create_all."""
+        return _env_flag("INVINCIBLE_MEMORY_FUZZY")
+
     def continuity_enabled(self) -> bool:
         """Continuation-brief injection from the ContinuityEngine (15b,
         default on). State WRITES are unaffected by this toggle - it only

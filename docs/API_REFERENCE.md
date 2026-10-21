@@ -83,7 +83,10 @@ credential, never from the client.
   brief are rendered as system messages under one token budget and are
   routed upstream but never persisted. Explicit "remember this…" /
   "save this…" phrases in your messages persist scoped memories for later
-  retrieval; set `INVINCIBLE_MEMORY=0` to disable all of it.
+  retrieval; set `INVINCIBLE_MEMORY=0` to disable all of it. Retrieval is
+  lexical; with `INVINCIBLE_MEMORY_FUZZY` on (default) a no-exact-match OR
+  fallback also considers `pg_trgm` near-miss spellings. Set it to
+  `0`/`false`/`off` to restore the Stage 1 behavior.
 
 ---
 

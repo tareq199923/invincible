@@ -10,6 +10,8 @@
 # neither application role is a superuser.
 services:
   db:
+    # The official postgres image ships the contrib extensions; a custom
+    # image that omits pg_trgm must install contrib before migration 0016.
     image: postgres:16-alpine
     environment:
       # Bootstrap superuser: used ONLY by the init script to create the

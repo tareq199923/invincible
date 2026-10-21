@@ -14,9 +14,13 @@ from sqlalchemy import text
 from invincible.core.db import ensure_local_owner
 from invincible.core.memory import MemoryStore
 from invincible.core.retrieval import (
+    FUZZY_TERM_BASE_RANK,
     RECENCY_HALF_LIFE_SECONDS,
     RetrievalService,
+    _build_fuzzy_sql,
+    fuzzy_tokens,
     half_life_for,
+    lexical_relevance,
     prefix_tsquery,
     score_memory,
     tokenize_query,
@@ -39,6 +43,17 @@ async def _backdate(pg_engine, memory_id: str, age_seconds: float):
             text("UPDATE memories SET created_at = :at WHERE id = :i"),
             {"at": time.time() - age_seconds, "i": memory_id},
         )
+
+
+async def _backdate_many(pg_engine, memory_ids, age_seconds: float):
+    """Set several rows to the exact same timestamp for fair comparisons."""
+    at = time.time() - age_seconds
+    async with pg_engine.begin() as conn:
+        for memory_id in memory_ids:
+            await conn.execute(
+                text("UPDATE memories SET created_at = :at WHERE id = :i"),
+                {"at": at, "i": memory_id},
+            )
 
 
 # --- pure scoring --------------------------------------------------------------
@@ -144,6 +159,76 @@ def test_prefix_tsquery_shapes():
     assert prefix_tsquery(["db", "postgres"], "&") == "'db' & 'postgres':*"
     assert prefix_tsquery(["go", "tune"], "|") == "'go' | 'tune':*"
     assert prefix_tsquery([], "&") is None
+
+
+# --- fuzzy scoring and query building -----------------------------------------
+
+
+def test_fuzzy_tokens_first_six_long_tokens():
+    tokens = [
+        "a", "postgres", "db", "about", "kubernetes",
+        "deployment", "gateway", "routing", "ignored",
+    ]
+    assert fuzzy_tokens(tokens) == [
+        "postgres", "about", "kubernetes", "deployment", "gateway",
+        "routing",
+    ]
+    assert fuzzy_tokens(["db", "go", "sql"]) == []
+
+
+def test_lexical_relevance_adds_capped_bonus():
+    assert lexical_relevance(0.0, 0.0) == 0.0
+    assert lexical_relevance(0.1, 0.0) == pytest.approx(0.1)
+    assert lexical_relevance(0.0, 0.8) == pytest.approx(
+        FUZZY_TERM_BASE_RANK * 0.8)
+    assert lexical_relevance(0.0, 1.0) == pytest.approx(
+        FUZZY_TERM_BASE_RANK)
+    # The cap matters when several fuzzy tokens each look strong.
+    assert lexical_relevance(0.0, 2.5) == pytest.approx(
+        FUZZY_TERM_BASE_RANK)
+    assert lexical_relevance(0.0, -0.5) == 0.0
+
+
+def test_score_memory_keeps_stage1_formula_when_fuzzy_sum_is_zero():
+    without = score_memory(
+        ts_rank=0.06, age_seconds=0, kind="fact", confidence=1.0,
+    )
+    explicit_zero = score_memory(
+        ts_rank=0.06, age_seconds=0, kind="fact", confidence=1.0,
+        fuzzy_sum=0.0,
+    )
+    assert without == explicit_zero
+    boosted = score_memory(
+        ts_rank=0.06, age_seconds=0, kind="fact", confidence=1.0,
+        fuzzy_sum=0.8,
+    )
+    assert boosted == pytest.approx(
+        without + FUZZY_TERM_BASE_RANK * 0.8)
+
+
+def test_fuzzy_sql_is_bounded_and_uses_only_bound_tokens():
+    query = " ".join(f"token{i:03d}" for i in range(200))
+    tokens = tokenize_query(query)
+    fuzzy = fuzzy_tokens(tokens)
+    assert len(fuzzy) == 6
+
+    sql, params = _build_fuzzy_sql(fuzzy)
+    rendered = str(sql)
+
+    assert rendered.count("<%") == 6
+    assert params == {
+        "t0": fuzzy[0], "p0": "'token000':*",
+        "t1": fuzzy[1], "p1": "'token001':*",
+        "t2": fuzzy[2], "p2": "'token002':*",
+        "t3": fuzzy[3], "p3": "'token003':*",
+        "t4": fuzzy[4], "p4": "'token004':*",
+        "t5": fuzzy[5], "p5": "'token005':*",
+    }
+    for token in fuzzy:
+        assert token not in rendered
+
+    with pytest.raises(ValueError):
+        _build_fuzzy_sql([])
 
 
 # --- SQL path -------------------------------------------------------------------
@@ -314,3 +399,241 @@ async def test_unmatched_terms_return_empty(pg_engine, owner_ids, retrieval):
                             provenance="t")
     assert await retrieval.retrieve(
         user_id=uid, query="quantum chromodynamics") == []
+
+
+# --- pg_trgm fuzzy fallback ---------------------------------------------------
+
+
+async def test_single_typo_reaches_or_stage(pg_engine, owner_ids, retrieval):
+    uid, _pid = owner_ids
+    store = MemoryStore(engine=pg_engine)
+    memory_id = await store.save_memory(
+        user_id=uid, content="toolchain: PostgreSQL", layer="explicit",
+        kind="fact", confidence=1.0, provenance="t",
+    )
+    # AND finds nothing and or_expr == and_expr here; the fuzzy token must
+    # be what makes the fallback run.
+    hits = await retrieval.retrieve(user_id=uid, query="postgress")
+    assert [m.id for m in hits] == [memory_id]
+
+
+async def test_fuzzy_and_exact_hits_return_together(
+    pg_engine, owner_ids, retrieval
+):
+    uid, _pid = owner_ids
+    store = MemoryStore(engine=pg_engine)
+    fuzzy_id = await store.save_memory(
+        user_id=uid, content="toolchain: PostgreSQL", layer="explicit",
+        kind="fact", confidence=1.0, provenance="t",
+    )
+    exact_id = await store.save_memory(
+        user_id=uid, content="task: pooling bug", layer="explicit",
+        kind="task", confidence=1.0, provenance="t",
+    )
+    await store.save_memory(
+        user_id=uid, content="rust borrow checker", layer="explicit",
+        kind="fact", confidence=1.0, provenance="t",
+    )
+
+    hits = await retrieval.retrieve(
+        user_id=uid, query="postgress pooling", floor=0.0)
+
+    assert {m.id for m in hits} == {fuzzy_id, exact_id}
+    assert all(m.content != "rust borrow checker" for m in hits)
+
+
+async def test_exact_outranks_fuzzy_only(pg_engine, owner_ids, retrieval):
+    uid, _pid = owner_ids
+    store = MemoryStore(engine=pg_engine)
+    exact_id = await store.save_memory(
+        user_id=uid, content="postgress deployment note", layer="explicit",
+        kind="fact", confidence=1.0, provenance="t",
+    )
+    fuzzy_id = await store.save_memory(
+        user_id=uid, content="PostgreSQL deployment note", layer="explicit",
+        kind="fact", confidence=1.0, provenance="t",
+    )
+    await _backdate_many(pg_engine, [exact_id, fuzzy_id], 0)
+
+    hits = await retrieval.retrieve(
+        user_id=uid, query="postgress pooling", floor=0.0, limit=10)
+
+    assert [m.id for m in hits] == [exact_id, fuzzy_id]
+    assert hits[0].score > hits[1].score
+
+
+async def test_exact_token_has_no_fuzzy_bonus(
+    pg_engine, owner_ids, retrieval
+):
+    uid, _pid = owner_ids
+    store = MemoryStore(engine=pg_engine)
+    memory_id = await store.save_memory(
+        user_id=uid, content="PostgreSQL", layer="explicit",
+        kind="fact", confidence=1.0, provenance="t",
+    )
+    now = time.time()
+
+    hits = await retrieval.retrieve(
+        user_id=uid, query="postgres postgress", floor=0.0, now=now)
+    assert len(hits) == 1
+
+    async with pg_engine.connect() as conn:
+        rank = (await conn.execute(
+            text(
+                "SELECT ts_rank(search_vector,"
+                " to_tsquery(CAST(:cfg AS regconfig), :q))"
+                " FROM memories WHERE id = :i"
+            ),
+            {
+                "cfg": "english",
+                "q": "'postgres':* | 'postgress':*",
+                "i": memory_id,
+            },
+        )).scalar_one()
+    expected = score_memory(
+        ts_rank=float(rank),
+        fuzzy_sum=0.8,  # postgress only; postgres is an exact match
+        age_seconds=max(now - hits[0].created_at, 0.0),
+        kind="fact",
+        confidence=1.0,
+    )
+    # If the exact "postgres" similarity (0.889) were also added, the capped
+    # sum would be 1.0 and this score would be materially higher.
+    assert hits[0].score == pytest.approx(expected, rel=1e-5)
+
+
+async def test_stopword_token_does_not_enter_fuzzy_pool(
+    pg_engine, owner_ids, retrieval
+):
+    uid, _pid = owner_ids
+    store = MemoryStore(engine=pg_engine)
+    await store.save_memory(
+        user_id=uid, content="this is about the dashboard", layer="auto",
+        kind="fact", confidence=0.6, provenance="t",
+    )
+    await store.save_memory(
+        user_id=uid, content="toolchain: PostgreSQL", layer="explicit",
+        kind="fact", confidence=1.0, provenance="t",
+    )
+
+    # "about" has no tsquery lexeme (stopword) but word_similarity() is 1.0
+    # against the dashboard row. The non-empty-tsquery guard must keep it
+    # out of the fuzzy candidate pool.
+    hits = await retrieval.retrieve(
+        user_id=uid, query="about postgress", floor=0.0)
+    assert [m.content for m in hits] == ["toolchain: PostgreSQL"]
+
+
+async def test_fuzzy_scope_isolation_user_and_project(
+    pg_engine, owner_ids, retrieval
+):
+    uid_a, pid_a = owner_ids
+    async with pg_engine.begin() as conn:
+        from invincible.core.db import projects, users
+
+        uid_b = (await conn.execute(
+            users.insert().values(email="fuzzy-b@example.com",
+                                  created_at=time.time())
+        )).inserted_primary_key[0]
+        pid_b = (await conn.execute(
+            projects.insert().values(user_id=uid_b, name="fuzzy-other",
+                                     is_default=True,
+                                     created_at=time.time())
+        )).inserted_primary_key[0]
+
+    store = MemoryStore(engine=pg_engine)
+    await store.save_memory(
+        user_id=uid_a, content="toolchain: PostgreSQL",
+        layer="explicit", kind="fact", confidence=1.0, provenance="t",
+    )
+    await store.save_memory(
+        user_id=uid_a, content="toolchain: PostgreSQL project",
+        project_id=pid_a, layer="explicit", kind="fact",
+        confidence=1.0, provenance="t",
+    )
+    await store.save_memory(
+        user_id=uid_b, content="toolchain: PostgreSQL other",
+        layer="explicit", kind="fact", confidence=1.0, provenance="t",
+    )
+
+    def contents(hits):
+        return {m.content for m in hits}
+
+    assert contents(await retrieval.retrieve(
+        user_id=uid_a, query="postgress", floor=0.0
+    )) == {"toolchain: PostgreSQL"}
+    assert contents(await retrieval.retrieve(
+        user_id=uid_a, project_id=pid_a, query="postgress", floor=0.0
+    )) == {"toolchain: PostgreSQL", "toolchain: PostgreSQL project"}
+    assert contents(await retrieval.retrieve(
+        user_id=uid_a, project_id=pid_b, query="postgress", floor=0.0
+    )) == {"toolchain: PostgreSQL"}
+    assert contents(await retrieval.retrieve(
+        user_id=uid_b, project_id=pid_b, query="postgress", floor=0.0
+    )) == {"toolchain: PostgreSQL other"}
+
+
+async def test_fuzzy_switch_off_matches_stage1(
+    pg_engine, owner_ids, retrieval, monkeypatch
+):
+    uid, _pid = owner_ids
+    store = MemoryStore(engine=pg_engine)
+    memory_id = await store.save_memory(
+        user_id=uid, content="toolchain: PostgreSQL", layer="explicit",
+        kind="fact", confidence=1.0, provenance="t",
+    )
+    now = time.time()
+
+    on_hits = await retrieval.retrieve(
+        user_id=uid, query="postgres", now=now)
+    assert [m.id for m in on_hits] == [memory_id]
+    assert [m.id for m in await retrieval.retrieve(
+        user_id=uid, query="postgress", now=now)] == [memory_id]
+
+    monkeypatch.setenv("INVINCIBLE_MEMORY_FUZZY", "0")
+    off_hits = await retrieval.retrieve(
+        user_id=uid, query="postgres", now=now)
+    assert [
+        (m.id, m.content, m.score) for m in off_hits
+    ] == [
+        (m.id, m.content, m.score) for m in on_hits
+    ]
+    assert await retrieval.retrieve(
+        user_id=uid, query="postgress", now=now) == []
+    # A multi-token OR still runs on the Stage 1 path; it just has no
+    # unused exact match to return (no fuzzy pooling candidate here).
+    assert await retrieval.retrieve(
+        user_id=uid, query="postgress pooling", now=now) == []
+
+
+async def test_fuzzy_off_never_issues_trgm_sql(
+    pg_engine, owner_ids, retrieval, monkeypatch, statements
+):
+    uid, _pid = owner_ids
+    monkeypatch.setenv("INVINCIBLE_MEMORY_FUZZY", "0")
+    del statements[:]
+    await retrieval.retrieve(user_id=uid, query="postgress")
+    rendered = "\n".join(sql for sql, _ in statements)
+    assert "<%" not in rendered
+    assert "word_similarity" not in rendered
+    assert "SET LOCAL" not in rendered
+
+
+async def test_200_word_query_issues_at_most_six_trgm_predicates(
+    pg_engine, owner_ids, retrieval, statements
+):
+    uid, _pid = owner_ids
+    store = MemoryStore(engine=pg_engine)
+    await store.save_memory(
+        user_id=uid, content="token000", layer="explicit",
+        kind="fact", confidence=1.0, provenance="t",
+    )
+    query = " ".join(f"token{i:03d}" for i in range(200))
+
+    del statements[:]
+    hits = await retrieval.retrieve(user_id=uid, query=query, floor=0.0)
+
+    assert [m.content for m in hits] == ["token000"]
+    rendered = "\n".join(sql for sql, _ in statements)
+    assert rendered.count("<%") == 6
+    assert "token000" not in rendered
