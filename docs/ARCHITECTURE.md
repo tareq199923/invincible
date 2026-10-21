@@ -525,10 +525,13 @@ memories row written at persist time:
 
 retrieval on the next request:
     scope:   user_id + (project_id OR NULL)   — never another user/owner
-    match:   generated tsvector @@ websearch_to_tsquery(query)
-             AND-first; empty result retries with an OR of sanitized
-             tokens (questions carry words the memory lacks)
-    rank:    ts_rank x recency(14-day half-life) x kind weight x confidence
+    match:   generated tsvector @@ to_tsquery(query)
+             query text is tokenized (Unicode-aware, 1000 chars / 12
+             tokens) into quoted prefix terms; AND-first, then an OR of
+             the same terms when strict matching finds nothing
+    rank:    ts_rank x recency(per-kind half-lives) x kind weight x confidence
+             (task 14d, fact 45d, decision 60d, preference 90d; note and
+             unknown kinds keep the 14-day default)
     cut:     top INVINCIBLE_MEMORY_TOP_N above INVINCIBLE_MEMORY_MIN_SCORE
 
 budget (context_builder.assemble):
