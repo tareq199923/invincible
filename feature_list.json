@@ -329,10 +329,17 @@
     "verification": "ruff check . && pytest tests/test_webchat_agent.py tests/test_baymax_prompt.py tests/test_voice.py tests/test_web_face.py"
   },
   {
-    "behavior": "docs/HARNESS_PLAN.md is verified against the code rather than the prose: the status block separates live phases from dormant modules (run_workflow, hydrate_context/compact_turns, harness_router.handle_tool_call, and ApprovalStore have no production caller; workflow_events is written but has no read surface), stale facts are corrected (34 MCP tools, 17 event types, 3000-token injection budget, websockets is a core dependency, workflow_events has no seq column, agent paths are invincible/agent/*), and the doc records a last-verified date and command; a staged machine action now emits approval.requested with metadata only (tool name, subject, action; never token, command, path, or content) before confirm_action emits approval.resolved; docs/MCP_PROTOCOL.md section 8 documents the WS-first agent relay (4401 auth close, 20s heartbeat, WS result frame, poll fallback) and the read-only /harness/events inspector",
+    "behavior": "docs/HARNESS_PLAN.md is verified against the code rather than the prose: the status block separates live phases from dormant modules (run_workflow, hydrate_context/compact_turns, harness_router.handle_tool_call, and ApprovalStore have no production caller; the Workflows page/read surface was missing at the time (F29 adds it)), stale facts are corrected (34 MCP tools, 17 event types, 3000-token injection budget, websockets is a core dependency, workflow_events has no seq column, agent paths are invincible/agent/*), and the doc records a last-verified date and command; a staged machine action now emits approval.requested with metadata only (tool name, subject, action; never token, command, path, or content) before confirm_action emits approval.resolved; docs/MCP_PROTOCOL.md section 8 documents the WS-first agent relay (4401 auth close, 20s heartbeat, WS result frame, poll fallback) and the read-only /harness/events inspector",
     "id": "F28",
-    "state": "active",
+    "state": "passing",
     "title": "Harness plan truth + approval.requested + WS transport docs",
     "verification": "ruff check . && pytest tests/test_harness_bus.py tests/test_mcp_endpoint.py tests/test_agent_ws.py"
+  },
+  {
+    "behavior": "Workflow timelines become a real per-account dashboard surface: workflow_events gains a nullable user_id (backfilled from sessions.client_session_id), the bus persists each event's user_id, and live fan-out events carry it. GET /dashboard/workflows plus /dashboard/workflows/{workflow_id} render owner-scoped, metadata-only timelines; a foreign or unknown workflow id returns the same 404; task objectives, findings previews, commands, paths, and file contents never render. Migration 0017 adds the column/index and create_all parity is asserted.",
+    "id": "F29",
+    "state": "active",
+    "title": "Per-account Workflows dashboard timeline",
+    "verification": "ruff check . && pytest tests/test_dashboard_workflows.py tests/test_harness_fanout.py tests/test_cli_db.py"
   }
 ]

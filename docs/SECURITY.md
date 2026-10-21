@@ -189,6 +189,14 @@ Properties of this realm:
   `provider_name` + `catalog_key` + id only — never the key, and never
   the base URL (a URL may embed auth parameters).
 
+### Dashboard workflow timelines — cookie realm (harness H6c)
+
+`/dashboard/workflows` and `/dashboard/workflows/{workflow_id}` are
+session-cookie only. Every read filters on the resolved `user_id`; a
+workflow id is not a capability, and a foreign id returns the same 404 as
+an unknown one. The page renders metadata summaries only — never task
+objectives, findings previews, commands, paths, or file contents.
+
 ### Dashboard webchat — cookie realm (agent modes v2)
 
 | Property | Value |

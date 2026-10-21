@@ -226,7 +226,8 @@ async def test_fanout_runs_steps_concurrently_and_merges(monkeypatch):
         text_body("scout findings"),
     ])
     out = await harness_fanout.run_fanout(
-        "fix it", **_kw(router=router), bus=bus, workflow_id="wf1")
+        "fix it", **_kw(router=router), bus=bus,
+        workflow_id="wf1", user_id=42)
     assert out["calls"] == 4  # planner + scout round + scout text + librarian
     assert out["steps"] == plan["steps"]
     assert "[a via scout] scout findings" in out["findings"]
@@ -242,6 +243,8 @@ async def test_fanout_runs_steps_concurrently_and_merges(monkeypatch):
     ]
     assert HarnessEventType.WORKFLOW_STARTED not in types
     assert HarnessEventType.WORKFLOW_COMPLETED not in types
+    # H6c: every durable event carries its owner for the dashboard read.
+    assert all(event.get("user_id") == 42 for event in bus.history())
     # Previews bounded, tool-result secrets never on the bus.
     blob = json.dumps(bus.history())
     assert "secret-token-xyz" not in blob

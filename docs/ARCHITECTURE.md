@@ -13,14 +13,14 @@ invincible/
 ├── cli.py                      Click CLI (setup / start / login / doctor / dev-db / db / oauth / secret / api-key / users)
 ├── providers.yaml              Static provider config (packaged test fixture)
 ├── templates/                  Jinja2 UI (public landing + docs site, login/register/account/device pages + dashboard)
-├── migrations/                 Packaged Alembic environment (0001 baseline … 0016 memories_trgm)
+├── migrations/                 Packaged Alembic environment (0001 baseline … 0017 workflow_events_user_id)
 ├── endpoints/
 │   ├── auth.py                 require_auth: per-user inv_ API-key Principal resolution for /v1/* (fail closed)
 │   ├── accounts.py             Phase 3: /auth/*, /projects, /api-keys, /sessions,
 │   │                           device pairing, GitHub login, password set/change
 │   │                           via /auth/password (session-cookie realm)
 │   ├── dashboard.py            Phase 5: /dashboard* views (overview, sessions,
-│   │                           detail, tasks, memory, usage, settings) plus the
+│   │                           detail, tasks, memory, usage, settings, workflows) plus the
 │   │                           /memories and /usage JSON siblings — all behind
 │   │                           require_user_session (cookies only; inv_* keys,
 │   │                           MCP bearers excluded by construction)
@@ -117,6 +117,8 @@ invincible/
     │                           sub-agents → fan-in → synthesize; never wired
     │                           into a live caller) — revisit Step 8
     ├── harness_approvals.py    Durable suspend/resume approvals over pending_actions (H5)
+    ├── workflow_store.py       Read-only per-account workflow timelines for
+    │                           the dashboard (H6c)
     ├── tool_dispatch.py      Shared tool-execution primitives (machine/agent
     │                           reads, staged mutating calls, MCP-parity data
     │                           tools) for the main agent loop and the explore

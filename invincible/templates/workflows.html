@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Workflows - Invincible{% endblock %}
+{% block content %}
+<h2>Workflows</h2>
+<p class="muted">Durable harness event timelines for this account. A
+workflow is one chat turn's planned read-only fan-out; only this
+account's events are shown.</p>
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Workflow</th><th>Started</th><th>Last event</th>
+      <th>Events</th></tr></thead>
+  <tbody>
+  {% for w in workflows %}
+  <tr class="workflow-row">
+    <td><a href="/dashboard/workflows/{{ w.workflow_id | urlencode }}"><code>{{ w.workflow_id }}</code></a></td>
+    <td class="muted" title="{{ w.started_at | absdate }}">{{ w.started_at | timeago }}</td>
+    <td>{% if w.latest_summary %}{{ w.latest_summary }}{% else %}{{ w.latest_type or '-' }}{% endif %}
+        <span class="muted">({{ w.latest_type or 'event' }})</span></td>
+    <td class="muted">{{ w.event_count }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4" class="empty">No workflows yet. Workflow timelines
+      appear when a harness turn records durable plan or sub-agent
+      events.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock content %}

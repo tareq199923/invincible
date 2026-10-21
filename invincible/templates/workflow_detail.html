@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Workflow - Invincible{% endblock %}
+{% block content %}
+<p><a href="/dashboard/workflows">&larr; All workflows</a></p>
+<h2>Workflow</h2>
+<p class="muted"><code>{{ workflow_id }}</code></p>
+<div class="table-scroll">
+<table>
+  <thead><tr><th>When</th><th>Event</th><th>Detail</th></tr></thead>
+  <tbody>
+  {% for e in events %}
+  <tr class="workflow-event-row">
+    <td class="muted" title="{{ e.created_at | absdate }}">{{ e.created_at | timeago }}</td>
+    <td><code>{{ e.type }}</code></td>
+    <td>{{ e.summary or '-' }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="muted">Task text, tool output, and file contents are not shown
+on this page.</p>
+{% endblock content %}

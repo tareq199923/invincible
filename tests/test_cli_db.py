@@ -284,9 +284,19 @@ async def test_db_upgrade_creates_full_schema(scratch_db, monkeypatch):
 
     async with engine.connect() as conn:
         tables = await conn.run_sync(reflect)
+
+    def reflect_columns(conn):
+        insp = inspect(conn)
+        return {c["name"] for c in insp.get_columns("workflow_events")}
+
+    async with engine.connect() as conn:
+        columns = await conn.run_sync(reflect_columns)
     await engine.dispose()
 
     assert tables == sorted(set(metadata.tables) | {"alembic_version"})
+    # H6c: the migration chain must add the dashboard ownership column,
+    # not just the table (metadata/create_all parity).
+    assert "user_id" in columns
 
     # Idempotent: a second upgrade to head is a clean no-op.
     second = CliRunner().invoke(cli, ["db", "upgrade"])

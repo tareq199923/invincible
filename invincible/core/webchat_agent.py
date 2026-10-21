@@ -1152,6 +1152,7 @@ async def run_agent_turn(
                             },
                             bus=bus,
                             workflow_id=prepared.session_id,
+                            user_id=principal.user_id,
                         )
                     except Exception:  # noqa: BLE001 - fallback below
                         logger.exception(

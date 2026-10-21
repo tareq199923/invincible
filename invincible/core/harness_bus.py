@@ -80,6 +80,7 @@ class HarnessBus:
                     await conn.execute(
                         workflow_events.insert().values(
                             workflow_id=event["workflow_id"],
+                            user_id=event.get("user_id"),
                             type=event["type"],
                             payload=dict(event),
                             created_at=float(event.get("ts", 0) or 0),

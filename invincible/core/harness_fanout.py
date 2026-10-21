@@ -376,6 +376,7 @@ async def run_fanout(
     data_ctx: dict | None = None,
     bus: HarnessBus | None = None,
     workflow_id: str = "",
+    user_id: int | None = None,
 ) -> dict:
     """Plan → parallel bounded steps → merged findings. Returns
     ``{"findings": str, "calls": int, "steps": [...]}`` (calls counts
@@ -416,13 +417,13 @@ async def run_fanout(
         if bus is not None:
             bus.emit(
                 HarnessEventType.LOG,
-                workflow_id=workflow_id, level="info",
+                workflow_id=workflow_id, user_id=user_id, level="info",
                 message=f"fan-out width capped: {dropped} step(s) dropped",
             )
     if bus is not None:
         bus.emit(
             HarnessEventType.PLAN_CREATED,
-            workflow_id=workflow_id, steps=steps,
+            workflow_id=workflow_id, user_id=user_id, steps=steps,
         )
     if not steps:
         return {"findings": "", "calls": calls, "steps": []}
@@ -431,7 +432,7 @@ async def run_fanout(
         if bus is not None:
             bus.emit(
                 HarnessEventType.SUBAGENT_STARTED,
-                workflow_id=workflow_id, step_id=step["id"],
+                workflow_id=workflow_id, user_id=user_id, step_id=step["id"],
                 agent=step["agent"], objective=step["objective"],
             )
         try:
@@ -444,14 +445,14 @@ async def run_fanout(
             if bus is not None:
                 bus.emit(
                     HarnessEventType.SUBAGENT_FAILED,
-                    workflow_id=workflow_id, step_id=step["id"],
+                    workflow_id=workflow_id, user_id=user_id, step_id=step["id"],
                     agent=step["agent"], error=str(exc)[:200],
                 )
             return None
         if bus is not None:
             bus.emit(
                 HarnessEventType.SUBAGENT_COMPLETED,
-                workflow_id=workflow_id, step_id=step["id"],
+                workflow_id=workflow_id, user_id=user_id, step_id=step["id"],
                 agent=step["agent"],
                 findings_preview=str(out["summary"])[:200],
             )

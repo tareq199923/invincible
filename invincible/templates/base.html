@@ -48,6 +48,8 @@
          href="/dashboard/mcp">{{ icon('wrench') }}<span class="nav-label">MCP</span></a>
       <a class="nav-link{% if path.startswith('/dashboard/machines') %} active{% endif %}"
          href="/dashboard/machines">{{ icon('monitor') }}<span class="nav-label">Machines</span></a>
+      <a class="nav-link{% if path.startswith('/dashboard/workflows') %} active{% endif %}"
+         href="/dashboard/workflows">{{ icon('activity') }}<span class="nav-label">Workflows</span></a>
       <a class="nav-link{% if path.startswith('/dashboard/memory') %} active{% endif %}"
          href="/dashboard/memory">{{ icon('database') }}<span class="nav-label">Memories</span></a>
       <a class="nav-link{% if path.startswith('/dashboard/tasks') %} active{% endif %}"

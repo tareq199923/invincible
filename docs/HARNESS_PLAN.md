@@ -1,7 +1,7 @@
 # Harness Plan — outbound-only harness behavior (additive, non-breaking)
 
 > **Last verified: 2026-10-21** on branch `main`
-> (migration head `0016`; F05 merged as `011ec2c`).
+> (migration head `0017`; F05 merged as `011ec2c`).
 >
 > Verification method: import graph, route table, settings constants,
 > schema metadata, and the tool registry — compared against this file,
@@ -28,12 +28,12 @@
 | H4 router/handoff | `core/harness_router.py::handle_tool_call` | `test_harness_router.py` | **dormant** | No production caller; module header says "NOT wired into `POST /mcp`" |
 | H4 supervisor | — deleted in Step 5 | — | **removed** | Replaced by the read-only delegation in Steps 8/8b |
 | H5 approvals | `core/harness_approvals.py`, migrations `0011`/`0012` | `test_harness_approvals.py` | **dormant** | `harness_approvals` is imported by nothing; the 10-minute fast path is live |
-| H5 durable log | `workflow_events` | `test_harness_approvals.py` | **partial** | Written only when an event carries `workflow_id` (fan-out; `webchat_agent.py`); no read surface |
+| H5 durable log | `workflow_events`, `core/workflow_store.py` | `test_dashboard_workflows.py` | **live** | Fan-out events persist with `user_id`; `/dashboard/workflows` reads owner-scoped timelines; rows without `user_id` stay hidden |
 | H6a parity tools | `code_search`, `process_list`, `screenshot` | tool suites | **live** | Registry-derived `/mcp` descriptors |
 | H6b tunneling | `core/harness_tunnel.py`, `endpoints/tunnel.py` | `test_tunnel_registry.py`, `test_tunnel_route.py` | **live** | 2 h TTL, 256 KiB/s, 100 MiB, 3 per user |
 | H6c CLI | `invincible harness setup/connect/status/service install` | `test_cli_harness.py` | **live** | writes a systemd unit / launchd plist on POSIX, prints a `schtasks` command on Windows; enabling stays manual |
 | H6c Machines | `GET /dashboard/machines` | `test_dashboard_machines.py` | **live** | Per-account, read-only |
-| H6c Workflows | — | — | **missing** | `workflow_events` has no `user_id` column and no read path |
+| H6c Workflows | `GET /dashboard/workflows`, `core/workflow_store.py` | `test_dashboard_workflows.py` | **live** | Owner-scoped list + detail; migration `0017`; foreign/unknown ids share one 404 |
 | Step 8 explore | `core/harness_explore.py` | `test_harness_explore.py` | **live** | 4 consecutive reads, 8 iterations, 300-word budget |
 | Step 8b fan-out | `core/harness_fanout.py` | `test_harness_fanout.py` | **live** | 6 reads across 2 planes, width 4, 150 words per step |
 
@@ -42,9 +42,9 @@ Two facts this table exists to keep honest:
 1. The loop spine, hydration, the handoff router, and the durable
    approval store are **dormant**. Earlier revisions called them
    "shipped"; they have tests and docs but no live caller.
-2. `workflow_events` is written (fan-out events carry a `workflow_id`)
-   but never read. A per-user Workflows page also needs an ownership
-   column before it can be built safely.
+2. `workflow_events` is written and read: fan-out events carry a
+   `workflow_id` and `user_id`, and `/dashboard/workflows` renders only
+   the signed-in account's timelines. The page is metadata-only.
 
 ## 2. Goal
 
@@ -59,8 +59,9 @@ existing structure, auth realms, wire protocols, or conventions.
 
 1. Schema truth in `invincible/core/db.py` metadata. Migrations under
    `invincible/migrations/versions/`, run ONLY via `invincible db upgrade`.
-   Never auto-run at startup. Verify against `create_all`. Head on this
-   branch: `0016` (F05 stage 2 merged as `011ec2c`).
+   Never auto-run at startup. Verify against `create_all`. Head in this
+   tree: `0017` (F05 stage 2 merged as `011ec2c`; F29 adds the workflow
+   ownership column).
 2. All in-app env reads via `invincible/core/settings.py` (live-read
    accessors). `cli.py` is the only exemption.
 3. Exactly one provider failover loop: `core/router.py::_iter_attempts`.
@@ -106,7 +107,7 @@ existing structure, auth realms, wire protocols, or conventions.
 | Settings | `core/settings.py` | `AGENT_ONLINE_TTL_SECONDS=60`, `AGENT_POLL_HOLD_SECONDS=25`, `AGENT_JOB_GRACE_SECONDS=10`; all toggles live-read |
 | Dependencies | `pyproject.toml` | `websockets` is a core dependency (imported lazily by the agent); no `langchain` |
 | Events | `core/harness_events.py` | 17 event types |
-| Durable log | `core/db.py` | `workflow_events(id, workflow_id, type, payload JSONB, created_at)` — no `seq` column |
+| Durable log | `core/db.py`, `core/workflow_store.py` | `workflow_events(id, workflow_id, user_id FK, type, payload JSONB, created_at)`; index `(user_id, created_at)`; no `seq` column |
 
 ## 5. Design decisions
 
@@ -216,8 +217,8 @@ single-call, owner-bound, and idempotent.
 `status` uses `/agent/whoami` and `/agent/machines`. `service install`
 writes a systemd unit or launchd plist on POSIX, prints a `schtasks`
 command on Windows; enabling the service remains manual. The Machines
-page is live.
-The Workflows page is missing.
+page is live. The Workflows page is live: owner-scoped, read-only, and
+metadata-only, backed by migration `0017`.
 
 ## 7. What remains
 
@@ -225,16 +226,12 @@ The Workflows page is missing.
    Either wire them into the H-later assistant (with tests proving the
    live path) or delete them. Do not advertise them as shipped in the
    meantime.
-2. **Workflows page.** `workflow_events` has no `user_id`; a safe
-   per-user view needs an ownership column (migration `0017`) or a join
-   that cannot leak another account's events. Until then the promise
-   stays missing.
-3. **`gpu` capability.** Removed from the plan; no portable probe.
-4. **WS transport docs.** `docs/MCP_PROTOCOL.md` §8 now documents the
+2. **`gpu` capability.** Removed from the plan; no portable probe.
+3. **WS transport docs.** `docs/MCP_PROTOCOL.md` §8 now documents the
    relay, the inspector stream, the heartbeat, the result frame, and the
    poll fallback.
-5. **`approval.requested`.** Now emitted at staging (metadata only).
-6. **Service install.** Documented as advisory; it does not enable the
+4. **`approval.requested`.** Now emitted at staging (metadata only).
+5. **Service install.** Documented as advisory; it does not enable the
    service and does not install one on Windows.
 
 ## 8. Acceptance
@@ -248,6 +245,9 @@ Current, honest acceptance:
   result shapes; server restart → agents re-register (in-flight jobs are
   documented orphans; durable resume is dormant).
 - User A jobs never reach user B machines or sockets (pinned tests).
+- `/dashboard/workflows` shows only the signed-in account's durable
+  timelines; a foreign or unknown workflow id is a 404; the page renders
+  metadata summaries only, never task text, tool output, or file contents.
 - `ruff check . && pytest` green; docs updated in the same PR as code.
 
 Dormant modules must not be listed as acceptance evidence until they have

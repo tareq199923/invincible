@@ -5,14 +5,15 @@
 
 ## Current State
 
-- F28 active (implementation complete, committed): `docs/HARNESS_PLAN.md`
+- F28 done (`passing`): `docs/HARNESS_PLAN.md`
   is now a verified status document. It separates live phases from dormant
   modules (`run_workflow`, hydration, `harness_router.handle_tool_call`,
   `ApprovalStore` have no production caller), corrects the stale facts
   (34 MCP tools, 17 event types, 3000-token injection budget, `websockets`
   is a core dependency, `workflow_events` has no `seq` column, agent paths
-  are `invincible/agent/*`), and marks the Workflows page missing. A staged
-  machine action now emits `approval.requested` (metadata only: tool name,
+  are `invincible/agent/*`), and recorded the then-missing Workflows page
+  (now built by F29). A staged machine action now emits
+  `approval.requested` (metadata only: tool name,
   subject, action; never token/command/path/content); `confirm_action`
   still emits `approval.resolved`. `docs/MCP_PROTOCOL.md` section 8 now
   documents the WS-first relay (4401 auth close, 20 s heartbeat, WS result
@@ -21,6 +22,18 @@
   passed / 11 skipped / 1 deselected on the F28-only tree; an earlier run
   hit 20 transient pg_trgm failures, the clean rerun passed). Committed on
   `main` after the F05 merge (`011ec2c`); F05 stage 2 is `b28b775`.
+- F29 active (implementation complete, committed): `workflow_events`
+  now has a nullable `user_id` (migration 0017, backfilled from
+  `sessions.client_session_id`), the bus persists the event's owner, and
+  live fan-out events carry `user_id`. New `core/workflow_store.py` reads
+  owner-scoped timelines; `GET /dashboard/workflows` + the detail page
+  render metadata-only summaries (never task text/tool output/paths), and
+  a foreign or unknown workflow id returns the same 404. Nav link +
+  templates added. `ruff check .` clean; targeted 63 passed (7 dashboard,
+  16 CLI/migration, 40 bus/MCP); FULL suite 2116 passed / 11 skipped /
+  1 deselected. Committed on `main` after the F05 merge (`011ec2c`); local
+  `invincible_test` got the additive
+  `user_id` column/index because `create_all` does not ALTER old tables.
 - F22 done (`passing`): the desktop companion face now mirrors voice
   listening/speaking. The webchat orb's existing `onState` posts
   `listening`/`speaking`/`idle` to a new session-cookie
@@ -786,18 +799,19 @@
 
 ## In Progress
 
-- F28 (`active`): harness plan truth + `approval.requested` + WS transport
-  docs. Implementation and tests are green; this commit lands it on `main`
-  after the F05 merge (`011ec2c`).
+- F29 (`active`): per-account Workflows dashboard timeline. Implementation
+  and tests are green (FULL suite 2116 passed / 11 skipped / 1 deselected);
+  committed on `main` after the F05 merge (`011ec2c`).
+- F28 (`passing`): harness plan truth + `approval.requested`
+  + WS transport docs.
 - F05 note: stage 1 (`60dfa8f`) and stage 2 (`b28b775`) are committed on
   `f05-stage2-trgm-fuzzy`, but `feature_list.json` still says `planned`.
   The F05 owner should activate or close it before a third stage starts.
 
 ## Next Steps
 
-Harness follow-up (F28): committed on `main` after the F05 merge
-(`011ec2c`). Next build: add `workflow_events.user_id` + the Workflows
-page.
+Harness follow-up (F29): the full suite is green; F28 and F29 are committed
+on `main` after the F05 merge (`011ec2c`). No push has been made.
 
 1. Restart any paired `invincible connect` agent to pick up F22's voice
    poses plus the earlier F23/F25/F26 runner/overlay changes

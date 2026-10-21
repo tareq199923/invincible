@@ -806,9 +806,18 @@ workflow_events = Table(
     metadata,
     Column("id", BigInteger, Identity(), primary_key=True),
     Column("workflow_id", Text, nullable=False),
+    # Owner of the workflow. Nullable for rows written before revision
+    # 0017 and for workflow ids that never mapped to a session; the
+    # dashboard only ever reads the caller's non-null rows.
+    Column("user_id", BigInteger, ForeignKey("users.id"), nullable=True),
     Column("type", Text, nullable=False),
     Column("payload", JSONB, nullable=False),
     Column("created_at", Float, nullable=False),
 )
 
 Index("idx_workflow_events_workflow", workflow_events.c.workflow_id)
+Index(
+    "idx_workflow_events_user",
+    workflow_events.c.user_id,
+    workflow_events.c.created_at,
+)

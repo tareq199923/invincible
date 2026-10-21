@@ -37,6 +37,10 @@ from invincible.core.user_settings_store import (
     UserSettingsStore,
     clean_overrides,
 )
+from invincible.core.workflow_store import (
+    list_workflow_events,
+    list_workflows,
+)
 from invincible.endpoints.accounts import (
     _audit,
     _page,
@@ -890,6 +894,51 @@ async def machines_page(
         "machines.html", request,
         user_email=await _email(_engine(request), principal),
         machines=rows,
+    )
+
+
+@router.get("/dashboard/workflows")
+async def workflows_page(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    """This account's durable workflow timelines (H6c, read-only).
+
+    Ownership is structural: every store query filters on the resolved
+    user id, and there is no workflow id in the list URL.
+    """
+    engine = _engine(request)
+    rows = await list_workflows(engine, user_id=principal.user_id)
+    return _page(
+        "workflows.html", request,
+        user_email=await _email(engine, principal),
+        workflows=rows,
+    )
+
+
+@router.get("/dashboard/workflows/{workflow_id:path}")
+async def workflow_detail_page(
+    request: Request,
+    workflow_id: str,
+    principal: Principal = Depends(require_user_session),
+):
+    """One workflow's event timeline.
+
+    A foreign workflow id renders the SAME 404 body as an unknown one;
+    the user_id predicate in the store is the isolation boundary.
+    """
+    engine = _engine(request)
+    events = await list_workflow_events(
+        engine, user_id=principal.user_id, workflow_id=workflow_id)
+    if not events:
+        return _missing_page(
+            request, "Workflow not found",
+            "This workflow has no events for this account.")
+    return _page(
+        "workflow_detail.html", request,
+        user_email=await _email(engine, principal),
+        workflow_id=workflow_id,
+        events=events,
     )
 
 
