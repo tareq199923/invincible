@@ -22,6 +22,7 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 | `INVINCIBLE_MEMORY_EXPLICIT` | per-request | **On by default** (Phase 4): explicit "remember this…" / "save this…" triggers land as `explicit`-layer memories. Independent of `INVINCIBLE_MEMORY`, so auto-extraction can be silenced while deliberate saves still work. |
 | `INVINCIBLE_MEMORY_TOP_N` | per-request | Max retrieved memories injected per request (default `8`). |
 | `INVINCIBLE_MEMORY_MIN_SCORE` | per-request | Relevance floor: memories scoring below this are not injected (default `0.01`). |
+| `INVINCIBLE_MEMORY_FUZZY` | per-request | **On by default** (Stage 2, migration `0016`): when strict AND lexical matching finds no rows, add a typo-tolerant `pg_trgm` fallback (`word_similarity` / `<%`) for up to six query tokens of length ≥5. Fuzzy candidates are scored with `ts_rank + 0.03 * min(fuzzy_sum, 1.0)`; exact tokens never receive the bonus. Set `0`/`false`/`off` to run the Stage 1 retrieval path exactly (no `pg_trgm` query, no `SET LOCAL`). The extension/index must still exist for the migration head. |
 | `INVINCIBLE_INJECTION_BUDGET_TOKENS` | per-request | Unified token budget shared by memory + continuity injections (Phase 4). Continuity brief wins priority; the memory block is truncated or dropped to fit. Default `3000` (Step 7: headroom for a full brief plus memory hits on large-window models). |
 | `INVINCIBLE_COMPRESSION` | per-request | Send-time request compression (truncate long tool results, collapse blank-line runs) applied before context trimming. **On by default**; set to `0`/`false`/`off` to disable. Affects only what is sent to providers — stored session history stays verbatim. |
 | `INVINCIBLE_TOOL_COMPRESSION` | per-request | Send-time **tool-schema** compression: caps tool/property descriptions and strips non-semantic JSON Schema keys (`title`, `examples`, `$schema`, `$id`, `$comment`). Names, `required`, types and enums are never touched; results are memoized per tools payload. **On by default**; set to `0`/`false`/`off` to disable. |
@@ -254,6 +255,18 @@ turns as nodes/edges/timeline - is available to the session's owner at
   is not a production provisioning path — the required production
   permission model is specified in
   [docs/SECURITY.md](SECURITY.md).
+- **`pg_trgm` (typo-tolerant memory retrieval).** Revision `0016` installs
+  the trusted `pg_trgm` extension and a GIN `gin_trgm_ops` index on
+  `memories.content`. The non-superuser `invincible_migrate` role owns the
+  database/schema and can create the extension on PostgreSQL 13+; a
+  managed provider that restricts `CREATE EXTENSION` needs an admin to
+  pre-create it before `invincible db upgrade`. The runtime role only
+  calls `word_similarity` / `<%` (PUBLIC execute) and needs no DDL. A
+  fresh `create_all` database gets the extension from a table-level
+  `before_create` hook before its trigram index is built. The index is
+  created non-concurrently by the migration, so plan the upgrade window
+  on a large `memories` table; the migration runs `ANALYZE memories` after
+  the build so the planner can use it immediately.
 - Schema: created by `invincible db upgrade` (packaged Alembic migrations;
   writes `alembic_version`). Tables: `sessions`, `turns`, `messages`,
   `runs`, `task_states`, `checkpoints`, `oauth_clients`,

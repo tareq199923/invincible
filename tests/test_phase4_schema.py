@@ -7,6 +7,8 @@ throwaway databases through the same programmatic Alembic path the CLI
 uses, both directions are exercised, and rows present before the upgrade
 must survive it unchanged. Live tier only - auto-skips without Postgres.
 """
+import uuid
+
 import asyncpg
 import pytest
 from sqlalchemy import make_url
@@ -57,6 +59,12 @@ async def _has_index(conn, name: str) -> bool:
     ) is not None
 
 
+async def _has_extension(conn, name: str) -> bool:
+    return await conn.fetchval(
+        "SELECT 1 FROM pg_extension WHERE extname = $1", name
+    ) is not None
+
+
 # --- hermetic: metadata declares the Phase 4 shapes -------------------------
 
 
@@ -77,6 +85,16 @@ def test_metadata_declares_memories_search_vector():
         i for i in memories.indexes if i.name == "idx_memories_search"
     )
     assert index.dialect_options["postgresql"]["using"] == "gin"
+
+
+def test_metadata_declares_memories_trgm_index():
+    memories = metadata.tables["memories"]
+    index = next(
+        i for i in memories.indexes if i.name == "idx_memories_content_trgm"
+    )
+    options = index.dialect_options["postgresql"]
+    assert options["using"] == "gin"
+    assert options["ops"] == {"content": "gin_trgm_ops"}
 
 
 # --- live tier: real migrations against scratch databases --------------------
@@ -136,6 +154,11 @@ async def test_upgrade_from_0004_preserves_rows_and_adds_artifacts(
         mem_cols = await _columns(conn, "memories")
         assert mem_cols["search_vector"] == "tsvector"
         assert await _has_index(conn, "idx_memories_search")
+        assert await _has_extension(conn, "pg_trgm")
+        assert await _has_index(conn, "idx_memories_content_trgm")
+        assert await conn.fetchval(
+            "SELECT $1 <% 'PostgreSQL'", "postgress"
+        )
 
         # Pre-existing rows survive untouched; token columns read NULL...
         row = await conn.fetchrow(
@@ -186,6 +209,9 @@ async def test_downgrade_removes_artifacts_and_keeps_rows(scratch_db):
         mem_cols = await _columns(conn, "memories")
         assert "search_vector" not in mem_cols
         assert not await _has_index(conn, "idx_memories_search")
+        assert not await _has_index(conn, "idx_memories_content_trgm")
+        # 0016 owns the index only; the database-scoped extension stays.
+        assert await _has_extension(conn, "pg_trgm")
         assert await conn.fetchval(
             "SELECT 1 FROM runs WHERE id = $1", run_id
         )
@@ -214,5 +240,132 @@ async def test_create_all_shape_matches_upgraded_shape(scratch_db):
             expected = set(metadata.tables[table].columns.keys())
             assert created == expected, table
         assert await _has_index(conn, "idx_memories_search")
+        assert await _has_extension(conn, "pg_trgm")
+        assert await _has_index(conn, "idx_memories_content_trgm")
     finally:
         await conn.close()
+
+
+async def test_0016_installs_trgm_and_downgrade_drops_only_index(scratch_db):
+    """0016 owns the extension + index on the way up, and only the index on
+    the way down. The extension is database-scoped and intentionally kept."""
+    _run_alembic(scratch_db, "0015")
+    conn = await _connect_scratch(scratch_db)
+    try:
+        assert not await _has_extension(conn, "pg_trgm")
+        assert not await _has_index(conn, "idx_memories_content_trgm")
+    finally:
+        await conn.close()
+
+    _run_alembic(scratch_db, "0016")
+    conn = await _connect_scratch(scratch_db)
+    try:
+        assert await _has_extension(conn, "pg_trgm")
+        assert await _has_index(conn, "idx_memories_content_trgm")
+        indexdef = await conn.fetchval(
+            "SELECT indexdef FROM pg_indexes"
+            " WHERE indexname = 'idx_memories_content_trgm'"
+        )
+        assert "USING gin" in indexdef
+        assert "gin_trgm_ops" in indexdef
+        assert await conn.fetchval(
+            "SELECT word_similarity('postgress', 'PostgreSQL') >= 0.6"
+        )
+        assert await conn.fetchval("SELECT 'postgress' <% 'PostgreSQL'")
+    finally:
+        await conn.close()
+
+    from alembic import command as alembic_command
+
+    from invincible.core.db import migrations_config as mc
+
+    alembic_command.downgrade(mc(db_url=scratch_db), "0015")
+
+    conn = await _connect_scratch(scratch_db)
+    try:
+        assert not await _has_index(conn, "idx_memories_content_trgm")
+        assert await _has_extension(conn, "pg_trgm")
+        assert await conn.fetchval("SELECT 'postgress' <% 'PostgreSQL'")
+    finally:
+        await conn.close()
+
+
+async def test_0016_runs_as_non_superuser_owner_and_runtime_role(admin_pg):
+    """A NOSUPERUSER database owner (the deployment's migrate role) can
+    install the trusted extension and index; a separate NOSUPERUSER runtime
+    role can call the trigram function/operator afterwards."""
+    from tests.conftest import TEST_DB_URL
+
+    suffix = uuid.uuid4().hex[:10]
+    migrate_role = f"inv_stage2_mig_{suffix}"
+    app_role = f"inv_stage2_app_{suffix}"
+    db_name = f"invincible_stage2_{suffix}"
+    password = f"stage2-{suffix}"
+
+    await admin_pg(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')
+    await admin_pg(f'DROP ROLE IF EXISTS "{app_role}"')
+    await admin_pg(f'DROP ROLE IF EXISTS "{migrate_role}"')
+
+    try:
+        try:
+            await admin_pg(
+                f'CREATE ROLE "{migrate_role}" LOGIN PASSWORD \'{password}\''
+                " NOSUPERUSER"
+            )
+            await admin_pg(
+                f'CREATE ROLE "{app_role}" LOGIN PASSWORD \'{password}\''
+                " NOSUPERUSER"
+            )
+        except asyncpg.exceptions.InsufficientPrivilegeError:
+            pytest.skip("test database user cannot create roles")
+        await admin_pg(
+            f'CREATE DATABASE "{db_name}" OWNER "{migrate_role}"'
+        )
+        await admin_pg(
+            f'GRANT CONNECT ON DATABASE "{db_name}" TO "{app_role}"'
+        )
+
+        migrate_url = make_url(TEST_DB_URL).set(
+            database=db_name, username=migrate_role, password=password,
+        ).render_as_string(hide_password=False)
+        _run_alembic(migrate_url, "0016")
+
+        migrate_dsn = make_url(migrate_url).render_as_string(
+            hide_password=False
+        ).replace("+asyncpg", "")
+        migrate = await asyncpg.connect(migrate_dsn, timeout=10)
+        try:
+            assert not await migrate.fetchval(
+                "SELECT rolsuper FROM pg_roles WHERE rolname = current_user"
+            )
+            await migrate.execute(
+                f'GRANT USAGE ON SCHEMA public TO "{app_role}"'
+            )
+            await migrate.execute(
+                f'GRANT SELECT ON memories TO "{app_role}"'
+            )
+        finally:
+            await migrate.close()
+
+        app_url = make_url(TEST_DB_URL).set(
+            database=db_name, username=app_role, password=password,
+        ).render_as_string(hide_password=False)
+        app_dsn = make_url(app_url).render_as_string(
+            hide_password=False
+        ).replace("+asyncpg", "")
+        app = await asyncpg.connect(app_dsn, timeout=10)
+        try:
+            assert not await app.fetchval(
+                "SELECT rolsuper FROM pg_roles WHERE rolname = current_user"
+            )
+            assert await app.fetchval(
+                "SELECT word_similarity('postgress', 'PostgreSQL') >= 0.6"
+            )
+            assert await app.fetchval("SELECT 'postgress' <% 'PostgreSQL'")
+            assert await app.fetchval("SELECT count(*) FROM memories") == 0
+        finally:
+            await app.close()
+    finally:
+        await admin_pg(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')
+        await admin_pg(f'DROP ROLE IF EXISTS "{app_role}"')
+        await admin_pg(f'DROP ROLE IF EXISTS "{migrate_role}"')
