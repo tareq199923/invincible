@@ -19,7 +19,10 @@
   0.6.0; verified by installing it into a scratch venv outside the repo
   (`invincible --version` → 0.6.0, `harness connect --help` works).
   `docs/RELEASING.md` and `docs/ROADMAP.md` record the release.
-  Clean-state checklist 5/5 ticked. Committed as `e7f0c4d`.
+  Hosted production is still on 0.5.1: Railway's newest production
+  deployment is `055e322` (2026-10-20), so the pushes did not trigger a
+  deploy (production deploys are manual). Clean-state checklist 5/5
+  ticked. Committed as `e7f0c4d`.
 - F28 done (`passing`): `docs/HARNESS_PLAN.md`
   is now a verified status document. It separates live phases from dormant
   modules (`run_workflow`, hydration, `harness_router.handle_tool_call`,
@@ -854,11 +857,11 @@
 
 ## Next Steps
 
-Release follow-through: push tag `v0.6.0`, dispatch the Release workflow
-against that tag with `publish=true` (gh is not authenticated on this
-machine, so the web UI route in `docs/RELEASING.md` may be needed), then
-verify `pip install invincible-ai` in a scratch venv and record the result
-in `docs/RELEASING.md` / `docs/ROADMAP.md`.
+Release follow-through: PyPI `0.6.0` is published and verified. Hosted
+production (`https://invincible-ai.me/health`) still reports 0.5.1 —
+trigger a Railway production deploy of `f58168e` (or newer), let its
+preDeploy `invincible db upgrade` apply `0016` (pg_trgm) and `0017`,
+then confirm `/health` → 0.6.0 and that sign-in/chat still work.
 
 1. Restart any paired `invincible connect` agent to pick up F22's voice
    poses plus the earlier F23/F25/F26 runner/overlay changes
