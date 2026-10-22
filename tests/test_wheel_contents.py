@@ -39,13 +39,17 @@ EXPECTED_TEMPLATES = {
     "device_result.html", "docs.html", "landing.html", "login.html",
     "mcp.html",
     "machines.html",
-    "memory.html", "providers.html", "register.html", "sessions.html",
-    "session_detail.html", "settings.html", "setup.html", "tasks.html",
-    "usage.html", "_chat_rows.html", "_memory_table.html",
-    "_provider_row.html",
+    "memory.html", "phone.html", "providers.html", "register.html",
+    "sessions.html", "session_detail.html", "settings.html", "setup.html",
+    "tasks.html", "usage.html", "workflows.html", "workflow_detail.html",
+    "_chat_rows.html", "_memory_table.html", "_provider_row.html",
     "_provider_rows.html", "_icons.html",
 }
-EXPECTED_STATIC = {"docs.js", "graph.js", "htmx.min.js", "sidebar.js"}
+EXPECTED_STATIC = {
+    "app.css", "confirm.js", "docs.js", "favicon.svg", "graph.js",
+    "htmx.min.js", "phone-sw.js", "phone.webmanifest", "robot-head.js",
+    "sidebar.js", "voice-orb.css", "voice-orb.js",
+}
 
 
 def _source_version() -> str:

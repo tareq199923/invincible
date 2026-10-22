@@ -5,6 +5,16 @@
 
 ## Current State
 
+- Release 0.6.0 prep (release task, no feature flip): `invincible/__init__.py`
+  bumped from 0.5.1 (never tagged or uploaded); the wheel template gate now
+  pins `phone.html`, `workflows.html`, `workflow_detail.html` and every
+  static asset; `AGENTS.md` migration head corrected to 0017. Gates:
+  `ruff check .` clean; FULL suite 2125 passed / 11 skipped / 1 deselected
+  against the embedded PostgreSQL 18 cluster on 127.0.0.1:6755 after
+  rebuilding the stale `invincible_test` schema (it predated migration
+  0017); packaging smoke test `pytest -q -m slow
+  tests/test_wheel_contents.py` passed in 66 s. Next: tag `v0.6.0`, push,
+  publish through the trusted-publisher dispatch, then record PyPI status.
 - F28 done (`passing`): `docs/HARNESS_PLAN.md`
   is now a verified status document. It separates live phases from dormant
   modules (`run_workflow`, hydration, `harness_router.handle_tool_call`,
@@ -839,11 +849,11 @@
 
 ## Next Steps
 
-Bookkeeping follow-through (this session): F29 is pushed (`origin/main` ==
-`f2021d9`) and F29 + F05 are both `passing` in `feature_list.json`;
-`docs/HARNESS_PLAN.md` no longer claims nothing reads `workflow_events`,
-and `docs/ROADMAP.md` states the F05 lexical stages landed while the
-vector/embedding backend stays deferred.
+Release follow-through: push tag `v0.6.0`, dispatch the Release workflow
+against that tag with `publish=true` (gh is not authenticated on this
+machine, so the web UI route in `docs/RELEASING.md` may be needed), then
+verify `pip install invincible-ai` in a scratch venv and record the result
+in `docs/RELEASING.md` / `docs/ROADMAP.md`.
 
 1. Restart any paired `invincible connect` agent to pick up F22's voice
    poses plus the earlier F23/F25/F26 runner/overlay changes
