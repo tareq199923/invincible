@@ -19,6 +19,7 @@
   0.6.0; verified by installing it into a scratch venv outside the repo
   (`invincible --version` → 0.6.0, `harness connect --help` works).
   `docs/RELEASING.md` and `docs/ROADMAP.md` record the release.
+  Clean-state checklist 5/5 ticked. Committed as `e7f0c4d`.
 - F28 done (`passing`): `docs/HARNESS_PLAN.md`
   is now a verified status document. It separates live phases from dormant
   modules (`run_workflow`, hydration, `harness_router.handle_tool_call`,
