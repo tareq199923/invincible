@@ -13,8 +13,12 @@
   against the embedded PostgreSQL 18 cluster on 127.0.0.1:6755 after
   rebuilding the stale `invincible_test` schema (it predated migration
   0017); packaging smoke test `pytest -q -m slow
-  tests/test_wheel_contents.py` passed in 66 s. Next: tag `v0.6.0`, push,
-  publish through the trusted-publisher dispatch, then record PyPI status.
+  tests/test_wheel_contents.py` passed in 66 s. Tagged `v0.6.0` (commit
+  `5ea75e2`), pushed, and published through the Release workflow (run
+  `39761731546`: build 45 s + publish 27 s, both green). PyPI now serves
+  0.6.0; verified by installing it into a scratch venv outside the repo
+  (`invincible --version` → 0.6.0, `harness connect --help` works).
+  `docs/RELEASING.md` and `docs/ROADMAP.md` record the release.
 - F28 done (`passing`): `docs/HARNESS_PLAN.md`
   is now a verified status document. It separates live phases from dormant
   modules (`run_workflow`, hydration, `harness_router.handle_tool_call`,

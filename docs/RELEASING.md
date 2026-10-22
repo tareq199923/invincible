@@ -160,6 +160,17 @@ help. Published from tag `v0.5.0` via the trusted-publisher dispatch;
 verified by installing from PyPI into a scratch venv outside the repo
 (`invincible --version` → 0.5.0).
 
+**0.6.0 shipped 2026-10-22:** minor bump carrying the hosted CLI overhaul
+(`login`/`connect`/`status` plus the `dev` namespace), dashboard webchat
+with voice and the phone PWA, computer-use pack 3 and the Bmax overlay,
+`web_fetch` / `find_files` / `list_dir` / git tools, `expose_port`
+tunneling, the public docs site, the Workflows dashboard, typo-tolerant
+`pg_trgm` memory retrieval (migration `0016`), and per-account workflow
+ownership (migration `0017`). Published from tag `v0.6.0` via the
+trusted-publisher dispatch; build and wheel smoke test green, then
+verified by installing from PyPI into a scratch venv (`invincible
+--version` → 0.6.0).
+
 Everything from here is immutable: `0.3.0` can never be replaced or
 re-uploaded, only yanked and superseded. Bump `invincible/__init__.py` to
 the next unused number before tagging the next release.
