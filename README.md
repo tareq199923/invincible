@@ -14,7 +14,7 @@
 > today, and what is planned.
 
 <p align="center">
-  <img src="docs/images/invincible-landing.svg" alt="Invincible landing page" width="1200" />
+  <img src="docs/images/invincible-landing.png" alt="Invincible landing page" width="1200" />
 </p>
 
 ---
