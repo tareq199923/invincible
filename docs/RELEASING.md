@@ -187,6 +187,21 @@ trusted-publisher dispatch; build and wheel smoke test green, then
 verified by installing from PyPI into a scratch venv (`invincible
 --version` → 0.6.0).
 
+**0.6.1 shipped 2026-10-27:** patch bump carrying the CLI upgrade
+experience — `invincible/core/updates.py` (PyPI resolver + 24h cache), a
+one-line `login`/`connect`/`doctor` update notice (off by default in CI,
+non-TTY, editable checkouts, and containers; opt-out
+`INVINCIBLE_NO_UPDATE_CHECK`), a `status` client block (CLI version,
+install channel, executing path, cached update line), a channel-aware
+`update` (pip/pipx/uv/editable/container) with post-upgrade steps, `update`
+under "Keep it current" in `--help`, a real `harness service restart`, and
+docs/landing switched to the idempotent `pip install -U invincible-ai`.
+Published from tag `v0.6.1` via the trusted-publisher dispatch; build and
+wheel smoke test green, then verified by installing from PyPI into a
+scratch venv outside the repo (`invincible --version` → 0.6.1,
+`connect --help`, `update --check`); hosted production `/health` reports
+0.6.1.
+
 Everything from here is immutable: `0.3.0` can never be replaced or
 re-uploaded, only yanked and superseded. Bump `invincible/__init__.py` to
 the next unused number before tagging the next release.

@@ -14,8 +14,13 @@
   FULL suite 2164 passed / 11 skipped / 1 deselected (Windows, embedded
   PostgreSQL on 127.0.0.1:5433, 7m48s); packaging smoke test
   `pytest -q -m slow tests/test_wheel_contents.py` passed in 110 s with the
-  wheel reporting 0.6.1. Next: tag `v0.6.1`, push, publish through the
-  trusted-publisher dispatch, then record PyPI status.
+  wheel reporting 0.6.1. Published from tag `v0.6.1` (commit `3fd5f28`)
+  via the trusted-publisher dispatch: build 38 s + publish 28 s green;
+  PyPI JSON reports 0.6.1 with wheel + sdist. Verified from a scratch venv
+  outside the repo: `invincible --version` → 0.6.1, `connect --help`,
+  `update --check` → "Up to date (0.6.1)", and `--help` shows "Keep it
+  current". Hosted production `/health` already reports 0.6.1 (Railway
+  auto-deployed the main push, including migrations `0016`/`0017`).
 - F31 done (`passing`): CLI update awareness + upgrade UX.
   `invincible/core/updates.py` holds the pure PyPI-payload → newest-release
   resolver plus a 24h cache at `~/.invincible/update-check.json` (atomic,
@@ -891,20 +896,10 @@
 
 ## Next Steps
 
-0. Release follow-through: push `main` + tag `v0.6.1`, dispatch the Release
-   workflow against that tag with `publish=true`, verify `pip install
-   invincible-ai` reports 0.6.1 in a scratch venv, then record the release
-   in `docs/RELEASING.md` and `docs/ROADMAP.md`. The update notice only
-   starts reaching users once they install a version that contains it;
-   0.5.x holdouts are reached by the README/docs "No such command 'connect'"
-   callout until they upgrade once.
-
-Release follow-through (older, still open): PyPI `0.6.0` is published and
-verified. Hosted production (`https://invincible-ai.me/health`) still
-reports 0.5.1 — trigger a Railway production deploy of `f58168e` (or
-newer), let its preDeploy `invincible db upgrade` apply `0016` (pg_trgm)
-and `0017`, then confirm `/health` → 0.6.0 and that sign-in/chat still
-work. Deploying after 0.6.1 also picks up F31.
+0. Release is closed: PyPI and hosted production (`/health`) both report
+   0.6.1 (verified 2026-10-27). 0.5.x holdouts are reached by the
+   README/docs "No such command 'connect'" callout until they upgrade once;
+   from 0.6.1 on, the passive notice takes over.
 
 1. Restart any paired `invincible connect` agent to pick up F22's voice
    poses plus the earlier F23/F25/F26 runner/overlay changes

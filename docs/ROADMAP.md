@@ -417,7 +417,7 @@ stands.
 | 15a/b/c Canonical sessions · ContinuityEngine · Graph API | Done | Landed work previously unrecorded here; recorded now |
 | 15 Observability (/metrics etc.) | Not started | Folded into platform backlog (candidate around P5/P7) |
 | 16 PostgreSQL storage migration | Done | Slips honored elsewhere: audit_log → Platform P2; provider-health persistence → backlog; TIMESTAMPTZ deferred |
-| 2 Zero-clone distribution (PyPI) | Done | First upload 0.3.0 on 2026-09-23, current 0.6.0; see `docs/RELEASING.md` §PyPI release status |
+| 2 Zero-clone distribution (PyPI) | Done | First upload 0.3.0 on 2026-09-23, current 0.6.1; see `docs/RELEASING.md` §PyPI release status |
 | 3 Documentation site | Deferred | Revisit post-platform |
 | 4 Multi-user system | Superseded | Realized as Platform Phases 1–3 |
 | 5 Dashboard | Superseded | Realized as Platform Phase 5 |
