@@ -27,7 +27,7 @@
   `status --help`). `ruff check .` clean; FULL suite 2164 passed / 11
   skipped / 1 deselected (Windows, default 5433 test DB). Pre-existing
   untracked `.vscode/settings.json` left untouched. Clean-state checklist
-  5/5 ticked.
+  5/5 ticked. Committed as `a47f458`.
 - Release 0.6.0 prep (release task, no feature flip): `invincible/__init__.py`
   bumped from 0.5.1 (never tagged or uploaded); the wheel template gate now
   pins `phone.html`, `workflows.html`, `workflow_detail.html` and every
