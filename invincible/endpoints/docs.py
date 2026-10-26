@@ -116,7 +116,7 @@ continuity. Step 4 is optional pairing for remote tools.
 ### Full remote access
 
 ```bash
-pip install invincible-ai
+pip install -U invincible-ai     # install or upgrade in place
 invincible login     # pair once (browser opens)
 invincible connect   # this machine goes online
 ```
@@ -146,8 +146,13 @@ Python 3.10+.
 ## Install
 
 ```bash
-pip install invincible-ai
+pip install -U invincible-ai     # first install OR upgrade, same command
 ```
+
+Already installed? Re-run that command; `invincible update --check` reports
+current vs latest without installing, and `invincible update` installs it.
+Self-hosters run `invincible db upgrade` after upgrading; always-on agents
+run `invincible harness service restart`.
 
 ## Verify
 
@@ -155,6 +160,25 @@ pip install invincible-ai
 invincible --version
 invincible connect --help
 ```
+
+## Upgrading
+
+| Install | Upgrade |
+|---|---|
+| pip (user site or venv) | `pip install -U invincible-ai` |
+| pipx | `pipx upgrade invincible-ai` |
+| uv tool | `uv tool upgrade invincible-ai` |
+| editable checkout | `git pull && pip install -e .` |
+
+`invincible update` runs the pip upgrade for you (`--check` reports without
+installing); on pipx, uv, editable, and container installs it prints the
+right command instead of touching a managed environment. `login`,
+`connect`, and `doctor` print a one-line notice when PyPI has a newer
+release (cached for 24h; set `INVINCIBLE_NO_UPDATE_CHECK` to any truthy
+value to disable).
+
+After upgrading: self-hosters run `invincible db upgrade`; always-on agents
+run `invincible harness service restart`.
 
 ## What the CLI is for
 
@@ -164,6 +188,7 @@ invincible connect --help
 - `invincible status` — show pairing and machine state.
 - `invincible harness service install` — always-on background service
   (see System Service).
+- `invincible harness service restart` — make an upgrade take effect.
 
 Pairing is optional. Chat, memory, and continuity need no CLI at all.
 """
@@ -222,6 +247,7 @@ below omit the `invincible` prefix, and every row is verified against
 | `harness connect` | Advanced: same as `connect` |
 | `harness status` | Advanced: same as `status` |
 | `harness service install` | Write the always-on service (`--dry-run` prints) |
+| `harness service restart` | Restart the installed service (post-upgrade step) |
 
 ## Server administration (self-host)
 
@@ -234,7 +260,7 @@ below omit the `invincible` prefix, and every row is verified against
 | `secret rotate` | New `INVINCIBLE_OWNER_SECRET`, written in place |
 | `secret credential-key` | Generate the BYOK Fernet key |
 | `dev-db` | Local development Postgres; prints the DSN |
-| `update` | Install the latest `invincible-ai` from PyPI |
+| `update` | Install/check the latest release; channel-aware (`--check` is a dry run) |
 
 ## Accounts, keys, and grants
 
@@ -439,6 +465,12 @@ invincible harness service install
 The installer prints exactly what it will register before writing
 anything (systemd unit, launchd plist, or Windows service per OS).
 Use your platform's service manager to start, stop, or remove it.
+
+After a CLI upgrade, restart the installed service so the new version runs:
+
+```bash
+invincible harness service restart
+```
 
 ## One server, many agents
 

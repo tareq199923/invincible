@@ -47,6 +47,7 @@ See `.env.example`. Loaded via `python-dotenv` in `invincible/main.py`
 | `INVINCIBLE_OVERLAY_DPI_AWARE` | agent (B1 overlay) | **Off by default** (opt-in: `1`/`true`/`on`/`yes`): makes the overlay child DPI-aware so it reports physical pixels. Leave unset on 125%/150% displays — an aware process draws the pixel-sized face smaller. Restart the agent/overlay after changing. UI-only — no tool/approval/model surface. |
 | `INVINCIBLE_HANDOFF` | agent transport (B2 phone→PC handoff) | **On by default**: `POST /agent/handoff` relays a fire-and-forget task from the caller's phone to their own paired PC (WS-first, poll fallback). Set to `0`/`false`/`off` to refuse handoffs fail-closed (503, nothing queued). Kill-switch only — no tool-registry or routing changes. |
 | `INVINCIBLE_VOICE` | in-app voice (B3 mic PTT + spoken Bmax) | **On by default**: the voice transcribe/synthesize/token surfaces run server-side against the caller's own BYOK credentials (`/v1/audio/*` + `/v1/voice/token` in the `inv_` realm, `/dashboard/voice/*` in the session-cookie realm). Set to `0`/`false`/`off` to refuse every voice route fail-closed (503, text chat unchanged). Per-user `voice` override on the Settings page follows this default. Kill-switch only — no tool-registry or routing changes. |
+| `INVINCIBLE_NO_UPDATE_CHECK` | CLI (`login`, `connect`, `doctor`) | Any truthy value (`1`/`true`/`yes`/`on`) disables the once-per-day PyPI update notice. `invincible update` itself always works. The check sends nothing but the GET to `https://pypi.org/pypi/invincible-ai/json`; it is skipped automatically in CI, non-TTY sessions, editable checkouts, and container images. |
 
 The secrets are **independent**: a leaked `/mcp` URL alone is not enough to
 reach tool execution (a live OAuth bearer token is required as well), and
@@ -288,8 +289,9 @@ turns as nodes/edges/timeline - is available to the session's owner at
 
 ## 4. CLI reference
 
-`--help` leads with the hosted-service commands; the rest is self-host
-and server administration (same order as the tool prints it):
+`--help` leads with the hosted-service commands, then `update` under
+"Keep it current", then self-host and server administration (same order as
+the tool prints it):
 
 ```
 invincible login [--server URL] [--config PATH]
@@ -300,6 +302,7 @@ invincible harness setup [--server URL] [--config PATH]
 invincible harness connect [--server URL] [--config PATH]
 invincible harness status [--config PATH]
 invincible harness service install [--config PATH] [--dry-run]
+invincible harness service restart
 invincible setup [--db-url DSN] [--env-file PATH] [--force] [--skip-db-check]
 invincible secret rotate | credential-key [--env-file PATH] [--show]
 invincible start [--host 127.0.0.1|0.0.0.0] [--port 8000] [--reload]
@@ -408,8 +411,26 @@ Notes on `update`:
 - `--check` reports `current -> latest` and exits 1 when behind without
   installing; `--yes` installs without prompting (required
   non-interactively); `--pre` includes pre-releases; `--target` pins an
-  exact version.
-- Refuses on editable installs (`pip install -e .`) — update with
-  `git pull` then `pip install -e .` instead.
+  exact version. `--check` is read-only and reports even for installs that
+  cannot be upgraded in place.
+- Install-channel aware: a pipx-managed copy refuses raw pip and points at
+  `pipx upgrade invincible-ai`; a uv tool copy points at
+  `uv tool upgrade invincible-ai`; a container refuses in-place upgrade and
+  says to rebuild the image; an editable checkout points at
+  `git pull` + `pip install -e .`.
+- After a successful pip upgrade it prints the follow-up steps: open a new
+  terminal, `invincible harness service restart` (always-on agents),
+  `invincible db upgrade` (self-host), and `invincible status`.
+- Update awareness: `login`, `connect`, and `doctor` print one stderr line
+  when a newer release exists (`Update available: X -> Y` plus the exact
+  upgrade command for this install). The PyPI result is cached in
+  `~/.invincible/update-check.json` for 24 hours, the request has a 2 s
+  timeout, and every failure is silent. Disable with
+  `INVINCIBLE_NO_UPDATE_CHECK=1`; it is also skipped in CI, non-TTY
+  sessions, editable checkouts, and containers. Nothing is installed
+  automatically.
+- `invincible status` shows the running CLI version, its install channel,
+  the executable that actually ran (the fix for multi-Python shadowing),
+  and a cached "Update available" line.
 - Restart the shell after upgrading, then verify with
   `invincible --version`.

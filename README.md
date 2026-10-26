@@ -84,9 +84,18 @@ It serves three roles in one process:
 **Users: one install command. That's all.**
 
 ```bash
-pip install invincible-ai
-invincible connect   # first run: browser opens → sign in or register → Approve
+pip install -U invincible-ai     # safe to re-run: installs, or upgrades in place
+invincible connect               # first run: browser opens → sign in or register → Approve
 ```
+
+Prefer an isolated CLI that never touches your project's Python environment?
+`pipx install invincible-ai` (or `uv tool install invincible-ai`); upgrade it
+with `pipx upgrade invincible-ai` / `uv tool upgrade invincible-ai`.
+
+> **Already on an older release?** Re-run the same command
+> (`pip install -U invincible-ai`). `No such command 'connect'` means you are
+> on 0.5.x: upgrade, or use the old spelling `invincible harness connect`.
+> Self-hosters run `invincible db upgrade` after every upgrade.
 
 The first run pairs your machine with the hosted service
 (`https://invincible-ai.me` — the default): your browser opens, you
@@ -118,6 +127,31 @@ start command, required secrets, and the go-live checklist:
 (`invincible dev-db`, `docker compose up`) and the full CLI reference:
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
+### Upgrading
+
+One upgrade command per install channel:
+
+| Install | Upgrade | Verify |
+|---|---|---|
+| pip (user site or venv) | `pip install -U invincible-ai` | `invincible --version` |
+| pipx | `pipx upgrade invincible-ai` | `invincible --version` |
+| uv tool | `uv tool upgrade invincible-ai` | `invincible --version` |
+| editable checkout | `git pull && pip install -e .` | `invincible --version` |
+
+`invincible update` runs the correct pip command for pip installs (`--check`
+for a dry run, `--yes` for scripted upgrades). It **refuses** pipx, uv,
+editable, and container installs and prints the command you should use
+instead, so it can never corrupt a managed environment.
+
+`login`, `connect`, and `doctor` print a one-line notice when a newer
+release is on PyPI (at most one check per 24h, cached under
+`~/.invincible/`). Disable it with `INVINCIBLE_NO_UPDATE_CHECK=1`. The check
+is a read-only GET to pypi.org — no account or machine data is sent.
+
+After any upgrade: self-hosters run `invincible db upgrade` (migrations are
+never automatic), and always-on agents restart with
+`invincible harness service restart`.
+
 ---
 
 ## Quick Start
@@ -125,7 +159,7 @@ start command, required secrets, and the go-live checklist:
 ### A. Use the hosted service (one install command)
 
 ```bash
-pip install invincible-ai
+pip install -U invincible-ai
 invincible connect   # first run: browser opens → sign in or register → Approve
 ```
 
@@ -242,7 +276,8 @@ server administration:
 | `invincible harness connect` | Advanced: same as `connect`. |
 | `invincible harness status` | Advanced: same as `status`. |
 | `invincible harness service install` | Write an always-on service definition (systemd/launchd/schtasks) so the machine stays online across reboots. |
-| `invincible update` | Install the latest `invincible-ai` release from PyPI (`--check` for a dry run). |
+| `invincible harness service restart` | Restart the installed always-on service (the post-upgrade step that makes the new version actually run). |
+| `invincible update` | Install the latest `invincible-ai` release from PyPI (`--check` for a dry run, `--yes` for scripts). Detects pip/pipx/uv/editable/container installs and prints the right command instead of corrupting a managed environment. |
 | `invincible setup` | Create/update `.env` (non-interactive, scriptable): generates missing secrets (`token_urlsafe(32)`, never echoed), generates the BYOK credential master key, preserves exist[...]
 | `invincible secret rotate` | Generate a brand-new `INVINCIBLE_OWNER_SECRET` and rewrite it in place — no manual `.env` editing, never echoes the value (unless `--show`). Preserves every other[...]
 | `invincible start` | Start the server. `--host` (default `127.0.0.1`; pass `0.0.0.0` to be reachable from other machines), `--port` (default `8000`), `--reload`, `--log-level`, `--env-file`, `-[...] 
@@ -418,7 +453,7 @@ command on my PC" is two commands — no account to create first, no
 separate pairing step:
 
 ```bash
-pip install invincible-ai
+pip install -U invincible-ai
 invincible connect   # first run: browser opens → sign in or register → Approve
 ```
 

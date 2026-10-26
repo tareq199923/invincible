@@ -1246,3 +1246,33 @@ tokens that authorize it.
   fetch, no keys, audio never leaves the browser. Server voice is
   preferred whenever a credential exists; voice-off refusals never
   trigger the fallback. Text bubbles stay the source of truth.
+
+---
+
+## 15. CLI update awareness (`invincible update` + the one-line notice)
+
+`invincible update` is the **only** code path that installs anything. It
+runs `pip install --upgrade invincible-ai==<version>` in a subprocess
+against the interpreter that owns the command, and it refuses installs it
+cannot safely upgrade in place (pipx, uv tool, editable checkout, container
+image) with the correct command instead.
+
+The passive notice (`login`, `connect`, `doctor`) is designed to leak
+nothing and fail silent:
+
+- **Read-only egress.** One `GET https://pypi.org/pypi/invincible-ai/json`
+  (2 s timeout, once per 24 h) — no query string, no identifiers, no
+  account or machine data, no telemetry.
+- **No automatic install.** A newer version only produces a stderr line
+  with the upgrade command; the user runs it.
+- **Cache only on disk.** `~/.invincible/update-check.json`
+  (`{version, checked_at, latest}`, same trust level as the pairing file)
+  so repeated commands stay offline; corrupt/unwritable caches are
+  ignored.
+- **Off where it cannot help.** `INVINCIBLE_NO_UPDATE_CHECK=1` (opt-out),
+  `CI`, non-TTY sessions (services/scripts), editable checkouts, and
+  container images skip the check entirely — no request is made.
+- **Status surface.** `invincible status` reads the cache only (no extra
+  network call) and prints the running version, install channel, and the
+  executable that actually ran, so a shadowed multi-Python install is
+  visible instead of mysterious.

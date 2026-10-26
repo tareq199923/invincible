@@ -326,3 +326,152 @@ def test_service_install_writes_file(tmp_path, monkeypatch):
     assert "ExecStart=" in content and "harness" in content
     assert "systemctl --user enable --now invincible-agent.service" in (
         result.output)
+
+
+def test_format_status_client_block_is_additive():
+    """Local CLI lines render above the account block; machines-only
+    payloads (older callers) are unchanged."""
+    text = _format_harness_status({
+        "client": {
+            "version": "0.6.0",
+            "install": "pip (user)",
+            "executable": r"C:\Python314\Scripts\invincible.exe",
+        },
+        "account": {"user_id": 7, "email": "me@example.com"},
+        "agent_online": False,
+        "machines": [],
+    })
+    assert text.startswith("CLI: 0.6.0 (pip (user))")
+    assert "Path: C:\\Python314\\Scripts\\invincible.exe" in text
+    assert text.index("CLI:") < text.index("Account:")
+
+
+def test_format_status_client_update_line():
+    text = _format_harness_status({
+        "client": {
+            "version": "0.6.0",
+            "install": "pipx",
+            "update": "0.6.1",
+            "upgrade": "pipx upgrade invincible-ai",
+        },
+        "agent_online": False,
+        "machines": [],
+    })
+    assert "Update: 0.6.1 available" in text
+    assert "pipx upgrade invincible-ai" in text
+
+
+def test_status_command_shows_cached_update(monkeypatch, tmp_path):
+    """One cached PyPI result is enough to surface the upgrade action in
+    `status`; no extra network call is added."""
+    import httpx
+
+    import invincible.cli as cli_mod
+
+    def _fake_get(url, **kwargs):
+        if url.endswith("/agent/whoami"):
+            return httpx.Response(
+                200, request=httpx.Request("GET", url),
+                json={"user_id": 7, "email": "me@example.com"})
+        return httpx.Response(
+            200, request=httpx.Request("GET", url), json={"machines": []})
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    cache = tmp_path / "update-check.json"
+    monkeypatch.setattr(cli_mod, "_update_cache_path", lambda: str(cache))
+    monkeypatch.setattr(
+        cli_mod, "_install_kind",
+        lambda: cli_mod._InstallKind(
+            "pipx", "pipx", "pipx upgrade invincible-ai"))
+    cli_mod.update_core.write_cache(str(cache), latest="99.0.0")
+
+    result = CliRunner().invoke(cli, [
+        "harness", "status", "--config", str(_paired_config(tmp_path))])
+    assert result.exit_code == 0, result.output
+    assert "Update: 99.0.0 available" in result.output
+    assert "pipx upgrade invincible-ai" in result.output
+
+
+# --- harness service restart (post-upgrade step) -----------------------------
+
+
+class _OkProc:
+    returncode = 0
+    stdout = ""
+    stderr = ""
+
+
+def test_service_restart_linux(monkeypatch):
+    import os
+    import sys
+
+    import invincible.cli as cli_mod
+
+    calls = []
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(
+        cli_mod.subprocess, "run",
+        lambda argv, **kwargs: (calls.append(argv), _OkProc())[1])
+    result = CliRunner().invoke(cli, ["harness", "service", "restart"])
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        ["systemctl", "--user", "restart", "invincible-agent.service"]]
+
+
+def test_service_restart_macos(monkeypatch):
+    import os
+    import sys
+
+    import invincible.cli as cli_mod
+
+    calls = []
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(os, "getuid", lambda: 501, raising=False)
+    monkeypatch.setattr(
+        cli_mod.subprocess, "run",
+        lambda argv, **kwargs: (calls.append(argv), _OkProc())[1])
+    result = CliRunner().invoke(cli, ["harness", "service", "restart"])
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        ["launchctl", "kickstart", "-k", "gui/501/me.invincible.agent"]]
+
+
+def test_service_restart_windows(monkeypatch):
+    import os
+
+    import invincible.cli as cli_mod
+
+    calls = []
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(
+        cli_mod.subprocess, "run",
+        lambda argv, **kwargs: (calls.append(argv), _OkProc())[1])
+    result = CliRunner().invoke(cli, ["harness", "service", "restart"])
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        ["schtasks", "/End", "/TN", "invincible-agent"],
+        ["schtasks", "/Run", "/TN", "invincible-agent"],
+    ]
+
+
+def test_service_restart_failure_teaches_install(monkeypatch):
+    import os
+    import sys
+
+    import invincible.cli as cli_mod
+
+    class _BadProc:
+        returncode = 1
+        stdout = ""
+        stderr = "Unit invincible-agent.service not found"
+
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(cli_mod.subprocess, "run", lambda *a, **k: _BadProc())
+    result = CliRunner().invoke(cli, ["harness", "service", "restart"])
+    assert result.exit_code != 0
+    assert "service install" in result.output
+
+

@@ -5,6 +5,29 @@
 
 ## Current State
 
+- F31 done (`passing`): CLI update awareness + upgrade UX.
+  `invincible/core/updates.py` holds the pure PyPI-payload → newest-release
+  resolver plus a 24h cache at `~/.invincible/update-check.json` (atomic,
+  best-effort writes; corrupt/expired/future entries ignored). `cli.py`
+  adds `_install_kind` (pip/pipx/uv/editable/container), a 2 s silent
+  `_maybe_notify_update` notice on `login`/`connect`/`doctor` (stderr only;
+  opt-out `INVINCIBLE_NO_UPDATE_CHECK`; skipped for CI, non-TTY, editable
+  checkouts, containers), a `status` client block (CLI version, install
+  channel, the executable that actually ran, cached update line), a
+  channel-aware `update` that prints post-upgrade steps and delegates to
+  pipx/uv instead of mutating managed envs, `update` surfaced under
+  "Keep it current" in `--help`, and a real
+  `harness service restart` (systemd/launchctl/schtasks). README,
+  CONFIGURATION, RELEASING, SECURITY §15, the landing page, `/docs`
+  install guide, and the machines empty state now use the idempotent
+  `pip install -U invincible-ai` command and document one upgrade command
+  per channel. Tests: new `tests/test_updates.py` plus additions to
+  `test_cli_update.py`, `test_cli_harness.py`, `test_cli.py`, `test_docs.py`
+  (the wheel smoke probe now exercises `connect --help` and
+  `status --help`). `ruff check .` clean; FULL suite 2164 passed / 11
+  skipped / 1 deselected (Windows, default 5433 test DB). Pre-existing
+  untracked `.vscode/settings.json` left untouched. Clean-state checklist
+  5/5 ticked.
 - Release 0.6.0 prep (release task, no feature flip): `invincible/__init__.py`
   bumped from 0.5.1 (never tagged or uploaded); the wheel template gate now
   pins `phone.html`, `workflows.html`, `workflow_detail.html` and every
@@ -856,6 +879,13 @@
   stage 2 (`b28b775`), merged as `011ec2c`.
 
 ## Next Steps
+
+0. F31 is unreleased on `main` (PyPI and hosted production are still
+   0.6.0): bump `invincible/__init__.py` to 0.6.1, tag `v0.6.1`, publish
+   through the Release workflow, then deploy hosted and verify `/health`.
+   The notice only starts reaching users once they install a version that
+   contains it; 0.5.x holdouts are reached by the README/docs
+   "No such command 'connect'" callout until they upgrade once.
 
 Release follow-through: PyPI `0.6.0` is published and verified. Hosted
 production (`https://invincible-ai.me/health`) still reports 0.5.1 —

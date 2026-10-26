@@ -101,7 +101,7 @@ async def test_root_serves_landing_page_to_browsers(client):
     assert "Simulated example. Real failover happens per request" in body
     assert 'id="failover-demo"' in body
     assert "Every provider" not in body
-    assert "pip install invincible-ai" in body
+    assert "pip install -U invincible-ai" in body
     assert "invincible connect" in body
     assert "invincible start" not in body
     assert 'href="/register"' in body

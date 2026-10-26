@@ -81,6 +81,21 @@ commit. Dispatching from `main` instead builds whatever `main`'s head is at
 that moment — if anything landed after the tag, you publish untagged code
 under a version number PyPI will never let you reuse.
 
+### Upgrade note in every release
+
+The PyPI project page renders `README.md`, so the
+`pip install -U invincible-ai` upgrade block ships with every release — keep
+it current. When a release renames or removes a CLI command:
+
+- Keep the old spelling working as a hidden alias (or a "requires >= X"
+  error) for at least one minor release.
+- Add the old spelling to the README "Already on an older release?" callout
+  in the same PR. An installed 0.5.x binary can never receive a hint from
+  code it does not have; the docs page is the only notification channel for
+  it.
+- Note the follow-ups (`invincible db upgrade`, `harness service restart`)
+  in the release notes when migrations or the agent loop changed.
+
 ### Arming trusted publishing (one time — done before the 0.3.0 publish)
 
 Two halves, both required:
@@ -120,8 +135,8 @@ invincible --version && invincible harness connect --help
 
 ```bash
 # in a throwaway venv, NOT the repo checkout:
-pip install invincible-ai
-invincible --version && invincible harness connect --help
+pip install -U invincible-ai
+invincible --version && invincible status --help && invincible connect --help
 ```
 
 Installing from inside the repo directory can shadow the installed

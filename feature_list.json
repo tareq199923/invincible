@@ -348,5 +348,12 @@
     "state": "planned",
     "title": "Embedding/semantic retrieval backend (pgvector + BYOK embeddings)",
     "verification": "ruff check . && pytest tests/test_retrieval.py"
+  },
+  {
+    "behavior": "installed copies learn about new releases instead of silently drifting: login/connect/doctor print one cached stderr notice (24h TTL at ~/.invincible/update-check.json, 2s timeout, silent on failure, opt-out INVINCIBLE_NO_UPDATE_CHECK, skipped for CI/non-TTY/editable/container), status shows CLI version + install channel + executable + cached update line, update keeps --check/--yes but is install-channel aware (pip/pipx/uv/editable/container) and prints the post-upgrade steps, --help surfaces update under 'Keep it current', and harness service restart makes the post-upgrade step real; README/CONFIGURATION/SECURITY/RELEASING document the one upgrade command per channel",
+    "id": "F31",
+    "state": "passing",
+    "title": "CLI update awareness + upgrade UX",
+    "verification": "ruff check . && pytest tests/test_updates.py tests/test_cli_update.py tests/test_cli_harness.py"
   }
 ]

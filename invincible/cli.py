@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 import webbrowser
+from dataclasses import dataclass
 
 import asyncpg
 import click
@@ -33,6 +34,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
 from invincible import __version__
+from invincible.core import updates as update_core
 from invincible.core.accounts import DeviceCodeStore
 from invincible.core.config import load_providers_config
 from invincible.core.db import (
@@ -994,6 +996,11 @@ def doctor(env_file):
 
     lines = []
     lines.append(f"Invincible version: {__version__}")
+    client = _client_status_block()
+    if client.get("update"):
+        lines.append(
+            f"Update available: {client['version']} -> {client['update']}"
+            f"  (run `{client.get('upgrade') or 'invincible update'}`)")
     for label, ok, note in checks:
         mark = "OK" if ok else "FAIL"
         line = f"{mark}  {label}"
@@ -1659,6 +1666,7 @@ def login(server: str, config_path: str | None):
     The URL + code are printed as a fallback for headless terminals.
     """
     _pair_and_save(server.rstrip("/"), config_path)
+    _maybe_notify_update()
     click.echo("Next: invincible connect  (keeps this machine online)")
 
 
@@ -1901,6 +1909,7 @@ def harness_connect(config_path: str | None, server: str):
     fresh_pair = not os.path.isfile(_client_config_path(config_path))
     config = _ensure_paired(server, config_path)
     server = config["server"].rstrip("/")
+    _maybe_notify_update()
     click.echo(f"Connected to {server}. This machine is now online. "
                 "Press Ctrl+C to stop.")
     if fresh_pair:
@@ -1941,6 +1950,18 @@ def _format_harness_status(payload: dict) -> str:
     renders exactly as it did (machines-only callers are unaffected).
     """
     lines: list[str] = []
+    client = payload.get("client")
+    if isinstance(client, dict) and client.get("version"):
+        line = f"CLI: {client['version']}"
+        if client.get("install"):
+            line += f" ({client['install']})"
+        lines.append(line)
+        if client.get("executable"):
+            lines.append(f"Path: {client['executable']}")
+        if client.get("update"):
+            lines.append(
+                f"Update: {client['update']} available - run "
+                f"`{client.get('upgrade') or 'invincible update'}`")
     account = payload.get("account")
     if account:
         lines.append(
@@ -2016,6 +2037,7 @@ def _show_status(config_path: str | None) -> None:
     account = _get("/agent/whoami")
     payload = _get("/agent/machines") or {}
     click.echo(_format_harness_status({
+        "client": _client_status_block(),
         "account": account,
         "agent_online": any(
             m.get("online") for m in (payload.get("machines") or [])),
@@ -2188,6 +2210,47 @@ def harness_service_install(config_path: str | None, dry_run: bool):
                    "systemctl --user enable --now invincible-agent.service")
 
 
+@harness_service.command("restart")
+def harness_service_restart():
+    """Restart the installed always-on agent service.
+
+    Best effort and non-elevating: uses the same unit/task names that
+    ``service install`` writes. Run ``service install`` first on a new
+    machine; this is the post-upgrade step that makes the new version
+    actually run.
+    """
+    import sys
+
+    def _run(argv, *, ignore_rc=False):
+        try:
+            proc = subprocess.run(
+                argv, capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise click.ClickException(
+                f"Could not restart the service: {exc}") from exc
+        if proc.returncode != 0 and not ignore_rc:
+            detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            first = detail[0][:200] if detail else f"exit {proc.returncode}"
+            raise click.ClickException(
+                f"Service restart failed ({' '.join(argv)}): {first}\n"
+                "If the service is not installed yet, run:\n"
+                "  invincible harness service install")
+        return proc
+
+    if os.name == "nt":
+        # /End on a stopped task reports an error; the /Run is what matters.
+        _run(["schtasks", "/End", "/TN", "invincible-agent"], ignore_rc=True)
+        _run(["schtasks", "/Run", "/TN", "invincible-agent"])
+    elif sys.platform == "darwin":
+        uid = getattr(os, "getuid", lambda: 0)()
+        _run(["launchctl", "kickstart", "-k",
+              f"gui/{uid}/me.invincible.agent"])
+    else:
+        _run(["systemctl", "--user", "restart",
+              "invincible-agent.service"])
+    click.echo("Service restarted.")
+
+
 @click.command("dev-db")
 @click.option("--port", default=DEV_DB_PORT, show_default=True, type=int,
               help="Local Postgres port to probe (and to publish when "
@@ -2239,6 +2302,147 @@ def dev_db(port, env_file, write_env):
 PYPI_JSON_URL = "https://pypi.org/pypi/invincible-ai/json"
 PYPI_TIMEOUT = 10.0
 
+# Update awareness (cached notice on hosted commands; `invincible update`
+# remains the only thing that installs). One PyPI GET per TTL at most.
+UPDATE_CHECK_FILENAME = "update-check.json"
+UPDATE_CHECK_TTL_SECONDS = 24 * 60 * 60
+UPDATE_CHECK_TIMEOUT = 2.0
+NO_UPDATE_CHECK_ENV = "INVINCIBLE_NO_UPDATE_CHECK"
+
+
+@dataclass(frozen=True)
+class _InstallKind:
+    """How this copy of invincible-ai was installed.
+
+    ``kind`` drives update strategy; ``label`` is human copy; ``upgrade``
+    is the exact command for this install (``None`` when in-place upgrade
+    is impossible, e.g. a container image).
+    """
+
+    kind: str
+    label: str
+    upgrade: str | None
+
+
+def _pip_upgrade_command() -> str:
+    """A copy-pasteable pip command for *this* interpreter.
+
+    ``python -m pip`` alone can hit a different interpreter than the one
+    that owns the ``invincible`` script, so quote ``sys.executable``.
+    """
+    return f'"{sys.executable}" -m pip install -U invincible-ai'
+
+
+def _install_kind() -> _InstallKind:
+    """Classify this install so update guidance is actionable.
+
+    Order matters: an editable checkout can live inside any prefix, and a
+    container may have pip's user site enabled. Unknown/odd environments
+    fall back to plain pip (the historical behaviour).
+    """
+    if _is_editable_install():
+        return _InstallKind(
+            "editable", "editable checkout",
+            f'git pull && "{sys.executable}" -m pip install -e .')
+
+    if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
+        return _InstallKind("container", "container image", None)
+
+    prefix = os.path.normcase(sys.prefix).replace("\\", "/")
+    if "/pipx/venvs/" in prefix:
+        return _InstallKind("pipx", "pipx", "pipx upgrade invincible-ai")
+    if "/uv/tools/" in prefix or "/uv/environments/" in prefix:
+        return _InstallKind("uv", "uv tool", "uv tool upgrade invincible-ai")
+
+    label = "pip"
+    try:
+        import site
+
+        user_site = os.path.normcase(site.getusersitepackages())
+        package_dir = os.path.normcase(
+            os.path.dirname(os.path.abspath(__file__)))
+        if package_dir.startswith(user_site):
+            label = "pip (user)"
+    except Exception:
+        pass
+    return _InstallKind("pip", label, _pip_upgrade_command())
+
+
+def _update_cache_path() -> str:
+    return os.path.join(os.path.expanduser("~"), CLIENT_CONFIG_DIRNAME,
+                        UPDATE_CHECK_FILENAME)
+
+
+def _update_checks_enabled() -> bool:
+    """The notice is best effort and never runs where it cannot help.
+
+    Off for opt-out, CI (logs, no human), non-TTY (services/scripts), an
+    editable checkout (PyPI is irrelevant), and container images (rebuild,
+    don't pip-upgrade in place).
+    """
+    raw = os.getenv(NO_UPDATE_CHECK_ENV, "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return False
+    if os.getenv("CI"):
+        return False
+    isatty = getattr(sys.stderr, "isatty", None)
+    if not callable(isatty) or not isatty():
+        return False
+    if _is_editable_install():
+        return False
+    return _install_kind().kind != "container"
+
+
+def _format_update_notice(check: update_core.UpdateCheck,
+                          kind: _InstallKind) -> str:
+    command = kind.upgrade or "invincible update"
+    return (f"Update available: {check.current} -> {check.latest}\n"
+            f"  Run: {command}")
+
+
+def _maybe_notify_update() -> None:
+    """Print one stderr line when a newer release exists.
+
+    Never raises, never installs, never blocks a command on failure. The
+    PyPI call is bounded (UPDATE_CHECK_TIMEOUT) and cached for a day.
+    """
+    if not _update_checks_enabled():
+        return
+    try:
+        check = update_core.check_for_update(
+            current=__version__,
+            fetch=lambda: _fetch_pypi_payload(timeout=UPDATE_CHECK_TIMEOUT),
+            cache_path=_update_cache_path(),
+            ttl=UPDATE_CHECK_TTL_SECONDS,
+        )
+    except Exception:
+        return
+    if check is not None:
+        click.echo(_format_update_notice(check, _install_kind()), err=True)
+
+
+def _client_status_block() -> dict:
+    """Local half of `invincible status` (version, install, update state).
+
+    Cache-only: `status` must stay fast and must not add a third network
+    call. `login`/`connect`/`doctor` refresh the cache.
+    """
+    kind = _install_kind()
+    block: dict = {
+        "version": __version__,
+        "install": kind.label,
+        "executable": sys.executable,
+    }
+    latest = update_core.cached_latest(
+        _update_cache_path(), ttl=UPDATE_CHECK_TTL_SECONDS)
+    latest_version = update_core.parse_version(latest)
+    current_version = update_core.parse_version(__version__)
+    if (latest_version is not None and current_version is not None
+            and latest_version > current_version):
+        block["update"] = str(latest_version)
+        block["upgrade"] = kind.upgrade or "invincible update"
+    return block
+
 
 def _is_editable_install() -> bool:
     """True when invincible-ai is an editable install (refuse PyPI upgrade).
@@ -2280,12 +2484,12 @@ def _is_editable_install() -> bool:
     return False
 
 
-def _fetch_pypi_payload() -> dict:
+def _fetch_pypi_payload(timeout: float = PYPI_TIMEOUT) -> dict:
     """Fetch the PyPI JSON payload for invincible-ai (network boundary)."""
     import httpx
 
     try:
-        response = httpx.get(PYPI_JSON_URL, timeout=PYPI_TIMEOUT)
+        response = httpx.get(PYPI_JSON_URL, timeout=timeout)
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
@@ -2299,26 +2503,11 @@ def _fetch_pypi_payload() -> dict:
 
 def _select_desired_version(payload: dict, *, pre: bool) -> str:
     """Pick the newest release from a PyPI payload (pure; testable)."""
-    from packaging.version import InvalidVersion
-    from packaging.version import Version as _Version
-
-    releases = payload.get("releases")
-    candidates: list = []
-    if isinstance(releases, dict):
-        for raw in releases:
-            try:
-                parsed = _Version(str(raw))
-            except InvalidVersion:
-                continue
-            if not pre and (parsed.is_prerelease or parsed.is_devrelease):
-                continue
-            candidates.append(parsed)
-    if candidates:
-        return str(max(candidates))
-    info = payload.get("info")
-    if isinstance(info, dict) and info.get("version"):
-        return str(info["version"])
-    raise click.ClickException("Could not check PyPI for updates: no releases found")
+    latest = update_core.newest_release(payload, pre=pre)
+    if latest is None:
+        raise click.ClickException(
+            "Could not check PyPI for updates: no releases found")
+    return latest
 
 
 @click.command()
@@ -2356,15 +2545,26 @@ def update(check, yes, pre, target):
         click.echo(f"Up to date ({__version__})")
         return
 
-    if _is_editable_install():
+    if check:
+        click.echo(f"Update available: {__version__} -> {desired}")
+        raise click.exceptions.Exit(1)
+
+    kind = _install_kind()
+    if kind.kind == "editable":
         raise click.ClickException(
             "This is an editable install - refusing PyPI upgrade. "
             "Update with `git pull` then `pip install -e .` instead."
         )
-
-    if check:
-        click.echo(f"Update available: {__version__} -> {desired}")
-        raise click.exceptions.Exit(1)
+    if kind.kind in ("pipx", "uv"):
+        raise click.ClickException(
+            f"This install is managed by {kind.label} - refusing raw pip. "
+            f"Upgrade with:\n  {kind.upgrade}"
+        )
+    if kind.kind == "container":
+        raise click.ClickException(
+            "This is a container install - refusing in-place pip upgrade. "
+            "Rebuild the image with the new release instead."
+        )
 
     if not yes:
         if not sys.stdin.isatty():
@@ -2391,10 +2591,18 @@ def update(check, yes, pre, target):
         detail = (proc.stderr or proc.stdout or "").strip().splitlines()
         first = detail[0][:200] if detail else f"exit {proc.returncode}"
         raise click.ClickException(f"pip upgrade failed: {first}")
-    click.echo(
-        f"Installed invincible-ai {desired} (was {__version__}). "
-        "Restart your shell, then verify with `invincible --version`."
-    )
+    # Record the new version so the notice stops until the next TTL. The
+    # next process imports the upgraded package and agrees with the cache.
+    update_core.write_cache(_update_cache_path(), latest=str(desired))
+    click.echo(f"Installed invincible-ai {desired} (was {__version__}).")
+    click.echo("Next:")
+    click.echo("  - open a new terminal so the upgraded command is picked up")
+    click.echo("  - invincible harness service restart"
+               "   (if the always-on service is installed)")
+    click.echo("  - invincible db upgrade"
+               "                 (self-host only: apply new migrations)")
+    click.echo("  - invincible status"
+               "                     (verify version + pairing)")
 
 
 # --- database maintenance -----------------------------------------------------
@@ -2446,6 +2654,7 @@ class _RemoteFirstGroup(click.Group):
     """click.Group with a curated two-section command listing."""
 
     HOSTED_COMMANDS = ("login", "connect", "status")
+    MAINTENANCE_COMMANDS = ("update",)
 
     def resolve_command(self, ctx, args):
         """Resolve with a fresh did-you-mean hint on typos.
@@ -2493,12 +2702,19 @@ class _RemoteFirstGroup(click.Group):
 
         hosted = [row for row in commands if row[0] in self.HOSTED_COMMANDS]
         hosted.sort(key=lambda row: self.HOSTED_COMMANDS.index(row[0]))
+        maintenance = [
+            row for row in commands if row[0] in self.MAINTENANCE_COMMANDS]
+        maintenance.sort(
+            key=lambda row: self.MAINTENANCE_COMMANDS.index(row[0]))
         rest = sorted(
-            [row for row in commands if row[0] not in self.HOSTED_COMMANDS],
+            [row for row in commands
+             if row[0] not in self.HOSTED_COMMANDS
+             and row[0] not in self.MAINTENANCE_COMMANDS],
             key=lambda row: row[0],
         )
         for title, rows in (
             ("Use the hosted service (just 3)", hosted),
+            ("Keep it current", maintenance),
             ("Advanced & server administration", rest),
         ):
             if not rows:
@@ -2520,6 +2736,11 @@ def cli():
     invincible login    pair this machine once (browser opens)
     invincible connect  keep this machine online (Ctrl+C to stop)
     invincible status   check pairing, account, next step
+
+    Keep it current:
+
+    \b
+    invincible update   install the latest release (--check = dry run)
 
     Local self-host? Use the same 3 under `dev`
     (defaults to http://127.0.0.1:8000 from `invincible start`):

@@ -211,7 +211,8 @@ async def test_docs_cli_reference_matches_shipped_surface(docs_client):
     pairing commands the tree pins elsewhere stay present."""
     body = (await docs_client.get("/docs/cli")).text
     for command in ("harness setup", "harness connect", "harness status",
-                    "harness service install", "login", "setup", "start",
+                    "harness service install", "harness service restart",
+                    "login", "setup", "start",
                     "doctor", "db upgrade", "secret rotate",
                     "secret credential-key", "dev-db", "update",
                     "users list", "users reset-password", "api-key create",

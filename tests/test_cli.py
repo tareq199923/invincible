@@ -57,6 +57,22 @@ def test_cli_help_leads_with_hosted_commands():
     assert login_at < connect_at < status_at < admin_at < setup_at
 
 
+def test_cli_help_keeps_update_discoverable():
+    """`update` is the self-healing command, so it gets its own section
+    between the hosted trio and server administration."""
+    result = CliRunner().invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    hosted_at = result.output.index("Use the hosted service")
+    current_at = result.output.index("Keep it current", hosted_at)
+    admin_at = result.output.index(
+        "Advanced & server administration", current_at)
+    assert hosted_at < current_at < admin_at
+    update_at = result.output.index("  update", current_at)
+    assert update_at < admin_at
+    assert "invincible update" in result.output
+
+
+
 def test_cli_version():
     result = CliRunner().invoke(cli, ["--version"])
     assert result.exit_code == 0
