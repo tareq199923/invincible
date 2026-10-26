@@ -5,6 +5,17 @@
 
 ## Current State
 
+- Release 0.6.1 prep (release task, no feature flip): `invincible/__init__.py`
+  bumped from 0.6.0; the release carries F31 (CLI update awareness + upgrade
+  UX) plus the docs/landing switch to `pip install -U invincible-ai` and the
+  real `harness service restart`. `tests/test_wheel_contents.py` now probes
+  `connect --help` and `status --help` (the 0.5.x README promise), and
+  `docs/RELEASING.md` describes the same gate. Gates: `ruff check .` clean;
+  FULL suite 2164 passed / 11 skipped / 1 deselected (Windows, embedded
+  PostgreSQL on 127.0.0.1:5433, 7m48s); packaging smoke test
+  `pytest -q -m slow tests/test_wheel_contents.py` passed in 110 s with the
+  wheel reporting 0.6.1. Next: tag `v0.6.1`, push, publish through the
+  trusted-publisher dispatch, then record PyPI status.
 - F31 done (`passing`): CLI update awareness + upgrade UX.
   `invincible/core/updates.py` holds the pure PyPI-payload → newest-release
   resolver plus a 24h cache at `~/.invincible/update-check.json` (atomic,
@@ -880,18 +891,20 @@
 
 ## Next Steps
 
-0. F31 is unreleased on `main` (PyPI and hosted production are still
-   0.6.0): bump `invincible/__init__.py` to 0.6.1, tag `v0.6.1`, publish
-   through the Release workflow, then deploy hosted and verify `/health`.
-   The notice only starts reaching users once they install a version that
-   contains it; 0.5.x holdouts are reached by the README/docs
-   "No such command 'connect'" callout until they upgrade once.
+0. Release follow-through: push `main` + tag `v0.6.1`, dispatch the Release
+   workflow against that tag with `publish=true`, verify `pip install
+   invincible-ai` reports 0.6.1 in a scratch venv, then record the release
+   in `docs/RELEASING.md` and `docs/ROADMAP.md`. The update notice only
+   starts reaching users once they install a version that contains it;
+   0.5.x holdouts are reached by the README/docs "No such command 'connect'"
+   callout until they upgrade once.
 
-Release follow-through: PyPI `0.6.0` is published and verified. Hosted
-production (`https://invincible-ai.me/health`) still reports 0.5.1 —
-trigger a Railway production deploy of `f58168e` (or newer), let its
-preDeploy `invincible db upgrade` apply `0016` (pg_trgm) and `0017`,
-then confirm `/health` → 0.6.0 and that sign-in/chat still work.
+Release follow-through (older, still open): PyPI `0.6.0` is published and
+verified. Hosted production (`https://invincible-ai.me/health`) still
+reports 0.5.1 — trigger a Railway production deploy of `f58168e` (or
+newer), let its preDeploy `invincible db upgrade` apply `0016` (pg_trgm)
+and `0017`, then confirm `/health` → 0.6.0 and that sign-in/chat still
+work. Deploying after 0.6.1 also picks up F31.
 
 1. Restart any paired `invincible connect` agent to pick up F22's voice
    poses plus the earlier F23/F25/F26 runner/overlay changes

@@ -38,8 +38,9 @@ pytest -q -m slow tests/test_wheel_contents.py
 It builds the real sdist + wheel, installs the wheel into a scratch venv,
 and asserts — from inside that venv — the version, the packaged
 `providers.yaml`, the migration head (wheel == source), every dashboard
-template + static asset, and that `invincible --version` /
-`invincible harness connect --help` work with no database and no `.env`.
+template + static asset, and that `invincible --version`,
+`invincible connect --help`, and `invincible status --help` work with no
+database and no `.env`.
 
 ## Release flow (CI)
 
