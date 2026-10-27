@@ -473,3 +473,107 @@ by `create_all` (test/dev scaffolding): `create_all` never adds columns to
 an existing table, so those need `invincible db upgrade` (or a
 drop/recreate) before the sidebar management queries work.
 
+---
+
+## 11. Worked examples
+
+All examples use:
+
+```bash
+export INVINCIBLE_BASE=https://invincible-ai.me   # or http://127.0.0.1:8000
+export INVINCIBLE_API_KEY=inv_...                 # dashboard -> Account -> API keys
+```
+
+### Health check
+
+```bash
+curl $INVINCIBLE_BASE/
+# {"status": "healthy"}
+
+curl $INVINCIBLE_BASE/health
+# {"service": "invincible", "status": "healthy", "version": "0.6.1"}
+```
+
+### List models
+
+```bash
+curl $INVINCIBLE_BASE/v1/models \
+  -H "Authorization: Bearer $INVINCIBLE_API_KEY"
+# {
+#   "object": "list",
+#   "data": [
+#     {"id": "<your connected credentials' model ids>", "object": "model", "owned_by": "invincible"},
+#     {"id": "<your configured aliases>", "object": "model", "owned_by": "invincible"}
+#   ]
+# }
+```
+
+The list is built from **your** connected BYOK credentials, so it reflects
+exactly what the gateway can route to for you (empty when you have none
+connected). Real model ids come first, then your aliases.
+
+### Chat with session memory
+
+```bash
+curl $INVINCIBLE_BASE/v1/chat/completions \
+  -H "Authorization: Bearer $INVINCIBLE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "X-Session-Id: my-conversation" \
+  -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
+```
+
+The assistant reply is stored under `my-conversation` and included in the
+next request with the same header.
+
+### Stream a chat (SSE)
+
+```bash
+curl -N $INVINCIBLE_BASE/v1/chat/completions \
+  -H "Authorization: Bearer $INVINCIBLE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello!"}], "stream": true}'
+```
+
+`-N` (`--no-buffer`) prints each event as it arrives. Tokens are streamed as
+OpenAI-compatible `chat.completion.chunk` events:
+
+```text
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":1783161600,"model":"gemini-2.5-flash","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":1783161600,"model":"gemini-2.5-flash","choices":[{"index":0,"delta":{"content":"!"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":1783161600,"model":"gemini-2.5-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+```
+
+### Anthropic Messages
+
+```bash
+curl $INVINCIBLE_BASE/v1/messages \
+  -H "Authorization: Bearer $INVINCIBLE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-4","max_tokens":1024,
+       "messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+Add `"stream": true` to receive Anthropic SSE events ending in
+`message_stop`.
+
+### MCP tools
+
+Register the connector, approve it in the browser, then use the token the
+client holds:
+
+```bash
+curl -X POST $INVINCIBLE_BASE/mcp \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+`execute_bash` and `write_file` return a `pending_confirmation` result with a
+token; approve it with `confirm_action` (details and the full flow:
+[MCP_PROTOCOL.md](MCP_PROTOCOL.md) → *§7*).
+
+

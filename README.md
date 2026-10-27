@@ -24,6 +24,18 @@
   <img src="docs/images/invincible-landing.png" alt="Invincible landing page" width="1200" />
 </p>
 
+<p align="center"><sub>
+<a href="#what-is-invincible">What it is</a> ·
+<a href="#screenshots">Screenshots</a> ·
+<a href="#installation">Install</a> ·
+<a href="#quick-start">Quick start</a> ·
+<a href="#api">API</a> ·
+<a href="#mcp-support">MCP</a> ·
+<a href="#architecture">Architecture</a> ·
+<a href="#documentation">Docs</a> ·
+<a href="#contributing">Contributing</a>
+</sub></p>
+
 ---
 
 ## What is Invincible?
@@ -56,12 +68,11 @@ It serves three roles in one process:
 
 ### Why it exists
 
-- **The 429 problem.** AI coding agents using free/open-source providers
-  get killed when they hit a rate limit. Invincible
-  sits between the agent and the providers; on a 429 (or 5xx) it records the
-  failure, puts the provider in a short cooldown, and retries the next
-  credential in the user's own routing order. The agent sees a single,
-  stable endpoint.
+- **The 429 problem.** AI coding agents using free/open-source providers get
+  killed when they hit a rate limit. Invincible sits between the agent and
+  the providers; on a 429 (or 5xx) it records the failure, puts the provider
+  in a short cooldown, and retries the next credential in the user's own
+  routing order. The agent sees a single, stable endpoint.
 - **The cloud-to-local gap.** Cloud AI tools (e.g. the Claude web/mobile app)
   can reason well but cannot read the user's files, write to disk, or run
   terminal commands. Invincible's MCP server exposes those capabilities over
@@ -70,23 +81,36 @@ It serves three roles in one process:
 
 ---
 
+## Screenshots
+
+| Memory graph | Usage |
+|---|---|
+| <img src="docs/images/dashboard-memory.png" alt="Dashboard memory graph" width="470" /> | <img src="docs/images/dashboard-usage.png" alt="Dashboard usage statistics" width="470" /> |
+
+---
+
 ## Features
 
 | Feature | What it gives you |
 |---|---|
-| **Remote-first, multi-user** | One deployment serves many accounts over HTTPS: browser accounts (email+password or GitHub), per-user projects/API keys/provider credentials, a dashboard, and stri[...]
-| **BYOK routing** | Every user connects their own provider credentials (dashboard → Providers) and routes only through them: `auto`/`pinned`/`chain` routing per user, 429/5xx → cooldown + nex[...]
-| **Exponential cooldown** | 30s → 60s → 120s → 240s → capped at 300s; a success resets the counter (in-memory, process-scoped). |
-| **Conversation memory** | PostgreSQL-backed, keyed by the `X-Session-Id` header (default `default`). History is merged into every request and the assistant reply is persisted back. |
-| **Context trimming** | Per-credential `max_context`; system messages always kept; everything else dropped as atomic *turns* (an assistant `tool_calls` is never separated from its tool results); [...]
-| **Per-provider timeouts** | Split connect/read/write/pool with sane defaults and per-provider overrides. |
-| **MCP tool server** | `read_file` (no approval), `execute_bash` and `write_file` (staged, then approved via a token round-trip through the `confirm_action` tool), guarded by denylists and an **O[...]
-| **Accounts & projects** | Sign up / sign in in a browser (email + argon2id passwords, or **GitHub login**), manage your own projects and `inv_` API keys over HTTP, list your sessions �[...]
-| **Protocol-agnostic** | Native **OpenAI**, **Anthropic**, and **Responses** protocols, all translated into one internal message model. Claude Code works with `ANTHROPIC_BASE_URL` pointing at the[...]
+| **Remote-first, multi-user** | One deployment serves many accounts over HTTPS: browser sign-up (email + password or GitHub), per-user projects, API keys, provider credentials, and a dashboard. |
+| **BYOK routing** | Every user connects their own provider credentials and routes only through them — `auto`, `pinned`, or explicit `chain` order. There is no shared gateway key and no shared provider pool. |
+| **Failover + cooldown** | 429/5xx/network errors move to the next credential; cooldowns grow 30s → 60s → 120s → 240s, capped at 300s, and reset on success. |
+| **Conversation memory** | PostgreSQL-backed, keyed by the `X-Session-Id` header. History is merged into every request and the reply is persisted back. |
+| **Continuity** | Versioned task state, checkpoints, and continuation briefs, so a session can resume across models and restarts. |
+| **Context trimming** | Per-credential `max_context`; system messages are always kept; history is dropped as atomic turns, never splitting an assistant `tool_calls` from its tool results. |
+| **Per-provider timeouts** | Separate connect/read/write/pool timeouts with sane defaults and per-provider overrides. |
+| **MCP tool server** | `read_file`, `execute_bash`, `write_file`, guarded by denylists and staged, single-use approval tokens. Tools run on the user's paired machine when agent routing is enabled. |
+| **Accounts & projects** | Browser accounts with argon2id passwords or GitHub login, self-service projects, and `inv_` API keys shown once (SHA-256 at rest). |
+| **Protocol-agnostic** | OpenAI, Anthropic, and Responses protocols translated into one internal message model, with tool calls round-tripping losslessly. |
+| **Dashboard** | Jinja2 + HTMX: sessions, memory graph, tasks, usage, providers, and machines. |
 
 ---
 
 ## Installation
+
+**Requirements:** Python 3.10+ and, for a self-hosted server, PostgreSQL.
+The hosted service needs neither — just the CLI.
 
 **Users: one install command. That's all.**
 
@@ -225,92 +249,67 @@ Clients of your own server point at it explicitly:
 `ANTHROPIC_BASE_URL=https://mycompany.ai` for Claude Code). The hosted
 service is the CLI default, so your users pass no flag at all.
 
-See [Examples](#examples) for ready-to-run `curl` calls, or continue reading
-for the full configuration, API, and tooling reference.
-
 ---
 
 ## Configuration
 
 Everything is environment variables plus one YAML file — no other config.
 
-### `.env` variables
-
-| Variable | Required by | Purpose |
-|---|---|---|
-| `INVINCIBLE_DB_URL` | startup (**required**) | PostgreSQL DSN for all persistent state. Use a **managed/reachable** PostgreSQL on a remote deployment, e.g. `postgresql+asyncpg://[...] 
-| `INVINCIBLE_MIGRATE_DB_URL` | container/platform deploys | Schema-owner DSN used **only** for the one `db upgrade` the image runs at startup (falling back to `INVINCIBLE_DB_URL` when unset), so[...]
-| `INVINCIBLE_OWNER_SECRET` | account sessions | Signs account browser sessions (dashboard login, OAuth consent). **Not** sent on `/mcp` — requests use short-lived OAuth Bearer tokens. **If uns[...]
-| `INVINCIBLE_CREDENTIAL_KEY` | BYOK | Fernet master key encrypting stored provider credentials at rest. Generated by `invincible setup` (or `invincible secret credential-key`); **back it up** ��[...]
-| `INVINCIBLE_PERSIST_PENDING_ACTIONS` | startup | **Opt-in**: when set, staged `execute_bash`/`write_file` approvals are written to the PostgreSQL database (`pending_actions` table) and survive [...]
-| `INVINCIBLE_AGENT_ROUTING` | startup (**required on public multi-user deployments**) | Routes confirmed tool execution to the caller's paired harness agent (`invincible harness connect`) instea[...]
-| `INVINCIBLE_AGENT_ROOT` | agent | Sandbox root for the local agent (default: the user's home directory). Reads and writes outside it are blocked; `.env*`, `.git`, `.ssh`, SSH keys, `*.pem`, `*c[...]
+| Variable | Purpose |
+|---|---|
+| `INVINCIBLE_DB_URL` | PostgreSQL DSN for all persistent state. **Required** to start a server. |
+| `INVINCIBLE_MIGRATE_DB_URL` | Schema-owner DSN used only for the startup `db upgrade` in container deploys (falls back to `INVINCIBLE_DB_URL`). |
+| `INVINCIBLE_OWNER_SECRET` | Signs account browser sessions (dashboard login, OAuth consent). Unset = those surfaces fail closed. Not sent on `/mcp`. |
+| `INVINCIBLE_CREDENTIAL_KEY` | Fernet master key encrypting stored BYOK credentials at rest. Back it up — losing it makes saved provider keys undecryptable. |
+| `INVINCIBLE_AGENT_ROUTING` | Set to `1` to route confirmed tool calls to each user's paired machine. **Required on public multi-user deployments**; otherwise tools run on the server host. |
+| `INVINCIBLE_PERSIST_PENDING_ACTIONS` | Opt-in: persist staged `execute_bash`/`write_file` approvals in PostgreSQL so they survive a restart. |
 
 `/v1/*` requests authenticate with **per-user `inv_` API keys** (minted on
 the dashboard's Account page, or by the host with
 `invincible api-key create --user <email-or-id>`). Each user connects their
-own provider credentials on the dashboard's Providers page (BYOK) and
-routes only through them — there is no shared gateway key and no shared
-provider pool.
+own provider credentials on the dashboard's Providers page (BYOK) and routes
+only through them — there is no shared gateway key and no shared provider
+pool.
 
 The secrets are **independent**: a leaked `/mcp` URL alone is not enough to
 reach tool execution (a live OAuth bearer token is required as well), and
 rotating one secret never affects the other.
 
-### `providers.yaml`
-
-The packaged `invincible/providers.yaml` is a static fixture (tests and
-direct `Router` construction); live traffic never reads it — every
-`/v1/*` request routes through the caller's own connected BYOK
-credentials. There is no repository-root copy.
-
-Full reference — schema, validation rules, timeout resolution:
-[docs/CONFIGURATION.md](docs/CONFIGURATION.md).
-How to add a provider, aliases, and supported shapes:
-[docs/PROVIDERS.md](docs/PROVIDERS.md).
+Full reference — every variable, `providers.yaml` schema, timeout resolution,
+database options: [docs/CONFIGURATION.md](docs/CONFIGURATION.md). Adding a
+provider, aliases, and supported shapes: [docs/PROVIDERS.md](docs/PROVIDERS.md).
+The packaged `invincible/providers.yaml` is a static test fixture; live
+traffic never reads it, because every `/v1/*` request routes through the
+caller's own BYOK credentials.
 
 ---
 
 ## CLI Commands
 
-Two commands, both exposed as `invincible` and `inv`. Most users only
-need the first two rows (the hosted service); the rest is self-host and
-server administration:
+Most users need the first four rows; the rest is self-host administration.
 
 | Command | Purpose |
 |---|---|
-| `invincible login [--server URL]` | Pair this machine with an Invincible server (device flow): opens the approval page in your browser — click Approve and the command finishes, saving the `inv_` key to `~/.invincible/config.json`. Defaults to the hosted service (`https://invincible-ai.me`); pass `--server` for a self-hosted or local server. URL + code are printed for headless terminals; the Account page also has a "Pair a device" box for typing a code by hand. |
-| `invincible connect` | Keep this machine online. First run pairs automatically (browser opens, you click Approve). Runs confirmed jobs on **this machine** with your own account — nothing listens for inbound connections. Ctrl+C to stop. |
-| `invincible status` | Check this machine: account, online state, next step. Same as `harness status`. |
-| `invincible harness setup` | Advanced: pair this machine and print its MCP connector config (idempotent — never re-pairs silently). Most users need only `login` + `connect`. |
-| `invincible harness connect` | Advanced: same as `connect`. |
-| `invincible harness status` | Advanced: same as `status`. |
-| `invincible harness service install` | Write an always-on service definition (systemd/launchd/schtasks) so the machine stays online across reboots. |
-| `invincible harness service restart` | Restart the installed always-on service (the post-upgrade step that makes the new version actually run). |
-| `invincible update` | Install the latest `invincible-ai` release from PyPI (`--check` for a dry run, `--yes` for scripts). Detects pip/pipx/uv/editable/container installs and prints the right command instead of corrupting a managed environment. |
-| `invincible setup` | Create/update `.env` (non-interactive, scriptable): generates missing secrets (`token_urlsafe(32)`, never echoed), generates the BYOK credential master key, preserves exist[...]
-| `invincible secret rotate` | Generate a brand-new `INVINCIBLE_OWNER_SECRET` and rewrite it in place — no manual `.env` editing, never echoes the value (unless `--show`). Preserves every other[...]
-| `invincible start` | Start the server. `--host` (default `127.0.0.1`; pass `0.0.0.0` to be reachable from other machines), `--port` (default `8000`), `--reload`, `--log-level`, `--env-file`, `-[...] 
-| `invincible doctor` | Environment/config diagnostics: providers.yaml, secrets, and PostgreSQL connectivity + schema revision (DSN always password-masked); loud FAIL on a stale/unmanaged schema.[...]
-| `invincible dev-db` | Provision or verify a local Postgres **development** database (Docker fallback included) and print/write a working `INVINCIBLE_DB_URL`. Loopback-only and dev-credential by[...]
-| `invincible db upgrade` | Run the packaged Alembic migrations to head against `INVINCIBLE_DB_URL`. Explicit by design — nothing auto-migrates. |
-| `invincible oauth list` | Show registered OAuth clients, their redirect URIs, and active/revoked grants. |
-| `invincible oauth revoke <client_id>` | Revoke every access/refresh token for a client immediately. |
-| `invincible oauth test-client` | Headless helper: registers a client, approves it, and prints a ready-to-use Bearer token + curl for `/mcp` (no browser needed). |
-| `invincible api-key create --user <id-or-email> --label L` | Mint an API key (`inv_…`) under a named account (host tool) — raw key shown **once**, only its SHA-256 hash is stored. |
-| `invincible api-key list` | List API keys by visible prefix (never hashes or raw keys). |
-| `invincible api-key revoke <id-or-prefix>` | Revoke a key immediately. |
-| `invincible users list` | List accounts (host tool; roles are informational only). |
-| `invincible users reset-password <email>` | Reset an account's password (host recovery path — database access is the proof of authority; `--generate` prints a strong password once). Every bro[...]
+| `invincible login [--server URL]` | Pair this machine with a server (device flow): the browser opens, you click Approve, and the `inv_` key is saved to `~/.invincible/config.json`. Defaults to the hosted service. |
+| `invincible connect [--server URL]` | Keep this machine online and run confirmed jobs locally. First run pairs automatically. Nothing listens for inbound connections; Ctrl+C stops it. |
+| `invincible status` | Check this machine: account, online state, next step. |
+| `invincible update` | Install the latest release from PyPI (`--check` for a dry run, `--yes` for scripts). Refuses managed environments and prints the right command instead. |
+| `invincible setup` | Create/update `.env` non-interactively, generating missing secrets and the credential key without echoing them. |
+| `invincible start` | Start the server (`--host`, `--port`, `--reload`, `--env-file`, `--no-tunnel`). |
+| `invincible db upgrade` | Run packaged Alembic migrations to head. Explicit by design — nothing auto-migrates. |
+| `invincible doctor` | Diagnose config, secrets, and PostgreSQL connectivity/schema revision. |
+| `invincible dev-db` | Provision a local development PostgreSQL and write a working `INVINCIBLE_DB_URL`. |
+
+Administration (`harness setup|service install|service restart`, `oauth
+list|revoke|test-client`, `api-key create|list|revoke`, `users
+list|reset-password`) is documented in the full CLI reference:
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md) → *CLI reference*.
 
 ```bash
 invincible setup --force
 invincible secret rotate            # new owner secret, in place
-invincible secret rotate --show     # ...and print it (rarely needed)
-invincible start --port 9000 --config ./my-providers.yaml
+invincible start --port 9000
 ```
-
-Full CLI reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md) → *CLI reference*.
 
 ---
 
@@ -323,105 +322,66 @@ Full CLI reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md) → *CLI refe
 | `GET` | `/` | none | Health check → `{"status": "healthy"}` |
 | `HEAD` | `/` | none | 200 OK — Claude Code's base-URL probe |
 | `GET` | `/health` | none | Service detail → `{"service", "status", "version"}` |
-| `GET` | `/v1/models` | `Authorization: Bearer inv_…` | OpenAI-compatible model list built from **your** connected credentials (empty when you have none) |
-| `POST` | `/v1/chat/completions` | `Bearer inv_…` API key | OpenAI chat completion routed through your own credentials with failover |
-| `POST` | `/v1/messages` | `Bearer inv_…` API key | Anthropic Messages API (same routing) |
-| `POST` | `/v1/responses` | `Bearer inv_…` API key | OpenAI Responses API for Codex CLI (same routing) |
+| `GET` | `/v1/models` | `Bearer inv_…` | OpenAI-compatible model list built from **your** connected credentials |
+| `POST` | `/v1/chat/completions` | `Bearer inv_…` | OpenAI chat completions with failover (JSON or SSE) |
+| `POST` | `/v1/messages` | `Bearer inv_…` | Anthropic Messages API (same routing) |
+| `POST` | `/v1/responses` | `Bearer inv_…` | OpenAI Responses API for Codex CLI (same routing) |
 
 ### Chat request
 
 - **Body**: `{"messages": [...], "stream": false}` — OpenAI message format.
   `messages`, `stream`, and `model` are accepted. `model` is a soft routing
-  hint (matches a configured alias or exact `model_id`; unknown names are
-  ignored). Other OpenAI fields are rejected with **422**.
-- **Streaming**: `stream: true` returns an OpenAI-compatible
-  Server-Sent Events (`text/event-stream`) response. Each event is a
-  `chat.completion.chunk` (`data: {…}\n\n`), and the stream ends with
-  `data: [DONE]`. Chunks are forwarded from the upstream provider as they
-  arrive — nothing is buffered. Providers that fail before the first chunk
-  trigger the normal failover; an error after streaming has begun terminates
-  the stream with a well-formed `data: {"error": …}` event.
+  hint (an alias or exact `model_id`; unknown names are ignored). Other
+  OpenAI fields are rejected with **422**.
+- **Streaming**: `stream: true` returns OpenAI-compatible SSE. Each event is a
+  `chat.completion.chunk` (`data: {…}\n\n`) and the stream ends with
+  `data: [DONE]`. Chunks are forwarded as they arrive — nothing is buffered.
+  A provider that fails before the first chunk triggers normal failover; an
+  error after streaming starts ends the stream with a well-formed error event.
 - **Sessions**: history is loaded from PostgreSQL keyed by the `X-Session-Id`
   header (default `default`), prepended to your messages, and the assistant
   reply is persisted back. `session_id` is a partition key, not a credential.
-  For streamed responses the reply is reconstructed from the chunk deltas and
-  saved once the stream completes.
-- **Response**: the upstream provider's JSON is forwarded **verbatim**
-  (non-streaming).
+  Streamed replies are reconstructed from deltas and saved when the stream
+  completes.
+- **Response**: the upstream provider's JSON is forwarded **verbatim**.
 
 ### Anthropic Messages (`POST /v1/messages`)
 
-Invincible also speaks the **Anthropic Messages API**, so Claude Code and
-other Anthropic-native clients work without modification:
+Invincible speaks the **Anthropic Messages API**, so Claude Code and other
+Anthropic-native clients work without modification:
 
 ```bash
-# .env for Claude Code (or your shell):
 # No /v1 suffix — Claude appends /v1/messages itself.
 ANTHROPIC_BASE_URL=http://127.0.0.1:8000
 ANTHROPIC_AUTH_TOKEN=inv_...   # older Claude Code: ANTHROPIC_API_KEY instead
 ```
 
-Claude Code probes `HEAD /`, then calls `POST /v1/messages?beta=true` — both
-are served. Supported request fields: `model`, `system`, `messages`,
-`max_tokens`, `stream`. Everything else Claude Code sends (`tools`,
-`tool_choice`, `metadata`, `temperature`, `top_p`, `top_k`,
-`stop_sequences`, unknown fields, `anthropic-beta` / `anthropic-version`
-headers, the `?beta=true` query) is **accepted and ignored** — never a 422.
+Supported request fields are `model`, `system`, `messages`, `max_tokens`, and
+`stream`; everything else Claude Code sends (`tools`, `metadata`,
+`temperature`, `top_p`, `anthropic-beta`, the `?beta=true` query, unknown
+fields) is accepted and ignored — never a 422. Streaming emits the canonical
+Anthropic event order, tool calls round-trip losslessly with ids preserved,
+sessions share history with the OpenAI endpoint, and errors map to Anthropic
+error types. Image content blocks are skipped today.
 
-The `model` field overrides each of **your** connected credentials'
-stored default in `auto` routing: the request's model is sent verbatim
-upstream to every credential in your order (check
-`GET /v1/models` — it lists exactly the model ids your key can route
-to). A model none of your providers serves fails with the provider's
-own "not a valid model" error, surfaced as an Anthropic
-`invalid_request_error` — set `/model` to one exact id from
-`/v1/models`, or omit `model` to use each credential's stored default.
-Provider slugs are exact: `deepseek-v4.1-flash-free` and
-`deepseek-v4.1-flash:free` are different models — a near-miss fails
-upstream with "not a valid model".
-In `chain`/`pinned` routing each step carries its own model and the
-request model only picks the entry point. The response reports the
-model that actually served, so a fallback across models stays visible
-instead of being masked by an echo of what you asked for.
-
-- **Streaming**: `stream: true` returns Anthropic SSE events in the
-  canonical order — `message_start` → `content_block_start` →
-  `content_block_delta` (one per text delta) → `content_block_stop` →
-  `message_delta` → `message_stop`. `tool_use` content blocks are preserved
-  and streamed as structured events (`content_block_start` +
-  `input_json_delta` frames) with `stop_reason: "tool_use"` at the end;
-  `tool_result` blocks in the request are carried as `role: "tool"`
-  messages, so tool-shaped conversations round-trip losslessly (ids
-  preserved). `image` content blocks are still skipped. A mid-stream
-  upstream failure emits a well-formed Anthropic `error` event and closes —
-  never malformed SSE.
-- **Sessions**: the same `X-Session-Id` header and PostgreSQL store are used,
-  and history is serialized in the shared internal format — an OpenAI
-  client and a Claude Code session on the same id see the same
-  conversation.
-- **Errors**: mapped to Anthropic error types (`invalid_request_error`,
-  `authentication_error`, `permission_error`, `not_found_error`,
-  `rate_limit_error`, `api_error`, `overloaded_error`) with sanitized
-  messages; upstream provider bodies are never forwarded.
-- **Unsupported today**: image content (skipped during conversion).
+The `model` value overrides each connected credential's stored default in
+`auto` routing and is sent verbatim upstream; `GET /v1/models` lists exactly
+what your key can route to. In `chain`/`pinned` routing each step carries its
+own model and the request model only picks the entry point.
 
 ### Status codes
 
 | Status | When |
 |---|---|
-| `200` | Upstream success — JSON body forwarded verbatim, or SSE stream (`stream: true`) |
-| `400` | Caller has no connected provider credentials (BYOK) — connect one on the dashboard's Providers page |
+| `200` | Upstream success — JSON body forwarded verbatim, or SSE stream |
+| `400` | Caller has no connected provider credentials (BYOK) |
 | `401` | Missing/invalid `inv_` API key |
 | `422` | Body fails validation (missing `messages`, extra fields) |
 | `4xx` | Upstream returned a non-failover error (e.g. 400) — forwarded verbatim |
-| `503` | All of the caller's credentials failed or are in cooldown (before streaming starts) |
+| `503` | All of the caller's credentials failed or are in cooldown |
 
-The Anthropic endpoint uses the same statuses; error bodies are Anthropic
-shaped (`{"type": "error", "error": {"type": …, "message": …}}`) and map to
-Anthropic error types.
-
-Full contract — sessions, trimming, timeout semantics:
-[docs/API_REFERENCE.md](docs/API_REFERENCE.md).
+Full contract — request/response shapes, sessions, trimming, timeout
+semantics: [docs/API_REFERENCE.md](docs/API_REFERENCE.md).
 
 ---
 
@@ -431,72 +391,52 @@ Full contract — sessions, trimming, timeout semantics:
 `tools/list`, and `tools/call`. Protocol version: `2025-06-18`.
 
 - **Auth**: OAuth 2.1 + PKCE via the built-in authorization server. Clients
-discover it at `/.well-known/oauth-protected-resource` (RFC 9728), register
-at `/oauth/register`, get owner approval on the `/oauth/authorize` consent
-page, then send `Authorization: Bearer <access_token>` on every `/mcp`
-request. Wrong/missing/expired/revoked token → `401` with a
-`WWW-Authenticate: Bearer resource_metadata="…"` challenge. (No
-`X-MCP-Secret` header anymore; the `MCP_SHARED_SECRET` env var is
-retired and inert.)
-- **Notifications**: a request without an `id` still runs its side effect
-  but the server replies `204 No Content` with no body.
-
-### Tools
+  discover it at `/.well-known/oauth-protected-resource` (RFC 9728), register
+  at `/oauth/register`, get owner approval on the `/oauth/authorize` consent
+  page, then send `Authorization: Bearer <access_token>` on every request.
+  Wrong/missing/expired/revoked token → `401` with a `WWW-Authenticate:
+  Bearer resource_metadata="…"` challenge.
+- **Notifications**: a request without an `id` still runs its side effect but
+  the server replies `204 No Content`.
 
 | Tool | Arguments | Confirmation | Gate |
 |---|---|---|---|
-| `read_file` | `path` | **No** | Blocks only real secrets/state: `.env*`, `sessions.db`, `.git/`. **Allows** `invincible/`, `tests/`, `providers.yaml`. |
-| `execute_bash` | `command` + a `confirm_action` token round-trip | **Yes** — staged with a token; runs only after `confirm_action(token, approve=true)` (30s execution timeout) | Blocks high-b[...]
-| `write_file` | `path`, `content` + a `confirm_action` token round-trip | **Yes** — staged with a token; writes only after `confirm_action(token, approve=true)` | Blocks writes to `.env*`, `pr[...]
-| `confirm_action` | `token`, `approve` | — | Approves/denies a pending `execute_bash`/`write_file`; token is single-use and expires after 10 minutes. |
-
-Security model, full denylist inventory, and known limits:
-[docs/SECURITY.md](docs/SECURITY.md).
+| `read_file` | `path` | **No** | Blocks `.env*`, `sessions.db`, `.git/`; allows the repo, tests, and config. |
+| `execute_bash` | `command` | **Yes** — staged token round-trip, 30s execution timeout | Blocks high-risk commands; the token is the real safety boundary. |
+| `write_file` | `path`, `content` | **Yes** — staged token round-trip | Blocks writes to `.env*`, private keys, and other protected paths. |
+| `confirm_action` | `token`, `approve` | — | Approves/denies a pending action; single-use, expires after 10 minutes. |
 
 ### Run tools on your own PC (the local agent)
 
 On a hosted deployment with `INVINCIBLE_AGENT_ROUTING=1`, confirmed tool
-actions execute on **your machine**, not the server — the security
-checks (denylist, staging, approval tokens) all stay server-side, but
-the work travels to a paired local agent. From zero to "my AI just ran a
-command on my PC" is two commands — no account to create first, no
-separate pairing step:
+actions execute on **your machine**, not the server. The security checks
+(denylist, staging, approval tokens) stay server-side; the work travels to a
+paired local agent. From zero to "my AI just ran a command on my PC" is two
+commands:
 
 ```bash
 pip install -U invincible-ai
 invincible connect   # first run: browser opens → sign in or register → Approve
 ```
 
-On first run the harness pairs the machine itself: the browser opens on
-the approval page (create your account right there if you don't have
-one, then click **Approve**), the minted key is saved to
-`~/.invincible/config.json`, and the relay connects straight into its
-WS-first loop — it never asks you to run another command first. Every
-later start is just `invincible connect` again; pairing happens once per
-machine, ever.
+The agent pairs once, saves the minted key to `~/.invincible/config.json`,
+and connects outbound — no inbound ports. Its sandbox is your home directory
+(`INVINCIBLE_AGENT_ROOT` to override), with `.env*`, `.git`, `.ssh`, and key
+material blocked everywhere. An offline agent answers `agent_offline`
+immediately — nothing hangs. Self-hosters point at their own server once:
+`invincible connect --server https://mycompany.ai`.
 
-Self-hosters point at their own server once:
-`invincible connect --server https://mycompany.ai` (or
-`--server http://127.0.0.1:8000` against a local `invincible start`).
-`invincible login` remains as the explicit re-pair/repair tool.
-
-Then connect Claude/Grok/any MCP client to `https://your-server.example.com/mcp`
-as usual. While the agent is running, its console shows each dispatched
-job; the dashboard MCP page shows a live **Agent: online/offline**
-badge. The agent sandbox is your home directory (`INVINCIBLE_AGENT_ROOT`
-to override), with `.env*`, `.git`, `.ssh`, and key material blocked
-everywhere. An offline agent means tool calls answer `agent_offline`
-immediately — nothing hangs. Full transport and threat model:
+Full transport, threat model, and every denial rule:
 [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md) and
-[SECURITY.md §10](docs/SECURITY.md).
+[docs/SECURITY.md](docs/SECURITY.md).
 
 ---
 
 ## Provider Routing
 
 Every `/v1/*` request routes through **the caller's own connected BYOK
-credentials** (dashboard → Providers), in the order the user configured
-(`auto` by ability, or an explicit `pinned`/`chain` order). Per attempt:
+credentials**, in the order the user configured (`auto` by ability, or an
+explicit `pinned`/`chain` order). Per attempt:
 
 | Upstream status | Router behavior |
 |---|---|
@@ -509,50 +449,22 @@ credentials** (dashboard → Providers), in the order the user configured
 
 All of the caller's credentials exhausted → **HTTP 503**. No credentials
 connected at all → **HTTP 400**. Cooldowns follow
-`30 * 2**(failures-1)`, capped at **300s**; all health state is in-memory and
+`30 * 2**(failures-1)`, capped at **300s**; health state is in-memory and
 resets on restart.
 
-Deep dive (failover state machine, context trimming): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Deep dive (failover state machine, context trimming):
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
 ## Examples
 
-Every call below uses `$INVINCIBLE_BASE` — the hosted service, or your own
-server:
-
 ```bash
-export INVINCIBLE_BASE=https://invincible-ai.me   # or http://127.0.0.1:8000 locally
+export INVINCIBLE_BASE=https://invincible-ai.me   # or http://127.0.0.1:8000
 export INVINCIBLE_API_KEY=inv_...                 # dashboard -> Account -> API keys
 ```
 
-### 1. Health check
-
-```bash
-curl $INVINCIBLE_BASE/
-# {"status": "healthy"}
-```
-
-### 2. List models
-
-```bash
-curl $INVINCIBLE_BASE/v1/models \
-  -H "Authorization: Bearer $INVINCIBLE_API_KEY"
-# {
-#   "object": "list",
-#   "data": [
-#     {"id": "<your connected credentials' model ids>", "object": "model", "owned_by": "invincible"},
-#     {"id": "<your configured aliases>", "object": "model", "owned_by": "invincible"}
-#   ]
-# }
-```
-
-The list is built from **your** connected BYOK credentials, so it reflects
-exactly what the gateway can route to for you (an empty list when you have
-none connected). Real model ids are listed first, then the aliases you
-configured.
-
-### 3. Chat with session memory
+### Chat with session memory
 
 ```bash
 curl $INVINCIBLE_BASE/v1/chat/completions \
@@ -562,11 +474,10 @@ curl $INVINCIBLE_BASE/v1/chat/completions \
   -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
-The assistant reply is stored under `my-conversation` and will be included in
-your next request with the same `X-Session-Id` — the model remembers the
-conversation.
+The reply is stored under `my-conversation` and included in your next request
+with the same header — the model remembers the conversation.
 
-### 4. Stream a chat (SSE)
+### Stream a chat (SSE)
 
 ```bash
 curl -N $INVINCIBLE_BASE/v1/chat/completions \
@@ -575,173 +486,63 @@ curl -N $INVINCIBLE_BASE/v1/chat/completions \
   -d '{"messages": [{"role": "user", "content": "Hello!"}], "stream": true}'
 ```
 
-`-N` (aka `--no-buffer`) prints each event as it arrives. Tokens are streamed
-as OpenAI-compatible `chat.completion.chunk` events:
-
-```json
-data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":1783161600,"model":"gemini-2.5-flash","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
-
-data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":1783161600,"model":"gemini-2.5-flash","choices":[{"index":0,"delta":{"content":"!"},"finish_reason":null}]}
-
-data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":1783161600,"model":"gemini-2.5-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
-
+```text
+data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"Hello"}}]}
+data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"!"}}]}
+data: {"object":"chat.completion.chunk","choices":[{"delta":{},"finish_reason":"stop"}]}
 data: [DONE]
 ```
 
-### 5. Use it from Claude Code (Anthropic)
+### Use it from Claude Code
 
 ```bash
 ANTHROPIC_BASE_URL=https://invincible-ai.me claude   # or your own server URL
 ```
 
-Claude Code probes `HEAD /`, then calls `POST /v1/messages` with streaming.
-You can send the same call directly:
-
-```bash
-curl $INVINCIBLE_BASE/v1/messages \
-  -H "Authorization: Bearer $INVINCIBLE_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"claude-sonnet-4","max_tokens":1024,
-       "messages":[{"role":"user","content":"Hello!"}]}'
-```
-
-And stream it (`stream: true`) to receive Anthropic SSE events ending in
-`message_stop`.
-
-### 6. List MCP tools
-
-First get an MCP access token. On the hosted service, add the connector in
-your MCP client at `$INVINCIBLE_BASE/mcp` and approve it in the browser —
-the client then holds the token. On a **local/self-hosted** server the
-headless helper registers a client against *that* server's database and
-prints a ready-to-use Bearer token:
-
-```bash
-invincible oauth test-client --env-file .env   # prints a token + curl example
-export ACCESS_TOKEN=...
-```
-
-```bash
-curl -X POST $INVINCIBLE_BASE/mcp \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
-```
-
-### 7. Run a command via MCP
-
-```bash
-curl -X POST $INVINCIBLE_BASE/mcp \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call",
-       "params":{"name":"execute_bash","arguments":{"command":"git status"}}}'
-```
-
-The call returns a `pending_confirmation` result carrying a token. To
-approve it, call `confirm_action` with that token (or deny with
-`approve: false`):
-
-```bash
-curl -X POST $INVINCIBLE_BASE/mcp \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call",
-       "params":{"name":"confirm_action",
-                 "arguments":{"token":"<token from step 2>","approve":true}}}'
-```
-
-The command runs (or the file is written) only after approval; the token is
-single-use and expires after 10 minutes.
-
-### 8. Reach it from a cloud AI
-
-On a deployed server the plain HTTPS URL is the entry point: point the MCP
-client at `https://your-domain/mcp` (or `https://invincible-ai.me/mcp` on the
-hosted service) and approve the connector in the browser.
-
-A laptop has no public URL, so `invincible start` starts a Cloudflare tunnel
-alongside the server by default: `cloudflared tunnel run <name>` (name
-defaults to `invincible`, override with `--tunnel-name` or
-`INVINCIBLE_TUNNEL_NAME`). cloudflared's log lines (and the public URL when
-cloudflared prints one) appear prefixed `[tunnel]`; a tunnel that dies is
-reported as soon as it exits, and it is shut down with the server. To skip
-the tunnel, pass `--no-tunnel`.
-
-For a one-off quick tunnel instead (no named-tunnel config required):
-
-```bash
-cloudflared tunnel --url http://127.0.0.1:8000
-# → https://random-name.trycloudflare.com  — call /mcp on this URL
-```
-
-Tunnel or not, the URL alone is useless without an access token — and any
-valid token can be revoked immediately with `invincible oauth revoke <client_id>`.
-
-More MCP protocol details: [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md).
+Health check, model listing, full SSE frames, Anthropic requests, and the
+complete MCP flow (`initialize` → `tools/list` → `tools/call` →
+`confirm_action`) are in [docs/API_REFERENCE.md](docs/API_REFERENCE.md) and
+[docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md).
 
 ---
 
 ## Architecture
 
-```
-                         ┌──────────────────────────────────┐
-   OpenAI-compatible      │  invincible/main.py              │
-   agent ─── /v1/chat ──► │  (FastAPI)                        │
-          Claude Code     │              compat/              │
-   (Anthropic) ─ /v1/msg ►│  openai_compat ──────► anthropic │
-          Codex ─ /v1/resp►│  responses_compat                │
-                          │  │ mcp │ dashboard │ agent │     │
-   Cloud AI     ─── /mcp ─►│  │ core/chat_service.py          │
-   (via tunnel)           │  │ core/router.py (BYOK failover)│
-                          │  │ core/tool_executor (denylist) │
-                          └──────┬──────────────┬────────────┘
-                                 │              │
-                   ┌─────────────▼──┐   ┌───────▼────────────┐
-                   │ core/router.py │   │ core/tool_executor │
-                   │ tiered failover│   │ (denylist + approval)│
-                   │ + ctx trimming │   └─────────┬──────────┘
-                   └───────┬────────┘             │ confirmed jobs
-                           │          ┌───────────▼────────────┐
-                           │          │ user's paired machine  │
-             ┌─────────────▼──────────▼──────────►│ (agent/runner.py)    │
-             │ PostgreSQL stores                  └────────────────────┘
-             │ (sessions/memory/continuity/BYOK)  │
-             └────────────────────────────────────┘
+```mermaid
+flowchart LR
+  C["OpenAI / Anthropic /<br/>Responses clients"] --> EP["FastAPI endpoints<br/>/v1/* · /mcp · /dashboard"]
+  M["Cloud AI<br/>via MCP"] --> EP
+  EP --> X["compat/<br/>protocol translators"]
+  X --> S["core/chat_service.py"]
+  S --> R["core/router.py<br/>BYOK failover"]
+  R --> P[("PostgreSQL<br/>sessions · memory · BYOK · OAuth")]
+  EP --> T["core/tool_executor.py<br/>denylist + approvals"]
+  T --> A["User's paired agent<br/>agent/runner.py"]
+  A --> F["User's files and shell<br/>sandboxed to the agent root"]
 ```
 
-The compatibility layers (OpenAI, Anthropic, Responses) only translate;
-all three produce the same internal message model, which is what the
-shared chat pipeline (`core/chat_service.py`), the Router, the session
-store, and the trimming logic consume.
+The compatibility layers (OpenAI, Anthropic, Responses) only translate; all
+three produce the same internal message model, which is what the shared chat
+pipeline, the Router, the session store, and the trimming logic consume.
 
 ### Package layout
 
 | Path | Role |
 |---|---|
-| `invincible/main.py` | FastAPI app, lifespan, auth dependencies, router wiring, `HEAD /` and `/health`. |
-| `invincible/endpoints/openai_compat.py` | `POST /v1/chat/completions` (JSON + SSE streaming, session merge + upstream call); `GET /v1/models`. |
-| `invincible/endpoints/anthropic_compat.py` | `POST /v1/messages`; translates Anthropic ↔ internal model, calls the same Router. |
-| `invincible/endpoints/responses_compat.py` | `POST /v1/responses` (OpenAI Responses protocol for Codex CLI). |
-| `invincible/endpoints/dashboard.py` | Jinja2 + HTMX dashboard (overview, sessions, tasks, memory, usage, settings) — session-cookie realm only. |
-| `invincible/endpoints/accounts.py` | `/auth/*`, `/projects`, `/api-keys`, device pairing, GitHub login (session realm). |
-| `invincible/endpoints/byok.py` | Per-user provider-credential management (connect, test, order, routing config). |
-| `invincible/endpoints/agents.py` | Agent transport: `/agent/poll` + `/agent/result`, WS relay, machine inventory. |
-| `invincible/endpoints/docs.py` | Public docs site (`/docs`). |
-| `invincible/models/anthropic.py` | Pydantic request model: only real fields declared; everything else ignored. |
-| `invincible/compat/common.py` | Protocol-neutral internal-message/usage helpers shared by compat layers. |
-| `invincible/compat/anthropic.py` | Pure Anthropic translators: flattening, finish-reason map, error map, Anthropic SSE streaming. |
-| `invincible/endpoints/mcp.py` | `POST /mcp`; JSON-RPC 2.0 dispatch, `tools/list`, `tools/call`. |
-| `invincible/core/router.py` | Tiered failover over per-user BYOK credentials, response trimming, timeouts. |
-| `invincible/core/provider_health.py` | Per-credential failure counts + exponential cooldowns. |
+| `invincible/main.py` | FastAPI app, lifespan, auth dependencies, router wiring, `/health`. |
+| `invincible/endpoints/` | OpenAI/Anthropic/Responses compat, MCP, accounts, BYOK, dashboard, docs site. |
+| `invincible/compat/` | Pure protocol translators: flattening, finish/error maps, SSE. |
+| `invincible/core/router.py` | The single tiered-failover loop over per-user BYOK credentials. |
+| `invincible/core/chat_service.py` | Shared chat pipeline (history, memory, continuity, routing). |
+| `invincible/core/tool_executor.py` | Denylists, staged approvals, tool execution. |
 | `invincible/core/db.py` | SQLAlchemy engine factory + schema metadata (single source of truth). |
-| `invincible/migrations/` | Packaged Alembic environment (`invincible db upgrade`). |
 | `invincible/core/session_store.py` | Conversation memory on PostgreSQL, partitioned by session id. |
-| `invincible/core/tool_executor.py` | Denylists, pending-action approval (`confirm_action`), tool execution. |
-| `invincible/core/chat_service.py` | Shared chat pipeline (history, memory, continuity, routing) used by `/v1/chat/completions` and the dashboard webchat, so API and web sessions share history. [...] |
-| `invincible/agent/runner.py` | The local agent on the **user's** machine: pairing config + poll/WS loop + home-confined sandbox. |
-| `invincible/cli.py` | Click CLI: `setup`/`start`(+tunnel)/`login`/`connect`/`harness`/`update`/`doctor`/`dev-db`/`db`/`secret`/`oauth`/`api-key`/`users`. |
-| `invincible/providers.yaml` | Static provider fixture (tests/direct construction; live traffic is BYOK-only). |
+| `invincible/core/continuity.py` | Versioned task state, checkpoints, continuation briefs. |
+| `invincible/core/settings.py` | Typed accessors for every `INVINCIBLE_*` environment variable. |
+| `invincible/agent/runner.py` | The local agent: pairing, poll/WS loop, home-confined sandbox. |
+| `invincible/endpoints/docs.py` | Public docs site (`/docs`). |
+| `invincible/cli.py` | Click CLI: setup/start/login/connect/harness/update/doctor/db/oauth/api-key/users. |
+| `invincible/migrations/` | Packaged Alembic environment (`invincible db upgrade`). |
 
 ---
 
@@ -749,43 +550,42 @@ store, and the trimming logic consume.
 
 | Doc | What it covers |
 |---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module map, request flows, context-trimming deep dive, failover state machine. |
-| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | The `/v1/chat/completions` contract: request, response, status codes, failover semantics. |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | `.env` variables, `providers.yaml` schema, timeouts, database options, CLI reference. |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Running it remotely: required env vars, ports/TLS/proxy headers, two-role database, migrations, single-instance constraints, go-live checklist. |
-| [docs/PROVIDERS.md](docs/PROVIDERS.md) | Adding providers, the full schema, model aliases, auth types, supported shapes, troubleshooting. |
-| [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md) | Client-facing `/mcp` spec: JSON-RPC shape, tools, notifications, hosted URL vs. self-host tunnel. |
-| [docs/SECURITY.md](docs/SECURITY.md) | Threat model, auth realms, denylist inventory, approval flow, known limits. |
-| [docs/TESTING.md](docs/TESTING.md) | How tests work, fixtures, per-file coverage map. |
-| [docs/RELEASING.md](docs/RELEASING.md) | Cutting a release: versioning, the build gate, the tag-triggered PyPI workflow. |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Current platform direction, a verified snapshot of what is implemented, and the phased plan (identity, isolation, accounts, memory/context intelligence, das[...]
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module map, request flows, trimming and failover deep dives. |
+| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | Chat and Anthropic contracts, examples, status codes, timeouts. |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every env var, `providers.yaml` schema, database options, full CLI reference. |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Running it remotely: TLS, proxy headers, two-role database, go-live checklist. |
+| [docs/PROVIDERS.md](docs/PROVIDERS.md) | Adding providers, schema, aliases, auth types, troubleshooting. |
+| [docs/MCP_PROTOCOL.md](docs/MCP_PROTOCOL.md) | Client-facing `/mcp` spec: JSON-RPC, tools, OAuth, tunnel. |
+| [docs/SECURITY.md](docs/SECURITY.md) | Threat model, auth realms, denylists, known limits. |
+| [docs/TESTING.md](docs/TESTING.md) | Test infrastructure, fixtures, per-file coverage map. |
+| [docs/RELEASING.md](docs/RELEASING.md) | Cutting a release: versioning, build gate, PyPI workflow. |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Direction, verified implemented state, phased plan. |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, invariants, and the PR process. |
+| [SECURITY.md](SECURITY.md) | Private vulnerability reporting and scope. |
+| [CHANGELOG.md](CHANGELOG.md) | Release history. |
 
 ---
 
-## Known limits (tl;dr)
+## Known limits
 
 - Invincible translates Anthropic tool calls correctly (`tool_use` →
-  `tool_calls`, `tool_result` → `role: "tool"` messages, ids preserved, and
-  responses close with `stop_reason: "tool_use"`), but it does not execute
-  the tools itself — execution is the client's job (Claude Code runs the
-  tool and sends back `tool_result`).
+  `tool_calls`, `tool_result` → `role: "tool"`, ids preserved), but it does
+  not execute the tools itself — execution is the client's job.
 - Image content blocks are **skipped** during flattening.
 - Denylists are **text-pattern matches, not shell parsers** — wrappers like
   `powershell -Command` can smuggle commands past them; the token approval
   step is the real safety boundary.
-- **Remote approval** — approval goes through `/mcp` itself: whoever holds
-  a valid OAuth Bearer token can approve pending actions; there is no
-  terminal prompt and no separate human-authentication surface. Revoke the
-  client with `invincible oauth revoke <client_id>` to cut that off.
+- **Remote approval** — whoever holds a valid OAuth Bearer token can approve
+  pending actions; there is no terminal prompt. Revoke the client with
+  `invincible oauth revoke <client_id>` to cut that off.
 - Sessions are stored **plaintext** in PostgreSQL (protect the DSN);
-  cooldowns and provider disables are **in-memory only**. Since the
-  multi-tenant audit, every store path is ownership-scoped per principal —
-  one user can never read another's sessions, graph, or history, and the
-  former operator override is gone.
+  cooldowns and provider disables are **in-memory only**. Every store path is
+  ownership-scoped per principal — one user can never read another's sessions,
+  graph, or history.
 - **In-memory server state.** Provider cooldowns, staged approvals (unless
-  `INVINCIBLE_PERSIST_PENDING_ACTIONS` is set), and the agent registry live
-  in the process, so a remote deployment runs a **single instance** (no
-  horizontal autoscaling) and clients simply retry across a restart — see
+  `INVINCIBLE_PERSIST_PENDING_ACTIONS` is set), and the agent registry live in
+  the process, so a remote deployment runs a **single instance** (no
+  horizontal autoscaling) and clients retry across a restart — see
   [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 Full details: [docs/SECURITY.md](docs/SECURITY.md) → *Known limits*.
