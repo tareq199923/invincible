@@ -1,0 +1,24 @@
+# gitleaks configuration for the Invincible repository.
+#
+# The default rule set is kept in full; only known non-secrets are
+# allowlisted so a local `gitleaks git .` run stays signal-only:
+#
+#   - tests/          fake keys and prefixes used by fixtures
+#   - docs/           documentation examples (placeholders, never live keys)
+#   - historical temp files that were removed from the tree long ago
+#     (an expired staged-approval token and an env-var diff with no values)
+#
+# Do not add live credentials here. If a finding is real, rotate the
+# credential first — this repository is public and forks may exist.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures, documentation placeholders, and removed temp artifacts"
+paths = [
+  '''tests/''',
+  '''docs/''',
+  '''confirm_request\.json''',
+  '''\.review_diff_tmp\.txt''',
+]
