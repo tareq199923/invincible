@@ -123,3 +123,19 @@ jobs:
         with:
           name: coverage-report
           path: coverage.xml
+
+  # Single required status check for branch protection. A matrix job's checks
+  # are named per version (test (3.10) ...), so pinning those would break
+  # every time the matrix changes. This job fails unless the whole matrix
+  # passed, and is the only context `main` requires.
+  result:
+    name: Tests passed
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check matrix result
+        run: |
+          echo "test matrix result: ${{ needs.test.result }}"
+          test "${{ needs.test.result }}" = "success"
+
