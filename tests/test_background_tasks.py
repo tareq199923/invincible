@@ -553,6 +553,7 @@ async def test_per_user_cap_and_other_user_unaffected(
     assert app.state.background_tasks.running_count(uid_b) == 1
 
 
+@pytest.mark.usefixtures("byok_env")
 async def test_foreign_workflow_detail_is_404(client, pg_engine):
     uid_a, _pid_a = await _login_with_credential(
         client, "tasks-owner@example.com")
@@ -573,6 +574,7 @@ async def test_foreign_workflow_detail_is_404(client, pg_engine):
     assert theirs.status_code == 404
 
 
+@pytest.mark.usefixtures("byok_env")
 async def test_cancel_endpoint_persists_cancelled_and_one_audit(
     client, pg_engine, monkeypatch
 ):
@@ -624,6 +626,7 @@ async def test_cancel_endpoint_persists_cancelled_and_one_audit(
         "workflow_id": workflow_id, "mode": "plan"}
 
 
+@pytest.mark.usefixtures("byok_env")
 async def test_cancel_endpoint_404_is_identical_and_leaves_foreign_running(
     client,
 ):
