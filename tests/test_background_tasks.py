@@ -571,3 +571,101 @@ async def test_foreign_workflow_detail_is_404(client, pg_engine):
     await _login_with_credential(client, "tasks-other@example.com")
     theirs = await client.get("/dashboard/workflows/task-foreign")
     assert theirs.status_code == 404
+
+
+async def test_cancel_endpoint_persists_cancelled_and_one_audit(
+    client, pg_engine, monkeypatch
+):
+    uid, pid = await _login_with_credential(
+        client, "tasks-cancel@example.com")
+    principal = Principal(user_id=uid, project_id=pid, kind="session")
+    workflow_id = new_workflow_id()
+
+    async def _slow_prepare(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(bt, "prepare_chat", _slow_prepare)
+    bus = HarnessBus()
+    bus.attach_engine(pg_engine)
+    task = app.state.background_tasks.start(
+        uid,
+        run_background_task(
+            **_runner_kwargs(principal, workflow_id, harness_bus=bus)
+        ),
+        workflow_id=workflow_id,
+    )
+    await asyncio.sleep(0.05)
+    assert app.state.background_tasks.is_running(uid, workflow_id)
+
+    response = await client.post(
+        f"/dashboard/background-tasks/{workflow_id}/cancel")
+    assert response.status_code == 202, response.text
+    assert response.json() == {"status": "cancelling"}
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await bus.flush_persisted()
+
+    # Exactly one terminal event from the existing CancelledError path -
+    # the endpoint adds no second event.
+    rows = await _persisted(pg_engine, workflow_id)
+    assert [row["type"] for row in rows] == [
+        "workflow.started", "workflow.failed"]
+    assert rows[-1]["payload"]["error"] == "cancelled"
+
+    audit_rows = [
+        row for row in await app.state.audit_log.recent(limit=50)
+        if row["action"] == "background_task.cancelled"
+    ]
+    assert len(audit_rows) == 1
+    assert audit_rows[0]["resource_id"] == workflow_id
+    assert audit_rows[0]["actor_user_id"] == uid
+    assert audit_rows[0]["meta"] == {
+        "workflow_id": workflow_id, "mode": "plan"}
+
+
+async def test_cancel_endpoint_404_is_identical_and_leaves_foreign_running(
+    client,
+):
+    uid_a, _pid_a = await _login_with_credential(
+        client, "tasks-cancel-owner@example.com")
+
+    async def _finish():
+        return None
+
+    finished_id = new_workflow_id()
+    finished = app.state.background_tasks.start(
+        uid_a, _finish(), workflow_id=finished_id)
+    await finished
+
+    held = asyncio.Event()
+
+    async def _hold():
+        held.set()
+        await asyncio.sleep(3600)
+
+    foreign_id = new_workflow_id()
+    foreign = app.state.background_tasks.start(
+        uid_a, _hold(), workflow_id=foreign_id)
+    await held.wait()
+
+    await _login_with_credential(client, "tasks-cancel-other@example.com")
+    unknown = await client.post(
+        "/dashboard/background-tasks/task-unknown/cancel")
+    done = await client.post(
+        f"/dashboard/background-tasks/{finished_id}/cancel")
+    other = await client.post(
+        f"/dashboard/background-tasks/{foreign_id}/cancel")
+
+    assert unknown.status_code == done.status_code == other.status_code == 404
+    assert unknown.json() == done.json() == other.json()
+    # User B's request must not touch user A's still-running task.
+    assert app.state.background_tasks.is_running(uid_a, foreign_id)
+    assert not [
+        row for row in await app.state.audit_log.recent(limit=50)
+        if row["action"] == "background_task.cancelled"
+    ]
+
+    app.state.background_tasks.cancel(uid_a, foreign_id)
+    with pytest.raises(asyncio.CancelledError):
+        await foreign

@@ -170,3 +170,33 @@ async def start_background_task(
         meta={"workflow_id": workflow_id, "mode": _PLAN_MODE},
     )
     return JSONResponse({"workflow_id": workflow_id}, status_code=202)
+
+
+@router.post("/dashboard/background-tasks/{workflow_id}/cancel")
+async def cancel_background_task(
+    request: Request,
+    workflow_id: str,
+    principal: Principal = Depends(require_user_session),
+):
+    """Stop one owned, still-running background task.
+
+    Ownership and liveness are one predicate in the registry: a foreign,
+    finished, or unknown workflow id all produce the SAME 404 body, so a
+    workflow id never becomes a capability. A successful cancellation
+    only calls ``task.cancel()``; the runner's existing
+    ``CancelledError`` branch emits the single ``workflow.failed``
+    event. The audit row is metadata-only and written once.
+    """
+    registry = _state(request, "background_tasks")
+    if not registry.cancel(principal.user_id, workflow_id):
+        return _error(
+            "No such background task.", "not_found_error", 404)
+    await _audit(
+        request, "background_task.cancelled",
+        actor_user_id=principal.user_id,
+        actor_kind="user",
+        resource_type="background_task",
+        resource_id=workflow_id,
+        meta={"workflow_id": workflow_id, "mode": _PLAN_MODE},
+    )
+    return JSONResponse({"status": "cancelling"}, status_code=202)
