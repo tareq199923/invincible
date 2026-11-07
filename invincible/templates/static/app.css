@@ -452,10 +452,65 @@ body.shell-body .card .label { font-weight: 600; letter-spacing: 0.04em; margin-
 body.shell-body .banner, body.shell-body .banner-ok { border-radius: var(--radius-sm); padding: 0.75rem 0.95rem; }
 body.shell-body .banner { border-left-width: 3px; }
 body.shell-body .banner-ok { border-left-width: 3px; }
-.status-badge { padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.72rem; border: 1px solid; }
+.status-badge { padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.72rem; border: 1px solid; white-space: nowrap; }
 .status-ok { color: var(--ok); background: var(--ok-dim); border-color: currentColor; }
 .status-failed { color: var(--err); background: var(--err-dim); border-color: currentColor; }
 .status-untested { color: var(--muted); background: var(--raise); border-color: var(--border); }
+.status-running { color: var(--accent-ink); background: var(--accent-dim); border-color: currentColor; }
+.status-completed { color: var(--ok); background: var(--ok-dim); border-color: currentColor; }
+.status-cancelled { color: var(--muted); background: var(--raise); border-color: var(--border); }
+.status-timed-out { color: var(--err); background: var(--err-dim); border-color: currentColor; }
+.status-stalled { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); }
+.task-status-summary { margin-left: 0.45rem; }
+
+/* ---------- background tasks ---------- */
+.task-start {
+  margin: 1rem 0 1.5rem;
+  padding: 0.9rem 1.1rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.task-start h3 { margin-top: 0; }
+.task-start textarea { min-height: 5rem; font-family: inherit; }
+.task-form-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.55rem;
+}
+.task-form-row button { margin-top: 0; }
+.char-counter { font-variant-numeric: tabular-nums; }
+#background-task-error[hidden] { display: none; }
+
+.task-result {
+  margin: 1rem 0 1.5rem;
+  padding: 0.9rem 1.1rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.task-result h3 { margin: 0; }
+.task-result h4 { margin-top: 1.1rem; }
+.task-result-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.task-result-head .task-stop { margin-top: 0; margin-left: auto; }
+.task-result-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0.35rem 0 0;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+  font: inherit;
+  font-size: 0.9rem;
+}
 
 /* ---------- tables ---------- */
 .table-scroll { overflow-x: auto; }

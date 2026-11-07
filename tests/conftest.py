@@ -13,6 +13,7 @@ from sqlalchemy.engine import make_url
 
 from invincible.agent import overlay as agent_overlay
 from invincible.core.agent_registry import AgentRegistry
+from invincible.core.background_tasks import BackgroundTaskRegistry
 from invincible.core.continuity import ContinuityEngine
 from invincible.core.credential_store import ByokCredentialStore
 from invincible.core.db import (
@@ -329,10 +330,16 @@ async def client(pg_engine, router_setter, monkeypatch):
     # workflow-scoped emits persist to workflow_events like production.
     app.state.harness_bus = HarnessBus()
     app.state.harness_bus.attach_engine(pg_engine)
+    # Same leak discipline as the harness bus: a fresh in-memory registry
+    # per test so a running task can never cross pollute the next test.
+    app.state.background_tasks = BackgroundTaskRegistry()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as async_client:
         yield async_client
+    # Mirror the production lifespan order: cancel background tasks while
+    # the stores and harness bus are still open, then flush the bus.
+    await app.state.background_tasks.shutdown()
     for router in router_setter.routers:
         await router.close()
     await continuity.close()
@@ -352,6 +359,7 @@ async def client(pg_engine, router_setter, monkeypatch):
     app.state.agent_registry = None
     app.state.tunnel_registry = None
     app.state.harness_bus = None
+    app.state.background_tasks = None
     app.state.webchat_approvals = None
 
 

@@ -24,6 +24,7 @@ from invincible.core.accounts import (
     UserService,
 )
 from invincible.core.identity import ApiKeyStore
+from invincible.core.markdown import render_chat_markdown
 from invincible.core.memory import MAX_CONTENT_CHARS, MEMORY_KINDS
 from invincible.core.memory_projection import classify_source
 from invincible.core.principal import Principal
@@ -40,6 +41,7 @@ from invincible.core.user_settings_store import (
 from invincible.core.workflow_store import (
     list_workflow_events,
     list_workflows,
+    task_status,
 )
 from invincible.endpoints.accounts import (
     _audit,
@@ -909,6 +911,17 @@ async def workflows_page(
     """
     engine = _engine(request)
     rows = await list_workflows(engine, user_id=principal.user_id)
+    registry = getattr(request.app.state, "background_tasks", None)
+    for row in rows:
+        if not row["workflow_id"].startswith("task-"):
+            continue
+        events = await list_workflow_events(
+            engine, user_id=principal.user_id,
+            workflow_id=row["workflow_id"])
+        running = bool(
+            registry and registry.is_running(
+                principal.user_id, row["workflow_id"]))
+        row["task_status"] = task_status(running, events)
     return _page(
         "workflows.html", request,
         user_email=await _email(engine, principal),
@@ -930,16 +943,51 @@ async def workflow_detail_page(
     engine = _engine(request)
     events = await list_workflow_events(
         engine, user_id=principal.user_id, workflow_id=workflow_id)
-    if not events:
+    registry = getattr(request.app.state, "background_tasks", None)
+    is_task = workflow_id.startswith("task-")
+    running = bool(
+        is_task and registry
+        and registry.is_running(principal.user_id, workflow_id)
+    )
+    task = None
+    if is_task:
+        store = getattr(request.app.state, "sessions", None)
+        if store is not None:
+            task = await store.task_result(
+                workflow_id, user_id=principal.user_id)
+    if not events and task is None and not running:
         return _missing_page(
             request, "Workflow not found",
             "This workflow has no events for this account.")
-    return _page(
-        "workflow_detail.html", request,
-        user_email=await _email(engine, principal),
-        workflow_id=workflow_id,
-        events=events,
+
+    status = task_status(running, events) if is_task else ""
+    answer_html = (
+        render_chat_markdown(task["answer"])
+        if task is not None and task.get("answer") else ""
     )
+    context = {
+        "user_email": await _email(engine, principal),
+        "workflow_id": workflow_id,
+        "events": events,
+        "task_view": is_task and (task is not None or running),
+        "task_status": status,
+        "task_text": task.get("task_text", "") if task is not None else "",
+        "answer_html": answer_html,
+        "task_session_pk": task.get("session_pk") if task is not None else None,
+        "can_cancel": running,
+    }
+    polling = request.headers.get("HX-Request") == "true"
+    if polling and context["task_view"]:
+        # HTMX polls this same URL; render only the swap target so the
+        # fragment can replace itself without nesting the whole shell.
+        return _page("_background_task.html", request, **context)
+    if polling and is_task:
+        # The poll started while the task was live, but it now has no
+        # owned session (e.g. stopped before one existed), so the page
+        # falls back to the plain timeline. Ask htmx for a full reload
+        # instead of swapping a whole page into the fragment.
+        return Response(status_code=200, headers={"HX-Refresh": "true"})
+    return _page("workflow_detail.html", request, **context)
 
 
 @router.delete("/dashboard/mcp/clients/{client_id}/tokens")

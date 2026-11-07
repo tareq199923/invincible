@@ -8,6 +8,7 @@ workflow renders exactly like an unknown one.
 """
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from sqlalchemy import func, select
@@ -16,6 +17,10 @@ from invincible.core.db import workflow_events
 
 _LIST_LIMIT = 50
 _EVENT_LIMIT = 200
+_ERROR_SUMMARY_CHARS = 200
+STALLED_AFTER_SECONDS = 60.0
+
+_TERMINAL_WORKFLOW_EVENTS = ("workflow.completed", "workflow.failed")
 
 
 def _clamp(value: int, *, default: int, maximum: int) -> int:
@@ -85,9 +90,66 @@ def summarize_event(row: Any) -> str:
         source = payload.get("from_agent") or "?"
         target = payload.get("to_agent") or "?"
         return f"{source} -> {target}"
+    if etype == "workflow.failed":
+        # The runner already bounds this to 200 client-safe chars; the
+        # second bound keeps an old/foreign row from bloating the table.
+        error = " ".join(str(payload.get("error") or "").split())
+        if error:
+            return f"failed - {error[:_ERROR_SUMMARY_CHARS]}"
+        return "failed"
     if etype.startswith(("workflow.", "model.")):
         return etype.split(".", 1)[1]
     return ""
+
+
+def _event_time(event: Any) -> float:
+    try:
+        return float((event or {}).get("created_at") or 0.0)
+    except (TypeError, ValueError, AttributeError):
+        return 0.0
+
+
+def task_status(
+    is_running: bool, events: list[dict], *, now: float | None = None
+) -> str:
+    """One display status for a background task.
+
+    ``is_running`` comes from the in-process registry and wins over
+    stored events: the runner emits its terminal event asynchronously,
+    so events alone briefly lag reality. Once nothing is running, the
+    NEWEST terminal event decides. With no terminal event, a task whose
+    last event is older than ``STALLED_AFTER_SECONDS`` is ``stalled``
+    (the final event may never arrive after a hard server kill); inside
+    that grace window it still reads ``running`` because persistence of
+    the terminal event is asynchronous.
+    """
+    if is_running:
+        return "running"
+    terminal = [
+        event for event in events
+        if (event or {}).get("type") in _TERMINAL_WORKFLOW_EVENTS
+    ]
+    if terminal:
+        latest = max(terminal, key=_event_time)
+        if latest.get("type") == "workflow.completed":
+            return "completed"
+        payload = latest.get("payload")
+        error = (
+            str(payload.get("error") or "").strip().lower()
+            if isinstance(payload, dict) else ""
+        )
+        if error == "cancelled":
+            return "cancelled"
+        if error == "timed out":
+            return "timed out"
+        return "failed"
+    if not events:
+        return "stalled"
+    current = time.time() if now is None else float(now)
+    latest_at = max(_event_time(event) for event in events)
+    if current - latest_at > STALLED_AFTER_SECONDS:
+        return "stalled"
+    return "running"
 
 
 async def list_workflows(
