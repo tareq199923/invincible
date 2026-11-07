@@ -40,6 +40,7 @@ from invincible.core.user_settings_store import (
 from invincible.core.workflow_store import (
     list_workflow_events,
     list_workflows,
+    task_status,
 )
 from invincible.endpoints.accounts import (
     _audit,
@@ -909,6 +910,17 @@ async def workflows_page(
     """
     engine = _engine(request)
     rows = await list_workflows(engine, user_id=principal.user_id)
+    registry = getattr(request.app.state, "background_tasks", None)
+    for row in rows:
+        if not row["workflow_id"].startswith("task-"):
+            continue
+        events = await list_workflow_events(
+            engine, user_id=principal.user_id,
+            workflow_id=row["workflow_id"])
+        running = bool(
+            registry and registry.is_running(
+                principal.user_id, row["workflow_id"]))
+        row["task_status"] = task_status(running, events)
     return _page(
         "workflows.html", request,
         user_email=await _email(engine, principal),
