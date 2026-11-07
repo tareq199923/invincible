@@ -450,6 +450,17 @@ async def test_start_success_persists_events_and_answer(
     await _drain(app.state.background_tasks, uid)
     await app.state.harness_bus.flush_persisted()
 
+    # Plan mode is read-only by construction: the provider request must
+    # offer read tools but never a mutating tool. Step 4 will relax this
+    # deliberately, so pin the promise now.
+    offered = {
+        tool["function"]["name"]
+        for body in _bodies
+        for tool in body.get("tools") or []
+    }
+    assert "read_file" in offered
+    assert offered.isdisjoint({"execute_bash", "write_file", "edit_file"})
+
     rows = await _persisted(pg_engine, workflow_id)
     assert [row["type"] for row in rows] == [
         "workflow.started", "workflow.completed"]
