@@ -349,6 +349,34 @@ async def test_runner_approval_denies_token_and_fails(
     assert pending.take(token, requester_subject=principal.user_id) is None
 
 
+async def test_registry_cancel_is_owner_and_workflow_scoped():
+    registry = BackgroundTaskRegistry()
+    started = asyncio.Event()
+
+    async def _wait():
+        started.set()
+        await asyncio.sleep(3600)
+
+    task = registry.start(1, _wait(), workflow_id="task-a")
+    await started.wait()
+    assert registry.is_running(1, "task-a")
+    assert not registry.is_running(2, "task-a")
+    assert not registry.is_running(1, "task-b")
+
+    # Another user (and an unknown workflow id) never reaches this task.
+    assert registry.cancel(2, "task-a") is False
+    assert registry.is_running(1, "task-a")
+    assert registry.cancel(1, "task-b") is False
+    assert registry.is_running(1, "task-a")
+
+    assert registry.cancel(1, "task-a") is True
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not registry.is_running(1, "task-a")
+    assert registry.running_count(1) == 0
+    assert registry.cancel(1, "task-a") is False  # finished
+
+
 async def test_shutdown_cancels_task_and_persists_failed(
     pg_engine, monkeypatch
 ):
@@ -368,6 +396,7 @@ async def test_shutdown_cancels_task_and_persists_failed(
         run_background_task(
             **_runner_kwargs(principal, workflow_id, harness_bus=bus)
         ),
+        workflow_id=workflow_id,
     )
     await asyncio.sleep(0.05)
     assert registry.running_count(principal.user_id) == 1

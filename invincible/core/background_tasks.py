@@ -52,31 +52,41 @@ class BackgroundTaskError(Exception):
 
 
 class BackgroundTaskRegistry:
-    """Strong references to running tasks, keyed by owner user id.
+    """Strong references to running tasks, keyed by owner and workflow id.
 
-    ``running_count`` ignores finished tasks; the done callback prunes
-    them from both the per-user set and the outer mapping. ``shutdown``
-    cancels everything and waits, so callers can flush persisted events
+    The nested mapping is the ownership boundary: a workflow id is only
+    resolvable under the user it was started for, so a foreign id behaves
+    exactly like an unknown one. ``running_count`` ignores finished tasks;
+    the done callback prunes them from both levels. ``shutdown`` cancels
+    everything and waits, so callers can flush persisted events
     afterwards.
     """
 
     MAX_RUNNING_PER_USER = MAX_RUNNING_PER_USER
 
     def __init__(self) -> None:
-        self._tasks: dict[int, set[asyncio.Task]] = {}
+        self._tasks: dict[int, dict[str, asyncio.Task]] = {}
 
-    def start(self, user_id: int, coro: Awaitable[Any]) -> asyncio.Task:
+    def start(
+        self, user_id: int, coro: Awaitable[Any], *, workflow_id: str
+    ) -> asyncio.Task:
         """Schedule one runner and keep a strong reference until it ends."""
         task = asyncio.create_task(coro)
-        self._tasks.setdefault(user_id, set()).add(task)
-        task.add_done_callback(lambda done: self._forget(user_id, done))
+        self._tasks.setdefault(user_id, {})[workflow_id] = task
+        task.add_done_callback(
+            lambda done: self._forget(user_id, workflow_id, done))
         return task
 
-    def _forget(self, user_id: int, task: asyncio.Task) -> None:
+    def _forget(
+        self, user_id: int, workflow_id: str, task: asyncio.Task
+    ) -> None:
         tasks = self._tasks.get(user_id)
         if tasks is None:
             return
-        tasks.discard(task)
+        # Only prune if this exact task still owns the slot: a done
+        # callback from an older task must never evict a newer one.
+        if tasks.get(workflow_id) is task:
+            tasks.pop(workflow_id, None)
         if not tasks:
             self._tasks.pop(user_id, None)
 
@@ -85,14 +95,35 @@ class BackgroundTaskRegistry:
         tasks = self._tasks.get(user_id)
         if not tasks:
             return 0
-        return sum(1 for task in tasks if not task.done())
+        return sum(1 for task in tasks.values() if not task.done())
+
+    def is_running(self, user_id: int, workflow_id: str) -> bool:
+        """Whether this user's workflow is still live."""
+        tasks = self._tasks.get(user_id)
+        task = tasks.get(workflow_id) if tasks else None
+        return task is not None and not task.done()
+
+    def cancel(self, user_id: int, workflow_id: str) -> bool:
+        """Cancel one owned running workflow; never touches another user's.
+
+        Cancellation flows through the runner's existing
+        ``asyncio.CancelledError`` branch, which emits the single
+        ``workflow.failed`` / ``error="cancelled"`` event. This method
+        deliberately emits nothing itself.
+        """
+        tasks = self._tasks.get(user_id)
+        task = tasks.get(workflow_id) if tasks else None
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
 
     async def shutdown(self) -> None:
         """Cancel every running task and wait for cancellation to settle."""
         tasks = [
             task
             for group in list(self._tasks.values())
-            for task in list(group)
+            for task in list(group.values())
             if not task.done()
         ]
         for task in tasks:

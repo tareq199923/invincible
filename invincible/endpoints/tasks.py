@@ -157,6 +157,7 @@ async def start_background_task(
             byok=byok,
             audit=_audit_tool,
         ),
+        workflow_id=workflow_id,
     )
     # Metadata-only trail for the start itself: workflow id and mode -
     # never the task text.
