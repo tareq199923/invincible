@@ -16,6 +16,7 @@ from invincible.core.db import workflow_events
 
 _LIST_LIMIT = 50
 _EVENT_LIMIT = 200
+_ERROR_SUMMARY_CHARS = 200
 
 
 def _clamp(value: int, *, default: int, maximum: int) -> int:
@@ -85,6 +86,13 @@ def summarize_event(row: Any) -> str:
         source = payload.get("from_agent") or "?"
         target = payload.get("to_agent") or "?"
         return f"{source} -> {target}"
+    if etype == "workflow.failed":
+        # The runner already bounds this to 200 client-safe chars; the
+        # second bound keeps an old/foreign row from bloating the table.
+        error = " ".join(str(payload.get("error") or "").split())
+        if error:
+            return f"failed - {error[:_ERROR_SUMMARY_CHARS]}"
+        return "failed"
     if etype.startswith(("workflow.", "model.")):
         return etype.split(".", 1)[1]
     return ""

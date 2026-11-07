@@ -7,6 +7,7 @@ from sqlalchemy import select
 from invincible.core.db import workflow_events
 from invincible.core.harness_bus import HarnessBus
 from invincible.core.harness_events import HarnessEventType
+from invincible.core.workflow_store import summarize_event
 from tests.conftest import register_account
 
 
@@ -28,6 +29,26 @@ async def _seed(engine, user_id, workflow_id, events):
                 payload=payload,
                 created_at=now + offset,
             ))
+
+
+def test_summarize_failed_includes_bounded_error():
+    assert summarize_event({
+        "type": "workflow.failed",
+        "payload": {"error": "timed out"},
+    }) == "failed - timed out"
+    assert summarize_event({
+        "type": "workflow.failed",
+        "payload": {"error": "cancelled"},
+    }) == "failed - cancelled"
+    assert summarize_event({
+        "type": "workflow.failed",
+        "payload": {},
+    }) == "failed"
+    bounded = summarize_event({
+        "type": "workflow.failed",
+        "payload": {"error": "x" * 500},
+    })
+    assert bounded == "failed - " + "x" * 200
 
 
 async def test_page_requires_session(client):
