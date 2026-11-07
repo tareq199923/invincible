@@ -25,6 +25,7 @@ from invincible.core import tool_executor
 from invincible.core.chat_service import ChatError, prepare_chat
 from invincible.core.harness_events import HarnessEventType
 from invincible.core.principal import Principal
+from invincible.core.task_checkpoints import TaskCheckpointStore
 from invincible.core.webchat_agent import run_agent_turn
 
 logger = logging.getLogger("invincible.background_tasks")
@@ -156,6 +157,28 @@ def _event_message(data: object, fallback: str) -> str:
     return _short(fallback)
 
 
+def _make_checkpointer(engine, principal: Principal, prepared, workflow_id):
+    """Build the per-task checkpoint callback, or None when unavailable.
+
+    Needs a database engine and a session resolved under the principal.
+    Without either (for example unit tests that fake ``prepare_chat``)
+    the task simply runs without checkpoints, exactly as before.
+    """
+    session_pk = getattr(prepared, "session_pk", None)
+    if engine is None or session_pk is None:
+        return None
+    store = TaskCheckpointStore(engine)
+
+    async def _checkpoint(*, call_id: str, name: str, args, result) -> None:
+        await store.record(
+            user_id=principal.user_id, session_pk=session_pk,
+            workflow_id=workflow_id, call_id=call_id, tool_name=name,
+            args=args, result=result,
+        )
+
+    return _checkpoint
+
+
 async def _execute_task(
     *,
     task: str,
@@ -188,6 +211,8 @@ async def _execute_task(
         continuity=continuity,
         byok=byok,
     )
+    checkpointer = _make_checkpointer(
+        engine, principal, prepared, workflow_id)
     stream = run_agent_turn(
         prepared, model=model, router=router,
         sessions=sessions, memory=memory, runs_store=runs_store,
@@ -196,7 +221,7 @@ async def _execute_task(
         waiter=waiter, audit=audit,
         retrieval=retrieval, continuity=continuity,
         engine=engine, agent_platform=agent_platform,
-        bus=harness_bus,
+        bus=harness_bus, checkpointer=checkpointer,
     )
     try:
         async for event_name, data in stream:
