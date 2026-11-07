@@ -86,7 +86,7 @@ Fixture semantics (`tests/conftest.py`):
 | `endpoints/dashboard.py` | Phase 5 Jinja2 + HTMX dashboard (overview, sessions, tasks, memory, usage, settings) — session-cookie realm only |
 | `endpoints/docs.py` | Public docs site (`GET /docs`, `/docs/{slug}`): allowlisted curated guides, live MCP tool tables split by plane, request-derived host snippets, server-injected heading anchors + the `⌘K` search-index payload |
 | `endpoints/chat.py` | Dashboard webchat: page, models, SSE stream (plan/manual/auto agent modes), approvals (session realm) |
-| `endpoints/tasks.py` | `POST /dashboard/tasks`: start a plan-mode background agent task (session realm; per-user running cap, no-provider 400) |
+| `endpoints/tasks.py` | `POST /dashboard/background-tasks`: start a plan-mode background agent task; `POST /dashboard/background-tasks/{workflow_id}/cancel`: owner-scoped Stop (session realm; per-user running cap, no-provider 400) |
 | `endpoints/agents.py` | Phase 10 agent transport: `POST /agent/poll` + `/agent/result` (inv_ key realm), `GET /agent/machines` + `GET /agent/whoami` (inv_ key realm, read-only), `GET /agent/status` (session realm) |
 | `agent/runner.py`, `agent/sandbox.py` | The local agent that runs on the **user's** machine: pairing config + long-poll loop + home-confined sandbox |
 | `core/router.py` | THE single tiered-failover loop (`_iter_attempts`); run recording |

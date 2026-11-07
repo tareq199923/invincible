@@ -34,7 +34,7 @@ invincible/
 │   │                           realm only): page + new-chat + models JSON +
 │   │                           SSE stream (plan/manual/auto agent modes) +
 │   │                           approval endpoint for manual mode
-│   ├── tasks.py                POST /dashboard/tasks: start a plan-mode
+│   ├── tasks.py                POST /dashboard/background-tasks: start a plan-mode
 │   │                           background agent task (cookie realm only;
 │   │                           per-user running cap, no-provider 400)
 │   ├── mcp.py                  POST /mcp (JSON-RPC 2.0 dispatch, Bearer resource server)

@@ -1,8 +1,9 @@
 # invincible/endpoints/tasks.py
 """Background agent tasks (cookie realm only, plan mode only).
 
-``POST /dashboard/tasks`` starts a server-side agent turn with no browser
-attached. The runner lives in ``core/background_tasks.py``; this module is
+``POST /dashboard/background-tasks`` starts a server-side agent turn with no
+browser attached. The runner lives in ``core/background_tasks.py``; this
+module is
 a thin wrapper that validates the request, resolves the same chat inputs
 ``POST /dashboard/chat/stream`` builds, enforces the per-user running cap,
 and hands the work to the registry.
@@ -42,7 +43,7 @@ def _error(message: str, error_type: str, status_code: int) -> JSONResponse:
     )
 
 
-@router.post("/dashboard/tasks")
+@router.post("/dashboard/background-tasks")
 async def start_background_task(
     request: Request,
     principal: Principal = Depends(require_user_session),

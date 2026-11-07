@@ -389,29 +389,29 @@ async def test_shutdown_cancels_task_and_persists_failed(
 
 async def test_start_requires_session(client):
     response = await client.post(
-        "/dashboard/tasks", json={"task": "hello"})
+        "/dashboard/background-tasks", json={"task": "hello"})
     assert response.status_code == 401
 
 
 async def test_start_validates_task_and_mode(client):
     await register_account(client, "tasks-validation@example.com")
 
-    empty = await client.post("/dashboard/tasks", json={"task": "   "})
+    empty = await client.post("/dashboard/background-tasks", json={"task": "   "})
     assert empty.status_code == 400
     assert "task is required" in empty.json()["error"]["message"]
 
     too_long = await client.post(
-        "/dashboard/tasks", json={"task": "x" * 8001})
+        "/dashboard/background-tasks", json={"task": "x" * 8001})
     assert too_long.status_code == 400
     assert "at most 8000" in too_long.json()["error"]["message"]
 
     wrong_mode = await client.post(
-        "/dashboard/tasks", json={"task": "hello", "mode": "manual"})
+        "/dashboard/background-tasks", json={"task": "hello", "mode": "manual"})
     assert wrong_mode.status_code == 400
     assert "mode must be plan" in wrong_mode.json()["error"]["message"]
 
     not_json = await client.post(
-        "/dashboard/tasks", content=b"not-json",
+        "/dashboard/background-tasks", content=b"not-json",
         headers={"content-type": "application/json"})
     assert not_json.status_code == 400
 
@@ -420,7 +420,7 @@ async def test_start_without_provider_is_400_before_start(client):
     uid, _pid = await _login_with_credential(client, "tasks-noprov@example.com",
                                              count=0)
     response = await client.post(
-        "/dashboard/tasks", json={"task": "hello"})
+        "/dashboard/background-tasks", json={"task": "hello"})
     assert response.status_code == 400
     assert "No AI provider is connected" in response.json()["error"]["message"]
     assert app.state.background_tasks.running_count(uid) == 0
@@ -441,7 +441,7 @@ async def test_start_success_persists_events_and_answer(
         client, "tasks-ok@example.com")
 
     response = await client.post(
-        "/dashboard/tasks", json={"task": "plan a trip"})
+        "/dashboard/background-tasks", json={"task": "plan a trip"})
     assert response.status_code == 202, response.text
     workflow_id = response.json()["workflow_id"]
     assert workflow_id.startswith("task-")
@@ -505,13 +505,13 @@ async def test_per_user_cap_and_other_user_unaffected(
     monkeypatch.setattr(tasks_endpoint, "run_background_task", _slow_runner)
     uid_a, _pid_a = await _login_with_credential(
         client, "tasks-cap-a@example.com")
-    first = await client.post("/dashboard/tasks", json={"task": "one"})
-    second = await client.post("/dashboard/tasks", json={"task": "two"})
+    first = await client.post("/dashboard/background-tasks", json={"task": "one"})
+    second = await client.post("/dashboard/background-tasks", json={"task": "two"})
     assert first.status_code == 202, first.text
     assert second.status_code == 202, second.text
     assert app.state.background_tasks.running_count(uid_a) == 2
 
-    third = await client.post("/dashboard/tasks", json={"task": "three"})
+    third = await client.post("/dashboard/background-tasks", json={"task": "three"})
     assert third.status_code == 429
     assert third.json()["error"]["type"] == "rate_limit_error"
     assert app.state.background_tasks.running_count(uid_a) == 2
@@ -519,7 +519,7 @@ async def test_per_user_cap_and_other_user_unaffected(
     uid_b, _pid_b = await _login_with_credential(
         client, "tasks-cap-b@example.com")
     assert app.state.background_tasks.running_count(uid_b) == 0
-    other = await client.post("/dashboard/tasks", json={"task": "mine"})
+    other = await client.post("/dashboard/background-tasks", json={"task": "mine"})
     assert other.status_code == 202, other.text
     assert app.state.background_tasks.running_count(uid_b) == 1
 
