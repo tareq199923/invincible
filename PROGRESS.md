@@ -5,6 +5,19 @@
 
 ## Current State
 
+- F33 done (`passing`): background tasks dashboard UI (Step 2 of 5). The
+  Workflows page accepts tasks up to 8,000 characters, shows task status,
+  and links to a result page with the first user message and safely rendered
+  final answer. The result fragment polls every 3 seconds while active and
+  stops at a terminal state; owners can cancel running tasks, with one
+  metadata-only cancellation audit entry. Task lookups are user-scoped and
+  unauthorized IDs return the same 404 response as unknown IDs. Added
+  dashboard/UI regression tests for result rendering, fragment isolation,
+  and cancellation polling. Verification: `ruff check .` clean; focused
+  run 204 passed / 1,999 deselected; full suite 2,191 passed / 11 skipped /
+  1 deselected
+  (421.59s, 40 warnings). Commits `cca7d2d` (result page) and
+  `bea7d69` (tests); F33 state set to `passing` in `feature_list.json`.
 - F32 done (`passing`): background plan-mode agent tasks (Step 1 of 5).
   New `core/background_tasks.py` (BackgroundTaskRegistry keyed by
   `user_id`, `MAX_RUNNING_PER_USER = 2`, 30-minute wall-clock cap) runs

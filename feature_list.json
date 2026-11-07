@@ -366,7 +366,7 @@
   {
     "behavior": "a logged-in user can start, watch, and stop plan-mode background tasks from the dashboard: POST /dashboard/background-tasks starts a task, the Workflows page has an 8000-char start form with inline 400/429 errors and a Status column for task- rows (running/completed/failed/cancelled/timed out/stalled, 60s stalled grace), and the task detail page shows the status badge, first user message, safe-markdown final answer, owned-session link, and an HTMX 3s auto-refresh that stops at a terminal state; POST /dashboard/background-tasks/{workflow_id}/cancel returns 202 only for the owner's running task (identical 404 otherwise), routes through the registry's existing CancelledError path, and writes one metadata-only background_task.cancelled audit row; every lookup is user-scoped",
     "id": "F33",
-    "state": "active",
+    "state": "passing",
     "title": "Background tasks dashboard UI (Step 2)",
     "verification": "ruff check . && pytest tests/test_background_tasks.py tests/test_background_tasks_ui.py tests/test_dashboard_workflows.py tests/test_wheel_contents.py"
   }
