@@ -484,6 +484,34 @@ body.shell-body .banner-ok { border-left-width: 3px; }
 .char-counter { font-variant-numeric: tabular-nums; }
 #background-task-error[hidden] { display: none; }
 
+.task-result {
+  margin: 1rem 0 1.5rem;
+  padding: 0.9rem 1.1rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.task-result h3 { margin: 0; }
+.task-result h4 { margin-top: 1.1rem; }
+.task-result-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.task-result-head .task-stop { margin-top: 0; margin-left: auto; }
+.task-result-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0.35rem 0 0;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
 /* ---------- tables ---------- */
 .table-scroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 0.85rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }

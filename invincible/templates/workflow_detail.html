@@ -1,7 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Workflow - Invincible{% endblock %}
+{% block head_extra %}
+<script src="/static/background-tasks.js?v={{ asset_rev('background-tasks.js') }}" defer></script>
+{% endblock %}
 {% block content %}
 <p><a href="/dashboard/workflows">&larr; All workflows</a></p>
+
+{% if task_view %}
+{% include "_background_task.html" %}
+{% endif %}
+
 <h2>Workflow</h2>
 <p class="muted"><code>{{ workflow_id }}</code></p>
 <div class="table-scroll">
@@ -18,6 +26,12 @@
   </tbody>
 </table>
 </div>
+{% if task_view %}
+<p class="muted">Task text and the final answer are shown to the owning
+account only. Tool output, commands, and file contents are not shown here;
+open the linked session for the full transcript.</p>
+{% else %}
 <p class="muted">Task text, tool output, and file contents are not shown
 on this page.</p>
+{% endif %}
 {% endblock content %}
