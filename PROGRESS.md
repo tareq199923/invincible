@@ -5,6 +5,45 @@
 
 ## Current State
 
+- Background tasks Step 3 done, UNCOMMITTED (no feature id yet in
+  `feature_list.json`, so no state flip): durable per-tool-call
+  checkpoints. New table `background_task_checkpoints` (migration
+  `0018`, mirrored in `core/db.py`): one row per SUCCESSFUL tool call,
+  metadata only (tool name, call id, SHA-256 of the args, result size;
+  never args, paths, commands, or result content), dense per-session
+  `seq`, `UNIQUE(session_pk, seq)` + `UNIQUE(session_pk, call_id)`, and
+  an `(user_id, workflow_id, seq)` index. New
+  `core/task_checkpoints.py` (`TaskCheckpointStore.record/latest/
+  history`): `record` refuses a session the user does not own, assigns
+  `seq` under a per-session advisory lock, and is idempotent on
+  `call_id`. It returns `created` and `conflict`: a repeat of the same
+  call id with the same tool + args hash is a silent retry; a reused id
+  with a different tool or args logs a metadata-only warning and the
+  new call is NOT stored. `_digest` now also catches `RecursionError`
+  (deeply nested data falls back to a fixed `<undigestable TYPE>`
+  placeholder instead of crashing). Wiring: `background_tasks.
+  _make_checkpointer` builds the callback (None without an engine or
+  session, so fake-`prepare_chat` unit tests run as before) and
+  `run_agent_turn` gained an optional `checkpointer=` argument, called
+  only for `ok` results and best-effort (a failure logs the tool name +
+  exception class only; plan-mode tools are read-only so losing one
+  checkpoint never kills a task). This is progress TRACKING, not
+  resume: nothing replays a tool call. Tests: new
+  `test_task_checkpoints.py`, `test_background_checkpoint_wiring.py`,
+  `test_migration_background_task_checkpoints.py`; `test_db_dialect.py`
+  lists the new table; `test_cli_update.py` gained an autouse fixture
+  that keeps the fake 99.0.0 release out of the real
+  `~/.invincible/update-check.json` (unrelated hygiene, commit it
+  separately if you want a clean Step 3 diff). Verification: `ruff
+  check .` clean (run as `venv\Scripts\python.exe -m ruff`, ruff is not
+  on PATH); `git diff --check` clean apart from two LF/CRLF warnings;
+  focused checkpoint run 67 passed; FULL suite 2,217 passed / 11
+  skipped / 1 deselected (429.59s, 40 warnings, Windows, PostgreSQL on
+  127.0.0.1:5433). Known and left alone (outside Step 3): when a
+  provider omits tool-call ids, `webchat_agent.py` falls back to
+  `call_{len(turn)}`, so id-less parallel calls share one id; the
+  collision warning now makes that visible but the fallback is not
+  changed. Uncommitted - commit on user's word.
 - F33 done (`passing`): background tasks dashboard UI (Step 2 of 5). The
   Workflows page accepts tasks up to 8,000 characters, shows task status,
   and links to a result page with the first user message and safely rendered

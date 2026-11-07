@@ -129,7 +129,7 @@ Fixture semantics (`tests/conftest.py`):
 | `cli.py` | Click CLI: setup/start(+tunnel)/login(device flow)/agent/doctor/dev-db/db/secret/oauth/api-key/users |
 | `compat/common.py`, `compat/anthropic.py`, `compat/responses.py` | Protocol-neutral internal message model; Anthropic and Responses translators/SSE |
 | `models/anthropic.py`, `models/responses.py` | Lenient request models (unknown fields ignored) |
-| `migrations/` | Packaged Alembic environment (baseline `0001` … current `0017`) |
+| `migrations/` | Packaged Alembic environment (baseline `0001` … current `0018`) |
 
 ---
 
