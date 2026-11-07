@@ -22,9 +22,10 @@
   request-bound function now delegates to it). An unexpected approval
   event denies and pops the staged token, then fails the workflow. Tests:
   new `tests/test_background_tasks.py` (14). `ruff check .` clean; FULL
-  suite 2178 passed / 11 skipped / 1 deselected (Windows, 7m42s).
-  Commits `5e373ba` (core), `2e08f42` (byok), `777984f` (endpoint +
-  tests). Clean-state checklist 5/5 ticked.
+  suite 2178 passed / 11 skipped / 1 deselected (Windows; re-run on the
+  final tree: 6m59s). Commits `5e373ba` (core), `2e08f42` (byok),
+  `777984f` (endpoint + tests), `64dcb76` (docs), `c6f2dc1` (exactly-one
+  audit-row assertion). Clean-state checklist 5/5 ticked.
 - Release 0.6.1 prep (release task, no feature flip): `invincible/__init__.py`
   bumped from 0.6.0; the release carries F31 (CLI update awareness + upgrade
   UX) plus the docs/landing switch to `pip install -U invincible-ai` and the
