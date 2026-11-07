@@ -469,11 +469,13 @@ async def test_start_success_persists_events_and_answer(
 
     # Amendment 3: exactly one metadata-only audit row on start.
     audit_rows = await app.state.audit_log.recent(limit=50)
-    started = next(
+    started_rows = [
         row for row in audit_rows
         if row["action"] == "background_task.started"
-        and row["resource_id"] == workflow_id
-    )
+    ]
+    assert len(started_rows) == 1
+    started = started_rows[0]
+    assert started["resource_id"] == workflow_id
     assert started["actor_user_id"] == uid
     assert started["actor_kind"] == "user"
     assert started["resource_type"] == "background_task"
