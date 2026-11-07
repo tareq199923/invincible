@@ -355,5 +355,12 @@
     "state": "passing",
     "title": "CLI update awareness + upgrade UX",
     "verification": "ruff check . && pytest tests/test_updates.py tests/test_cli_update.py tests/test_cli_harness.py"
+  },
+  {
+    "behavior": "a logged-in user can start a plan-mode agent task that runs server-side with no browser attached: POST /dashboard/tasks (cookie realm only) validates task/model/mode, checks the per-user running cap (2, 429) and a connected provider (400) before starting, and returns 202 {workflow_id}; BackgroundTaskRegistry runs prepare_chat + run_agent_turn(mode=plan) through the single router failover loop with a 30-minute wall-clock timeout, emits metadata-only workflow.started/completed/failed events (input/output previews bounded to 200 chars), maps timeout/cancellation/ChatError to distinct failure text, and stores the answer in the chat session whose id IS the workflow id; a start audit row records workflow_id + mode only; an unexpected approval event denies and pops the staged token then fails the workflow",
+    "id": "F32",
+    "state": "passing",
+    "title": "Background plan-mode agent tasks (Step 1)",
+    "verification": "ruff check . && pytest tests/test_background_tasks.py tests/test_dashboard_workflows.py tests/test_harness_bus.py tests/test_chat_byok.py"
   }
 ]

@@ -85,6 +85,8 @@ Fixture semantics (`tests/conftest.py`):
 | `endpoints/graph.py` | `GET /api/v1/sessions/{id}/graph` continuity projection (owner-scoped) |
 | `endpoints/dashboard.py` | Phase 5 Jinja2 + HTMX dashboard (overview, sessions, tasks, memory, usage, settings) — session-cookie realm only |
 | `endpoints/docs.py` | Public docs site (`GET /docs`, `/docs/{slug}`): allowlisted curated guides, live MCP tool tables split by plane, request-derived host snippets, server-injected heading anchors + the `⌘K` search-index payload |
+| `endpoints/chat.py` | Dashboard webchat: page, models, SSE stream (plan/manual/auto agent modes), approvals (session realm) |
+| `endpoints/tasks.py` | `POST /dashboard/tasks`: start a plan-mode background agent task (session realm; per-user running cap, no-provider 400) |
 | `endpoints/agents.py` | Phase 10 agent transport: `POST /agent/poll` + `/agent/result` (inv_ key realm), `GET /agent/machines` + `GET /agent/whoami` (inv_ key realm, read-only), `GET /agent/status` (session realm) |
 | `agent/runner.py`, `agent/sandbox.py` | The local agent that runs on the **user's** machine: pairing config + long-poll loop + home-confined sandbox |
 | `core/router.py` | THE single tiered-failover loop (`_iter_attempts`); run recording |
@@ -106,6 +108,18 @@ Fixture semantics (`tests/conftest.py`):
 | `core/tool_compression.py` | Send-time tool-schema compression (description caps + noise-key stripping, LRU-cached) |
 | `core/relay.py` | Context relay: digests all but the newest N turns into one bounded system digest; system messages pass through untouched |
 | `core/agent_registry.py` | Per-user agent queues/futures (in-memory; long-poll transport, single instance by design) |
+| `core/background_tasks.py` | Server-side plan-mode background tasks: per-user registry (`MAX_RUNNING_PER_USER`), workflow events, wall-clock timeout, cancellation cleanup — same `prepare_chat` + `run_agent_turn` pipeline, no second failover loop |
+| `core/harness_events.py` | Harness event contract: stable type names + metadata-only payloads |
+| `core/harness_bus.py` | In-memory event bus + durable `workflow_events` persistence for workflow-scoped events |
+| `core/harness_policy.py` | Unified pre-execution policy gate (denylists enforced before staging/execution) |
+| `core/harness_runtime.py` | Durable agent-loop spine + context hydration/compaction |
+| `core/harness_router.py` | Agent definitions + lateral handoff interception |
+| `core/harness_approvals.py` | Durable suspend/resume approvals over `pending_actions` |
+| `core/harness_explore.py` | Read-only explore sub-agent (bounded search loop with its own context) |
+| `core/harness_fanout.py` | Read-only parallel fan-out sub-agent |
+| `core/harness_tools.py` | Single tool registry: metadata source of truth for every surface |
+| `core/harness_tunnel.py` | Per-user localhost port tunneling (registry, caps, framing) |
+| `core/workflow_store.py` | Read-only per-account workflow timelines for the dashboard |
 | `core/credential_store.py`, `core/credential_crypto.py` | BYOK credential persistence + Fernet crypto (`INVINCIBLE_CREDENTIAL_KEY`) |
 | `core/user_settings_store.py` | Per-user settings (routing mode/order, provider overrides) |
 | `core/projection.py`, `core/memory_projection.py` | Continuity-graph and memory-graph projections (graph endpoint + dashboard views) |

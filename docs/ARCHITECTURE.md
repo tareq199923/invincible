@@ -34,6 +34,9 @@ invincible/
 │   │                           realm only): page + new-chat + models JSON +
 │   │                           SSE stream (plan/manual/auto agent modes) +
 │   │                           approval endpoint for manual mode
+│   ├── tasks.py                POST /dashboard/tasks: start a plan-mode
+│   │                           background agent task (cookie realm only;
+│   │                           per-user running cap, no-provider 400)
 │   ├── mcp.py                  POST /mcp (JSON-RPC 2.0 dispatch, Bearer resource server)
 │   ├── oauth.py                Built-in OAuth 2.1 + PKCE authorization server
 │   │                           (/.well-known/oauth-*, /oauth/register|authorize|token|revoke;
@@ -83,6 +86,11 @@ invincible/
     │                           manual / auto modes): mode tool schemas, the
     │                           tool-call iteration, staged approvals via
     │                           ApprovalWaiter, agent-or-local execution
+    ├── background_tasks.py     Server-side plan-mode tasks: per-user registry
+    │                           (MAX_RUNNING_PER_USER), workflow events,
+    │                           wall-clock timeout, cancellation cleanup —
+    │                           uses the same prepare_chat + run_agent_turn
+    │                           pipeline and the single router failover loop
     ├── compression.py          Send-time message compression (tool-result
     │                           truncation + blank-run collapse)
     ├── tool_compression.py     Send-time tool-schema compression (description
@@ -181,14 +189,20 @@ import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
                               app.include_router(mcp_router, deps=[require_mcp_auth])
                               app.include_router(accounts_router)   (cookie realm)
                               app.include_router(dashboard_router)  (cookie realm, Phase 5)
+                              app.include_router(chat_router)       (cookie realm)
+                              app.include_router(tasks_router)      (cookie realm)
                               app.include_router(oauth_router)      (no dep — own auth)
                               app.include_router(graph_router)      (inv_ key, owner-scoped)
                      │
-         shutdown (lifespan)   await router.close()  (httpx client)
+         shutdown (lifespan)   await app.state.background_tasks.shutdown()
+                                                              (cancel tasks;
+                                                               last workflow events)
+                               await router.close()  (httpx client)
                                await continuity.close() / runs.close()
                                await retrieval.close() / memory.close()
                                await oauth_store.close()
                               await pending.flush_persisted()  (drain staged-action writes)
+                              await harness_bus.flush_persisted()  (drain workflow events)
                               await engine.dispose()           (lifespan owns the engine)
 ```
 

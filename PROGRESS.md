@@ -5,6 +5,26 @@
 
 ## Current State
 
+- F32 done (`passing`): background plan-mode agent tasks (Step 1 of 5).
+  New `core/background_tasks.py` (BackgroundTaskRegistry keyed by
+  `user_id`, `MAX_RUNNING_PER_USER = 2`, 30-minute wall-clock cap) runs
+  `prepare_chat` + `run_agent_turn(mode="plan")` through the single router
+  failover loop, emits metadata-only `workflow.started`/`completed`/
+  `failed` events (input/output previews bounded to 200 chars), maps
+  timeout / cancellation / `ChatError` to distinct failure text, and
+  persists the answer in the chat session whose id IS the workflow id.
+  New `endpoints/tasks.py` (`POST /dashboard/tasks`, cookie realm only)
+  rejects non-plan modes, empty/oversized tasks and missing providers
+  before starting, enforces the per-user cap with 429, writes one
+  metadata-only audit row (`background_task.started`; workflow id + mode,
+  never task text), and returns `202 {"workflow_id": ...}`.
+  `endpoints/byok.py` gained `byok_attempt_source_for(engine, ...)` (the
+  request-bound function now delegates to it). An unexpected approval
+  event denies and pops the staged token, then fails the workflow. Tests:
+  new `tests/test_background_tasks.py` (14). `ruff check .` clean; FULL
+  suite 2178 passed / 11 skipped / 1 deselected (Windows, 7m42s).
+  Commits `5e373ba` (core), `2e08f42` (byok), `777984f` (endpoint +
+  tests). Clean-state checklist 5/5 ticked.
 - Release 0.6.1 prep (release task, no feature flip): `invincible/__init__.py`
   bumped from 0.6.0; the release carries F31 (CLI update awareness + upgrade
   UX) plus the docs/landing switch to `pip install -U invincible-ai` and the
@@ -886,8 +906,9 @@
 
 ## In Progress
 
-- No active feature. F29 and F05 are both `passing`; F30 (embedding/
-  semantic retrieval backend) is `planned` and not started.
+- No active feature. F32, F29, F28 and F05 are all `passing`; F30
+  (embedding/semantic retrieval backend) is `planned` and not started.
+- F32 (`passing`): background plan-mode agent tasks (Step 1 of 5).
 - F29 (`passing`): per-account Workflows dashboard timeline.
 - F28 (`passing`): harness plan truth + `approval.requested`
   + WS transport docs.
@@ -923,6 +944,12 @@
    `overlay_spawn_guard`.
 6. `.vscode/` is local-only and must stay untracked. F04 fan-out
    (`harness_fanout.py` + 18 tests) stays green, untouched.
+7. Background tasks: Step 1 (plan-only, `POST /dashboard/tasks`) is done
+   and deliberately ships no UI — the existing `/dashboard/workflows`
+   page renders the persisted events and the full answer lives in the
+   session named by the workflow id. Await the Step 2 prompt before
+   extending the runner; do not add a second failover loop or edit
+   `webchat_agent.run_agent_turn`.
 
 ## Blockers
 
