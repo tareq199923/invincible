@@ -24,6 +24,20 @@ def _patch(monkeypatch, *, payload=None, editable=False):
     monkeypatch.setattr(cli_mod, "_is_editable_install", lambda: editable)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_update_cache(monkeypatch, tmp_path):
+    """Never touch the real ~/.invincible/update-check.json.
+
+    Tests here fake a newer release (99.0.0); without this, `update` and
+    the notice write that fake version into the developer's real cache and
+    `invincible connect` then advertises a release that does not exist.
+    Tests that need their own cache path still override this.
+    """
+    monkeypatch.setattr(
+        cli_mod, "_update_cache_path",
+        lambda: str(tmp_path / "isolated-update-check.json"))
+
+
 def test_update_help_lists_options():
     result = CliRunner().invoke(cli, ["update", "--help"])
     assert result.exit_code == 0
