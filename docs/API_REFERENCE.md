@@ -431,6 +431,9 @@ Server-rendered Jinja2 + HTMX pages on the same cookie realm:
 | `/dashboard/sessions` | Owned sessions index |
 | `/dashboard/sessions/{session_pk}` | Continuity-projection detail: runs chain, failover pairs, checkpoints, task states, activity |
 | `/dashboard/tasks` | Cross-session active task heads |
+| `/dashboard/workflows`, `/dashboard/workflows/{workflow_id}` | Per-account workflow timelines; `task-` ids add a status/result view (first user message + safe-markdown final answer) with HTMX polling while running |
+| `POST /dashboard/background-tasks` | Start a plan-mode background task (JSON; 202 `{workflow_id}`, 400 validation/provider, 429 cap) |
+| `POST /dashboard/background-tasks/{workflow_id}/cancel` | Owner-scoped Stop; 202 `{"status":"cancelling"}`, identical 404 for foreign/finished/unknown ids |
 | `/dashboard/memory` | Browse/filter/paginate/search owned memories, explicit create, audited delete buttons |
 | `/dashboard/usage?days=N` | Day bars + per-provider totals; buckets pinned to UTC, window clamped to 1–90 days |
 | `/dashboard/settings` | System flags, read-only provider/routing panel, password forms |

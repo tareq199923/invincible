@@ -821,3 +821,45 @@ Index(
     workflow_events.c.user_id,
     workflow_events.c.created_at,
 )
+
+
+# ---------------------------------------------------------------------------
+# Background-task checkpoints (Step 3).
+#
+# One row per SUCCESSFULLY completed tool call of a background task, so an
+# interrupted task still has a durable record of its progress. Metadata
+# only: tool name, call id, a SHA-256 of the arguments, and the size of
+# the result - never arguments, paths, commands, or result content.
+# ``seq`` is dense per session (1, 2, 3, ...) and assigned under an
+# advisory lock; the highest ``seq`` is the latest checkpoint. Ownership
+# is explicit (``user_id``) AND structural (``session_pk``).
+# UNIQUE(session_pk, call_id) makes a retried or repeated event a no-op.
+background_task_checkpoints = Table(
+    "background_task_checkpoints",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id"), nullable=False),
+    Column(
+        "session_pk", BigInteger, ForeignKey("sessions.id"), nullable=False
+    ),
+    Column("workflow_id", Text, nullable=False),
+    Column("seq", Integer, nullable=False),
+    Column("call_id", Text, nullable=False),
+    Column("tool_name", Text, nullable=False),
+    Column("args_hash", Text, nullable=False),
+    Column("result_bytes", Integer, nullable=False),
+    Column("created_at", Float, nullable=False),
+    UniqueConstraint(
+        "session_pk", "seq", name="uq_bg_checkpoints_session_seq"
+    ),
+    UniqueConstraint(
+        "session_pk", "call_id", name="uq_bg_checkpoints_session_call"
+    ),
+)
+
+Index(
+    "idx_bg_checkpoints_user_workflow",
+    background_task_checkpoints.c.user_id,
+    background_task_checkpoints.c.workflow_id,
+    background_task_checkpoints.c.seq,
+)

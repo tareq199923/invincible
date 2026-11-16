@@ -5,6 +5,82 @@
 
 ## Current State
 
+- Background tasks Step 3 done (`passing` as F34): durable per-tool-call
+  checkpoints. New table `background_task_checkpoints` (migration
+  `0018`, mirrored in `core/db.py`): one row per SUCCESSFUL tool call,
+  metadata only (tool name, call id, SHA-256 of the args, result size;
+  never args, paths, commands, or result content), dense per-session
+  `seq`, `UNIQUE(session_pk, seq)` + `UNIQUE(session_pk, call_id)`, and
+  an `(user_id, workflow_id, seq)` index. New
+  `core/task_checkpoints.py` (`TaskCheckpointStore.record/latest/
+  history`): `record` refuses a session the user does not own, assigns
+  `seq` under a per-session advisory lock, and is idempotent on
+  `call_id`. It returns `created` and `conflict`: a repeat of the same
+  call id with the same tool + args hash is a silent retry; a reused id
+  with a different tool or args logs a metadata-only warning and the
+  new call is NOT stored. `_digest` now also catches `RecursionError`
+  (deeply nested data falls back to a fixed `<undigestable TYPE>`
+  placeholder instead of crashing). Wiring: `background_tasks.
+  _make_checkpointer` builds the callback (None without an engine or
+  session, so fake-`prepare_chat` unit tests run as before) and
+  `run_agent_turn` gained an optional `checkpointer=` argument, called
+  only for `ok` results and best-effort (a failure logs the tool name +
+  exception class only; plan-mode tools are read-only so losing one
+  checkpoint never kills a task). This is progress TRACKING, not
+  resume: nothing replays a tool call. Tests: new
+  `test_task_checkpoints.py`, `test_background_checkpoint_wiring.py`,
+  `test_migration_background_task_checkpoints.py`; `test_db_dialect.py`
+  lists the new table; `test_cli_update.py` gained an autouse fixture
+  that keeps the fake 99.0.0 release out of the real
+  `~/.invincible/update-check.json` (unrelated hygiene, commit it
+  separately if you want a clean Step 3 diff). Verification: `ruff
+  check .` clean (run as `venv\Scripts\python.exe -m ruff`, ruff is not
+  on PATH); `git diff --check` clean apart from two LF/CRLF warnings;
+  focused checkpoint run 67 passed; FULL suite 2,217 passed / 11
+  skipped / 1 deselected (429.59s, 40 warnings, Windows, PostgreSQL on
+  127.0.0.1:5433). Known and left alone (outside Step 3): when a
+  provider omits tool-call ids, `webchat_agent.py` falls back to
+  `call_{len(turn)}`, so id-less parallel calls share one id; the
+  collision warning now makes that visible but the fallback is not
+  changed. Committed as `45520ac` (feature), `15fc215` (tests),
+  `0414677` (docs), `3f49512` (test credential-key fix) on
+  `background-tasks-ui` (PR #26, CI green on 3.10-3.14). F34 is now
+  `passing` in `feature_list.json`; F35 (Step 4: background tasks with
+  mutating tools + durable approvals) is `planned` and not started.
+- F33 done (`passing`): background tasks dashboard UI (Step 2 of 5). The
+  Workflows page accepts tasks up to 8,000 characters, shows task status,
+  and links to a result page with the first user message and safely rendered
+  final answer. The result fragment polls every 3 seconds while active and
+  stops at a terminal state; owners can cancel running tasks, with one
+  metadata-only cancellation audit entry. Task lookups are user-scoped and
+  unauthorized IDs return the same 404 response as unknown IDs. Added
+  dashboard/UI regression tests for result rendering, fragment isolation,
+  and cancellation polling. Verification: `ruff check .` clean; focused
+  run 204 passed / 1,999 deselected; full suite 2,191 passed / 11 skipped /
+  1 deselected
+  (421.59s, 40 warnings). Commits `cca7d2d` (result page) and
+  `bea7d69` (tests); F33 state set to `passing` in `feature_list.json`.
+- F32 done (`passing`): background plan-mode agent tasks (Step 1 of 5).
+  New `core/background_tasks.py` (BackgroundTaskRegistry keyed by
+  `user_id`, `MAX_RUNNING_PER_USER = 2`, 30-minute wall-clock cap) runs
+  `prepare_chat` + `run_agent_turn(mode="plan")` through the single router
+  failover loop, emits metadata-only `workflow.started`/`completed`/
+  `failed` events (input/output previews bounded to 200 chars), maps
+  timeout / cancellation / `ChatError` to distinct failure text, and
+  persists the answer in the chat session whose id IS the workflow id.
+  New `endpoints/tasks.py` (`POST /dashboard/tasks`, cookie realm only)
+  rejects non-plan modes, empty/oversized tasks and missing providers
+  before starting, enforces the per-user cap with 429, writes one
+  metadata-only audit row (`background_task.started`; workflow id + mode,
+  never task text), and returns `202 {"workflow_id": ...}`.
+  `endpoints/byok.py` gained `byok_attempt_source_for(engine, ...)` (the
+  request-bound function now delegates to it). An unexpected approval
+  event denies and pops the staged token, then fails the workflow. Tests:
+  new `tests/test_background_tasks.py` (14). `ruff check .` clean; FULL
+  suite 2178 passed / 11 skipped / 1 deselected (Windows; re-run on the
+  final tree: 6m59s). Commits `5e373ba` (core), `2e08f42` (byok),
+  `777984f` (endpoint + tests), `64dcb76` (docs), `c6f2dc1` (exactly-one
+  audit-row assertion). Clean-state checklist 5/5 ticked.
 - Release 0.6.1 prep (release task, no feature flip): `invincible/__init__.py`
   bumped from 0.6.0; the release carries F31 (CLI update awareness + upgrade
   UX) plus the docs/landing switch to `pip install -U invincible-ai` and the
@@ -886,13 +962,20 @@
 
 ## In Progress
 
-- No active feature. F29 and F05 are both `passing`; F30 (embedding/
-  semantic retrieval backend) is `planned` and not started.
+- No `active` entry in `feature_list.json` (WIP=1 respected: an entry
+  flips to `active` only when its work actually starts). Background
+  tasks Steps 1-3 are DONE and waiting on the merge; Step 4 is
+  `planned` as F35.
+- Background tasks (Steps 1-3 of 5) live on branch
+  `background-tasks-ui` / PR #26 (OPEN, mergeable, CI green on
+  3.10-3.14):
+  - F32 (`passing`): background plan-mode agent tasks (Step 1).
+  - F33 (`passing`): background tasks dashboard UI (Step 2).
+  - F34 (`passing`): durable per-tool-call checkpoints (Step 3).
+- F35 (`planned`): background tasks with mutating tools + durable
+  approvals (Step 4). Not started.
+- F30 (`planned`): embedding/semantic retrieval backend. Not started.
 - F29 (`passing`): per-account Workflows dashboard timeline.
-- F28 (`passing`): harness plan truth + `approval.requested`
-  + WS transport docs.
-- F05 (`passing`): retrieval seam hardening — stage 1 (`60dfa8f`) and
-  stage 2 (`b28b775`), merged as `011ec2c`.
 
 ## Next Steps
 
@@ -921,8 +1004,21 @@
 5. Tests must never spawn a real overlay head (autouse conftest
    guard); a test needing a spawn stubs `Overlay.start` and clears
    `overlay_spawn_guard`.
-6. `.vscode/` is local-only and must stay untracked. F04 fan-out
+6. `.vscode/` is tracked on `main` now; keep local editor edits out of
+   feature commits (revert or commit them separately). F04 fan-out
    (`harness_fanout.py` + 18 tests) stays green, untouched.
+7. Background tasks: Steps 1-3 are DONE (F32/F33/F34) on
+   `background-tasks-ui` (PR #26). Next in order:
+   (a) merge PR #26, (b) cut release 0.6.2 (version lives only in
+   `invincible/__init__.py`), (c) write the Step 4/5 design in
+   `docs/BACKGROUND_TASKS.md`, then flip F35 to `active`.
+   Step 4 = a background task may stage MUTATING tools and suspend on
+   a durable approval (today an unexpected approval event is denied
+   with "approval not supported yet"); it must reuse
+   `harness_approvals`/`pending_actions`/`tool_executor`, never a
+   second approval system. Step 5 = pick ONE and document it;
+   restart-safe task records + resume is the natural completion of
+   Step 3's tracking-only checkpoints.
 
 ## Blockers
 

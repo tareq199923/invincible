@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from invincible import __version__
 from invincible.core.agent_registry import AgentRegistry
+from invincible.core.background_tasks import BackgroundTaskRegistry
 from invincible.core.continuity import ContinuityEngine
 from invincible.core.db import (
     create_all_from_metadata,
@@ -45,6 +46,7 @@ from invincible.endpoints.mcp import router as mcp_router
 from invincible.endpoints.oauth import router as oauth_router
 from invincible.endpoints.openai_compat import router as openai_router
 from invincible.endpoints.responses_compat import router as responses_router
+from invincible.endpoints.tasks import router as tasks_router
 from invincible.endpoints.template_filters import register_template_filters
 from invincible.endpoints.tunnel import router as tunnel_router
 from invincible.endpoints.voice import router as voice_router
@@ -155,8 +157,16 @@ async def lifespan(app: FastAPI):
     # to workflow_events (best-effort; memory stays the source of truth).
     app.state.harness_bus = HarnessBus()
     app.state.harness_bus.attach_engine(engine)
+    # Background agent tasks: in-process strong refs, per-user running
+    # cap. In-memory on purpose (same trade-off as the agent registry) -
+    # a restart cancels in-flight tasks and emits workflow.failed.
+    app.state.background_tasks = BackgroundTaskRegistry()
     app.state.router.run_recorder = runs.record
     yield
+    # Cancel in-flight background tasks FIRST: each runner records its
+    # partial turn and emits the terminal workflow.failed event while the
+    # stores and the bus are still alive, before the flushes below.
+    await app.state.background_tasks.shutdown()
     await app.state.router.close()
     await continuity.close()
     await runs.close()
@@ -229,6 +239,8 @@ app.include_router(docs_router)
 # Dashboard webchat (text-only BYOK chat with SSE streaming): same
 # cookie realm as the dashboard pages.
 app.include_router(chat_router)
+# Background agent tasks (plan mode): same cookie realm as the webchat.
+app.include_router(tasks_router)
 # Phase 9 BYOK surface: same cookie realm as the dashboard (its own
 # fail-closed INVINCIBLE_CREDENTIAL_KEY gate lives in the router).
 app.include_router(byok_router)

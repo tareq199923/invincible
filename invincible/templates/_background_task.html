@@ -1,0 +1,34 @@
+{# Background-task status/result fragment. Included by workflow_detail.html
+   and returned alone for HTMX polling (HX-Request). Polls only while the
+   derived status is running; the terminal render drops the hx-* attributes,
+   so outerHTML replacement stops the loop. #}
+<section id="task-live" class="task-result"
+         {% if task_status == 'running' %}hx-get="/dashboard/workflows/{{ workflow_id | urlencode }}"
+         hx-trigger="every 3s, refresh" hx-swap="outerHTML"{% endif %}>
+  <div class="task-result-head">
+    <h3>Background task</h3>
+    <span class="status-badge status-{{ task_status | replace(' ', '-') }}">{{ task_status }}</span>
+    {% if can_cancel %}
+    <button type="button" class="task-stop"
+            data-cancel-workflow="{{ workflow_id }}">Stop task</button>
+    {% endif %}
+  </div>
+
+  {% if task_text %}
+  <h4>Task</h4>
+  <pre class="task-result-text">{{ task_text }}</pre>
+  {% endif %}
+
+  <h4>Answer</h4>
+  {% if answer_html %}
+  <div class="md">{{ answer_html | safe }}</div>
+  {% elif task_status == 'running' %}
+  <p class="muted">The answer appears here when the task finishes.</p>
+  {% else %}
+  <p class="muted">No answer was stored for this task.</p>
+  {% endif %}
+
+  {% if task_session_pk %}
+  <p><a href="/dashboard/sessions/{{ task_session_pk }}">Open the full session transcript &rarr;</a></p>
+  {% endif %}
+</section>

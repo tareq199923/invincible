@@ -7,6 +7,11 @@ from sqlalchemy import select
 from invincible.core.db import workflow_events
 from invincible.core.harness_bus import HarnessBus
 from invincible.core.harness_events import HarnessEventType
+from invincible.core.workflow_store import (
+    STALLED_AFTER_SECONDS,
+    summarize_event,
+    task_status,
+)
 from tests.conftest import register_account
 
 
@@ -28,6 +33,65 @@ async def _seed(engine, user_id, workflow_id, events):
                 payload=payload,
                 created_at=now + offset,
             ))
+
+
+def test_summarize_failed_includes_bounded_error():
+    assert summarize_event({
+        "type": "workflow.failed",
+        "payload": {"error": "timed out"},
+    }) == "failed - timed out"
+    assert summarize_event({
+        "type": "workflow.failed",
+        "payload": {"error": "cancelled"},
+    }) == "failed - cancelled"
+    assert summarize_event({
+        "type": "workflow.failed",
+        "payload": {},
+    }) == "failed"
+    bounded = summarize_event({
+        "type": "workflow.failed",
+        "payload": {"error": "x" * 500},
+    })
+    assert bounded == "failed - " + "x" * 200
+
+
+def _event(etype, at, error=None):
+    payload = {"error": error} if error is not None else {}
+    return {"type": etype, "created_at": at, "payload": payload}
+
+
+def test_task_status_table():
+    now = 1000.0
+    started = _event("workflow.started", now - 5)
+    completed = _event("workflow.completed", now - 1)
+    failed = _event("workflow.failed", now - 1, error="provider down")
+    cancelled = _event("workflow.failed", now - 1, error="cancelled")
+    timed_out = _event("workflow.failed", now - 1, error="timed out")
+    old_started = _event("workflow.started", now - 61)
+    boundary = _event("workflow.started", now - STALLED_AFTER_SECONDS)
+
+    cases = [
+        ("registry wins", True, [started], "running"),
+        ("completed", False, [started, completed], "completed"),
+        ("failed", False, [started, failed], "failed"),
+        ("cancelled", False, [started, cancelled], "cancelled"),
+        ("timed out", False, [started, timed_out], "timed out"),
+        ("grace", False, [started], "running"),
+        ("grace boundary", False, [boundary], "running"),
+        ("stalled after 60s", False, [old_started], "stalled"),
+        ("no events", False, [], "stalled"),
+        # The newest terminal event wins even if earlier ones disagree.
+        ("last terminal wins", False, [
+            _event("workflow.completed", now - 5),
+            failed,
+        ], "failed"),
+        # A terminal event older than the grace window is still terminal.
+        ("terminal after grace", False, [
+            _event("workflow.failed", now - 120, error="cancelled"),
+        ], "cancelled"),
+    ]
+    for label, running, events, expected in cases:
+        assert task_status(running, events, now=now) == expected, label
 
 
 async def test_page_requires_session(client):

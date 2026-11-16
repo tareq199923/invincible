@@ -97,6 +97,20 @@ def _audit_meta(row: dict) -> dict:
 async def byok_attempt_source(
     request: Request, principal: Principal, model: str | None = None,
 ):
+    """Request-bound wrapper around :func:`byok_attempt_source_for`.
+
+    Only resolves the shared engine from the app state; the real work
+    (and the documented tuple semantics) lives in the engine-scoped
+    helper so ``core/`` callers can receive it injected without importing
+    an endpoint module at call time.
+    """
+    return await byok_attempt_source_for(
+        request.app.state.engine, principal, model=model)
+
+
+async def byok_attempt_source_for(
+    engine, principal: Principal, model: str | None = None,
+):
     """Candidate pool + key resolver + routing config + overrides for a
     BYOK-scoped chat request (Platform Phase 9, PR-C; Phase 1 grew the
     tuple with the user's own routing mode and pipeline overrides).
@@ -121,6 +135,10 @@ async def byok_attempt_source(
     unusable credential (vanished row, unsafe URL, undecryptable
     ciphertext) logs a warning and returns None, which the Router treats
     exactly like a missing env key - skip to the next attempt.
+
+    Engine-scoped so background tasks (``core/background_tasks``) can
+    receive this callable injected while ``core/`` stays free of
+    ``endpoints/`` imports.
     """
     # Per-user kinds only: api_key (/v1/* chat) and session (dashboard
     # webchat) both resolve to the same user's own credentials. Anything
@@ -128,10 +146,10 @@ async def byok_attempt_source(
     # path through an unexpected route.
     if principal.kind not in ("api_key", "session"):
         return None
-    store = ByokCredentialStore(request.app.state.engine)
+    store = ByokCredentialStore(engine)
     rows = await store.routing_rows(principal.user_id)
     user_id = principal.user_id
-    stored = await UserSettingsStore(request.app.state.engine).get(user_id)
+    stored = await UserSettingsStore(engine).get(user_id)
     routing = routing_config_from_user(
         stored["routing"], rows, model)
     overrides = stored["overrides"]

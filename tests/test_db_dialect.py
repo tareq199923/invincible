@@ -225,6 +225,8 @@ def test_metadata_covers_all_expected_tables():
         "user_settings",
         # Harness H5: durable workflow event log
         "workflow_events",
+        # Background tasks Step 3: metadata-only tool-call checkpoints
+        "background_task_checkpoints",
     }
     assert set(metadata.tables) == expected
 

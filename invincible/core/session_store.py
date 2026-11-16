@@ -172,6 +172,67 @@ class SessionStore:
             {"created_at": row[0], "updated_at": row[1]} if row else None
         )
 
+    async def task_result(
+        self, workflow_id: str, *, user_id: int
+    ) -> dict | None:
+        """Owner-scoped task text + final answer for one background task.
+
+        The workflow id IS the chat session id. This deliberately scopes
+        by ``user_id`` only (background tasks are user-level, not tied to
+        the caller's current default project); a foreign id returns
+        ``None`` exactly like an unknown one. Content is considered only
+        when it is a non-empty string, matching the webchat history's
+        renderability rule.
+        """
+        async with self.engine.connect() as conn:
+            session_row = (await conn.execute(
+                select(
+                    sessions.c.id,
+                    sessions.c.created_at,
+                    sessions.c.updated_at,
+                )
+                .where(
+                    sessions.c.user_id == user_id,
+                    sessions.c.client_session_id == workflow_id,
+                )
+                .order_by(sessions.c.updated_at.desc())
+                .limit(1)
+            )).first()
+            if session_row is None:
+                return None
+            session_pk = int(session_row[0])
+
+            async def _first_content(role: str, *, newest: bool):
+                order = (
+                    (turns.c.seq.desc(), messages.c.seq.desc())
+                    if newest else
+                    (turns.c.seq.asc(), messages.c.seq.asc())
+                )
+                rows = (await conn.execute(
+                    select(messages.c.payload)
+                    .join(turns, messages.c.turn_id == turns.c.id)
+                    .where(
+                        turns.c.session_id == session_pk,
+                        messages.c.role == role,
+                    )
+                    .order_by(*order)
+                )).scalars().all()
+                for payload in rows:
+                    if not isinstance(payload, dict):
+                        continue
+                    content = payload.get("content")
+                    if isinstance(content, str) and content.strip():
+                        return content
+                return ""
+
+            return {
+                "session_pk": session_pk,
+                "created_at": session_row[1],
+                "updated_at": session_row[2],
+                "task_text": await _first_content("user", newest=False),
+                "answer": await _first_content("assistant", newest=True),
+            }
+
     async def list_for_user(
         self, user_id: int, *, project_id: int | None = None,
         limit: int = 100, client_session_id_prefix: str | None = None,

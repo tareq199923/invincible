@@ -719,6 +719,7 @@ async def run_agent_turn(
     engine=None,
     agent_platform: str | None = None,
     bus=None,
+    checkpointer=None,
 ):
     """Run one agentic turn, yielding ``(event, data)`` pairs.
 
@@ -1026,6 +1027,20 @@ async def run_agent_turn(
                 call_id = item["call_id"]
                 result_doc, ok = outcome["result"], outcome["ok"]
                 tools_used += 1
+                if ok and checkpointer is not None:
+                    # Step 3: durable progress record, best-effort. A
+                    # failed write is logged (tool name + error class
+                    # only, never args or results) and the task goes on:
+                    # plan-mode tools are read-only, so losing one
+                    # checkpoint must not kill a long-running task.
+                    try:
+                        await checkpointer(
+                            call_id=call_id, name=fname,
+                            args=item["args"], result=result_doc)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "background checkpoint failed for %s: %s",
+                            fname, type(exc).__name__)
                 label = target_label(fname, item["args"])
                 if label is not None:
                     last_target = label
