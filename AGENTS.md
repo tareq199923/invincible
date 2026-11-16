@@ -109,6 +109,7 @@ Fixture semantics (`tests/conftest.py`):
 | `core/relay.py` | Context relay: digests all but the newest N turns into one bounded system digest; system messages pass through untouched |
 | `core/agent_registry.py` | Per-user agent queues/futures (in-memory; long-poll transport, single instance by design) |
 | `core/background_tasks.py` | Server-side plan-mode background tasks: per-user registry (`MAX_RUNNING_PER_USER`), workflow events, wall-clock timeout, cancellation cleanup — same `prepare_chat` + `run_agent_turn` pipeline, no second failover loop |
+| `core/task_checkpoints.py` | Durable per-tool-call checkpoints for background tasks (metadata only: tool, call id, args digest, result size) — progress tracking, never a replay |
 | `core/harness_events.py` | Harness event contract: stable type names + metadata-only payloads |
 | `core/harness_bus.py` | In-memory event bus + durable `workflow_events` persistence for workflow-scoped events |
 | `core/harness_policy.py` | Unified pre-execution policy gate (denylists enforced before staging/execution) |

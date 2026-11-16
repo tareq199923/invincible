@@ -11,6 +11,23 @@ are called out under **Changed** and **Removed**.
 
 ### Added
 
+- Background agent tasks (Steps 1-3 of 5). A logged-in user can start a
+  **plan-mode** task with no browser attached
+  (`POST /dashboard/background-tasks`): it runs the same
+  `prepare_chat` + `run_agent_turn(mode="plan")` pipeline as the
+  dashboard webchat — hence the single router failover loop — with a
+  30-minute wall-clock timeout, a per-user concurrency cap of 2, and
+  metadata-only `workflow.started`/`completed`/`failed` events. The
+  answer is stored in the chat session whose id is the workflow id.
+- Background tasks dashboard UI: a start form on the Workflows page, a
+  task status column, a polling result page with a safely rendered final
+  answer, and an owner-scoped Stop action
+  (`POST /dashboard/background-tasks/{workflow_id}/cancel`).
+- Durable per-tool-call checkpoints for background tasks (migration
+  `0018`, table `background_task_checkpoints`): one metadata-only row
+  per successful tool call (tool name, call id, SHA-256 of the args,
+  result size — never args, paths, commands, or result content).
+  Progress tracking only; nothing replays a tool call.
 - `CONTRIBUTING.md` — development setup, project invariants, and PR process.
 - `CODE_OF_CONDUCT.md` — Contributor Covenant 2.1.
 - `SECURITY.md` — private vulnerability reporting, scope, and safe harbor.

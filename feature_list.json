@@ -369,5 +369,19 @@
     "state": "passing",
     "title": "Background tasks dashboard UI (Step 2)",
     "verification": "ruff check . && pytest tests/test_background_tasks.py tests/test_background_tasks_ui.py tests/test_dashboard_workflows.py tests/test_wheel_contents.py"
+  },
+  {
+    "behavior": "one metadata-only background_task_checkpoints row per SUCCESSFUL tool call (tool name, call id, SHA-256 of the args, result size; never args, paths, commands, or result content), dense per-session seq with UNIQUE(session_pk, seq) and UNIQUE(session_pk, call_id), an (user_id, workflow_id, seq) index, and migration 0018 mirrored in core/db.py; the store refuses a session the user does not own, assigns seq under a per-session advisory lock, is idempotent on call_id, and rejects a reused call id whose tool or args digest differ; the runner records best-effort (a failed checkpoint never kills a task) - progress TRACKING only, nothing replays a tool call",
+    "id": "F34",
+    "state": "passing",
+    "title": "Background-task durable tool-call checkpoints (Step 3)",
+    "verification": "ruff check . && pytest tests/test_task_checkpoints.py tests/test_background_checkpoint_wiring.py tests/test_migration_background_task_checkpoints.py tests/test_background_tasks.py"
+  },
+  {
+    "behavior": "a background task may stage MUTATING tools and suspend on a durable approval instead of failing: the staged action is persisted through the existing pending_actions/harness_approvals path, the owner approves or denies from the dashboard (identical 404 for a foreign id), approval resumes the same task, denial/timeout/cancellation resolves it with distinct failure text, every event and audit row stays metadata-only, and the per-user running cap keeps counting a suspended task",
+    "id": "F35",
+    "state": "planned",
+    "title": "Background tasks: mutating tools + durable approvals (Step 4)",
+    "verification": "ruff check . && pytest tests/test_background_tasks.py tests/test_background_tasks_ui.py tests/test_harness_approvals.py"
   }
 ]

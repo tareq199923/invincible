@@ -91,6 +91,10 @@ invincible/
     │                           wall-clock timeout, cancellation cleanup —
     │                           uses the same prepare_chat + run_agent_turn
     │                           pipeline and the single router failover loop
+    ├── task_checkpoints.py     Durable per-tool-call checkpoints for background
+    │                           tasks (tool, call id, args digest, result
+    │                           size; metadata only) — progress tracking,
+    │                           never a replay
     ├── compression.py          Send-time message compression (tool-result
     │                           truncation + blank-run collapse)
     ├── tool_compression.py     Send-time tool-schema compression (description

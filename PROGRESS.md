@@ -5,8 +5,7 @@
 
 ## Current State
 
-- Background tasks Step 3 done, UNCOMMITTED (no feature id yet in
-  `feature_list.json`, so no state flip): durable per-tool-call
+- Background tasks Step 3 done (`passing` as F34): durable per-tool-call
   checkpoints. New table `background_task_checkpoints` (migration
   `0018`, mirrored in `core/db.py`): one row per SUCCESSFUL tool call,
   metadata only (tool name, call id, SHA-256 of the args, result size;
@@ -43,7 +42,11 @@
   provider omits tool-call ids, `webchat_agent.py` falls back to
   `call_{len(turn)}`, so id-less parallel calls share one id; the
   collision warning now makes that visible but the fallback is not
-  changed. Uncommitted - commit on user's word.
+  changed. Committed as `45520ac` (feature), `15fc215` (tests),
+  `0414677` (docs), `3f49512` (test credential-key fix) on
+  `background-tasks-ui` (PR #26, CI green on 3.10-3.14). F34 is now
+  `passing` in `feature_list.json`; F35 (Step 4: background tasks with
+  mutating tools + durable approvals) is `planned` and not started.
 - F33 done (`passing`): background tasks dashboard UI (Step 2 of 5). The
   Workflows page accepts tasks up to 8,000 characters, shows task status,
   and links to a result page with the first user message and safely rendered
@@ -959,14 +962,20 @@
 
 ## In Progress
 
-- No active feature. F32, F29, F28 and F05 are all `passing`; F30
-  (embedding/semantic retrieval backend) is `planned` and not started.
-- F32 (`passing`): background plan-mode agent tasks (Step 1 of 5).
+- No `active` entry in `feature_list.json` (WIP=1 respected: an entry
+  flips to `active` only when its work actually starts). Background
+  tasks Steps 1-3 are DONE and waiting on the merge; Step 4 is
+  `planned` as F35.
+- Background tasks (Steps 1-3 of 5) live on branch
+  `background-tasks-ui` / PR #26 (OPEN, mergeable, CI green on
+  3.10-3.14):
+  - F32 (`passing`): background plan-mode agent tasks (Step 1).
+  - F33 (`passing`): background tasks dashboard UI (Step 2).
+  - F34 (`passing`): durable per-tool-call checkpoints (Step 3).
+- F35 (`planned`): background tasks with mutating tools + durable
+  approvals (Step 4). Not started.
+- F30 (`planned`): embedding/semantic retrieval backend. Not started.
 - F29 (`passing`): per-account Workflows dashboard timeline.
-- F28 (`passing`): harness plan truth + `approval.requested`
-  + WS transport docs.
-- F05 (`passing`): retrieval seam hardening — stage 1 (`60dfa8f`) and
-  stage 2 (`b28b775`), merged as `011ec2c`.
 
 ## Next Steps
 
@@ -995,14 +1004,21 @@
 5. Tests must never spawn a real overlay head (autouse conftest
    guard); a test needing a spawn stubs `Overlay.start` and clears
    `overlay_spawn_guard`.
-6. `.vscode/` is local-only and must stay untracked. F04 fan-out
+6. `.vscode/` is tracked on `main` now; keep local editor edits out of
+   feature commits (revert or commit them separately). F04 fan-out
    (`harness_fanout.py` + 18 tests) stays green, untouched.
-7. Background tasks: Step 1 (plan-only, `POST /dashboard/tasks`) is done
-   and deliberately ships no UI — the existing `/dashboard/workflows`
-   page renders the persisted events and the full answer lives in the
-   session named by the workflow id. Await the Step 2 prompt before
-   extending the runner; do not add a second failover loop or edit
-   `webchat_agent.run_agent_turn`.
+7. Background tasks: Steps 1-3 are DONE (F32/F33/F34) on
+   `background-tasks-ui` (PR #26). Next in order:
+   (a) merge PR #26, (b) cut release 0.6.2 (version lives only in
+   `invincible/__init__.py`), (c) write the Step 4/5 design in
+   `docs/BACKGROUND_TASKS.md`, then flip F35 to `active`.
+   Step 4 = a background task may stage MUTATING tools and suspend on
+   a durable approval (today an unexpected approval event is denied
+   with "approval not supported yet"); it must reuse
+   `harness_approvals`/`pending_actions`/`tool_executor`, never a
+   second approval system. Step 5 = pick ONE and document it;
+   restart-safe task records + resume is the natural completion of
+   Step 3's tracking-only checkpoints.
 
 ## Blockers
 
