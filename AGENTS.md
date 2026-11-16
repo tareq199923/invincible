@@ -209,6 +209,7 @@ Fixture semantics (`tests/conftest.py`):
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, auth realms, denylists, known limits |
 | [docs/TESTING.md](docs/TESTING.md) | Test infrastructure and per-file coverage map |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Platform direction, current state, phase plan |
+| [docs/BACKGROUND_TASKS.md](docs/BACKGROUND_TASKS.md) | Background agent tasks: shipped steps, and the Step 4/5 design |
 
 ---
 

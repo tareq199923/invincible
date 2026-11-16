@@ -560,6 +560,7 @@ pipeline, the Router, the session store, and the trimming logic consume.
 | [docs/TESTING.md](docs/TESTING.md) | Test infrastructure, fixtures, per-file coverage map. |
 | [docs/RELEASING.md](docs/RELEASING.md) | Cutting a release: versioning, build gate, PyPI workflow. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Direction, verified implemented state, phased plan. |
+| [docs/BACKGROUND_TASKS.md](docs/BACKGROUND_TASKS.md) | Background agent tasks: shipped steps and the next-step design. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, invariants, and the PR process. |
 | [SECURITY.md](SECURITY.md) | Private vulnerability reporting and scope. |
 | [CHANGELOG.md](CHANGELOG.md) | Release history. |
