@@ -202,6 +202,18 @@ scratch venv outside the repo (`invincible --version` → 0.6.1,
 `connect --help`, `update --check`); hosted production `/health` reports
 0.6.1.
 
+**0.6.2 shipped 2026-11-17:** patch bump carrying background agent tasks
+(Steps 1-3 of 5): a logged-in user can start a plan-mode agent turn that
+runs on the server with no browser attached, a dashboard to start, watch
+and stop it, and durable per-tool-call checkpoints (migration `0018`; run
+`invincible db upgrade` when upgrading). Mutating tools and approvals are
+not in this release (Step 4, see `docs/BACKGROUND_TASKS.md`). The wheel
+smoke test gained `_background_task.html` in its expected templates.
+Published from tag `v0.6.2` via the trusted-publisher dispatch; build and
+wheel smoke test green, then verified by installing from PyPI into a
+scratch venv outside the repo (`invincible --version` reports 0.6.2,
+`status --help`, `connect --help`, and `import invincible.main` all work).
+
 Everything from here is immutable: `0.3.0` can never be replaced or
 re-uploaded, only yanked and superseded. Bump `invincible/__init__.py` to
 the next unused number before tagging the next release.
