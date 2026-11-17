@@ -1015,3 +1015,39 @@ async def test_edit_file_null_new_string_deletes(tmp_path):
         store, staged["token"], True)
     assert result["status"] == "edited"
     assert target.read_text() == ""
+
+
+# ---------------------------------------------------------------------------
+# execute_staged: the one execution path shared by the fast approval path
+# (confirm_action) and the durable background-task approvals (Step 4).
+
+
+async def test_execute_staged_unknown_type_is_an_error():
+    from invincible.core.tool_executor import execute_staged
+
+    result = await execute_staged({"type": "no_such_tool", "args": {}})
+    assert result["status"] == "error"
+    assert "no_such_tool" in result["error"]
+
+
+async def test_execute_staged_computer_tool_without_executor_is_unavailable():
+    from invincible.core.tool_executor import COMPUTER_TOOLS, execute_staged
+
+    name = sorted(COMPUTER_TOOLS)[0]
+    result = await execute_staged({"type": name, "args": {}})
+    assert result["status"] == "unavailable"
+
+
+async def test_execute_staged_forwards_to_the_agent_executor():
+    from invincible.core.tool_executor import execute_staged
+
+    seen = []
+
+    async def executor(action_type, args):
+        seen.append((action_type, args))
+        return {"status": "ok"}
+
+    record = {"type": "execute_bash", "args": {"command": "echo hi"}}
+    result = await execute_staged(record, executor)
+    assert result == {"status": "ok"}
+    assert seen == [("execute_bash", {"command": "echo hi"})]

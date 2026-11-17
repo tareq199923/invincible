@@ -845,6 +845,20 @@ async def confirm_action(
         return {"status": "not_found"}
     if not approve:
         return {"status": "declined"}
+    return await execute_staged(record, executor)
+
+
+async def execute_staged(record: dict, executor=None) -> dict:
+    """Run one APPROVED staged record: ``{"type": ..., "args": {...}}``.
+
+    The single execution path shared by the fast approval path
+    (:func:`confirm_action`) and the durable slow path (background
+    tasks, via ``harness_approvals``). It never decides WHETHER to run
+    (approval, ownership and denylists are the caller's job); it only
+    decides WHERE: through ``executor`` (the owner's paired agent) when
+    one is given, locally otherwise. Computer-use tools have no local
+    path and answer ``unavailable`` without an executor.
+    """
     if record["type"] in COMPUTER_TOOLS:
         # Pack 3 computer-use: agent-only by design — there is no local
         # execution path (the server has no desktop to click). Without
