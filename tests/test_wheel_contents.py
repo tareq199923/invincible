@@ -42,7 +42,8 @@ EXPECTED_TEMPLATES = {
     "memory.html", "phone.html", "providers.html", "register.html",
     "sessions.html", "session_detail.html", "settings.html", "setup.html",
     "tasks.html", "usage.html", "workflows.html", "workflow_detail.html",
-    "_chat_rows.html", "_memory_table.html", "_provider_row.html",
+    "_background_task.html", "_chat_rows.html", "_memory_table.html",
+    "_provider_row.html",
     "_provider_rows.html", "_icons.html",
 }
 EXPECTED_STATIC = {

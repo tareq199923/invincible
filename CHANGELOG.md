@@ -9,6 +9,8 @@ are called out under **Changed** and **Removed**.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-16
+
 ### Added
 
 - Background agent tasks (Steps 1-3 of 5). A logged-in user can start a
@@ -32,6 +34,13 @@ are called out under **Changed** and **Removed**.
 - `CODE_OF_CONDUCT.md` — Contributor Covenant 2.1.
 - `SECURITY.md` — private vulnerability reporting, scope, and safe harbor.
 - This changelog.
+
+### Notes
+
+- Background tasks are **plan mode only** in this release: no mutating
+  tools and no approvals (an unexpected approval event is denied).
+  Self-hosters must run `invincible db upgrade` before upgrading to it
+  (migration `0018`).
 
 ## [0.6.1] - 2026-10-27
 
@@ -68,5 +77,6 @@ git tag --sort=v:refname
 git log --oneline v0.6.0
 ```
 
-[Unreleased]: https://github.com/tareq199923/invincible/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/tareq199923/invincible/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/tareq199923/invincible/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/tareq199923/invincible/compare/v0.6.0...v0.6.1
