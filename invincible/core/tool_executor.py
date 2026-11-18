@@ -848,7 +848,9 @@ async def confirm_action(
     return await execute_staged(record, executor)
 
 
-async def execute_staged(record: dict, executor=None) -> dict:
+async def execute_staged(
+    record: dict, executor=None, *, require_executor: bool = False
+) -> dict:
     """Run one APPROVED staged record: ``{"type": ..., "args": {...}}``.
 
     The single execution path shared by the fast approval path
@@ -858,7 +860,18 @@ async def execute_staged(record: dict, executor=None) -> dict:
     decides WHERE: through ``executor`` (the owner's paired agent) when
     one is given, locally otherwise. Computer-use tools have no local
     path and answer ``unavailable`` without an executor.
+
+    ``require_executor`` (F35 D3, default False = unchanged behavior for
+    web-chat and MCP): the durable background-task path passes True so a
+    mutating action NEVER falls back to local execution on the server
+    host. With no executor (agent routing off / no paired machine) it
+    answers ``unavailable`` and runs nothing.
     """
+    if (require_executor and executor is None
+            and record["type"] in ("execute_bash", "write_file",
+                                   "edit_file", "expose_port")):
+        return {"status": "unavailable",
+                "reason": MUTATING_UNAVAILABLE_REASON}
     if record["type"] in COMPUTER_TOOLS:
         # Pack 3 computer-use: agent-only by design — there is no local
         # execution path (the server has no desktop to click). Without
@@ -2913,6 +2926,13 @@ def stage_computer_action(
 
 _COMPUTER_UNAVAILABLE_REASON = (
     "computer-use runs on a paired Windows machine: "
+    "set INVINCIBLE_AGENT_ROUTING=1 and start one with: "
+    "invincible connect")
+
+# F35 D3: shown when a durable background action has no paired machine
+# to run on. A background task must never execute on the shared host.
+MUTATING_UNAVAILABLE_REASON = (
+    "background tasks run approved actions only on your paired machine: "
     "set INVINCIBLE_AGENT_ROUTING=1 and start one with: "
     "invincible connect")
 

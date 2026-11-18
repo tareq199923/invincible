@@ -462,7 +462,20 @@ Alongside the 10-minute fast path above, `core/harness_approvals.py`
 provides a **slow path** for human decisions that take hours or days
 (their human-in-the-loop lesson): `suspend` parks a confirmed action as
 a `pending_actions` row carrying `suspended_workflow_id` + `deadline`
-(default 24h), and `resolve` resumes it later — across process restarts.
+(default 24h), and `resolve` resumes it later — within the running process only: background tasks are not resumed
+after a restart, so suspended background approvals do NOT survive one.
+At startup, before any request is served, every suspended row left by a
+dead process is deleted (a surviving row would be a live token with no
+task attached); fast-path rows are untouched. This relies on the
+documented single-instance deployment: a second process booting would
+delete the first one's pending approvals. `resolve` claims a row with
+one atomic `DELETE ... RETURNING`, so two simultaneous approvals of one
+token settle exactly once. Listing and cleanup (`pending_for_workflow`,
+`purge_workflow`) are owner-scoped and fail closed without a subject.
+`execute_staged(require_executor=True)` makes the durable background
+path answer `unavailable` instead of running `execute_bash`,
+`write_file`, `edit_file` or `expose_port` on the server host when no
+paired agent is available; web-chat and MCP keep the old default.
 Separation is structural, not a flag check: `suspend` is the only writer
 of slow-path rows, `resolve` refuses rows with NULL `suspended_workflow_id`
 (fast-path tokens), and the fast path's `load_persisted` skips slow-path
@@ -1261,7 +1274,7 @@ The passive notice (`login`, `connect`, `doctor`) is designed to leak
 nothing and fail silent:
 
 - **Read-only egress.** One `GET https://pypi.org/pypi/invincible-ai/json`
-  (2 s timeout, once per 24 h) � no query string, no identifiers, no
+  (2 s timeout, once per 24 h) — no query string, no identifiers, no
   account or machine data, no telemetry.
 - **No automatic install.** A newer version only produces a stderr line
   with the upgrade command; the user runs it.
@@ -1271,7 +1284,7 @@ nothing and fail silent:
   ignored.
 - **Off where it cannot help.** `INVINCIBLE_NO_UPDATE_CHECK=1` (opt-out),
   `CI`, non-TTY sessions (services/scripts), editable checkouts, and
-  container images skip the check entirely � no request is made.
+  container images skip the check entirely — no request is made.
 - **Status surface.** `invincible status` reads the cache only (no extra
   network call) and prints the running version, install channel, and the
   executable that actually ran, so a shadowed multi-Python install is

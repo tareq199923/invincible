@@ -42,6 +42,21 @@ logger = logging.getLogger("invincible.harness_approvals")
 DEFAULT_SUSPEND_TTL_SECONDS = 86400.0
 
 
+def _owned_by(mapping, owner_subject: int | None) -> bool:
+    """Whether a slow-path row was staged by ``owner_subject``.
+
+    Fail closed: no subject never matches, and subject-less rows
+    (``_owner_subject`` NULL) never match a real subject, mirroring
+    ``resolve`` / ``PendingActionStore.take``.
+    """
+    if owner_subject is None:
+        return False
+    args = mapping["args"]
+    if not isinstance(args, dict):
+        return False
+    return args.get(_OWNER_SUBJECT_KEY) == owner_subject
+
+
 class ApprovalStore:
     """Durable suspend/resume over the shared ``pending_actions`` table.
 
@@ -130,11 +145,23 @@ class ApprovalStore:
                 return None
             if owner is not None and requester_subject != owner:
                 return None
-            await conn.execute(
-                pending_actions.delete().where(
-                    pending_actions.c.token == token
+            # Atomic claim: the DELETE is the single-use gate. Two
+            # concurrent resolves can both pass the SELECT above, but
+            # only one DELETE ... RETURNING removes the row; the loser
+            # (zero rows) answers exactly like an unknown token, so an
+            # approval can never be claimed - or executed - twice.
+            claimed = (
+                await conn.execute(
+                    pending_actions.delete()
+                    .where(
+                        pending_actions.c.token == token,
+                        pending_actions.c.suspended_workflow_id.is_not(None),
+                    )
+                    .returning(pending_actions.c.token)
                 )
-            )
+            ).first()
+            if claimed is None:
+                return None
             if not approve:
                 return {"status": "declined", "workflow_id": workflow_id}
             return {
@@ -144,7 +171,9 @@ class ApprovalStore:
                 "created_at": record["created_at"],
             }
 
-    async def pending_for_workflow(self, workflow_id: str) -> list[dict]:
+    async def pending_for_workflow(
+        self, workflow_id: str, *, owner_subject: int | None
+    ) -> list[dict]:
         """Slow-path rows still awaiting a human for one workflow
         (metadata only — tokens included so the dashboard can render
         them; never args contents)."""
@@ -166,6 +195,7 @@ class ApprovalStore:
                 "deadline": r._mapping["deadline"],
             }
             for r in rows
+            if _owned_by(r._mapping, owner_subject)
         ]
 
     async def sweep_expired(self, now: float | None = None) -> int:
@@ -176,6 +206,53 @@ class ApprovalStore:
                 pending_actions.delete().where(
                     pending_actions.c.suspended_workflow_id.is_not(None),
                     pending_actions.c.deadline <= ts,
+                )
+            )
+        return int(result.rowcount or 0)
+
+    async def purge_workflow(
+        self, workflow_id: str, *, owner_subject: int | None
+    ) -> int:
+        """Delete ONE owner's pending slow-path rows for ONE workflow
+        (task cancelled / finished): a late approval then reads as an
+        unknown token. Never touches another subject's rows, other
+        workflows, or fast-path rows. Returns the count deleted."""
+        if owner_subject is None:
+            return 0
+        async with self._engine.begin() as conn:
+            rows = (
+                await conn.execute(
+                    pending_actions.select().where(
+                        pending_actions.c.suspended_workflow_id
+                        == workflow_id
+                    )
+                )
+            ).all()
+            tokens = [
+                r._mapping["token"] for r in rows
+                if _owned_by(r._mapping, owner_subject)
+            ]
+            if not tokens:
+                return 0
+            result = await conn.execute(
+                pending_actions.delete().where(
+                    pending_actions.c.token.in_(tokens),
+                    pending_actions.c.suspended_workflow_id
+                    == workflow_id,
+                )
+            )
+        return int(result.rowcount or 0)
+
+    async def purge_all_suspended(self) -> int:
+        """Startup cleanup: delete EVERY slow-path row. Background
+        tasks are not resumed after a restart, so no suspended row can
+        have a live workflow waiting on it; leaving them would let a
+        stale approval be claimed with no task attached. Fast-path
+        rows (NULL workflow) are untouched. Returns the count."""
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                pending_actions.delete().where(
+                    pending_actions.c.suspended_workflow_id.is_not(None)
                 )
             )
         return int(result.rowcount or 0)

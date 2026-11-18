@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from invincible import __version__
@@ -20,6 +21,7 @@ from invincible.core.db import (
     make_engine,
     warn_if_schema_stale,
 )
+from invincible.core.harness_approvals import ApprovalStore
 from invincible.core.harness_bus import HarnessBus
 from invincible.core.harness_tunnel import TunnelRegistry
 from invincible.core.identity import ApiKeyStore, AuditLog
@@ -161,6 +163,26 @@ async def lifespan(app: FastAPI):
     # cap. In-memory on purpose (same trade-off as the agent registry) -
     # a restart cancels in-flight tasks and emits workflow.failed.
     app.state.background_tasks = BackgroundTaskRegistry()
+    # F35 Slice A: durable slow-path approvals. Background tasks are NOT
+    # resumed after a restart, so every suspended row left by a previous
+    # process belongs to a workflow that no longer exists and must never
+    # be claimable. Purge them before the app serves any request; fast-
+    # path rows (NULL workflow) are untouched.
+    approval_store = ApprovalStore(engine)
+    try:
+        purged = await approval_store.purge_all_suspended()
+    except SQLAlchemyError:
+        # Pre-0012 schema (no suspended_workflow_id yet): warn like
+        # warn_if_schema_stale does, never crash startup over it.
+        purged = 0
+        logger.warning(
+            "Could not purge orphaned suspended approvals "
+            "(run `invincible db upgrade`)")
+    if purged:
+        logger.warning(
+            "Purged %d orphaned suspended approval(s) from a previous "
+            "process", purged)
+    app.state.approval_store = approval_store
     app.state.router.run_recorder = runs.record
     yield
     # Cancel in-flight background tasks FIRST: each runner records its

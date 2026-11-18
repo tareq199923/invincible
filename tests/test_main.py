@@ -59,6 +59,51 @@ async def test_lifespan_pending_actions_opt_in(lifespan_env, monkeypatch):
         await main.app.state.pending_actions.flush_persisted()
 
 
+async def test_lifespan_wires_approval_store_and_purges_orphans(lifespan_env):
+    """F35 Slice A: the lifespan exposes app.state.approval_store and
+    purges suspended approvals left by a previous process (background
+    tasks are not resumed), while fast-path rows survive."""
+    from invincible.core.db import pending_actions
+    from invincible.core.harness_approvals import ApprovalStore
+
+    orphan = await ApprovalStore(lifespan_env).suspend(
+        workflow_id="wf-dead", action_type="execute_bash",
+        args={"command": "echo hi"}, owner_subject=1)
+    async with lifespan_env.begin() as conn:
+        await conn.execute(pending_actions.insert().values(
+            token="fast-row", type="execute_bash",
+            args={"command": "echo hi"}, created_at=1000.0))
+
+    async with main.lifespan(main.app):
+        store = main.app.state.approval_store
+        assert isinstance(store, ApprovalStore)
+        assert await store.resolve(
+            orphan, approve=True, requester_subject=1) is None
+        async with lifespan_env.connect() as conn:
+            remaining = (await conn.execute(
+                pending_actions.select())).all()
+    assert [r._mapping["token"] for r in remaining] == ["fast-row"]
+
+
+async def test_lifespan_survives_purge_failure_on_stale_schema(
+    lifespan_env, monkeypatch, caplog,
+):
+    """A schema without suspended_workflow_id (pre-0012) must warn, never
+    crash startup."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from invincible.core.harness_approvals import ApprovalStore
+
+    async def _boom(self):
+        raise SQLAlchemyError("no such column")
+
+    monkeypatch.setattr(ApprovalStore, "purge_all_suspended", _boom)
+    with caplog.at_level("WARNING", logger="invincible"):
+        async with main.lifespan(main.app):
+            assert isinstance(main.app.state.approval_store, ApprovalStore)
+    assert "Could not purge orphaned suspended approvals" in caplog.text
+
+
 async def test_lifespan_warns_when_schema_not_managed(lifespan_env, caplog):
     """create_all bootstraps tables without alembic_version; startup must
     warn loudly that `invincible db upgrade` should be run."""

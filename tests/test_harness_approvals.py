@@ -8,6 +8,8 @@
   pin for the H5 column fix).
 - HarnessBus persists workflow-scoped events only.
 """
+import asyncio
+
 from sqlalchemy import text
 
 from invincible.core.harness_approvals import ApprovalStore
@@ -137,12 +139,171 @@ async def test_pending_for_workflow_lists_metadata(pg_engine):
     await store.suspend(
         workflow_id="wf-list", action_type="execute_bash",
         args={"command": "secret-cmd"}, owner_subject=3, now=1000.0)
-    rows = await store.pending_for_workflow("wf-list")
+    rows = await store.pending_for_workflow("wf-list", owner_subject=3)
     assert len(rows) == 1
     assert rows[0]["type"] == "execute_bash"
     assert rows[0]["workflow_id"] == "wf-list"
     assert "secret-cmd" not in str(rows[0])  # metadata only
-    assert await store.pending_for_workflow("other") == []
+    assert await store.pending_for_workflow("other", owner_subject=3) == []
+
+
+async def _stage_fast_row(pg_engine, subject):
+    """Persist one FAST-path row (NULL workflow) and return its token."""
+    fast = PendingActionStore()
+    fast.attach_engine(pg_engine)
+    token = fast.put(
+        "execute_bash", {"command": "echo fast"}, owner_subject=subject)
+    await fast.flush_persisted()
+    return token
+
+
+async def _fast_row_survives(pg_engine, token, subject) -> bool:
+    fresh = PendingActionStore()
+    fresh.attach_engine(pg_engine)
+    await fresh.load_persisted()
+    return fresh.take(token, requester_subject=subject) is not None
+
+
+# ---------------------------------------------------------------------------
+# F35 Slice A: single-use under concurrency, owner isolation, cleanup.
+
+
+async def test_concurrent_resolve_claims_exactly_once(pg_engine):
+    """Many simultaneous approvals of ONE token: exactly one gets the
+    staged record, so the action can never be executed twice."""
+    token = await ApprovalStore(pg_engine).suspend(
+        workflow_id="wf-race", action_type="execute_bash",
+        args={"command": "echo hi"}, owner_subject=42, now=1000.0)
+    results = await asyncio.gather(*(
+        ApprovalStore(pg_engine).resolve(
+            token, approve=True, requester_subject=42, now=1000.0)
+        for _ in range(8)
+    ))
+    winners = [r for r in results if r is not None]
+    assert len(winners) == 1
+    assert winners[0]["args"] == {"command": "echo hi"}
+    assert winners[0]["workflow_id"] == "wf-race"
+
+
+async def test_concurrent_approve_and_deny_settle_once(pg_engine):
+    """An approve racing a deny resolves exactly one way, and the token
+    is dead afterwards."""
+    token = await ApprovalStore(pg_engine).suspend(
+        workflow_id="wf-race2", action_type="write_file",
+        args={"path": "a", "content": "b"}, owner_subject=7, now=1000.0)
+    results = await asyncio.gather(
+        ApprovalStore(pg_engine).resolve(
+            token, approve=True, requester_subject=7, now=1000.0),
+        ApprovalStore(pg_engine).resolve(
+            token, approve=False, requester_subject=7, now=1000.0),
+    )
+    assert sum(r is not None for r in results) == 1
+    assert await ApprovalStore(pg_engine).resolve(
+        token, approve=True, requester_subject=7, now=1000.0) is None
+
+
+async def test_foreign_resolves_never_consume_the_owners_approval(
+    pg_engine,
+):
+    """Another user hammering a token (approve or deny) gets None every
+    time and leaves the owner's approval intact."""
+    store = ApprovalStore(pg_engine)
+    token = await store.suspend(
+        workflow_id="wf-iso", action_type="execute_bash",
+        args={"command": "echo hi"}, owner_subject=42, now=1000.0)
+    foreign = await asyncio.gather(*(
+        ApprovalStore(pg_engine).resolve(
+            token, approve=bool(i % 2), requester_subject=99, now=1000.0)
+        for i in range(6)
+    ))
+    assert all(r is None for r in foreign)
+    owner = await store.resolve(
+        token, approve=True, requester_subject=42, now=1000.0)
+    assert owner is not None and owner["workflow_id"] == "wf-iso"
+
+
+async def test_pending_for_workflow_is_owner_scoped(pg_engine):
+    """Listing one workflow id never reveals another user's approvals,
+    even when the workflow id is the same; no-subject lists nothing."""
+    store = ApprovalStore(pg_engine)
+    mine = await store.suspend(
+        workflow_id="wf-own", action_type="execute_bash",
+        args={"command": "mine"}, owner_subject=1, now=1000.0)
+    theirs = await store.suspend(
+        workflow_id="wf-own", action_type="execute_bash",
+        args={"command": "theirs"}, owner_subject=2, now=1000.0)
+    await store.suspend(
+        workflow_id="wf-own", action_type="execute_bash",
+        args={"command": "legacy"}, owner_subject=None, now=1000.0)
+
+    rows1 = await store.pending_for_workflow("wf-own", owner_subject=1)
+    rows2 = await store.pending_for_workflow("wf-own", owner_subject=2)
+    assert [r["token"] for r in rows1] == [mine]
+    assert [r["token"] for r in rows2] == [theirs]
+    assert "mine" not in str(rows1) and "theirs" not in str(rows2)
+    assert await store.pending_for_workflow(
+        "wf-own", owner_subject=3) == []
+    # Fail closed: no subject lists nothing (subject-less rows included).
+    assert await store.pending_for_workflow(
+        "wf-own", owner_subject=None) == []
+
+
+async def test_purge_workflow_is_owner_and_workflow_scoped(pg_engine):
+    """Cleanup removes only the owner's rows for that workflow, so a
+    late approval reads as unknown; others' rows, other workflows and
+    fast-path rows are untouched."""
+    store = ApprovalStore(pg_engine)
+    mine = await store.suspend(
+        workflow_id="wf-p", action_type="execute_bash",
+        args={"command": "a"}, owner_subject=1, now=1000.0)
+    theirs = await store.suspend(
+        workflow_id="wf-p", action_type="execute_bash",
+        args={"command": "b"}, owner_subject=2, now=1000.0)
+    await store.suspend(
+        workflow_id="wf-q", action_type="execute_bash",
+        args={"command": "c"}, owner_subject=1, now=1000.0)
+    fast = await _stage_fast_row(pg_engine, 1)
+
+    # A non-owner (or no subject) purge deletes nothing.
+    assert await store.purge_workflow("wf-p", owner_subject=3) == 0
+    assert await store.purge_workflow("wf-p", owner_subject=None) == 0
+    assert len(await store.pending_for_workflow(
+        "wf-p", owner_subject=1)) == 1
+
+    assert await store.purge_workflow("wf-p", owner_subject=1) == 1
+    # Late approval after cleanup behaves like an unknown token.
+    assert await store.resolve(
+        mine, approve=True, requester_subject=1, now=1000.0) is None
+    # Everything else survives.
+    survivor = await store.resolve(
+        theirs, approve=True, requester_subject=2, now=1000.0)
+    assert survivor is not None and survivor["workflow_id"] == "wf-p"
+    assert len(await store.pending_for_workflow(
+        "wf-q", owner_subject=1)) == 1
+    assert await _fast_row_survives(pg_engine, fast, 1)
+    # Idempotent.
+    assert await store.purge_workflow("wf-p", owner_subject=1) == 0
+
+
+async def test_purge_all_suspended_leaves_fast_path_rows(pg_engine):
+    """Startup cleanup: every slow-path row dies (no workflow resumes
+    after a restart), fast-path rows are untouched."""
+    store = ApprovalStore(pg_engine)
+    a = await store.suspend(
+        workflow_id="wf-a", action_type="execute_bash",
+        args={"command": "a"}, owner_subject=1, now=1000.0)
+    b = await store.suspend(
+        workflow_id="wf-b", action_type="write_file",
+        args={"path": "p", "content": "c"}, owner_subject=2, now=1000.0)
+    fast = await _stage_fast_row(pg_engine, 1)
+
+    assert await store.purge_all_suspended() == 2
+    for token, subject in ((a, 1), (b, 2)):
+        assert await store.resolve(
+            token, approve=True, requester_subject=subject,
+            now=1000.0) is None
+    assert await _fast_row_survives(pg_engine, fast, 1)
+    assert await store.purge_all_suspended() == 0
 
 
 async def test_bus_persists_only_workflow_scoped_events(pg_engine):

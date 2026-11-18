@@ -1051,3 +1051,71 @@ async def test_execute_staged_forwards_to_the_agent_executor():
     result = await execute_staged(record, executor)
     assert result == {"status": "ok"}
     assert seen == [("execute_bash", {"command": "echo hi"})]
+
+
+# F35 D3: the durable background path must never run a mutating action on
+# the server host; the default (web-chat / MCP) behavior is unchanged.
+
+
+async def test_execute_staged_require_executor_never_runs_locally(
+    monkeypatch,
+):
+    from invincible.core import tool_executor
+
+    async def _boom(*args, **kwargs):
+        raise AssertionError("local execution must not happen")
+
+    for name in ("_run_command", "_write_file", "_edit_file"):
+        monkeypatch.setattr(tool_executor, name, _boom)
+
+    for action in ("execute_bash", "write_file", "edit_file", "expose_port"):
+        result = await tool_executor.execute_staged(
+            {"type": action, "args": {}}, None, require_executor=True)
+        assert result == {
+            "status": "unavailable",
+            "reason": tool_executor.MUTATING_UNAVAILABLE_REASON,
+        }
+
+
+async def test_execute_staged_require_executor_still_forwards_to_agent():
+    from invincible.core.tool_executor import execute_staged
+
+    seen = []
+
+    async def executor(action_type, args):
+        seen.append((action_type, args))
+        return {"status": "ok"}
+
+    record = {"type": "write_file", "args": {"path": "p", "content": "c"}}
+    result = await execute_staged(record, executor, require_executor=True)
+    assert result == {"status": "ok"}
+    assert seen == [("write_file", {"path": "p", "content": "c"})]
+
+
+async def test_execute_staged_default_still_runs_locally_without_executor(
+    monkeypatch,
+):
+    """Regression pin: without the opt-in flag, web-chat/MCP behavior is
+    byte-identical (local fallback when no executor is given)."""
+    from invincible.core import tool_executor
+
+    called = []
+
+    async def fake_write(path, content):
+        called.append((path, content))
+        return {"status": "written"}
+
+    monkeypatch.setattr(tool_executor, "_write_file", fake_write)
+    result = await tool_executor.execute_staged(
+        {"type": "write_file", "args": {"path": "p", "content": "c"}})
+    assert result == {"status": "written"}
+    assert called == [("p", "c")]
+
+
+async def test_execute_staged_require_executor_unknown_type_still_errors():
+    from invincible.core.tool_executor import execute_staged
+
+    result = await execute_staged(
+        {"type": "no_such_tool", "args": {}}, None, require_executor=True)
+    assert result["status"] == "error"
+    assert "no_such_tool" in result["error"]

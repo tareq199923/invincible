@@ -143,10 +143,15 @@ workflow with a distinct "approval timed out" message.
 pending rows before the workflow fails, so no approval can later be
 approved against a dead task.
 
-**D8 — The cap.** `MAX_RUNNING_PER_USER = 2` counts **running** tasks.
-A **suspended** task holds a separate, smaller allowance
-(`MAX_SUSPENDED_PER_USER = 1`) so a user can never deadlock their own
-queue with two tasks waiting for themselves.
+**D8 — The cap.** `MAX_RUNNING_PER_USER = 2` counts every live task, **including a
+suspended task waiting for approval**. A suspended task keeps its slot
+until it is approved, rejected, cancelled, or its approval expires, so
+there is no separate suspended allowance and no new registry state.
+Answering or cancelling a waiting task frees its slot, so a user cannot
+deadlock their own queue. Decision (project owner, 2026-11-18): a
+separate allowance (`MAX_SUSPENDED_PER_USER`) was considered and
+deliberately not adopted; revisit it only if waiting on approval proves
+too blocking in practice.
 
 **D9 — Events and audit.** Reuse the existing contract:
 `approval.requested` and `approval.resolved` (both already emitted on
