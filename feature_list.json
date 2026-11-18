@@ -380,8 +380,15 @@
   {
     "behavior": "a background task may stage MUTATING tools and suspend on a durable approval instead of failing: the staged action is persisted through the existing pending_actions/harness_approvals path, the owner approves or denies from the dashboard (identical 404 for a foreign id), approval resumes the same task, denial/timeout/cancellation resolves it with distinct failure text, every event and audit row stays metadata-only, and the per-user running cap keeps counting a suspended task",
     "id": "F35",
-    "state": "planned",
+    "state": "active",
     "title": "Background tasks: mutating tools + durable approvals (Step 4)",
     "verification": "ruff check . && pytest tests/test_background_tasks.py tests/test_background_tasks_ui.py tests/test_harness_approvals.py"
+  },
+  {
+    "behavior": "the internal docs match the code again: docs/ARCHITECTURE.md states the live loop cap of 25 (not 10), the 31 webchat registry tools (not 7/9), and migration head 0018 (not 0017); docs/MCP_PROTOCOL.md and docs/TESTING.md state 34 MCP tools (not 20/23); docs/HARNESS_PLAN.md carries a fresh last-verified date plus command; every changed number is re-derived from core/harness_tools.py, core/webchat_agent.py, and core/db.py before the edit, and no .zcode/pattern-map artifact is copied into docs/ or the public docs site",
+    "id": "F36",
+    "state": "planned",
+    "title": "Internal docs-accuracy pass from pattern-map audit",
+    "verification": "python -m json.tool feature_list.json && ruff check . && pytest tests/test_docs.py tests/test_wheel_contents.py"
   }
 ]

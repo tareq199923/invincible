@@ -5,6 +5,23 @@
 
 ## Current State
 
+- Docs-accuracy baseline verified at `b883560` (2026-11-17) from code and
+  tests, not from older prose: **35** registry tools, **34** exposed over
+  MCP, **31** in webchat; agent-loop cap **25**
+  (`webchat_agent.MAX_TOOL_ITERATIONS`); explore **8 iterations / 300
+  words**; fan-out width **4**, **4 iterations/step**, **150 words/step**;
+  background tasks **30 min / 2 per user**; injection budget **3000**
+  tokens; **17** harness event types; migration head **0018**. Design facts
+  to keep straight: memory is **four stores** (conversation / facts /
+  continuity / context builder) and they are never merged; there are
+  **two loops** (provider failover in `router._iter_attempts`, agent
+  tool-use in `webchat_agent`); `/mcp` is the **control plane** and the
+  paired agent is the execution plane; the continuity interruption note is
+  failure awareness, not self-critique; background checkpoints are
+  **progress tracking, not resume**. Stale docs are tracked as F36:
+  `ARCHITECTURE.md` (cap 10, 7/9 tools, migration 0017),
+  `MCP_PROTOCOL.md` (20 tools), `TESTING.md` (23 tools). Local working
+  notes: `.zcode/pattern-map/` (git-ignored).
 - Background tasks Step 3 done (`passing` as F34): durable per-tool-call
   checkpoints. New table `background_task_checkpoints` (migration
   `0018`, mirrored in `core/db.py`): one row per SUCCESSFUL tool call,
@@ -962,18 +979,34 @@
 
 ## In Progress
 
-- No `active` entry in `feature_list.json` (WIP=1 respected: an entry
-  flips to `active` only when its work actually starts). Background
-  tasks Steps 1-3 are DONE and waiting on the merge; Step 4 is
-  `planned` as F35.
-- Background tasks (Steps 1-3 of 5) live on branch
-  `background-tasks-ui` / PR #26 (OPEN, mergeable, CI green on
-  3.10-3.14):
+- One `active` entry: F35 (background tasks, Step 4). Steps 1-3 are
+  shipped (`passing`); F36 and F30 stay `planned`.
+- Internal docs-accuracy pass is `planned` as F36 (not started): fix the
+  drift recorded in the baseline above — `docs/ARCHITECTURE.md` (loop cap
+  10 → 25, webchat 7/9 → 31 registry tools, migration 0017 → 0018),
+  `docs/MCP_PROTOCOL.md` (20 → 34 tools), `docs/TESTING.md` (23 → 34
+  tools), and refresh `docs/HARNESS_PLAN.md`'s last-verified stamp. This
+  is internal accuracy work, not new product surface. Working notes live
+  in `.zcode/pattern-map/` (git-ignored).
+- Background tasks Steps 1-3 shipped in 0.6.2 (PR #26 merged as
+  `b508676`):
   - F32 (`passing`): background plan-mode agent tasks (Step 1).
   - F33 (`passing`): background tasks dashboard UI (Step 2).
   - F34 (`passing`): durable per-tool-call checkpoints (Step 3).
-- F35 (`planned`): background tasks with mutating tools + durable
-  approvals (Step 4). Not started.
+- F35 (`active`): background tasks with mutating tools + durable
+  approvals (Step 4). Slice A (groundwork) is committed as `d9852ec` on
+  `background-tasks-approvals`: atomic single-use
+  `ApprovalStore.resolve`, owner-scoped `pending_for_workflow`,
+  `purge_workflow` / `purge_all_suspended` (startup purge; a purge
+  failure warns and continues), `app.state.approval_store`, and
+  `execute_staged(require_executor=True)` (D3, no caller yet). Full
+  suite 2232 passed / 11 skipped / 1 deselected, ruff clean. Cap
+  decision (D8): a suspended task counts toward `MAX_RUNNING_PER_USER`.
+  Slices B-D (runner lifecycle, endpoints/UI, audit + final docs) are
+  NOT started; the runner still denies approval events. Slice B
+  gotcha: `tests/conftest.py::client` builds `app.state` by hand and
+  does not set `approval_store`, so the first endpoint that reads it
+  will fail in the full-app fixture until the fixture sets it.
 - F30 (`planned`): embedding/semantic retrieval backend. Not started.
 - F29 (`passing`): per-account Workflows dashboard timeline.
 
@@ -1007,11 +1040,13 @@
 6. `.vscode/` is tracked on `main` now; keep local editor edits out of
    feature commits (revert or commit them separately). F04 fan-out
    (`harness_fanout.py` + 18 tests) stays green, untouched.
-7. Background tasks: Steps 1-3 are DONE (F32/F33/F34) on
-   `background-tasks-ui` (PR #26). Next in order:
-   (a) merge PR #26, (b) cut release 0.6.2 (version lives only in
-   `invincible/__init__.py`), (c) write the Step 4/5 design in
-   `docs/BACKGROUND_TASKS.md`, then flip F35 to `active`.
+7. Background tasks: Steps 1-3 shipped in 0.6.2 (PR #26 merged);
+   F32/F33/F34 are `passing`. Next in order: (a) write the Step 4/5 design
+   in `docs/BACKGROUND_TASKS.md` (D8 is recorded), (b) land Slice B (runner
+   lifecycle), then Slice C (endpoints/UI) and Slice D (audit + final
+   docs), (c) flip F35 to `passing` when its acceptance criteria hold,
+   (d) cut the next release (version lives only in
+   `invincible/__init__.py`).
    Step 4 = a background task may stage MUTATING tools and suspend on
    a durable approval (today an unexpected approval event is denied
    with "approval not supported yet"); it must reuse
@@ -1019,6 +1054,11 @@
    second approval system. Step 5 = pick ONE and document it;
    restart-safe task records + resume is the natural completion of
    Step 3's tracking-only checkpoints.
+8. Docs-accuracy pass (F36, `planned`): use `.zcode/pattern-map/findings.md`
+   (git-ignored) as the worklist, fix the stale counts in
+   `ARCHITECTURE.md`, `MCP_PROTOCOL.md`, `TESTING.md`, and re-stamp
+   `HARNESS_PLAN.md`. Re-verify every number against code before editing a
+   doc; the ledger is a snapshot at `b883560`, not a live source.
 
 ## Blockers
 
