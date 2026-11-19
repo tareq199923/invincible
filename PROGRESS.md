@@ -999,8 +999,8 @@
   `ApprovalStore.resolve`, owner-scoped `pending_for_workflow`,
   `purge_workflow` / `purge_all_suspended` (startup purge; a purge
   failure warns and continues), `app.state.approval_store`, and
-  `execute_staged(require_executor=True)` (D3). Slice B is IMPLEMENTED
-  in the working tree, uncommitted and awaiting review:
+  `execute_staged(require_executor=True)` (D3). Slice B is committed as
+  `4a77a39`:
   `staged_call_args` / `prepare_staged_action` / `staged_response`
   extraction in `tool_executor` (both approval paths scrub model args;
   `execute_bash` keeps only `command`, so its 30s command timeout is
