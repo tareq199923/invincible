@@ -1105,6 +1105,20 @@ def test_stage_mutating_edit_file_null_safety(tmp_path):
     assert record["args"]["new_string"] == ""
 
 
+def test_stage_mutating_ignores_out_of_schema_timeout():
+    """Fast-path byte identity: the stored timeout stays 30s (F35 D2)."""
+    from invincible.core import tool_executor
+    from invincible.core.webchat_agent import _stage_mutating
+
+    store = tool_executor.PendingActionStore()
+    staged = _stage_mutating(
+        store, "execute_bash",
+        {"command": "echo hi", "timeout": 600}, 1,
+    )
+    record = store.take(staged["token"], requester_subject=1)
+    assert record["args"] == {"command": "echo hi", "timeout": 30.0}
+
+
 def test_target_label_for_computer_tools():
     from invincible.core.webchat_agent import target_label
 

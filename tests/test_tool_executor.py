@@ -84,6 +84,48 @@ async def test_execute_bash_blocked_command_never_issues_token(monkeypatch):
     assert len(store) == 0  # denylist short-circuits before staging
 
 
+def test_prepare_staged_action_validates_without_staging():
+    """F35 D2: the slow path needs a tokenless validate step."""
+    record = tool_executor.prepare_staged_action(
+        "execute_bash", {"command": "echo hi"})
+    assert record == {
+        "type": "execute_bash",
+        "args": {"command": "echo hi", "timeout": 30.0},
+    }
+    # Both approval paths build the staged input through this scrub, so
+    # an out-of-schema timeout can never reach the paired machine.
+    assert tool_executor.staged_call_args(
+        "execute_bash", {"command": "echo hi", "timeout": 600}
+    ) == {"command": "echo hi"}
+    other = {"path": "notes.txt", "content": "x"}
+    assert tool_executor.staged_call_args("write_file", other) is other
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.prepare_staged_action(
+            "execute_bash", {"command": "sudo rm -rf /"})
+    with pytest.raises(tool_executor.ToolBlocked):
+        tool_executor.prepare_staged_action(
+            "write_file",
+            {"path": os.path.join(tool_executor._REPO_ROOT, ".env"),
+             "content": "SOME_SECRET=stolen"},
+        )
+
+
+def test_prepare_staged_action_edit_null_and_computer_shape():
+    record = tool_executor.prepare_staged_action(
+        "edit_file",
+        {"path": "notes.txt", "old_string": None, "new_string": None,
+         "replace_all": True},
+    )
+    assert record["args"] == {
+        "path": "notes.txt",
+        "old_string": "",
+        "new_string": "",
+        "replace_all": True,
+    }
+    with pytest.raises(ValueError):
+        tool_executor.prepare_staged_action("click", {})
+
+
 async def test_execute_bash_returns_pending_confirmation(monkeypatch):
     store = make_store()
     called = []

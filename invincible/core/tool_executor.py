@@ -710,6 +710,145 @@ async def _edit_file(
                 os.unlink(tmp)
 
 
+def staged_call_args(name: str, args: dict | None) -> dict:
+    """Cut model-supplied args down to one mutating call's schema (F35 D2).
+
+    ``execute_bash`` exposes exactly one field (``command``); its 30 s
+    command timeout is a server default, never a model choice. Both
+    approval paths (fast ``PendingActionStore`` and durable
+    ``ApprovalStore``) build the staged input through here, so neither
+    can be widened by an out-of-schema ``timeout`` argument.
+    """
+    args = args or {}
+    if name == "execute_bash":
+        return {"command": args.get("command", "")}
+    return args
+
+
+def prepare_staged_action(name: str, args: dict | None) -> dict:
+    """Validate one mutating call WITHOUT staging it (F35 D2).
+
+    The single validation gate for both approval paths: the fast path
+    (``PendingActionStore`` for webchat/``/mcp``) and the durable slow
+    path (``ApprovalStore`` for background tasks). Returns a staged
+    record ``{"type", "args"}`` ready for either store; writes nothing.
+
+    Raises ``ToolBlocked`` on a denylist hit (no token may ever be
+    issued) and ``ValueError`` on a shape error. Callers map both to a
+    model-facing result.
+    """
+    args = args or {}
+    if name == "execute_bash":
+        command = str(args.get("command", ""))
+        check_denylist(command)  # raises ToolBlocked; no token
+        return {
+            "type": name,
+            "args": {"command": command,
+                     "timeout": args.get("timeout", 30.0)},
+        }
+    if name == "write_file":
+        path = str(args.get("path", ""))
+        check_write_denylist(path)  # raises ToolBlocked; no token
+        return {
+            "type": name,
+            "args": {"path": path,
+                     "content": str(args.get("content", ""))},
+        }
+    if name == "edit_file":
+        path = str(args.get("path", ""))
+        check_edit_denylist(path)  # raises ToolBlocked; no token
+        # JSON null is not the string "None": a null new_string deletes
+        # text, a null/missing old_string errors like an empty one.
+        old_raw = args.get("old_string")
+        new_raw = args.get("new_string")
+        return {
+            "type": name,
+            "args": {
+                "path": path,
+                "old_string": "" if old_raw is None else str(old_raw),
+                "new_string": "" if new_raw is None else str(new_raw),
+                "replace_all": args.get("replace_all", False) is True,
+            },
+        }
+    if name in COMPUTER_TOOLS:
+        # ValueError on shape, ToolBlocked on a denylisted chord/URL.
+        return {"type": name, "args": normalize_computer_args(name, args)}
+    from invincible.core import harness_tools
+
+    raise ToolBlocked(
+        f"Unknown mutating tool: {name}. Valid tools: "
+        f"{', '.join(harness_tools.approval_required_names())}.")
+
+
+def staged_response(record: dict, token: str) -> dict:
+    """Build the ``pending_confirmation`` response for a prepared record.
+
+    Shared by the fast-path staging helpers and ``tool_dispatch`` so the
+    wire shape cannot drift between them. Prints the same one-line
+    pending notice the MCP surface has always emitted.
+    """
+    name = record["type"]
+    args = record["args"]
+    if name == "execute_bash":
+        command = args.get("command", "")
+        print(f'[MCP] Pending {token}: execute_bash "{command}"')
+        return {
+            "status": "pending_confirmation",
+            "token": token,
+            "action": name,
+            "command": command,
+            "message": (
+                "Call confirm_action with this token "
+                "(approve=true/false) to proceed."
+            ),
+        }
+    if name == "write_file":
+        path = args.get("path", "")
+        content = args.get("content", "")
+        print(
+            f"[MCP] Pending {token}: write_file {path} "
+            f"({len(content)} bytes)")
+        return {
+            "status": "pending_confirmation",
+            "token": token,
+            "action": name,
+            "path": path,
+            "content_length": len(content),
+            "message": (
+                "Call confirm_action with this token "
+                "(approve=true/false) to proceed."
+            ),
+        }
+    if name == "edit_file":
+        path = args.get("path", "")
+        print(f"[MCP] Pending {token}: edit_file {path}")
+        return {
+            "status": "pending_confirmation",
+            "token": token,
+            "action": name,
+            "path": path,
+            "message": (
+                "Call confirm_action with this token "
+                "(approve=true/false) to proceed."
+            ),
+        }
+    if name == "type_text":
+        summary = f"type_text ({len(args['text'])} chars)"
+    else:
+        summary = f"{name} {json.dumps(args)[:160]}"
+    print(f"[MCP] Pending {token}: {summary}")
+    return {
+        "status": "pending_confirmation",
+        "token": token,
+        "action": name,
+        "args": args,
+        "message": (
+            "Call confirm_action with this token "
+            "(approve=true/false) to proceed."
+        ),
+    }
+
+
 def execute_bash(
     command: str,
     store: PendingActionStore,
@@ -724,24 +863,11 @@ def execute_bash(
     ``pending_confirmation`` response; the caller must then call
     :func:`confirm_action` with that token to run (or discard) it.
     """
-    check_denylist(command)  # raises ToolBlocked; caller maps it to a response
-
+    record = prepare_staged_action(
+        "execute_bash", {"command": command, "timeout": timeout})
     token = store.put(
-        "execute_bash",
-        {"command": command, "timeout": timeout},
-        owner_subject=owner_subject,
-    )
-    print(f'[MCP] Pending {token}: execute_bash "{command}"')
-    return {
-        "status": "pending_confirmation",
-        "token": token,
-        "action": "execute_bash",
-        "command": command,
-        "message": (
-            "Call confirm_action with this token "
-            "(approve=true/false) to proceed."
-        ),
-    }
+        record["type"], record["args"], owner_subject=owner_subject)
+    return staged_response(record, token)
 
 
 def write_file(
@@ -756,25 +882,11 @@ def write_file(
     no token), then a ``pending_confirmation`` response carrying a token
     the caller must confirm via :func:`confirm_action`.
     """
-    check_write_denylist(path)  # raises ToolBlocked; caller maps it to a response
-
+    record = prepare_staged_action(
+        "write_file", {"path": path, "content": content})
     token = store.put(
-        "write_file",
-        {"path": path, "content": content},
-        owner_subject=owner_subject,
-    )
-    print(f"[MCP] Pending {token}: write_file {path} ({len(content)} bytes)")
-    return {
-        "status": "pending_confirmation",
-        "token": token,
-        "action": "write_file",
-        "path": path,
-        "content_length": len(content),
-        "message": (
-            "Call confirm_action with this token "
-            "(approve=true/false) to proceed."
-        ),
-    }
+        record["type"], record["args"], owner_subject=owner_subject)
+    return staged_response(record, token)
 
 
 def edit_file(
@@ -792,25 +904,14 @@ def edit_file(
     action result). Same denylist + approval + routing as ``write_file``
     (both the given path and the resolved symlink target are checked).
     """
-    check_edit_denylist(path)  # raises ToolBlocked; caller maps it to a response
-
-    token = store.put(
+    record = prepare_staged_action(
         "edit_file",
         {"path": path, "old_string": old_string,
          "new_string": new_string, "replace_all": bool(replace_all)},
-        owner_subject=owner_subject,
     )
-    print(f"[MCP] Pending {token}: edit_file {path}")
-    return {
-        "status": "pending_confirmation",
-        "token": token,
-        "action": "edit_file",
-        "path": path,
-        "message": (
-            "Call confirm_action with this token "
-            "(approve=true/false) to proceed."
-        ),
-    }
+    token = store.put(
+        record["type"], record["args"], owner_subject=owner_subject)
+    return staged_response(record, token)
 
 
 async def confirm_action(
@@ -2905,23 +3006,10 @@ def stage_computer_action(
     the agent executor; there is deliberately no local execution path
     (see confirm_action's Pack 3 arm).
     """
-    normalized = normalize_computer_args(name, args or {})
-    token = store.put(name, normalized, owner_subject=owner_subject)
-    if name == "type_text":
-        summary = f"type_text ({len(normalized['text'])} chars)"
-    else:
-        summary = f"{name} {json.dumps(normalized)[:160]}"
-    print(f"[MCP] Pending {token}: {summary}")
-    return {
-        "status": "pending_confirmation",
-        "token": token,
-        "action": name,
-        "args": normalized,
-        "message": (
-            "Call confirm_action with this token "
-            "(approve=true/false) to proceed."
-        ),
-    }
+    record = prepare_staged_action(name, args or {})
+    token = store.put(
+        record["type"], record["args"], owner_subject=owner_subject)
+    return staged_response(record, token)
 
 
 _COMPUTER_UNAVAILABLE_REASON = (

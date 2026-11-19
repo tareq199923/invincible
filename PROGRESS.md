@@ -994,19 +994,41 @@
   - F33 (`passing`): background tasks dashboard UI (Step 2).
   - F34 (`passing`): durable per-tool-call checkpoints (Step 3).
 - F35 (`active`): background tasks with mutating tools + durable
-  approvals (Step 4). Slice A (groundwork) is committed as `d9852ec` on
-  `background-tasks-approvals`: atomic single-use
+  approvals (Step 4). Slice A (durable groundwork) is committed as
+  `d9852ec` on `background-tasks-approvals`: atomic single-use
   `ApprovalStore.resolve`, owner-scoped `pending_for_workflow`,
   `purge_workflow` / `purge_all_suspended` (startup purge; a purge
   failure warns and continues), `app.state.approval_store`, and
-  `execute_staged(require_executor=True)` (D3, no caller yet). Full
-  suite 2232 passed / 11 skipped / 1 deselected, ruff clean. Cap
-  decision (D8): a suspended task counts toward `MAX_RUNNING_PER_USER`.
-  Slices B-D (runner lifecycle, endpoints/UI, audit + final docs) are
-  NOT started; the runner still denies approval events. Slice B
-  gotcha: `tests/conftest.py::client` builds `app.state` by hand and
-  does not set `approval_store`, so the first endpoint that reads it
-  will fail in the full-app fixture until the fixture sets it.
+  `execute_staged(require_executor=True)` (D3). Slice B is IMPLEMENTED
+  in the working tree, uncommitted and awaiting review:
+  `staged_call_args` / `prepare_staged_action` / `staged_response`
+  extraction in `tool_executor` (both approval paths scrub model args;
+  `execute_bash` keeps only `command`, so its 30s command timeout is
+  never model-supplied; webchat's `tool_dispatch.stage_mutating` is now
+  validate-then-put, and the `/mcp` staging helpers keep their wire
+  shapes), `ApprovalWaiter.register` / `wait_decision` (the rendezvous
+  is registered at stage time, so the approval cannot race the yield
+  that announces it), `_execute_call(durable=...)` staging, waiting,
+  and resolving through `DurableApprovalAdapter` (3600s TTL,
+  `require_executor=True`, deny -> `{"status": "declined"}` and the turn
+  continues, timeout -> `"approval timed out"`), metadata-only
+  `approval.requested` / `approval.resolved` bus events, and a `finally`
+  purge on every exit. `_execute_task` accepts only `plan` / `manual`
+  and raises `BackgroundTaskError` before preparation for any other
+  mode (D1). Tests: 7 manual-mode runner tests (approve-once + replayed
+  approval, out-of-schema timeout scrubbed to 30.0, deny-continues,
+  blocked command never stages + metadata-only audit, no executor ->
+  `unavailable`, timeout, cancel + D8 cap), an unsupported-mode guard
+  test, and extraction pins. `ruff check .` clean; targeted runner/tool/
+  agent files 182 passed / 6 skipped; FULL suite 2243 passed / 11
+  skipped / 1 deselected (388.02s, 40 warnings, Windows, PostgreSQL on
+  127.0.0.1:5433).
+  Slices C (endpoints/UI) and D (audit +
+  final docs) are NOT started; the endpoint still rejects non-plan
+  modes. `tests/conftest.py::client` still lacks
+  `app.state.approval_store` (only Slice C needs it). D4: ownership
+  stays in JSONB, so there is no migration `0019`; `docs/
+  BACKGROUND_TASKS.md` now says so. Clean-state checklist 5/5 ticked.
 - F30 (`planned`): embedding/semantic retrieval backend. Not started.
 - F29 (`passing`): per-account Workflows dashboard timeline.
 
@@ -1041,15 +1063,13 @@
    feature commits (revert or commit them separately). F04 fan-out
    (`harness_fanout.py` + 18 tests) stays green, untouched.
 7. Background tasks: Steps 1-3 shipped in 0.6.2 (PR #26 merged);
-   F32/F33/F34 are `passing`. Next in order: (a) write the Step 4/5 design
-   in `docs/BACKGROUND_TASKS.md` (D8 is recorded), (b) land Slice B (runner
-   lifecycle), then Slice C (endpoints/UI) and Slice D (audit + final
-   docs), (c) flip F35 to `passing` when its acceptance criteria hold,
-   (d) cut the next release (version lives only in
-   `invincible/__init__.py`).
+   F32/F33/F34 are `passing`. Step 4 is landing in slices: Slice A
+   shipped (`d9852ec`), Slice B is implemented (review pending), then
+   Slice C (endpoints/UI) and Slice D (audit + final docs); flip F35 to
+   `passing` when its acceptance criteria hold, then cut the next
+   release (version lives only in `invincible/__init__.py`).
    Step 4 = a background task may stage MUTATING tools and suspend on
-   a durable approval (today an unexpected approval event is denied
-   with "approval not supported yet"); it must reuse
+   a durable approval; it must reuse
    `harness_approvals`/`pending_actions`/`tool_executor`, never a
    second approval system. Step 5 = pick ONE and document it;
    restart-safe task records + resume is the natural completion of

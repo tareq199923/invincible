@@ -1,16 +1,17 @@
 # invincible/core/background_tasks.py
-"""Cookie-realm background agent tasks (plan mode only).
+"""Cookie-realm background agent tasks (plan, or manual with approvals).
 
 A logged-in user can start a task that runs on the server without a
 browser attached. Every task goes through the SAME one-shot pipeline the
 dashboard webchat uses - ``chat_service.prepare_chat`` followed by
-``webchat_agent.run_agent_turn(mode="plan")``, hence the single
-``router._iter_attempts`` failover loop - and persists its answer in a
-chat session whose id is the workflow id.
+``webchat_agent.run_agent_turn`` (plan, or manual with a durable
+approval seam) - hence the single ``router._iter_attempts`` failover
+loop - and persists its answer in a chat session whose id is the
+workflow id.
 
 Layering: pure ``core/`` business logic. The registry, stores, executor,
-approval waiter, and the pre-resolved ``byok`` tuple are injected by the
-endpoint. No FastAPI, and no ``endpoints/`` imports.
+approval store/waiter, and the pre-resolved ``byok`` tuple are injected
+by the endpoint. No FastAPI, and no ``endpoints/`` imports.
 """
 from __future__ import annotations
 
@@ -39,6 +40,12 @@ BACKGROUND_TASK_TIMEOUT_SECONDS = 30 * 60
 # In-process by design, like the agent registry and approval waiter.
 MAX_RUNNING_PER_USER = 2
 
+# F35 D6: a background approval waits one hour, NOT
+# ApprovalStore.DEFAULT_SUSPEND_TTL_SECONDS (24h). A suspended task
+# counts against MAX_RUNNING_PER_USER (D8), so the longer default would
+# lock a user out of their own queue for a day.
+BACKGROUND_APPROVAL_TTL_SECONDS = 60 * 60
+
 _PREVIEW_CHARS = 200
 _ERROR_CHARS = 200
 
@@ -50,6 +57,62 @@ def new_workflow_id() -> str:
 
 class BackgroundTaskError(Exception):
     """A task-level failure with a client-safe message."""
+
+
+class DurableApprovalAdapter:
+    """Slow-path approval seam for ONE background workflow (F35 B).
+
+    Conforms to ``webchat_agent.DurableApprovalSource``: ``stage`` parks
+    the prepared record in ``pending_actions`` (1h TTL), ``wait`` blocks
+    on the shared in-process rendezvous, and ``resolve`` atomically
+    claims the row. ``discard`` is the cleanup gate for every exit
+    (cancel, timeout, error, completion): it removes any still-parked
+    row so a late approval reads as an unknown token (D7).
+
+    The rendezvous is registered at stage time, before the runner can
+    yield the approval event; otherwise a dashboard that lists the row
+    immediately could approve before the runner reaches ``wait``.
+    """
+
+    def __init__(
+        self, store, waiter, *, workflow_id: str, owner_subject: int,
+        ttl_seconds: float = BACKGROUND_APPROVAL_TTL_SECONDS,
+    ) -> None:
+        self._store = store
+        self._waiter = waiter
+        self._workflow_id = workflow_id
+        self._owner_subject = owner_subject
+        self._ttl_seconds = ttl_seconds
+        self._tokens: set[str] = set()
+
+    async def stage(self, record: dict) -> str:
+        token = await self._store.suspend(
+            workflow_id=self._workflow_id,
+            action_type=record["type"],
+            args=record["args"],
+            owner_subject=self._owner_subject,
+            ttl_seconds=self._ttl_seconds,
+        )
+        self._waiter.register(token, self._owner_subject)
+        self._tokens.add(token)
+        return token
+
+    async def wait(self, token: str) -> bool | None:
+        return await self._waiter.wait_decision(
+            token, self._owner_subject, timeout=self._ttl_seconds)
+
+    async def resolve(self, token: str, approve: bool) -> dict | None:
+        self._tokens.discard(token)
+        return await self._store.resolve(
+            token, approve=approve,
+            requester_subject=self._owner_subject)
+
+    async def discard(self) -> None:
+        for token in list(self._tokens):
+            self._waiter.discard(token)
+        self._tokens.clear()
+        await self._store.purge_workflow(
+            self._workflow_id, owner_subject=self._owner_subject)
 
 
 class BackgroundTaskRegistry:
@@ -157,6 +220,13 @@ def _event_message(data: object, fallback: str) -> str:
     return _short(fallback)
 
 
+def _event_field(data: object, key: str) -> str:
+    """Metadata-only string field from a runner event (never args)."""
+    if isinstance(data, dict):
+        return str(data.get(key) or "")
+    return ""
+
+
 def _make_checkpointer(engine, principal: Principal, prepared, workflow_id):
     """Build the per-task checkpoint callback, or None when unavailable.
 
@@ -192,6 +262,8 @@ async def _execute_task(
     pending_store,
     executor,
     waiter,
+    mode: str = "plan",
+    approval_store=None,
     retrieval=None,
     continuity=None,
     engine=None,
@@ -201,6 +273,27 @@ async def _execute_task(
     audit: Callable | None = None,
 ) -> str:
     """Prepare the turn and consume ``run_agent_turn`` to completion."""
+    if mode not in ("plan", "manual"):
+        # D1: plan is read-only; manual adds durable approvals. `auto`
+        # has no background surface (and would execute on stage), so
+        # reject it here instead of letting a caller widen the surface.
+        raise BackgroundTaskError(
+            f"unsupported background task mode: {mode}")
+    durable = None
+    if mode == "manual":
+        # Manual: every mutating call must suspend on the slow path.
+        # Without a store there is nowhere durable to park it, so fail
+        # before any turn runs rather than silently falling back to the
+        # fast browser flow (which has no browser here).
+        if approval_store is None:
+            raise BackgroundTaskError(
+                "durable approvals are not available on this server")
+        durable = DurableApprovalAdapter(
+            approval_store, waiter,
+            workflow_id=workflow_id,
+            owner_subject=principal.user_id,
+            ttl_seconds=BACKGROUND_APPROVAL_TTL_SECONDS,
+        )
     prepared = await prepare_chat(
         [{"role": "user", "content": task}],
         principal=principal,
@@ -216,9 +309,9 @@ async def _execute_task(
     stream = run_agent_turn(
         prepared, model=model, router=router,
         sessions=sessions, memory=memory, runs_store=runs_store,
-        principal=principal, mode="plan",
+        principal=principal, mode=mode,
         pending_store=pending_store, executor=executor,
-        waiter=waiter, audit=audit,
+        waiter=waiter, durable=durable, audit=audit,
         retrieval=retrieval, continuity=continuity,
         engine=engine, agent_platform=agent_platform,
         bus=harness_bus, checkpointer=checkpointer,
@@ -232,6 +325,17 @@ async def _execute_task(
                 raise BackgroundTaskError(
                     _event_message(data, "task failed"))
             if event_name == "approval":
+                if durable is not None:
+                    # The action is parked; the runner is about to block
+                    # on the rendezvous. Metadata only - never the
+                    # command, path, args, summary, or detail.
+                    _emit(
+                        harness_bus, HarnessEventType.APPROVAL_REQUESTED,
+                        workflow_id=workflow_id,
+                        user_id=principal.user_id,
+                        name=_event_field(data, "action"),
+                    )
+                    continue
                 # Plan mode offers no mutating tools, so this should be
                 # unreachable. If a model calls one anyway, deny the
                 # staged action immediately (never wait for a browser)
@@ -247,12 +351,34 @@ async def _execute_task(
                         executor=executor,
                     )
                 raise BackgroundTaskError("approval not supported yet")
+            if event_name == "approval_resolved":
+                _emit(
+                    harness_bus, HarnessEventType.APPROVAL_RESOLVED,
+                    workflow_id=workflow_id,
+                    user_id=principal.user_id,
+                    name=_event_field(data, "action"),
+                    approved=bool(
+                        data.get("approved")
+                        if isinstance(data, dict) else False),
+                )
+                continue
+            if event_name == "approval_timeout":
+                raise BackgroundTaskError("approval timed out")
         raise BackgroundTaskError("task ended without a result")
     finally:
         # Close early (approval/error) so run_agent_turn's partial-turn
         # persistence runs now, not at loop shutdown.
         with contextlib.suppress(Exception):
             await stream.aclose()
+        if durable is not None:
+            # D7: no exit may leave a suspended row behind (completion,
+            # denial, timeout, error, or cancellation).
+            try:
+                await durable.discard()
+            except Exception:
+                logger.warning(
+                    "Background approval cleanup failed for %s",
+                    workflow_id, exc_info=True)
 
 
 async def run_background_task(
@@ -268,6 +394,8 @@ async def run_background_task(
     pending_store,
     executor,
     waiter,
+    mode: str = "plan",
+    approval_store=None,
     retrieval=None,
     continuity=None,
     engine=None,
@@ -276,7 +404,12 @@ async def run_background_task(
     byok=None,
     audit: Callable | None = None,
 ) -> None:
-    """Run one plan-mode task and emit its workflow events.
+    """Run one background task and emit its workflow events.
+
+    ``plan`` (the default) is read-only. ``manual`` adds the durable
+    approval path: a mutating call parks in ``pending_actions`` and the
+    task waits for its owner (``approval_store`` + the shared waiter).
+    ``auto`` is deliberately rejected by core (F35 D1).
 
     The started event fires before preparation, so the dashboard shows
     the task immediately. Every terminal path emits exactly one
@@ -298,7 +431,8 @@ async def run_background_task(
                 workflow_id=workflow_id, router=router, sessions=sessions,
                 memory=memory, runs_store=runs_store,
                 pending_store=pending_store, executor=executor,
-                waiter=waiter, retrieval=retrieval,
+                waiter=waiter, mode=mode, approval_store=approval_store,
+                retrieval=retrieval,
                 continuity=continuity, engine=engine,
                 agent_platform=agent_platform, harness_bus=harness_bus,
                 byok=byok, audit=audit,

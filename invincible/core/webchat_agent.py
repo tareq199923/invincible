@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import platform
+from typing import Protocol
 
 from invincible.compat.common import upstream_error_detail
 from invincible.core import (
@@ -405,25 +406,65 @@ class ApprovalWaiter:
     them. Cross-user resolution returns False (indistinguishable from
     unknown), and every entry is discarded when its stream ends, so a
     late approval can never fire twice.
+
+    Durable background approvals reuse the same map (F35 D10): they call
+    :meth:`register` at stage time, so an approval event can never race
+    the yield that announces it, then :meth:`wait_decision` with the
+    background TTL.
     """
 
     def __init__(self):
         self._waiters: dict[str, tuple[int, asyncio.Future]] = {}
 
-    async def wait(self, token: str, user_id: int) -> bool:
-        """Block until this user's browser resolves ``token``. True =
-        approved; False = denied or timed out."""
+    def register(self, token: str, user_id: int) -> bool:
+        """Reserve a waiter BEFORE any caller can observe the token.
+
+        Idempotent. Returns False when the token is already owned by
+        another user or already settled; resolution still fails closed.
+        """
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return False
-        future = loop.create_future()
-        self._waiters[token] = (user_id, future)
+        entry = self._waiters.get(token)
+        if entry is not None:
+            return entry[0] == user_id and not entry[1].done()
+        self._waiters[token] = (user_id, loop.create_future())
+        return True
+
+    async def wait(self, token: str, user_id: int) -> bool:
+        """Block until this user's browser resolves ``token``. True =
+        approved; False = denied or timed out."""
+        return await self.wait_decision(
+            token, user_id, timeout=APPROVAL_WAIT_SECONDS) is True
+
+    async def wait_decision(
+        self, token: str, user_id: int, *, timeout: float | None = None
+    ) -> bool | None:
+        """Block until this user resolves ``token``.
+
+        True = approved, False = denied, None = timed out (the caller
+        distinguishes a human denial from an expired wait - D5 vs D6).
+        A future registered by :meth:`register` is reused, so a decision
+        that arrived between staging and this call is never lost.
+        """
+        if timeout is None:
+            timeout = APPROVAL_WAIT_SECONDS
         try:
-            return bool(await asyncio.wait_for(
-                future, timeout=APPROVAL_WAIT_SECONDS))
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+        entry = self._waiters.get(token)
+        if entry is not None and entry[0] != user_id:
+            return None
+        if entry is None:
+            entry = (user_id, loop.create_future())
+            self._waiters[token] = entry
+        future = entry[1]
+        try:
+            return bool(await asyncio.wait_for(future, timeout=timeout))
         except asyncio.TimeoutError:
-            return False
+            return None
         finally:
             self._waiters.pop(token, None)
 
@@ -452,6 +493,23 @@ class ApprovalWaiter:
             token for token, (owner, future) in self._waiters.items()
             if owner == user_id and not future.done()
         ]
+
+
+class DurableApprovalSource(Protocol):
+    """Slow-path approval seam passed to ``run_agent_turn``.
+
+    Implemented by ``background_tasks.DurableApprovalAdapter``; webchat
+    passes ``None`` and keeps the fast browser path. The agent loop only
+    calls these three methods - it never talks to ``pending_actions``
+    directly (D2). ``discard`` is the runner's cleanup hook, not part of
+    the loop's contract.
+    """
+
+    async def stage(self, record: dict) -> str: ...
+
+    async def wait(self, token: str) -> bool | None: ...
+
+    async def resolve(self, token: str, approve: bool) -> dict | None: ...
 
 
 def build_agent_executor(registry, subject: int, routing_on: bool):
@@ -713,6 +771,7 @@ async def run_agent_turn(
     pending_store,
     executor,
     waiter: ApprovalWaiter,
+    durable: DurableApprovalSource | None = None,
     audit=None,
     retrieval=None,
     continuity=None,
@@ -730,6 +789,12 @@ async def run_agent_turn(
     closing call). Persistence mirrors the text path (one append of the
     whole turn + memory + stream usage row) so history stays identical
     in shape to API-path turns.
+
+    ``durable`` (F35): when set, mutating tools validate through
+    ``prepare_staged_action`` and suspend on the slow approval path
+    instead of staging in the fast ``PendingActionStore``. ``None``
+    (webchat, ``/mcp``) keeps the existing browser approval flow
+    byte-identically.
     """
     tools = _TOOLS_BY_MODE[mode]
     agent_routed = executor is not None
@@ -959,7 +1024,8 @@ async def run_agent_turn(
                             call_id=item["call_id"], mode=mode,
                             ctx_principal=principal,
                             pending_store=pending_store, executor=executor,
-                            waiter=waiter, audit=_audit, outcome=outcome,
+                            waiter=waiter, durable=durable, audit=_audit,
+                            outcome=outcome,
                             memory=memory, retrieval=retrieval,
                             continuity=continuity, sessions=sessions,
                             engine=engine,
@@ -1014,7 +1080,8 @@ async def run_agent_turn(
                             fname, fargs, call_id=item["call_id"], mode=mode,
                             ctx_principal=principal,
                             pending_store=pending_store, executor=executor,
-                            waiter=waiter, audit=_audit, outcome=outcome,
+                            waiter=waiter, durable=durable, audit=_audit,
+                            outcome=outcome,
                             memory=memory, retrieval=retrieval,
                             continuity=continuity, sessions=sessions,
                             engine=engine,
@@ -1196,6 +1263,7 @@ async def _execute_call(
     name: str, args: dict, *, call_id: str, mode: str,
     ctx_principal: Principal, pending_store, executor,
     waiter: ApprovalWaiter, audit, outcome: dict,
+    durable: DurableApprovalSource | None = None,
     memory=None, retrieval=None, continuity=None,
     sessions=None, engine=None,
 ):
@@ -1205,6 +1273,10 @@ async def _execute_call(
     path - the browser must learn the token BEFORE the waiter blocks),
     then records ``outcome["result"]`` / ``outcome["ok"]`` (fed back to
     the model) and returns.
+
+    With ``durable`` set (background tasks), the approval event is
+    followed by ``"approval_resolved"`` (approve/deny) or
+    ``"approval_timeout"``; no fast-path store is touched.
     """
     if name == "web_research":
         # F08: server-side through the caller's own provider - never
@@ -1251,7 +1323,69 @@ async def _execute_call(
             )
         outcome["result"], outcome["ok"] = result, ok
         return
-    # Mutating tools: stage first (denylist enforced, no token on hit).
+    # Mutating tools: validate first (denylist enforced, no token on hit).
+    if durable is not None:
+        # F35 slow path: validate, park in `pending_actions`, wait for
+        # the owner, then execute through the ONE shared runner. The
+        # fast PendingActionStore is never touched here.
+        try:
+            record = tool_executor.prepare_staged_action(
+                name, tool_executor.staged_call_args(name, args))
+        except tool_executor.ToolBlocked as e:
+            await audit("background_task.tool.blocked",
+                        meta={"action": name, "call_id": call_id})
+            outcome["result"] = {"status": "blocked",
+                                 "error": f"Blocked: {e}"}
+            outcome["ok"] = False
+            return
+        except ValueError as e:
+            outcome["result"] = {"status": "error", "error": str(e)}
+            outcome["ok"] = False
+            return
+        token = await durable.stage(record)
+        yield "approval", {
+            "token": token,
+            "call_id": call_id,
+            "action": name,
+            "summary": summarize_call(name, args),
+            "detail": approval_detail(name, args),
+        }
+        decision = await durable.wait(token)
+        if decision is None:
+            # Timed out. Delete the row now (a no-op if the deadline
+            # already swept it) so a late approval cannot fire, then let
+            # the runner fail the workflow with a distinct message.
+            await durable.resolve(token, False)
+            outcome["result"] = {
+                "status": "error", "error": "approval timed out"}
+            outcome["ok"] = False
+            yield "approval_timeout", {
+                "call_id": call_id, "action": name,
+            }
+            return
+        resolved = await durable.resolve(token, bool(decision))
+        if resolved is None:
+            # Expired / already claimed / purged between wait and claim.
+            outcome["result"] = {
+                "status": "error", "error": "approval expired"}
+            outcome["ok"] = False
+            yield "approval_timeout", {
+                "call_id": call_id, "action": name,
+            }
+            return
+        yield "approval_resolved", {
+            "call_id": call_id, "action": name,
+            "approved": bool(decision),
+        }
+        if not decision:
+            # D5: a denial is a normal tool result, never a task failure.
+            outcome["result"] = {"status": "declined"}
+            outcome["ok"] = False
+            return
+        result = await tool_executor.execute_staged(
+            resolved, executor, require_executor=True)
+        outcome["result"], outcome["ok"] = result, _result_ok(result)
+        return
     try:
         staged = _stage_mutating(pending_store, name, args,
                                  ctx_principal.user_id)

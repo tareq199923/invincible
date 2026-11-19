@@ -23,13 +23,15 @@ from invincible.core.background_tasks import (
     new_workflow_id,
     run_background_task,
 )
-from invincible.core.chat_service import ChatError
+from invincible.core.chat_service import ChatError, PreparedChat
 from invincible.core.credential_store import ByokCredentialStore
 from invincible.core.db import ensure_local_owner, workflow_events
+from invincible.core.harness_approvals import ApprovalStore
 from invincible.core.harness_bus import HarnessBus
 from invincible.core.harness_events import HarnessEventType
 from invincible.core.principal import Principal
 from invincible.core.tool_executor import PendingActionStore
+from invincible.core.webchat_agent import ApprovalWaiter
 from invincible.main import app
 from tests.conftest import provider_body, register_account
 
@@ -61,8 +63,81 @@ def _patch_runner(monkeypatch, *, prepare=None, events=()):
     )
 
 
+def _patch_real_agent(monkeypatch, workflow_id):
+    """Keep the real run_agent_turn; fake only preparation/persistence."""
+    async def _prepare(*args, **kwargs):
+        return PreparedChat(
+            session_id=workflow_id, session_pk=1,
+            full_messages=[{"role": "user", "content": "do it"}],
+            to_persist=[{"role": "user", "content": "do it"}],
+        )
+
+    async def _no_persist(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(bt, "prepare_chat", _prepare)
+    monkeypatch.setattr(
+        "invincible.core.webchat_agent._persist_new_turns", _no_persist)
+
+
 def _types(bus) -> list[str]:
     return [event["type"] for event in bus.history()]
+
+
+class _ScriptedRouter:
+    """Minimal ``route_request_detailed`` for a real run_agent_turn."""
+
+    def __init__(self, messages):
+        self._messages = list(messages)
+        self.calls: list[list] = []
+
+    async def route_request_detailed(self, messages, **kwargs):
+        self.calls.append(json.loads(json.dumps(messages)))
+        message = self._messages.pop(0)
+        return (
+            {"choices": [{"message": message}]},
+            {
+                "request_id": f"req-{len(self.calls)}",
+                "provider_name": "test",
+                "model_id": "test-model",
+                "attempts": 1,
+            },
+        )
+
+
+def _manual_router(
+    command: str = "echo hi", answer: str = "finished", **tool_args
+):
+    """A tool-call turn followed by a text answer.
+
+    ``tool_args`` are merged into the call's arguments (e.g. an
+    out-of-schema ``timeout`` to prove the runner scrubs it).
+    """
+    arguments = {"command": command, **tool_args}
+    return _ScriptedRouter([
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "execute_bash",
+                    "arguments": json.dumps(arguments),
+                },
+            }],
+        },
+        {"role": "assistant", "content": answer},
+    ])
+
+
+def _last_tool_result(router: _ScriptedRouter) -> dict:
+    tool_messages = [
+        message for message in router.calls[1]
+        if message.get("role") == "tool"
+    ]
+    assert tool_messages
+    return json.loads(tool_messages[-1]["content"])
 
 
 def _runner_kwargs(
@@ -223,6 +298,33 @@ async def test_runner_exception_is_logged_and_failed(
     assert any(record.exc_info for record in records)
 
 
+async def test_runner_rejects_unsupported_mode_before_preparation(
+    pg_engine, monkeypatch
+):
+    """F35 D1: core accepts only plan/manual; auto fails before any turn."""
+    principal = await _principal(pg_engine)
+    workflow_id = new_workflow_id()
+
+    async def _boom(*args, **kwargs):
+        raise AssertionError("mode guard must run before preparation")
+
+    monkeypatch.setattr(bt, "prepare_chat", _boom)
+    bus = HarnessBus()
+
+    await asyncio.wait_for(run_background_task(
+        **_runner_kwargs(
+            principal, workflow_id, harness_bus=bus, mode="auto",
+        )
+    ), timeout=10)
+
+    assert _types(bus) == [
+        HarnessEventType.WORKFLOW_STARTED.value,
+        HarnessEventType.WORKFLOW_FAILED.value,
+    ]
+    assert bus.history()[-1]["error"] == (
+        "unsupported background task mode: auto")
+
+
 async def test_runner_timeout_emits_distinct_failed(
     pg_engine, monkeypatch
 ):
@@ -347,6 +449,356 @@ async def test_runner_approval_denies_token_and_fails(
         pending, token, True, requester_subject=principal.user_id,
     ) == {"status": "not_found"}
     assert pending.take(token, requester_subject=principal.user_id) is None
+
+
+async def test_manual_task_suspends_then_approve_executes_once(
+    pg_engine, monkeypatch
+):
+    """F35 B: stage -> wait -> approve -> execute exactly once."""
+    principal = await _principal(pg_engine)
+    workflow_id = new_workflow_id()
+    store = ApprovalStore(pg_engine)
+    waiter = ApprovalWaiter()
+    bus = HarnessBus()
+    router = _manual_router()
+    executed: list = []
+
+    async def executor(action_type, args):
+        executed.append((action_type, dict(args)))
+        return {"status": "ok", "output": "hi"}
+
+    _patch_real_agent(monkeypatch, workflow_id)
+    staged: dict = {}
+
+    async def approver():
+        for _ in range(500):
+            await asyncio.sleep(0.01)
+            rows = await store.pending_for_workflow(
+                workflow_id, owner_subject=principal.user_id)
+            if not rows:
+                continue
+            staged.update(rows[0])
+            assert waiter.resolve(
+                rows[0]["token"], principal.user_id, True)
+            return
+        raise AssertionError("approval was never staged")
+
+    task = asyncio.create_task(run_background_task(
+        **_runner_kwargs(
+            principal, workflow_id, router=router, waiter=waiter,
+            executor=executor, harness_bus=bus, mode="manual",
+            approval_store=store,
+        )
+    ))
+    approver_task = asyncio.create_task(approver())
+    await asyncio.wait_for(task, timeout=10)
+    await asyncio.wait_for(approver_task, timeout=10)
+
+    assert staged["type"] == "execute_bash"
+    # D6: one hour, not the store's 24h default.
+    remaining = staged["deadline"] - time.time()
+    assert 3500 < remaining <= bt.BACKGROUND_APPROVAL_TTL_SECONDS
+    # D2/D3: exactly one execution, through the paired-machine executor.
+    assert executed == [
+        ("execute_bash", {"command": "echo hi", "timeout": 30.0})]
+    # The model got the real result, not a synthetic acknowledgement.
+    assert _last_tool_result(router)["output"] == "hi"
+    assert await store.pending_for_workflow(
+        workflow_id, owner_subject=principal.user_id) == []
+    assert _types(bus) == [
+        HarnessEventType.WORKFLOW_STARTED.value,
+        HarnessEventType.APPROVAL_REQUESTED.value,
+        HarnessEventType.APPROVAL_RESOLVED.value,
+        HarnessEventType.WORKFLOW_COMPLETED.value,
+    ]
+    # D9: metadata only - the command never reaches the event stream.
+    requested = bus.history()[1]
+    assert requested["name"] == "execute_bash"
+    assert "echo hi" not in json.dumps(requested)
+    assert bus.history()[2]["approved"] is True
+    # D2: replaying the approval finds no row (single execution).
+    assert await store.resolve(
+        staged["token"], approve=True,
+        requester_subject=principal.user_id) is None
+    assert len(executed) == 1
+
+
+async def test_manual_task_ignores_out_of_schema_timeout(
+    pg_engine, monkeypatch
+):
+    """F35 D2: the model cannot widen execute_bash's 30s timeout.
+
+    ``execute_bash`` exposes only ``command``; both approval paths must
+    scrub an out-of-schema ``timeout`` before staging.
+    """
+    principal = await _principal(pg_engine)
+    workflow_id = new_workflow_id()
+    store = ApprovalStore(pg_engine)
+    waiter = ApprovalWaiter()
+    bus = HarnessBus()
+    router = _manual_router(timeout=600)
+    executed: list = []
+
+    async def executor(action_type, args):
+        executed.append((action_type, dict(args)))
+        return {"status": "ok"}
+
+    _patch_real_agent(monkeypatch, workflow_id)
+
+    async def approver():
+        for _ in range(500):
+            await asyncio.sleep(0.01)
+            rows = await store.pending_for_workflow(
+                workflow_id, owner_subject=principal.user_id)
+            if not rows:
+                continue
+            assert waiter.resolve(
+                rows[0]["token"], principal.user_id, True)
+            return
+        raise AssertionError("approval was never staged")
+
+    task = asyncio.create_task(run_background_task(
+        **_runner_kwargs(
+            principal, workflow_id, router=router, waiter=waiter,
+            executor=executor, harness_bus=bus, mode="manual",
+            approval_store=store,
+        )
+    ))
+    approver_task = asyncio.create_task(approver())
+    await asyncio.wait_for(task, timeout=10)
+    await asyncio.wait_for(approver_task, timeout=10)
+
+    assert executed == [
+        ("execute_bash", {"command": "echo hi", "timeout": 30.0})]
+
+
+async def test_manual_task_deny_is_a_tool_result_not_a_failure(
+    pg_engine, monkeypatch
+):
+    """F35 D5: deny feeds {"status": "declined"} and the turn continues."""
+    principal = await _principal(pg_engine)
+    workflow_id = new_workflow_id()
+    store = ApprovalStore(pg_engine)
+    waiter = ApprovalWaiter()
+    bus = HarnessBus()
+    router = _manual_router(answer="done after deny")
+    executed: list = []
+
+    async def executor(action_type, args):
+        executed.append((action_type, dict(args)))
+        return {"status": "ok"}
+
+    _patch_real_agent(monkeypatch, workflow_id)
+
+    async def approver():
+        for _ in range(500):
+            await asyncio.sleep(0.01)
+            rows = await store.pending_for_workflow(
+                workflow_id, owner_subject=principal.user_id)
+            if not rows:
+                continue
+            assert waiter.resolve(
+                rows[0]["token"], principal.user_id, False)
+            return
+        raise AssertionError("approval was never staged")
+
+    task = asyncio.create_task(run_background_task(
+        **_runner_kwargs(
+            principal, workflow_id, router=router, waiter=waiter,
+            executor=executor, harness_bus=bus, mode="manual",
+            approval_store=store,
+        )
+    ))
+    approver_task = asyncio.create_task(approver())
+    await asyncio.wait_for(task, timeout=10)
+    await asyncio.wait_for(approver_task, timeout=10)
+
+    assert executed == []
+    assert _last_tool_result(router) == {"status": "declined"}
+    assert await store.pending_for_workflow(
+        workflow_id, owner_subject=principal.user_id) == []
+    assert _types(bus) == [
+        HarnessEventType.WORKFLOW_STARTED.value,
+        HarnessEventType.APPROVAL_REQUESTED.value,
+        HarnessEventType.APPROVAL_RESOLVED.value,
+        HarnessEventType.WORKFLOW_COMPLETED.value,
+    ]
+    assert bus.history()[2]["approved"] is False
+
+
+async def test_manual_task_denylisted_command_never_stages(
+    pg_engine, monkeypatch
+):
+    """F35 D2: denylist runs first - no row, no approval, turn continues."""
+    principal = await _principal(pg_engine)
+    workflow_id = new_workflow_id()
+    store = ApprovalStore(pg_engine)
+    waiter = ApprovalWaiter()
+    bus = HarnessBus()
+    router = _manual_router(
+        command="sudo rm -rf /", answer="cannot do that")
+    executed: list = []
+    audit_calls: list = []
+
+    async def executor(action_type, args):
+        executed.append((action_type, dict(args)))
+        return {"status": "ok"}
+
+    async def audit(action, **meta):
+        audit_calls.append((action, meta))
+
+    _patch_real_agent(monkeypatch, workflow_id)
+
+    await asyncio.wait_for(run_background_task(
+        **_runner_kwargs(
+            principal, workflow_id, router=router, waiter=waiter,
+            executor=executor, harness_bus=bus, mode="manual",
+            approval_store=store, audit=audit,
+        )
+    ), timeout=10)
+
+    assert _last_tool_result(router)["status"] == "blocked"
+    assert executed == []
+    assert await store.pending_for_workflow(
+        workflow_id, owner_subject=principal.user_id) == []
+    assert _types(bus) == [
+        HarnessEventType.WORKFLOW_STARTED.value,
+        HarnessEventType.WORKFLOW_COMPLETED.value,
+    ]
+    # D9: audit is metadata only - never the command.
+    assert audit_calls[0][0] == "background_task.tool.blocked"
+    assert audit_calls[0][1] == {"meta": {
+        "action": "execute_bash", "call_id": "call-1"}}
+    assert "sudo rm -rf /" not in json.dumps(audit_calls)
+
+
+async def test_manual_task_without_executor_answers_unavailable(
+    pg_engine, monkeypatch
+):
+    """F35 D3: no paired agent -> "unavailable", never a local run."""
+    principal = await _principal(pg_engine)
+    workflow_id = new_workflow_id()
+    store = ApprovalStore(pg_engine)
+    waiter = ApprovalWaiter()
+    bus = HarnessBus()
+    router = _manual_router(answer="no machine")
+
+    _patch_real_agent(monkeypatch, workflow_id)
+
+    async def approver():
+        for _ in range(500):
+            await asyncio.sleep(0.01)
+            rows = await store.pending_for_workflow(
+                workflow_id, owner_subject=principal.user_id)
+            if not rows:
+                continue
+            assert waiter.resolve(
+                rows[0]["token"], principal.user_id, True)
+            return
+        raise AssertionError("approval was never staged")
+
+    task = asyncio.create_task(run_background_task(
+        **_runner_kwargs(
+            principal, workflow_id, router=router, waiter=waiter,
+            executor=None, harness_bus=bus, mode="manual",
+            approval_store=store,
+        )
+    ))
+    approver_task = asyncio.create_task(approver())
+    await asyncio.wait_for(task, timeout=10)
+    await asyncio.wait_for(approver_task, timeout=10)
+
+    assert _last_tool_result(router)["status"] == "unavailable"
+    assert await store.pending_for_workflow(
+        workflow_id, owner_subject=principal.user_id) == []
+    assert _types(bus) == [
+        HarnessEventType.WORKFLOW_STARTED.value,
+        HarnessEventType.APPROVAL_REQUESTED.value,
+        HarnessEventType.APPROVAL_RESOLVED.value,
+        HarnessEventType.WORKFLOW_COMPLETED.value,
+    ]
+
+
+async def test_manual_task_approval_timeout_fails_and_leaves_no_row(
+    pg_engine, monkeypatch
+):
+    """F35 D6: a bounded wait fails the task and deletes the row."""
+    principal = await _principal(pg_engine)
+    workflow_id = new_workflow_id()
+    store = ApprovalStore(pg_engine)
+    waiter = ApprovalWaiter()
+    bus = HarnessBus()
+    router = _manual_router()
+
+    _patch_real_agent(monkeypatch, workflow_id)
+    monkeypatch.setattr(bt, "BACKGROUND_APPROVAL_TTL_SECONDS", 0.05)
+
+    await asyncio.wait_for(run_background_task(
+        **_runner_kwargs(
+            principal, workflow_id, router=router, waiter=waiter,
+            executor=None, harness_bus=bus, mode="manual",
+            approval_store=store,
+        )
+    ), timeout=10)
+
+    assert _types(bus) == [
+        HarnessEventType.WORKFLOW_STARTED.value,
+        HarnessEventType.APPROVAL_REQUESTED.value,
+        HarnessEventType.WORKFLOW_FAILED.value,
+    ]
+    assert bus.history()[-1]["error"] == "approval timed out"
+    assert await store.pending_for_workflow(
+        workflow_id, owner_subject=principal.user_id) == []
+
+
+async def test_manual_task_cancel_purges_the_suspended_row(
+    pg_engine, monkeypatch
+):
+    """F35 D7/D8: a suspended task is live for the cap and cleanup runs."""
+    principal = await _principal(pg_engine)
+    workflow_id = new_workflow_id()
+    store = ApprovalStore(pg_engine)
+    waiter = ApprovalWaiter()
+    bus = HarnessBus()
+    router = _manual_router()
+    registry = BackgroundTaskRegistry()
+
+    _patch_real_agent(monkeypatch, workflow_id)
+    task = registry.start(
+        principal.user_id,
+        run_background_task(
+            **_runner_kwargs(
+                principal, workflow_id, router=router, waiter=waiter,
+                executor=None, harness_bus=bus, mode="manual",
+                approval_store=store,
+            )
+        ),
+        workflow_id=workflow_id,
+    )
+
+    token = None
+    for _ in range(500):
+        await asyncio.sleep(0.01)
+        rows = await store.pending_for_workflow(
+            workflow_id, owner_subject=principal.user_id)
+        if (rows and HarnessEventType.APPROVAL_REQUESTED.value
+                in _types(bus)):
+            token = rows[0]["token"]
+            break
+    assert token is not None
+    # D8: suspended is still running, so it still counts toward the cap.
+    assert registry.running_count(principal.user_id) == 1
+
+    assert registry.cancel(principal.user_id, workflow_id) is True
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert await store.resolve(
+        token, approve=True, requester_subject=principal.user_id) is None
+    assert await store.pending_for_workflow(
+        workflow_id, owner_subject=principal.user_id) == []
+    assert _types(bus)[-1] == HarnessEventType.WORKFLOW_FAILED.value
+    assert bus.history()[-1]["error"] == "cancelled"
 
 
 async def test_registry_cancel_is_owner_and_workflow_scoped():

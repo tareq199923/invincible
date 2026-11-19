@@ -13,11 +13,16 @@ Status legend: **Shipped** (code + tests + docs landed) · **Planned**
 | 1 | Plan-mode task runner (server-side, no browser) | **Shipped** (F32) |
 | 2 | Dashboard UI: start, status, result page, Stop | **Shipped** (F33) |
 | 3 | Durable per-tool-call checkpoints (progress tracking) | **Shipped** (F34) |
-| 4 | Mutating tools + durable approvals | **Planned** (F35) |
+| 4 | Mutating tools + durable approvals | **In progress** (F35 — A shipped, B implemented) |
 | 5 | Restart-safe task records (decision pending) | **Planned** |
 
 Steps 1-3 are packaged together in the 0.6.2 release (migration
 `0018`).
+
+Step 4 is landing in slices. Slice A (the durable groundwork) is
+shipped; Slice B (the runner's suspend/approve/deny/timeout path) is
+implemented in this change. The dashboard surfaces (Slice C) and the
+final audit/docs pass (Slice D) are still planned.
 
 ---
 
@@ -61,7 +66,7 @@ best-effort). Step 5 is where "what happens after a restart" is decided.
 
 ---
 
-## Step 4 — mutating tools + durable approvals (planned)
+## Step 4 — mutating tools + durable approvals (Slices A/B)
 
 ### Goal
 
@@ -78,26 +83,34 @@ separate:
 | Path | Store | Lifetime | User |
 |---|---|---|---|
 | Fast | `PendingActionStore` (in-memory unless `INVINCIBLE_PERSIST_PENDING_ACTIONS=1`) | 10 minutes | A browser holds the request open (webchat manual mode, `/mcp`) |
-| Slow | `pending_actions` row with `suspended_workflow_id` + `deadline` | up to 24h | A human answers later, possibly after a restart |
+| Slow | `pending_actions` row with `suspended_workflow_id` + `deadline` | up to 24h (Step 4 passes 1h) | A human answers later, possibly after a restart |
 
-`core/harness_approvals.py` (H5) implements the slow path — and today it
-has **no production caller**. Step 4 is that caller. It is not a new
-approval system: it reuses `harness_approvals`, `pending_actions`, and
-`tool_executor` as they are.
+`core/harness_approvals.py` (H5) implements the slow path — until Step 4
+it had no production caller. Slice B wired the first one: a `manual`
+background task suspends on that path instead of the browser fast path.
+It is not a new approval system: it reuses `harness_approvals`,
+`pending_actions`, and `tool_executor` as they are.
 
 ### Flow
 
 ```text
-run_agent_turn(mode="manual")
+run_agent_turn(mode="manual", durable=DurableApprovalAdapter)
   -> model calls a mutating tool
+  -> tool_executor.staged_call_args(name, args)          # schema scrub
   -> tool_executor.prepare_staged_action(name, args)     # denylist FIRST
-  -> ApprovalStore.suspend(workflow_id, action_type, args, owner_subject)
-       -> a pending_actions row + approval.requested event
-  -> the runner WAITS (task status: waiting for approval)
-  -> owner approves from the dashboard
-       -> ApprovalStore.resolve(token, approve=True)  -> staged record
-       -> tool_executor.execute_staged(record, executor) -> real result
+  -> ApprovalStore.suspend(workflow_id, action_type, args,
+                           owner_subject, ttl_seconds=3600)
+       -> one pending_actions row + approval.requested event
+       -> ApprovalWaiter.register(token) BEFORE the runner yields
+  -> the runner WAITS on the in-process rendezvous
+  -> owner approves from the dashboard (Slice C)
+       -> ApprovalStore.resolve(token, approve=True) atomically claims
+          the row (DELETE ... RETURNING) -> staged record
+       -> tool_executor.execute_staged(record, executor,
+                                       require_executor=True)
        -> approval.resolved event; the turn continues
+  -> every exit (approve, deny, timeout, cancel, error) purges any
+     remaining row for this workflow
 ```
 
 ### Decisions
@@ -106,42 +119,59 @@ run_agent_turn(mode="manual")
 `manual` (mutating tools, approval-gated). `auto` (unattended mutating
 execution) is **out of scope** and is not part of Step 4 or Step 5:
 background execution without a human in the loop is a different security
-posture and needs its own threat model.
+posture and needs its own threat model. Core enforces the set:
+`_execute_task` raises `BackgroundTaskError` for any mode other than
+`plan` or `manual`, before preparation runs (the endpoint also rejects
+it).
 
-**D2 — One execution path.** The execution half of
-`tool_executor.confirm_action` is extracted into a reusable
-`execute_staged(record, executor)`; the fast path and the slow path both
-call it. The denylist check is extracted the same way into
-`prepare_staged_action(name, args)` (validate + deny, no store), so the
-slow path cannot stage anything the fast path would have blocked.
+**D2 — One execution path.** `execute_staged(record, executor, *,
+require_executor=False)` is the single execution half (extracted from
+`confirm_action` in `b883560`; Slice A added `require_executor`). Slice B
+extracted the validation half into `prepare_staged_action(name, args)`
+(validate + deny, no store) and the wire response into
+`staged_response(record, token)`. Both fast-path writers (webchat's
+`tool_dispatch.stage_mutating` and the `/mcp` staging helpers) and the
+slow path call them; the slow path passes `require_executor=True`.
+`stage_mutating` and the slow path also scrub model args through
+`staged_call_args(name, args)` before validating: `execute_bash` keeps
+only `command`, because its 30s command timeout is a server default,
+never a model-supplied value (the `/mcp` handler never passes one). The
+agent loop sees a narrow `DurableApprovalSource` seam (`stage` / `wait` /
+`resolve`) and never talks to `pending_actions` directly.
 
 **D3 — Agent routing is required for mutating background tasks.** On a
 hosted deployment, a confirmed background action executes on the **server
 host** unless `INVINCIBLE_AGENT_ROUTING=1` routes it to the owner's
 paired machine. Background tasks therefore **refuse** mutating tools when
-agent routing is off (same "unavailable" answer the computer-use tools
-already give), and the dashboard says why. A background task must never
-be a way to run commands on the shared host.
+agent routing is off: the slow path calls
+`execute_staged(..., require_executor=True)`, which answers `unavailable`
+and runs nothing when no executor exists (`build_agent_executor` returns
+`None` when routing is off). A background task must never be a way to
+run commands on the shared host.
 
-**D4 — Ownership of the pending row.** `pending_actions` currently
-carries the owner inside the JSONB `args` (`_OWNER_SUBJECT_KEY`), which
-is fine for a single row but not for listing "my pending approvals".
-Migration `0019` adds a nullable indexed `owner_user_id` column; the
-slow-path `suspend` writes it, and the listing endpoint filters on it.
+**D4 — Ownership of the pending row.** `pending_actions` carries the
+owner inside the JSONB `args` (`_OWNER_SUBJECT_KEY`), stripped on
+resolve. That stayed as-is: neither slice needed a schema change, so
+there is **no migration `0019`**. Owner-scoped listing and purge filter
+on the same key. A dedicated indexed `owner_user_id` column is not part
+of Step 4.
 
 **D5 — Deny is a tool result, not a task failure.** A denial feeds
 `{"status": "declined"}` back to the model exactly like the fast path,
 so the model can adapt or explain. Only a timeout or a cancellation
 fails the workflow.
 
-**D6 — Bounded wait.** A background approval has its own TTL (default
-**1 hour**, shorter than the 24h slow-path default because a suspended
-task holds a slot). On expiry the runner deletes the row and fails the
-workflow with a distinct "approval timed out" message.
+**D6 — Bounded wait.** A background approval has its own TTL,
+`BACKGROUND_APPROVAL_TTL_SECONDS = 3600`, passed explicitly to
+`ApprovalStore.suspend` (the store's default stays 24h because a
+suspended task holds a slot). On expiry the waiter answers `None`, the
+runner deletes the row, and the workflow fails with the distinct
+`"approval timed out"` message.
 
 **D7 — Cancelling cleans up.** Cancelling a suspended task deletes its
 pending rows before the workflow fails, so no approval can later be
-approved against a dead task.
+approved against a dead task. The same `finally` purge runs on every
+other exit: approve, deny, timeout, error, and normal completion.
 
 **D8 — The cap.** `MAX_RUNNING_PER_USER = 2` counts every live task, **including a
 suspended task waiting for approval**. A suspended task keeps its slot
@@ -153,19 +183,24 @@ separate allowance (`MAX_SUSPENDED_PER_USER`) was considered and
 deliberately not adopted; revisit it only if waiting on approval proves
 too blocking in practice.
 
-**D9 — Events and audit.** Reuse the existing contract:
-`approval.requested` and `approval.resolved` (both already emitted on
-the webchat path) plus `workflow.failed` for a timeout. Audit rows are
-`background_task.approval_requested` / `background_task.approval_resolved`
-with metadata only: workflow id, tool name, decision — never the command,
-path, or args.
+**D9 — Events and audit.** Slice B emits `approval.requested` and
+`approval.resolved` on the existing workflow bus, metadata only (tool
+name and decision — never the command, path, args, or content). A
+timeout emits `workflow.failed`. The blocked-tool path audits
+`background_task.tool.blocked` with the tool name and call id only.
+The remaining audit rows
+(`background_task.approval_requested` / `_resolved`) belong to Slice D.
 
-**D10 — Single instance.** The wait is an in-process `asyncio.Event`
-resolved by the dashboard endpoint (the server is single instance by
-design). The **persisted row** is the durable record; a restart does not
-resume the task (that is Step 5's decision).
+**D10 — Single instance.** The wait is an in-process future in
+`ApprovalWaiter` (the same rendezvous webchat uses), resolved by the
+dashboard endpoint; the server is single instance by design. The
+**persisted row** is the durable record; a restart does not resume the
+task (that is Step 5's decision) and startup purges orphaned suspended
+rows.
 
-### Surfaces (session realm only)
+### Surfaces (session realm only — Slice C, not shipped)
+
+None of these routes exist yet; Slice B is runner-only.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -180,10 +215,10 @@ workflow id returns the same 404 body as an unknown one.
 
 | Slice | Work | Gate |
 |---|---|---|
-| A | `prepare_staged_action` + `execute_staged` extraction; `suspend` writes `owner_user_id` (migration `0019`) | unit pins; existing webchat/MCP behavior byte-identical |
-| B | Runner: `manual` mode suspends on a mutating call and waits; approve resumes, deny feeds back, timeout fails | `tests/test_background_tasks.py` |
-| C | Endpoints + dashboard list/approve/deny; owner scoping; identical 404s | `tests/test_background_tasks_ui.py` |
-| D | Audit + events + `docs/SECURITY.md` + `docs/MCP_PROTOCOL.md` + roadmap | full suite green |
+| A | Durable groundwork: atomic single-use `ApprovalStore.resolve`, owner-scoped listing/purge, startup purge, `execute_staged(require_executor=True)` | **Shipped** (`d9852ec`); unit pins |
+| B | Shared validation extraction (`staged_call_args` / `prepare_staged_action` / `staged_response`) + runner `manual` lifecycle: suspend, wait, approve, deny, timeout, cancel, purge; metadata-only events | **Implemented** (this change); `tests/test_background_tasks.py` |
+| C | Endpoints + dashboard list/approve/deny; owner scoping; identical 404s | Planned; `tests/test_background_tasks_ui.py` |
+| D | Audit + `docs/SECURITY.md` + `docs/MCP_PROTOCOL.md` + roadmap; final docs pass | Planned; full suite green |
 
 ---
 

@@ -124,36 +124,22 @@ async def run_read(executor, name: str, args: dict,
 
 def stage_mutating(store, name: str, args: dict,
                    owner_subject: int) -> dict:
-    """Stage execute_bash/write_file for approval (denylist first).
-    Raises ``ToolBlocked`` (mapped to an error result, no token)."""
-    if name == "execute_bash":
-        return tool_executor.execute_bash(
-            str(args.get("command", "")), store,
-            owner_subject=owner_subject)
-    if name == "write_file":
-        return tool_executor.write_file(
-            str(args.get("path", "")), str(args.get("content", "")),
-            store, owner_subject=owner_subject)
-    if name == "edit_file":
-        # JSON null is not the string "None": a null new_string deletes
-        # text, a null/missing old_string errors like an empty one.
-        old_raw = args.get("old_string")
-        new_raw = args.get("new_string")
-        return tool_executor.edit_file(
-            str(args.get("path", "")),
-            "" if old_raw is None else str(old_raw),
-            "" if new_raw is None else str(new_raw),
-            store, replace_all=args.get("replace_all", False) is True,
-            owner_subject=owner_subject)
-    if name in tool_executor.COMPUTER_TOOLS:
-        # F10: validated + staged for approval (ValueError on shape /
-        # ToolBlocked on denylist — no token either way). Confirm
-        # forwards to the agent executor; no local path exists.
-        return tool_executor.stage_computer_action(
-            name, args, store, owner_subject=owner_subject)
-    raise tool_executor.ToolBlocked(
-        f"Unknown mutating tool: {name}. Valid tools: "
-        f"{', '.join(harness_tools.approval_required_names())}.")
+    """Stage a mutating call for approval (validate first, then put).
+
+    ``prepare_staged_action`` owns shape validation and the denylist for
+    every mutating tool; this writer only adds the fast-path store and
+    the wire response. Raises ``ToolBlocked`` / ``ValueError`` before any
+    token exists.
+
+    The fast path has always stored the default 30s command timeout, so
+    an out-of-schema ``timeout`` argument must not widen it; the durable
+    path shares the same scrub (``tool_executor.staged_call_args``).
+    """
+    prepared = tool_executor.staged_call_args(name, args)
+    record = tool_executor.prepare_staged_action(name, prepared)
+    token = store.put(
+        record["type"], record["args"], owner_subject=owner_subject)
+    return tool_executor.staged_response(record, token)
 
 
 async def webchat_project_id(engine, user_id: int, args: dict):
