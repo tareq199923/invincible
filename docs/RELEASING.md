@@ -214,7 +214,7 @@ wheel smoke test green, then verified by installing from PyPI into a
 scratch venv outside the repo (`invincible --version` reports 0.6.2,
 `status --help`, `connect --help`, and `import invincible.main` all work).
 
-**0.6.3 (2026-11-24):** patch bump carrying F35, Step 4 of 5 for
+**0.6.3 shipped 2026-11-24:** patch bump carrying F35, Step 4 of 5 for
 background agent tasks: a `manual` background task may stage mutating
 tools and suspend on a durable approval; the owner approves or denies
 from the owner-only detail page (with a metadata-only
@@ -223,7 +223,12 @@ Staging and decisions write metadata-only
 `background_task.approval_requested` / `approval_decided` audit rows;
 webchat approval previews now escape control/bidi characters. No schema
 or migration change (`db upgrade` not required). The wheel smoke test
-gained `approvals.html` in its expected templates.
+gained `approvals.html` in its expected templates. Published from tag
+`v0.6.3` via the trusted-publisher dispatch; build and wheel smoke test
+green, then verified by installing from PyPI into a scratch venv outside
+the repo (`invincible --version` → 0.6.3, `status --help`,
+`connect --help`, and `import invincible.main` all work). Hosted
+production `/health` reports 0.6.3.
 
 Everything from here is immutable: `0.3.0` can never be replaced or
 re-uploaded, only yanked and superseded. Bump `invincible/__init__.py` to

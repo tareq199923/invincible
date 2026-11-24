@@ -5,6 +5,10 @@
 
 ## Current State
 
+- 0.6.3 shipped 2026-11-24 (tag `v0.6.3`, release commit `08e14d4`):
+  F35 Step 4 is on PyPI. The Release workflow build/smoke gate passed,
+  the scratch-venv install reports 0.6.3, and hosted production
+  `/health` reports 0.6.3.
 - F35 Slice C+D committed and pushed to `main` as `2680979` (with
   CI-only test fixes `d57f720` and `0a45f2a`; latest CI run
   `45392514319` is green): a `manual` background task now has a full
@@ -1101,12 +1105,13 @@
 
 ## Next Steps
 
-0. 0.6.2 shipped 2026-11-17 (Steps 1-3 of background tasks). The next
-   release is 0.6.3, carrying F35 Step 4 (mutating tools + durable
-   approvals); bump `invincible/__init__.py`, add the release note, tag,
-   and publish. 0.5.x holdouts are reached by the README/docs "No such
-   command 'connect'" callout until they upgrade once; from 0.6.1 on,
-   the passive notice takes over.
+0. 0.6.3 shipped 2026-11-24 (tag `v0.6.3`, release commit `08e14d4`),
+   carrying F35 Step 4 (mutating tools + durable approvals). PyPI
+   install and hosted production `/health` both report 0.6.3. Next
+   product work: Step 5 (restart-safe task records, Option A) or F36
+   docs accuracy. 0.5.x holdouts are reached by the README/docs "No
+   such command 'connect'" callout until they upgrade once; from 0.6.1
+   on, the passive notice takes over.
 
 1. Restart any paired `invincible connect` agent to pick up F22's voice
    poses plus the earlier F23/F25/F26 runner/overlay changes
@@ -1136,8 +1141,8 @@
    Slice A (`d9852ec`), Slice B (`4a77a39`), and Slices C+D (`2680979`;
    dashboard approval loop, `approval_requested`/`approval_decided`
    audit rows, webchat preview escaping, docs pass) are on `main`; CI
-   test-only fixes are `d57f720` and `0a45f2a`. Cut 0.6.3 next (version
-   lives only in `invincible/__init__.py`).
+   test-only fixes are `d57f720` and `0a45f2a`. 0.6.3 shipped from
+   `08e14d4` (tag `v0.6.3`).
    Step 4 = a background task may stage MUTATING tools and suspend on
    a durable approval; it reuses
    `harness_approvals`/`pending_actions`/`tool_executor`, never a
