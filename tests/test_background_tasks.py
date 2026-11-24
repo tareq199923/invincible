@@ -267,6 +267,9 @@ async def test_runner_error_event_emits_failed(pg_engine, monkeypatch):
     ]
     assert bus.history()[-1]["error"] == "upstream down"
     assert bus.history()[-1]["user_id"] == principal.user_id
+    # Let the fire-and-forget workflow_events inserts finish before
+    # pg_engine teardown TRUNCATEs the schema.
+    await bus.flush_persisted()
 
 
 async def test_runner_exception_is_logged_and_failed(
