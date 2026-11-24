@@ -5,8 +5,9 @@
 
 ## Current State
 
-- F35 Slice C+D implemented in the working tree (UNCOMMITTED — waiting on
-  explicit user approval): a `manual` background task now has a full
+- F35 Slice C+D committed and pushed to `main` as `2680979` (with
+  CI-only test fixes `d57f720` and `0a45f2a`; latest CI run
+  `45392514319` is green): a `manual` background task now has a full
   dashboard approval loop. Start accepts `mode=plan|manual` (plan
   default; `auto`/non-strings 400) and requires `approval_store` for
   manual. `POST /dashboard/background-tasks/{workflow_id}/approvals/{token}`
@@ -35,8 +36,8 @@
   preview escaping, window/deadline/waiter-door coverage. `ruff check .`
   clean; FULL suite 2262 passed / 11 skipped / 1 deselected (416.22s, 40
   warnings, Windows, PostgreSQL on 127.0.0.1:5433). Clean-state checklist
-  4/5 — build, tests, no artifacts, and feature-list state pass; the
-  commit hash is pending user approval.
+  5/5 — build, tests, no artifacts, feature-list state, and clean commit
+  all pass.
 - Docs-accuracy baseline verified at `b883560` (2026-11-17) from code and
   tests, not from older prose: **35** registry tools, **34** exposed over
   MCP, **31** in webchat; agent-loop cap **25**
@@ -1011,9 +1012,10 @@
 
 ## In Progress
 
-- No `active` entry. F35 (background tasks, Step 4) is `passing` in the
-  working tree pending its commit; Steps 1-3 are shipped (`passing`);
-  F36 and F30 stay `planned`.
+- No `active` entry. F35 (background tasks, Step 4) is `passing` and
+  committed/pushed to `main` (`2680979`, plus CI test fixes `d57f720`
+  and `0a45f2a`); Steps 1-3 are shipped (`passing`); F36 and F30 stay
+  `planned`.
 - Internal docs-accuracy pass is `planned` as F36 (not started): fix the
   drift recorded in the baseline above — `docs/ARCHITECTURE.md` (loop cap
   10 → 25, webchat 7/9 → 31 registry tools, migration 0017 → 0018),
@@ -1056,7 +1058,7 @@
   agent files 182 passed / 6 skipped; FULL suite 2243 passed / 11
   skipped / 1 deselected (388.02s, 40 warnings, Windows, PostgreSQL on
   127.0.0.1:5433).
-  Slice C is implemented in the working tree (uncommitted): the start
+  Slice C is committed as part of `2680979`: the start
   route accepts `mode=plan|manual` (default plan; `auto` and non-strings
   are 400) and requires `approval_store` before provider checks for
   manual. `POST /dashboard/background-tasks/{workflow_id}/approvals/{token}`
@@ -1084,25 +1086,27 @@
   deadline hiding, list/approvals scoping, route matrix + audit, real
   start→approve→finish), rewritten no-executor runner test, waiter-door
   and bounded-window tests. No schema or migration change; the webchat
-  and `/mcp` fast paths keep their behavior. Slice D is implemented in the
-  working tree: staging emits `background_task.approval_requested`
+  and `/mcp` fast paths keep their behavior. Slice D is part of `2680979`:
+  staging emits `background_task.approval_requested`
   (`workflow_id`, `action`) and `_audit_tool` scopes it to
   `resource_type=background_task`, `resource_id=workflow_id`; the
   webchat default `approval_detail` preview applies `visible_controls`
   (display-only); docs/SECURITY.md, docs/ROADMAP.md, and this file now
   record it. D4: ownership stays in JSONB, so there is no
   migration `0019`; `docs/BACKGROUND_TASKS.md` says so. Clean-state
-  checklist 4/5 — build, tests, artifacts, and feature-list state pass;
-  commit/hash pending explicit user approval.
+  checklist 5/5 — build, tests, artifacts, feature-list state, and clean
+  commit all pass; CI is green on `0a45f2a`.
 - F30 (`planned`): embedding/semantic retrieval backend. Not started.
 - F29 (`passing`): per-account Workflows dashboard timeline.
 
 ## Next Steps
 
-0. Release is closed: PyPI and hosted production (`/health`) both report
-   0.6.1 (verified 2026-10-27). 0.5.x holdouts are reached by the
-   README/docs "No such command 'connect'" callout until they upgrade once;
-   from 0.6.1 on, the passive notice takes over.
+0. 0.6.2 shipped 2026-11-17 (Steps 1-3 of background tasks). The next
+   release is 0.6.3, carrying F35 Step 4 (mutating tools + durable
+   approvals); bump `invincible/__init__.py`, add the release note, tag,
+   and publish. 0.5.x holdouts are reached by the README/docs "No such
+   command 'connect'" callout until they upgrade once; from 0.6.1 on,
+   the passive notice takes over.
 
 1. Restart any paired `invincible connect` agent to pick up F22's voice
    poses plus the earlier F23/F25/F26 runner/overlay changes
@@ -1128,12 +1132,12 @@
    feature commits (revert or commit them separately). F04 fan-out
    (`harness_fanout.py` + 18 tests) stays green, untouched.
 7. Background tasks: Steps 1-3 shipped in 0.6.2 (PR #26 merged);
-   F32/F33/F34 are `passing`. Step 4 is implemented and F35 is `passing`
-   in the working tree pending commit: Slice A shipped (`d9852ec`),
-   Slice B shipped (`4a77a39`), and Slices C+D (dashboard approval loop,
-   `approval_requested`/`approval_decided` audit rows, webchat preview
-   escaping, docs pass) are uncommitted for review. Commit F35, then cut
-   the next release (version lives only in `invincible/__init__.py`).
+   F32/F33/F34 are `passing`. Step 4 is shipped and F35 is `passing`:
+   Slice A (`d9852ec`), Slice B (`4a77a39`), and Slices C+D (`2680979`;
+   dashboard approval loop, `approval_requested`/`approval_decided`
+   audit rows, webchat preview escaping, docs pass) are on `main`; CI
+   test-only fixes are `d57f720` and `0a45f2a`. Cut 0.6.3 next (version
+   lives only in `invincible/__init__.py`).
    Step 4 = a background task may stage MUTATING tools and suspend on
    a durable approval; it reuses
    `harness_approvals`/`pending_actions`/`tool_executor`, never a
