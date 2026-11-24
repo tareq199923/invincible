@@ -763,10 +763,15 @@ async def test_manual_task_route_start_approve_and_finish(
     assert rows, "the manual task never staged an approval"
     token = rows[0]["token"]
 
-    requested_audit = [
-        row for row in await app.state.audit_log.recent(limit=200)
-        if row["action"] == "background_task.approval_requested"
-    ]
+    requested_audit: list[dict] = []
+    for _ in range(500):
+        requested_audit = [
+            row for row in await app.state.audit_log.recent(limit=200)
+            if row["action"] == "background_task.approval_requested"
+        ]
+        if requested_audit:
+            break
+        await asyncio.sleep(0.01)
     assert len(requested_audit) == 1
     assert requested_audit[0]["resource_type"] == "background_task"
     assert requested_audit[0]["resource_id"] == workflow_id
