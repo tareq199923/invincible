@@ -467,6 +467,11 @@ async def test_manual_task_suspends_then_approve_executes_once(
         executed.append((action_type, dict(args)))
         return {"status": "ok", "output": "hi"}
 
+    audit_calls: list[tuple[str, dict | None]] = []
+
+    async def audit(action, meta=None):
+        audit_calls.append((action, meta))
+
     _patch_real_agent(monkeypatch, workflow_id)
     staged: dict = {}
 
@@ -479,7 +484,7 @@ async def test_manual_task_suspends_then_approve_executes_once(
                 continue
             staged.update(rows[0])
             assert waiter.resolve(
-                rows[0]["token"], principal.user_id, True)
+                rows[0]["token"], principal.user_id, True, durable=True)
             return
         raise AssertionError("approval was never staged")
 
@@ -487,7 +492,7 @@ async def test_manual_task_suspends_then_approve_executes_once(
         **_runner_kwargs(
             principal, workflow_id, router=router, waiter=waiter,
             executor=executor, harness_bus=bus, mode="manual",
-            approval_store=store,
+            approval_store=store, audit=audit,
         )
     ))
     approver_task = asyncio.create_task(approver())
@@ -515,6 +520,11 @@ async def test_manual_task_suspends_then_approve_executes_once(
     requested = bus.history()[1]
     assert requested["name"] == "execute_bash"
     assert "echo hi" not in json.dumps(requested)
+    assert audit_calls == [(
+        "background_task.approval_requested",
+        {"workflow_id": workflow_id, "action": "execute_bash"},
+    )]
+    assert "echo hi" not in json.dumps(audit_calls)
     assert bus.history()[2]["approved"] is True
     # D2: replaying the approval finds no row (single execution).
     assert await store.resolve(
@@ -553,7 +563,7 @@ async def test_manual_task_ignores_out_of_schema_timeout(
             if not rows:
                 continue
             assert waiter.resolve(
-                rows[0]["token"], principal.user_id, True)
+                rows[0]["token"], principal.user_id, True, durable=True)
             return
         raise AssertionError("approval was never staged")
 
@@ -598,7 +608,7 @@ async def test_manual_task_deny_is_a_tool_result_not_a_failure(
             if not rows:
                 continue
             assert waiter.resolve(
-                rows[0]["token"], principal.user_id, False)
+                rows[0]["token"], principal.user_id, False, durable=True)
             return
         raise AssertionError("approval was never staged")
 
@@ -675,48 +685,139 @@ async def test_manual_task_denylisted_command_never_stages(
 async def test_manual_task_without_executor_answers_unavailable(
     pg_engine, monkeypatch
 ):
-    """F35 D3: no paired agent -> "unavailable", never a local run."""
+    """F35 D3: no paired agent -> "unavailable" before staging.
+
+    There is nowhere safe to run, so the action must not park and wait
+    for an approval that could never execute. The model gets a normal
+    tool result and the workflow completes.
+    """
     principal = await _principal(pg_engine)
     workflow_id = new_workflow_id()
     store = ApprovalStore(pg_engine)
     waiter = ApprovalWaiter()
     bus = HarnessBus()
     router = _manual_router(answer="no machine")
+    audit_calls: list = []
 
     _patch_real_agent(monkeypatch, workflow_id)
 
-    async def approver():
-        for _ in range(500):
-            await asyncio.sleep(0.01)
-            rows = await store.pending_for_workflow(
-                workflow_id, owner_subject=principal.user_id)
-            if not rows:
-                continue
-            assert waiter.resolve(
-                rows[0]["token"], principal.user_id, True)
-            return
-        raise AssertionError("approval was never staged")
+    async def audit(action, **meta):
+        audit_calls.append((action, meta))
 
-    task = asyncio.create_task(run_background_task(
+    await asyncio.wait_for(run_background_task(
         **_runner_kwargs(
             principal, workflow_id, router=router, waiter=waiter,
             executor=None, harness_bus=bus, mode="manual",
-            approval_store=store,
+            approval_store=store, audit=audit,
         )
-    ))
-    approver_task = asyncio.create_task(approver())
-    await asyncio.wait_for(task, timeout=10)
-    await asyncio.wait_for(approver_task, timeout=10)
+    ), timeout=10)
 
-    assert _last_tool_result(router)["status"] == "unavailable"
+    result = _last_tool_result(router)
+    assert result["status"] == "unavailable"
+    assert result["reason"] == tool_executor.MUTATING_UNAVAILABLE_REASON
     assert await store.pending_for_workflow(
         workflow_id, owner_subject=principal.user_id) == []
     assert _types(bus) == [
         HarnessEventType.WORKFLOW_STARTED.value,
-        HarnessEventType.APPROVAL_REQUESTED.value,
-        HarnessEventType.APPROVAL_RESOLVED.value,
         HarnessEventType.WORKFLOW_COMPLETED.value,
     ]
+    assert HarnessEventType.APPROVAL_REQUESTED.value not in _types(bus)
+    assert HarnessEventType.APPROVAL_RESOLVED.value not in _types(bus)
+    assert not [
+        action for action, _meta in audit_calls
+        if action.startswith("background_task.approval")
+    ]
+    assert "echo hi" not in json.dumps(audit_calls)
+
+
+def test_effective_approval_deadline_uses_the_earlier_bound():
+    started = 1_000_000.0
+    task_cutoff = (
+        started + bt.BACKGROUND_TASK_TIMEOUT_SECONDS
+        - bt.APPROVAL_SAFETY_MARGIN_SECONDS
+    )
+    # Row deadline first.
+    assert bt.effective_approval_deadline(
+        task_cutoff - 100, started) == task_cutoff - 100
+    # Task clock first.
+    assert bt.effective_approval_deadline(
+        task_cutoff + 100, started) == task_cutoff
+    # Missing row deadline still gets the task cutoff.
+    assert bt.effective_approval_deadline(None, started) == task_cutoff
+    # Missing task start leaves the row deadline alone.
+    assert bt.effective_approval_deadline(task_cutoff, None) == task_cutoff
+    assert bt.effective_approval_deadline(None, None) is None
+    assert bt.effective_approval_deadline(
+        task_cutoff + 1_000, started,
+        task_timeout_seconds=300) == started + 300 - 60
+
+
+async def test_adapter_wait_is_bounded_by_the_task_clock():
+    calls: list = []
+
+    class FakeWaiter:
+        async def wait_decision(
+            self, token, user_id, *, timeout=None, durable=False
+        ):
+            calls.append((token, user_id, timeout, durable))
+            return True
+
+    adapter = bt.DurableApprovalAdapter(
+        object(), FakeWaiter(), workflow_id="task-wait",
+        owner_subject=7)
+    adapter._task_deadline = time.time() + 5
+    assert await adapter.wait("tok") is True
+    _token, user_id, timeout, durable = calls[-1]
+    assert (user_id, durable) == (7, True)
+    assert 0 < timeout <= 5
+
+    adapter._ttl_seconds = 2
+    assert await adapter.wait("tok") is True
+    assert 0 < calls[-1][2] <= 2
+
+    adapter._task_deadline = time.time() - 1
+    assert await adapter.wait("tok") is None
+    assert len(calls) == 2
+
+
+async def test_manual_task_window_closed_before_staging_fails(
+    pg_engine, monkeypatch
+):
+    """F35 D6: inside the safety margin nothing stages and nothing runs."""
+    principal = await _principal(pg_engine)
+    workflow_id = new_workflow_id()
+    store = ApprovalStore(pg_engine)
+    waiter = ApprovalWaiter()
+    bus = HarnessBus()
+    router = _manual_router()
+    executed: list = []
+
+    _patch_real_agent(monkeypatch, workflow_id)
+    # Adapter construction computes now + 5 - 60: already closed.
+    monkeypatch.setattr(bt, "BACKGROUND_TASK_TIMEOUT_SECONDS", 5)
+    monkeypatch.setattr(bt, "APPROVAL_SAFETY_MARGIN_SECONDS", 60)
+
+    async def executor(action_type, args):
+        executed.append((action_type, dict(args)))
+        return {"status": "ok"}
+
+    await asyncio.wait_for(run_background_task(
+        **_runner_kwargs(
+            principal, workflow_id, router=router, waiter=waiter,
+            executor=executor, harness_bus=bus, mode="manual",
+            approval_store=store,
+        )
+    ), timeout=10)
+
+    assert executed == []
+    assert await store.pending_for_workflow(
+        workflow_id, owner_subject=principal.user_id) == []
+    assert _types(bus) == [
+        HarnessEventType.WORKFLOW_STARTED.value,
+        HarnessEventType.WORKFLOW_FAILED.value,
+    ]
+    assert HarnessEventType.APPROVAL_REQUESTED.value not in _types(bus)
+    assert bus.history()[-1]["error"] == "approval timed out"
 
 
 async def test_manual_task_approval_timeout_fails_and_leaves_no_row(
@@ -733,10 +834,13 @@ async def test_manual_task_approval_timeout_fails_and_leaves_no_row(
     _patch_real_agent(monkeypatch, workflow_id)
     monkeypatch.setattr(bt, "BACKGROUND_APPROVAL_TTL_SECONDS", 0.05)
 
+    async def executor(_action_type, _args):
+        return {"status": "ok"}
+
     await asyncio.wait_for(run_background_task(
         **_runner_kwargs(
             principal, workflow_id, router=router, waiter=waiter,
-            executor=None, harness_bus=bus, mode="manual",
+            executor=executor, harness_bus=bus, mode="manual",
             approval_store=store,
         )
     ), timeout=10)
@@ -764,12 +868,16 @@ async def test_manual_task_cancel_purges_the_suspended_row(
     registry = BackgroundTaskRegistry()
 
     _patch_real_agent(monkeypatch, workflow_id)
+
+    async def executor(_action_type, _args):
+        return {"status": "ok"}
+
     task = registry.start(
         principal.user_id,
         run_background_task(
             **_runner_kwargs(
                 principal, workflow_id, router=router, waiter=waiter,
-                executor=None, harness_bus=bus, mode="manual",
+                executor=executor, harness_bus=bus, mode="manual",
                 approval_store=store,
             )
         ),
@@ -887,9 +995,16 @@ async def test_start_validates_task_and_mode(client):
     assert "at most 8000" in too_long.json()["error"]["message"]
 
     wrong_mode = await client.post(
-        "/dashboard/background-tasks", json={"task": "hello", "mode": "manual"})
+        "/dashboard/background-tasks", json={"task": "hello", "mode": "auto"})
     assert wrong_mode.status_code == 400
-    assert "mode must be plan" in wrong_mode.json()["error"]["message"]
+    assert "mode must be plan or manual" in \
+        wrong_mode.json()["error"]["message"]
+
+    empty_mode = await client.post(
+        "/dashboard/background-tasks", json={"task": "hello", "mode": ""})
+    assert empty_mode.status_code == 400
+    assert "mode must be plan or manual" in \
+        empty_mode.json()["error"]["message"]
 
     not_json = await client.post(
         "/dashboard/background-tasks", content=b"not-json",
@@ -911,6 +1026,28 @@ async def test_start_without_provider_is_400_before_start(client):
             .where(workflow_events.c.user_id == uid)
         )).scalar_one()
     assert count == 0
+
+
+async def test_start_manual_requires_store_but_plan_does_not(
+    client, byok_env, monkeypatch
+):
+    uid, _pid = await _login_with_credential(
+        client, "tasks-store@example.com")
+    monkeypatch.setattr(app.state, "approval_store", None)
+
+    manual = await client.post(
+        "/dashboard/background-tasks",
+        json={"task": "do it", "mode": "manual"})
+    assert manual.status_code == 503, manual.text
+    error = manual.json()["detail"]["error"]
+    assert error["type"] == "config_error"
+    assert "approval_store" in error["message"]
+
+    plan = await client.post(
+        "/dashboard/background-tasks",
+        json={"task": "plan it", "mode": "plan"})
+    assert plan.status_code == 202, plan.text
+    await _drain(app.state.background_tasks, uid)
 
 
 async def test_start_success_persists_events_and_answer(
@@ -1074,8 +1211,7 @@ async def test_cancel_endpoint_persists_cancelled_and_one_audit(
     assert len(audit_rows) == 1
     assert audit_rows[0]["resource_id"] == workflow_id
     assert audit_rows[0]["actor_user_id"] == uid
-    assert audit_rows[0]["meta"] == {
-        "workflow_id": workflow_id, "mode": "plan"}
+    assert audit_rows[0]["meta"] == {"workflow_id": workflow_id}
 
 
 @pytest.mark.usefixtures("byok_env")

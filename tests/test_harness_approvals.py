@@ -344,3 +344,73 @@ async def test_metadata_tables_match_migrated_schema(pg_engine):
     assert "workflow_events" in tables
     assert "suspended_workflow_id" in cols
     assert "deadline" in cols
+
+
+async def test_pending_for_owner_scopes_orders_and_hides_args(pg_engine):
+    store = ApprovalStore(pg_engine)
+    # Inserted out of time order on purpose: result must sort by created_at.
+    later = await store.suspend(
+        workflow_id="wf-b", action_type="write_file",
+        args={"path": "p", "content": "secret-body"},
+        owner_subject=1, now=2000.0)
+    earlier = await store.suspend(
+        workflow_id="wf-a", action_type="execute_bash",
+        args={"command": "echo secret-cmd", "timeout": 30.0},
+        owner_subject=1, now=1000.0)
+    await store.suspend(
+        workflow_id="wf-c", action_type="execute_bash",
+        args={"command": "x"}, owner_subject=2, now=1500.0)
+    await store.suspend(
+        workflow_id="wf-d", action_type="execute_bash",
+        args={"command": "y"}, owner_subject=None, now=1600.0)
+
+    # A fast-path (browser) row for the same subject must never show up.
+    fast = PendingActionStore()
+    fast.attach_engine(pg_engine)
+    fast_token = fast.put(
+        "execute_bash", {"command": "fast-secret"}, owner_subject=1)
+    await fast.flush_persisted()
+
+    rows = await store.pending_for_owner(1)
+
+    assert [r["token"] for r in rows] == [earlier, later]
+    assert [r["workflow_id"] for r in rows] == ["wf-a", "wf-b"]
+    assert [r["type"] for r in rows] == ["execute_bash", "write_file"]
+    for r in rows:
+        assert set(r) == {
+            "token", "type", "workflow_id", "created_at", "deadline"}
+    assert "secret" not in repr(rows)
+    assert fast_token not in [r["token"] for r in rows]
+    # Fails closed: no subject, unknown subject, other owner's rows.
+    assert await store.pending_for_owner(None) == []
+    assert await store.pending_for_owner(999) == []
+    assert [r["workflow_id"] for r in await store.pending_for_owner(2)] == [
+        "wf-c"]
+
+
+async def test_pending_for_workflow_include_args(pg_engine):
+    store = ApprovalStore(pg_engine)
+    token = await store.suspend(
+        workflow_id="wf1", action_type="execute_bash",
+        args={"command": "echo hi", "timeout": 30.0},
+        owner_subject=5, now=1000.0)
+
+    default = await store.pending_for_workflow("wf1", owner_subject=5)
+    assert [r["token"] for r in default] == [token]
+    assert "args" not in default[0]
+
+    full = await store.pending_for_workflow(
+        "wf1", owner_subject=5, include_args=True)
+    assert full[0]["args"] == {"command": "echo hi", "timeout": 30.0}
+    assert "_owner_subject" not in full[0]["args"]
+
+    # Foreign / missing subject: nothing, even with include_args.
+    assert await store.pending_for_workflow(
+        "wf1", owner_subject=6, include_args=True) == []
+    assert await store.pending_for_workflow(
+        "wf1", owner_subject=None, include_args=True) == []
+
+    # Reading with include_args never consumes the row.
+    record = await store.resolve(
+        token, approve=True, requester_subject=5, now=1000.0)
+    assert record["args"] == {"command": "echo hi", "timeout": 30.0}

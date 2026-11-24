@@ -5,6 +5,38 @@
 
 ## Current State
 
+- F35 Slice C+D implemented in the working tree (UNCOMMITTED — waiting on
+  explicit user approval): a `manual` background task now has a full
+  dashboard approval loop. Start accepts `mode=plan|manual` (plan
+  default; `auto`/non-strings 400) and requires `approval_store` for
+  manual. `POST /dashboard/background-tasks/{workflow_id}/approvals/{token}`
+  is owner-scoped, JSON-only, checks the effective deadline, resolves the
+  `durable=True` waiter door, and audits
+  `background_task.approval_decided` (`workflow_id`, `action`, `approved`
+  only); unknown/foreign/already-resolved/wrong-door/expired tokens share
+  one 404 body and the runner still performs the single atomic claim.
+  `/dashboard/approvals` lists the owner's waiting actions metadata-only
+  (no tokens/args/buttons); `/dashboard/workflows` counts only visible
+  rows; the owner detail page shows full `execute_bash`, full `edit_file`
+  old/new, and `write_file` path + bytes + 500-char preview, escaped by
+  `visible_controls` with the non-ASCII lookalike warning, and sends
+  `no-store`. Staging now writes
+  `background_task.approval_requested` (`workflow_id`, `action`;
+  `resource_type=background_task`, `resource_id=workflow_id`) through
+  `_audit_tool`; there is still no `_resolved` audit row. The webchat
+  default `approval_detail` preview also passes through
+  `visible_controls` (display only; fast-path semantics unchanged). The
+  real window is `min(row deadline, task_started + 1800s - 60s)`,
+  enforced before staging, in the bounded wait, and at the route (page
+  is advisory). No schema/migration change; webchat/`/mcp` fast paths
+  keep their behavior (webchat now passes `durable=False` explicitly).
+  Tests: new `tests/test_background_tasks_ui.py` (17), rewritten
+  no-executor runner test, requested-audit/resource-scope pins, webchat
+  preview escaping, window/deadline/waiter-door coverage. `ruff check .`
+  clean; FULL suite 2262 passed / 11 skipped / 1 deselected (416.22s, 40
+  warnings, Windows, PostgreSQL on 127.0.0.1:5433). Clean-state checklist
+  4/5 — build, tests, no artifacts, and feature-list state pass; the
+  commit hash is pending user approval.
 - Docs-accuracy baseline verified at `b883560` (2026-11-17) from code and
   tests, not from older prose: **35** registry tools, **34** exposed over
   MCP, **31** in webchat; agent-loop cap **25**
@@ -979,8 +1011,9 @@
 
 ## In Progress
 
-- One `active` entry: F35 (background tasks, Step 4). Steps 1-3 are
-  shipped (`passing`); F36 and F30 stay `planned`.
+- No `active` entry. F35 (background tasks, Step 4) is `passing` in the
+  working tree pending its commit; Steps 1-3 are shipped (`passing`);
+  F36 and F30 stay `planned`.
 - Internal docs-accuracy pass is `planned` as F36 (not started): fix the
   drift recorded in the baseline above — `docs/ARCHITECTURE.md` (loop cap
   10 → 25, webchat 7/9 → 31 registry tools, migration 0017 → 0018),
@@ -993,7 +1026,7 @@
   - F32 (`passing`): background plan-mode agent tasks (Step 1).
   - F33 (`passing`): background tasks dashboard UI (Step 2).
   - F34 (`passing`): durable per-tool-call checkpoints (Step 3).
-- F35 (`active`): background tasks with mutating tools + durable
+- F35 (`passing`): background tasks with mutating tools + durable
   approvals (Step 4). Slice A (durable groundwork) is committed as
   `d9852ec` on `background-tasks-approvals`: atomic single-use
   `ApprovalStore.resolve`, owner-scoped `pending_for_workflow`,
@@ -1023,12 +1056,44 @@
   agent files 182 passed / 6 skipped; FULL suite 2243 passed / 11
   skipped / 1 deselected (388.02s, 40 warnings, Windows, PostgreSQL on
   127.0.0.1:5433).
-  Slices C (endpoints/UI) and D (audit +
-  final docs) are NOT started; the endpoint still rejects non-plan
-  modes. `tests/conftest.py::client` still lacks
-  `app.state.approval_store` (only Slice C needs it). D4: ownership
-  stays in JSONB, so there is no migration `0019`; `docs/
-  BACKGROUND_TASKS.md` now says so. Clean-state checklist 5/5 ticked.
+  Slice C is implemented in the working tree (uncommitted): the start
+  route accepts `mode=plan|manual` (default plan; `auto` and non-strings
+  are 400) and requires `approval_store` before provider checks for
+  manual. `POST /dashboard/background-tasks/{workflow_id}/approvals/{token}`
+  is JSON-only, owner-scoped, checks the effective deadline, resolves the
+  `durable=True` waiter door, and writes `background_task.approval_decided`
+  (`workflow_id`, `action`, `approved` only); unknown/foreign/already-
+  resolved/wrong-door/expired tokens share one 404 body. Dashboard:
+  `/dashboard/approvals` is the metadata-only cross-workflow page;
+  `/dashboard/workflows` counts only VISIBLE rows (no args/tokens); the
+  owner detail page renders full `execute_bash`, full `edit_file`
+  old/new, and `write_file` path + bytes + 500-char preview through
+  `visible_controls` (control/bidi/zero-width/non-ASCII spaces escaped as
+  `<U+XXXX>`, tab as `\t`), adds the non-ASCII lookalike warning, hides
+  cards past the effective deadline, and sends `no-store`. Runner:
+  `APPROVAL_SAFETY_MARGIN_SECONDS = 60`, `effective_approval_deadline`,
+  adapter `window_open` + bounded wait; no-executor actions are refused
+  BEFORE staging (`unavailable`, no row/event) and the window check
+  likewise stages nothing. `ApprovalWaiter` entries are `(user_id,
+  future, durable)`; the background decision route and webchat route each
+  pass their own door explicitly. `workflow_store` gained
+  `task_started_at` and `task_status(awaiting_approval=)`. Templates/JS:
+  mode select, approval cards, polling while awaiting, approvals nav
+  page, `resolvedTokens` + `htmx:afterSwap` so answered buttons stay
+  disabled. Tests: new `tests/test_background_tasks_ui.py` (rendering,
+  deadline hiding, list/approvals scoping, route matrix + audit, real
+  start→approve→finish), rewritten no-executor runner test, waiter-door
+  and bounded-window tests. No schema or migration change; the webchat
+  and `/mcp` fast paths keep their behavior. Slice D is implemented in the
+  working tree: staging emits `background_task.approval_requested`
+  (`workflow_id`, `action`) and `_audit_tool` scopes it to
+  `resource_type=background_task`, `resource_id=workflow_id`; the
+  webchat default `approval_detail` preview applies `visible_controls`
+  (display-only); docs/SECURITY.md, docs/ROADMAP.md, and this file now
+  record it. D4: ownership stays in JSONB, so there is no
+  migration `0019`; `docs/BACKGROUND_TASKS.md` says so. Clean-state
+  checklist 4/5 — build, tests, artifacts, and feature-list state pass;
+  commit/hash pending explicit user approval.
 - F30 (`planned`): embedding/semantic retrieval backend. Not started.
 - F29 (`passing`): per-account Workflows dashboard timeline.
 
@@ -1063,13 +1128,14 @@
    feature commits (revert or commit them separately). F04 fan-out
    (`harness_fanout.py` + 18 tests) stays green, untouched.
 7. Background tasks: Steps 1-3 shipped in 0.6.2 (PR #26 merged);
-   F32/F33/F34 are `passing`. Step 4 is landing in slices: Slice A
-   shipped (`d9852ec`), Slice B is implemented (review pending), then
-   Slice C (endpoints/UI) and Slice D (audit + final docs); flip F35 to
-   `passing` when its acceptance criteria hold, then cut the next
-   release (version lives only in `invincible/__init__.py`).
+   F32/F33/F34 are `passing`. Step 4 is implemented and F35 is `passing`
+   in the working tree pending commit: Slice A shipped (`d9852ec`),
+   Slice B shipped (`4a77a39`), and Slices C+D (dashboard approval loop,
+   `approval_requested`/`approval_decided` audit rows, webchat preview
+   escaping, docs pass) are uncommitted for review. Commit F35, then cut
+   the next release (version lives only in `invincible/__init__.py`).
    Step 4 = a background task may stage MUTATING tools and suspend on
-   a durable approval; it must reuse
+   a durable approval; it reuses
    `harness_approvals`/`pending_actions`/`tool_executor`, never a
    second approval system. Step 5 = pick ONE and document it;
    restart-safe task records + resume is the natural completion of

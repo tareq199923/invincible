@@ -6,20 +6,30 @@
 {% block content %}
 <h2>Workflows</h2>
 <p class="muted">Durable harness event timelines for this account. A
-<code>task-</code> workflow is one background plan-mode run started below;
+<code>task-</code> workflow is one background run started below;
 other workflows are chat turns' planned read-only fan-outs. Only this
 account's events are shown.</p>
 
 <section class="task-start">
   <h3>Start a background task</h3>
-  <p class="muted">Runs on the server in plan mode (read-only). It can inspect
-  and propose steps, but it cannot change files or run mutating tools.</p>
+  <p class="muted">Plan runs read-only on the server. Manual can also
+  request machine-mutating actions: each one waits for your approval and
+  runs only on your paired machine. Mutating actions need
+  <code>INVINCIBLE_AGENT_ROUTING=1</code> and a connected agent; reads
+  work in both modes.</p>
   <form id="background-task-form"
         data-endpoint="/dashboard/background-tasks">
     <label for="background-task-input">Task</label>
     <textarea id="background-task-input" name="task" rows="4"
               maxlength="8000"
               placeholder="Describe what to investigate or plan..."></textarea>
+    <div class="task-form-mode-row">
+      <label for="background-task-mode">Mode</label>
+      <select id="background-task-mode" name="mode">
+        <option value="plan" selected>Plan (read-only)</option>
+        <option value="manual">Manual (approve mutating actions)</option>
+      </select>
+    </div>
     <div class="task-form-row">
       <span class="muted char-counter" id="background-task-counter">0 / 8000</span>
       <button type="submit" id="background-task-submit">Start task</button>
@@ -40,6 +50,7 @@ account's events are shown.</p>
     <td>
       {% if w.workflow_id.startswith('task-') %}
       <span class="status-badge status-{{ w.task_status | replace(' ', '-') }}">{{ w.task_status }}</span>
+      {% if w.approval_count %}<span class="muted task-status-summary"><a href="/dashboard/approvals">{{ w.approval_count }} awaiting approval</a></span>{% endif %}
       {% if w.latest_summary %}<span class="muted task-status-summary">{{ w.latest_summary }}</span>{% endif %}
       {% elif w.latest_summary %}{{ w.latest_summary }}
       <span class="muted">({{ w.latest_type or 'event' }})</span>

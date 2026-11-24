@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Approvals - Invincible{% endblock %}
+{% block content %}
+<h2>Approvals</h2>
+<p class="muted">Machine-mutating actions from your background tasks that
+are waiting for a decision. Open a workflow to see the full command or
+file change and approve or deny it. Only this account's approvals are
+shown.</p>
+
+{% for group in approval_groups %}
+<section class="approval-group">
+  <h3><a href="/dashboard/workflows/{{ group.workflow_id | urlencode }}"><code>{{ group.workflow_id }}</code></a></h3>
+  <table>
+    <thead><tr><th>Action</th><th>Requested</th><th>Expires</th></tr></thead>
+    <tbody>
+    {% for a in group.approvals %}
+    <tr>
+      <td><code>{{ a.type }}</code></td>
+      <td class="muted" title="{{ a.created_at | absdate }}">{{ a.created_at | timeago }}</td>
+      <td class="muted"{% if a.deadline %} title="{{ a.deadline | absdate }}"{% endif %}>
+        {% if a.deadline %}{{ a.deadline | timeago }}{% else %}-{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<p class="empty">No approvals are waiting. When a background task wants to
+run a mutating action, it appears here and on its workflow page.</p>
+{% endfor %}
+{% endblock content %}

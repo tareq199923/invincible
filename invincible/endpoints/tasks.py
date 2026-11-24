@@ -1,23 +1,28 @@
 # invincible/endpoints/tasks.py
-"""Background agent tasks (cookie realm only, plan mode only).
+"""Background agent tasks (cookie realm only).
 
 ``POST /dashboard/background-tasks`` starts a server-side agent turn with no
-browser attached. The runner lives in ``core/background_tasks.py``; this
-module is
-a thin wrapper that validates the request, resolves the same chat inputs
-``POST /dashboard/chat/stream`` builds, enforces the per-user running cap,
-and hands the work to the registry.
+browser attached. ``plan`` is read-only; ``manual`` adds durable approvals
+for machine-mutating actions. The runner lives in
+``core/background_tasks.py``; this module is a thin wrapper that validates
+the request, resolves the same chat inputs ``POST /dashboard/chat/stream``
+builds, enforces the per-user running cap, and hands the work to the
+registry. ``POST .../approvals/{token}`` wakes the runner's waiter; it never
+claims or executes the staged action itself.
 
 Auth and CSRF posture match the rest of the dashboard: the signed
 ``SameSite=Lax`` session cookie is the only accepted credential, and the
-route is JSON-only (a cross-site form cannot post JSON). ``inv_`` API keys
+routes are JSON-only (a cross-site form cannot post JSON). ``inv_`` API keys
 never authorize this surface.
 """
+import time
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from invincible.core.background_tasks import (
     MAX_RUNNING_PER_USER,
+    effective_approval_deadline,
     new_workflow_id,
     run_background_task,
 )
@@ -25,6 +30,10 @@ from invincible.core.principal import Principal
 from invincible.core.router import NO_CREDENTIALS_MESSAGE
 from invincible.core.settings import settings
 from invincible.core.webchat_agent import build_agent_executor
+from invincible.core.workflow_store import (
+    list_workflow_events,
+    task_started_at,
+)
 from invincible.endpoints.accounts import _audit, require_user_session
 from invincible.endpoints.byok import byok_attempt_source_for
 from invincible.endpoints.dashboard import _state
@@ -33,7 +42,9 @@ router = APIRouter()
 
 _MAX_TASK_CHARS = 8000
 _MAX_MODEL_CHARS = 200
-_PLAN_MODE = "plan"
+_BACKGROUND_MODES = ("plan", "manual")
+_NOT_FOUND = {"error": {"message": "No such approval.",
+                        "type": "not_found_error"}}
 
 
 def _error(message: str, error_type: str, status_code: int) -> JSONResponse:
@@ -48,7 +59,7 @@ async def start_background_task(
     request: Request,
     principal: Principal = Depends(require_user_session),
 ):
-    """Start one plan-mode task; return its workflow id.
+    """Start one plan or manual task; return its workflow id.
 
     Validation and the no-provider check run BEFORE anything starts, so a
     rejected request never leaves a phantom workflow behind. The running
@@ -78,20 +89,32 @@ async def start_background_task(
         return _error(
             f"model must be at most {_MAX_MODEL_CHARS} characters.",
             "invalid_request_error", 400)
-    # Step 1 is plan mode only. The field is accepted for forward
-    # compatibility but anything else is rejected outright instead of
-    # being silently downgraded.
-    mode = raw.get("mode")
-    if mode is not None:
-        mode = str(mode).strip().lower()
-    if mode not in (None, "", _PLAN_MODE):
-        return _error("mode must be plan.", "invalid_request_error", 400)
+    # Plan is the default. Manual adds durable approvals for mutating
+    # actions; `auto` has no unattended background surface and is
+    # rejected rather than silently downgraded.
+    mode_value = raw.get("mode")
+    if mode_value is None:
+        mode = "plan"
+    elif isinstance(mode_value, str):
+        mode = mode_value.strip().lower()
+    else:
+        return _error("mode must be plan or manual.",
+                      "invalid_request_error", 400)
+    if mode not in _BACKGROUND_MODES:
+        return _error("mode must be plan or manual.",
+                      "invalid_request_error", 400)
 
     engine = _state(request, "engine")
     registry = _state(request, "background_tasks")
     router_obj = getattr(request.app.state, "router", None)
     if router_obj is None:
         return _error("Router not initialized.", "config_error", 503)
+
+    # Manual needs a durable store for the staged rows. Plan never reads
+    # it; the same server can still run plan tasks with no store.
+    approval_store = None
+    if mode == "manual":
+        approval_store = _state(request, "approval_store")
 
     byok = await byok_attempt_source_for(engine, principal, model=model)
     if byok is None or not byok[0]:
@@ -100,7 +123,8 @@ async def start_background_task(
     if registry.running_count(principal.user_id) >= MAX_RUNNING_PER_USER:
         return _error(
             f"At most {MAX_RUNNING_PER_USER} background tasks may run at "
-            "once. Wait for one to finish and try again.",
+            "once. Wait for one to finish, or answer a pending approval at "
+            "/dashboard/approvals, then try again.",
             "rate_limit_error", 429)
 
     store = _state(request, "sessions")
@@ -127,11 +151,17 @@ async def start_background_task(
 
     async def _audit_tool(action: str, meta: dict | None = None):
         # Metadata only (action + mode) - never commands, paths, or
-        # contents; same discipline as the webchat and MCP audits.
+        # contents; background approval requests are scoped to their task.
+        background_event = action == "background_task.approval_requested"
+        metadata = meta or {}
         await _audit(
             request, action, actor_user_id=principal.user_id,
-            actor_kind="user", resource_type="webchat_tool",
-            meta=meta or {},
+            actor_kind="user",
+            resource_type=("background_task" if background_event
+                           else "webchat_tool"),
+            resource_id=(metadata.get("workflow_id")
+                         if background_event else None),
+            meta=metadata,
         )
 
     workflow_id = new_workflow_id()
@@ -149,6 +179,8 @@ async def start_background_task(
             pending_store=pending_store,
             executor=executor,
             waiter=waiter,
+            mode=mode,
+            approval_store=approval_store,
             retrieval=retrieval,
             continuity=continuity,
             engine=engine,
@@ -167,7 +199,7 @@ async def start_background_task(
         actor_kind="user",
         resource_type="background_task",
         resource_id=workflow_id,
-        meta={"workflow_id": workflow_id, "mode": _PLAN_MODE},
+        meta={"workflow_id": workflow_id, "mode": mode},
     )
     return JSONResponse({"workflow_id": workflow_id}, status_code=202)
 
@@ -197,6 +229,75 @@ async def cancel_background_task(
         actor_kind="user",
         resource_type="background_task",
         resource_id=workflow_id,
-        meta={"workflow_id": workflow_id, "mode": _PLAN_MODE},
+        meta={"workflow_id": workflow_id},
     )
     return JSONResponse({"status": "cancelling"}, status_code=202)
+
+
+@router.post(
+    "/dashboard/background-tasks/{workflow_id}/approvals/{token}")
+async def decide_background_approval(
+    request: Request,
+    workflow_id: str,
+    token: str,
+    principal: Principal = Depends(require_user_session),
+):
+    """Wake the runner's waiter for one owned durable approval.
+
+    This route NEVER claims or executes the staged action: it resolves
+    the in-process waiter, and the runner performs the single atomic
+    ``pending_actions`` claim (``DurableApprovalAdapter.resolve``) and
+    the execution. Unknown, foreign, already-resolved, and past-the-
+    effective-deadline tokens all share the same 404 body.
+    """
+    try:
+        raw = await request.json()
+    except Exception:
+        raw = None
+    if not isinstance(raw, dict):
+        return _error("Request body must be JSON.",
+                      "invalid_request_error", 400)
+    approve = raw.get("approve")
+    if not isinstance(approve, bool):
+        return _error("approve must be true or false.",
+                      "invalid_request_error", 400)
+
+    store = _state(request, "approval_store")
+    rows = await store.pending_for_workflow(
+        workflow_id, owner_subject=principal.user_id)
+    row = next((item for item in rows if item["token"] == token), None)
+    if row is None:
+        return JSONResponse(_NOT_FOUND, status_code=404)
+
+    # Page-facing deadline check: the row TTL is an upper bound, and the
+    # task clock minus the safety margin is the real window. The runner
+    # enforces the same bound, so this is an identical miss, not a
+    # separate outcome.
+    engine = _state(request, "engine")
+    events = await list_workflow_events(
+        engine, user_id=principal.user_id, workflow_id=workflow_id)
+    started = task_started_at(events)
+    if started is not None:
+        cutoff = effective_approval_deadline(row["deadline"], started)
+        if cutoff is not None and time.time() >= cutoff:
+            return JSONResponse(_NOT_FOUND, status_code=404)
+
+    waiter = _state(request, "webchat_approvals")
+    if not waiter.resolve(
+            token, principal.user_id, approve, durable=True):
+        return JSONResponse(_NOT_FOUND, status_code=404)
+
+    # Metadata only: the owner's choice, never the token/command/path.
+    await _audit(
+        request, "background_task.approval_decided",
+        actor_user_id=principal.user_id,
+        actor_kind="user",
+        resource_type="background_task",
+        resource_id=workflow_id,
+        meta={
+            "workflow_id": workflow_id,
+            "action": row["type"],
+            "approved": approve,
+        },
+    )
+    return JSONResponse({"ok": True, "approved": approve}, status_code=202)

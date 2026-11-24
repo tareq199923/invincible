@@ -551,7 +551,8 @@ async def chat_approve(
     if not isinstance(approve, bool):
         return _bad_request("approve must be true or false.")
     waiter = _state(request, "webchat_approvals")
-    if waiter.resolve(token, principal.user_id, approve):
+    if waiter.resolve(
+            token, principal.user_id, approve, durable=False):
         await _audit(
             request,
             "webchat.approval.granted" if approve

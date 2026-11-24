@@ -11,6 +11,7 @@ INVINCIBLE_MEMORY kill-switch gates only CREATION - existing rows stay
 browsable/deletable so the toggle never traps data.
 """
 import logging
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -23,6 +24,7 @@ from invincible.core.accounts import (
     SessionManager,
     UserService,
 )
+from invincible.core.background_tasks import effective_approval_deadline
 from invincible.core.identity import ApiKeyStore
 from invincible.core.markdown import render_chat_markdown
 from invincible.core.memory import MAX_CONTENT_CHARS, MEMORY_KINDS
@@ -38,9 +40,15 @@ from invincible.core.user_settings_store import (
     UserSettingsStore,
     clean_overrides,
 )
+from invincible.core.webchat_agent import (
+    approval_detail,
+    summarize_call,
+    visible_controls,
+)
 from invincible.core.workflow_store import (
     list_workflow_events,
     list_workflows,
+    task_started_at,
     task_status,
 )
 from invincible.endpoints.accounts import (
@@ -899,6 +907,46 @@ async def machines_page(
     )
 
 
+def _visible_approval_rows(
+    rows: list[dict], started_at: float | None, *, now: float | None = None
+) -> list[dict]:
+    """Drop rows whose effective approval window has closed.
+
+    The page deadline is advisory (the adapter's clock is authoritative),
+    but showing an actionable card past it would invite an approval the
+    runner is already about to reject.
+    """
+    ts = time.time() if now is None else float(now)
+    visible: list[dict] = []
+    for row in rows:
+        cutoff = effective_approval_deadline(row.get("deadline"), started_at)
+        if cutoff is not None and ts >= cutoff:
+            continue
+        item = dict(row)
+        item["effective_deadline"] = cutoff
+        visible.append(item)
+    return visible
+
+
+def _approval_cards(
+    rows: list[dict], started_at: float | None, *, now: float | None = None
+) -> list[dict]:
+    """Owner detail cards: full args + the display-safe summary/detail."""
+    cards = _visible_approval_rows(rows, started_at, now=now)
+    for card in cards:
+        args = card.get("args") if isinstance(card.get("args"), dict) else {}
+        name = card["type"]
+        card["summary"] = visible_controls(summarize_call(name, args))
+        card["detail"] = approval_detail(name, args, full=True)
+        command = (
+            str(args.get("command", "")) if name == "execute_bash" else "")
+        card["non_ascii"] = (
+            name == "execute_bash"
+            and any(ord(ch) > 127 for ch in command)
+        )
+    return cards
+
+
 @router.get("/dashboard/workflows")
 async def workflows_page(
     request: Request,
@@ -912,6 +960,19 @@ async def workflows_page(
     engine = _engine(request)
     rows = await list_workflows(engine, user_id=principal.user_id)
     registry = getattr(request.app.state, "background_tasks", None)
+    store = getattr(request.app.state, "approval_store", None)
+    pending_rows: list[dict] = []
+    if store is not None:
+        try:
+            pending_rows = await store.pending_for_owner(principal.user_id)
+        except Exception:  # noqa: BLE001 - a read page must still render
+            logger.warning(
+                "Could not read pending approvals for the workflow list",
+                exc_info=True)
+    pending_by: dict[str, list[dict]] = {}
+    for pending in pending_rows:
+        pending_by.setdefault(pending["workflow_id"], []).append(pending)
+    now = time.time()
     for row in rows:
         if not row["workflow_id"].startswith("task-"):
             continue
@@ -921,12 +982,74 @@ async def workflows_page(
         running = bool(
             registry and registry.is_running(
                 principal.user_id, row["workflow_id"]))
-        row["task_status"] = task_status(running, events)
-    return _page(
+        visible = _visible_approval_rows(
+            pending_by.get(row["workflow_id"], []),
+            task_started_at(events), now=now)
+        row["approval_count"] = len(visible)
+        row["task_status"] = task_status(
+            running, events, awaiting_approval=bool(visible))
+    response = _page(
         "workflows.html", request,
         user_email=await _email(engine, principal),
         workflows=rows,
     )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.get("/dashboard/approvals")
+async def approvals_page(
+    request: Request,
+    principal: Principal = Depends(require_user_session),
+):
+    """Cross-workflow "waiting for you" page.
+
+    Metadata only: workflow id, tool type, requested and effective
+    deadline. No tokens, args, commands, or paths - the owner detail
+    page is the only surface that shows those.
+    """
+    engine = _engine(request)
+    store = getattr(request.app.state, "approval_store", None)
+    rows: list[dict] = []
+    if store is not None:
+        try:
+            rows = await store.pending_for_owner(principal.user_id)
+        except Exception:  # noqa: BLE001 - a read page must still render
+            logger.warning(
+                "Could not read pending approvals for the approvals page",
+                exc_info=True)
+    now = time.time()
+    groups: dict[str, dict] = {}
+    for row in rows:
+        workflow_id = row["workflow_id"]
+        group = groups.get(workflow_id)
+        if group is None:
+            events = await list_workflow_events(
+                engine, user_id=principal.user_id,
+                workflow_id=workflow_id)
+            group = {
+                "workflow_id": workflow_id,
+                "started_at": task_started_at(events),
+                "approvals": [],
+            }
+            groups[workflow_id] = group
+        cutoff = effective_approval_deadline(
+            row.get("deadline"), group["started_at"])
+        if cutoff is not None and now >= cutoff:
+            continue
+        group["approvals"].append({
+            "type": row["type"],
+            "created_at": row["created_at"],
+            "deadline": cutoff,
+        })
+    visible = [group for group in groups.values() if group["approvals"]]
+    response = _page(
+        "approvals.html", request,
+        user_email=await _email(engine, principal),
+        approval_groups=visible,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.get("/dashboard/workflows/{workflow_id:path}")
@@ -960,7 +1083,31 @@ async def workflow_detail_page(
             request, "Workflow not found",
             "This workflow has no events for this account.")
 
-    status = task_status(running, events) if is_task else ""
+    started_at = task_started_at(events) if is_task else None
+    approval_rows: list[dict] = []
+    if is_task:
+        approval_store = getattr(
+            request.app.state, "approval_store", None)
+        if approval_store is not None:
+            try:
+                approval_rows = await approval_store.pending_for_workflow(
+                    workflow_id, owner_subject=principal.user_id,
+                    include_args=True)
+            except Exception:  # noqa: BLE001 - never 503 a read page
+                logger.warning(
+                    "Could not read pending approvals for %s",
+                    workflow_id, exc_info=True)
+    approvals = (
+        _approval_cards(approval_rows, started_at) if is_task else [])
+    status = (
+        task_status(
+            running, events, awaiting_approval=bool(approvals))
+        if is_task else ""
+    )
+    # Only VISIBLE rows may claim the task is waiting for a human. Rows
+    # hidden by the effective deadline are about to expire; say so.
+    approval_window_closed = (
+        bool(approval_rows) and not approvals and running)
     answer_html = (
         render_chat_markdown(task["answer"])
         if task is not None and task.get("answer") else ""
@@ -975,19 +1122,29 @@ async def workflow_detail_page(
         "answer_html": answer_html,
         "task_session_pk": task.get("session_pk") if task is not None else None,
         "can_cancel": running,
+        "approvals": approvals,
+        "approval_window_closed": approval_window_closed,
     }
     polling = request.headers.get("HX-Request") == "true"
     if polling and context["task_view"]:
         # HTMX polls this same URL; render only the swap target so the
         # fragment can replace itself without nesting the whole shell.
-        return _page("_background_task.html", request, **context)
+        response = _page("_background_task.html", request, **context)
+        response.headers["Cache-Control"] = "no-store"
+        return response
     if polling and is_task:
         # The poll started while the task was live, but it now has no
         # owned session (e.g. stopped before one existed), so the page
         # falls back to the plain timeline. Ask htmx for a full reload
         # instead of swapping a whole page into the fragment.
-        return Response(status_code=200, headers={"HX-Refresh": "true"})
-    return _page("workflow_detail.html", request, **context)
+        return Response(
+            status_code=200,
+            headers={"HX-Refresh": "true",
+                     "Cache-Control": "no-store"},
+        )
+    response = _page("workflow_detail.html", request, **context)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.delete("/dashboard/mcp/clients/{client_id}/tokens")

@@ -172,11 +172,16 @@ class ApprovalStore:
             }
 
     async def pending_for_workflow(
-        self, workflow_id: str, *, owner_subject: int | None
+        self, workflow_id: str, *, owner_subject: int | None,
+        include_args: bool = False,
     ) -> list[dict]:
-        """Slow-path rows still awaiting a human for one workflow
-        (metadata only — tokens included so the dashboard can render
-        them; never args contents)."""
+        """Slow-path rows still awaiting a human for one workflow.
+
+        Metadata only by default (tokens included so the dashboard can
+        render them). ``include_args=True`` adds a COPY of the staged
+        args with the reserved owner key removed; only the owner's
+        workflow detail page may ask for it.
+        """
         async with self._engine.connect() as conn:
             rows = (
                 await conn.execute(
@@ -186,11 +191,56 @@ class ApprovalStore:
                     )
                 )
             ).all()
+        out: list[dict] = []
+        for r in rows:
+            mapping = r._mapping
+            if not _owned_by(mapping, owner_subject):
+                continue
+            item = {
+                "token": mapping["token"],
+                "type": mapping["type"],
+                "workflow_id": workflow_id,
+                "created_at": mapping["created_at"],
+                "deadline": mapping["deadline"],
+            }
+            if include_args:
+                args = dict(mapping["args"])
+                args.pop(_OWNER_SUBJECT_KEY, None)
+                item["args"] = args
+            out.append(item)
+        return out
+
+    async def pending_for_owner(
+        self, owner_subject: int | None
+    ) -> list[dict]:
+        """Every slow-path row owned by ``owner_subject``, oldest first.
+
+        Metadata only: never ``args``. Fails closed through
+        ``_owned_by`` (no subject, or subject-less rows, match nothing).
+        Rows are filtered in Python, same as ``pending_for_workflow``:
+        ownership lives inside the JSONB args, and the slow-path table
+        stays small (1 h TTL, startup purge, single instance).
+        """
+        if owner_subject is None:
+            return []
+        async with self._engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    pending_actions.select()
+                    .where(
+                        pending_actions.c.suspended_workflow_id.is_not(None)
+                    )
+                    .order_by(
+                        pending_actions.c.created_at,
+                        pending_actions.c.token,
+                    )
+                )
+            ).all()
         return [
             {
                 "token": r._mapping["token"],
                 "type": r._mapping["type"],
-                "workflow_id": workflow_id,
+                "workflow_id": r._mapping["suspended_workflow_id"],
                 "created_at": r._mapping["created_at"],
                 "deadline": r._mapping["deadline"],
             }

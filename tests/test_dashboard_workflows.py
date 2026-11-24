@@ -93,6 +93,14 @@ def test_task_status_table():
     for label, running, events, expected in cases:
         assert task_status(running, events, now=now) == expected, label
 
+    # F35: only a running task with a VISIBLE pending row says so.
+    assert task_status(
+        True, [started], now=now,
+        awaiting_approval=True) == "awaiting approval"
+    assert task_status(
+        False, [started], now=now,
+        awaiting_approval=True) == "running"
+
 
 async def test_page_requires_session(client):
     assert (await client.get("/dashboard/workflows")).status_code == 401

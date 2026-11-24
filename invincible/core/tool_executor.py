@@ -968,11 +968,9 @@ async def execute_staged(
     host. With no executor (agent routing off / no paired machine) it
     answers ``unavailable`` and runs nothing.
     """
-    if (require_executor and executor is None
-            and record["type"] in ("execute_bash", "write_file",
-                                   "edit_file", "expose_port")):
-        return {"status": "unavailable",
-                "reason": MUTATING_UNAVAILABLE_REASON}
+    required_reason = executor_required_reason(record["type"])
+    if require_executor and executor is None and required_reason is not None:
+        return {"status": "unavailable", "reason": required_reason}
     if record["type"] in COMPUTER_TOOLS:
         # Pack 3 computer-use: agent-only by design — there is no local
         # execution path (the server has no desktop to click). Without
@@ -3023,6 +3021,19 @@ MUTATING_UNAVAILABLE_REASON = (
     "background tasks run approved actions only on your paired machine: "
     "set INVINCIBLE_AGENT_ROUTING=1 and start one with: "
     "invincible connect")
+
+# Machine-mutating actions with no safe local path on a background
+# server. One list for the pre-stage short-circuit and execute_staged,
+# so the two cannot drift.
+_EXECUTOR_REQUIRED_TOOLS = frozenset(
+    ("execute_bash", "write_file", "edit_file", "expose_port"))
+
+
+def executor_required_reason(name: str) -> str | None:
+    """Reason a durable action needs a paired executor, or None."""
+    if name in _EXECUTOR_REQUIRED_TOOLS:
+        return MUTATING_UNAVAILABLE_REASON
+    return None
 
 # Virtual-key codes for press_keys main keys (modifiers are separate).
 _COMPUTER_VK_MODIFIERS = {"shift": 0x10, "ctrl": 0x11, "alt": 0x12,

@@ -19,7 +19,12 @@ from invincible.core.chat_service import PreparedChat
 from invincible.core.credential_store import ByokCredentialStore
 from invincible.core.identity import ApiKeyStore
 from invincible.core.principal import Principal
-from invincible.core.webchat_agent import ApprovalWaiter, run_agent_turn
+from invincible.core.webchat_agent import (
+    ApprovalWaiter,
+    approval_detail,
+    run_agent_turn,
+    visible_controls,
+)
 from invincible.main import app
 from tests.conftest import provider_body, register_account
 
@@ -276,7 +281,7 @@ async def test_manual_approve_flow(
 ):
     bodies, handler = scripted([
         tool_body("w1", [fn_call("c1", "execute_bash",
-                                 {"command": "echo approved"})]),
+                                 {"command": "echo approved" + chr(0x202E)})]),
         provider_body("w1", content="approved and ran"),
     ])
     router_setter({"w1.example.com": handler})
@@ -298,11 +303,13 @@ async def test_manual_approve_flow(
     assert approved_resp is not None
     assert approved_resp.status_code == 200, approved_resp.text
     assert approved_resp.json() == {"ok": True, "approved": True}
-    assert ran == ["echo approved"]
+    assert ran == ["echo approved" + chr(0x202E)]
     approvals = [d for n, d in events if n == "approval"]
     assert len(approvals) == 1
     assert approvals[0]["action"] == "execute_bash"
     assert "echo approved" in approvals[0]["detail"]
+    assert "<U+202E>" in approvals[0]["summary"]
+    assert chr(0x202E) not in approvals[0]["summary"]
     results = [d for n, d in events if n == "tool_result"]
     assert len(results) == 1 and results[0]["ok"] is True
     done = [d for n, d in events if n == "done"]
@@ -386,11 +393,13 @@ async def test_approve_foreign_token_is_404(client, byok_env):
         "/dashboard/chat/approve",
         json={"token": "tok-foreign", "approve": True})
     assert resp.status_code == 404, resp.text
-    assert waiter.resolve("tok-foreign", 999999, True) is True
+    assert waiter.resolve(
+        "tok-foreign", 999999, True, durable=False) is True
     await task
     assert seen["ok"] is True
     # Settled tokens cannot resolve twice.
-    assert waiter.resolve("tok-foreign", 999999, True) is False
+    assert waiter.resolve(
+        "tok-foreign", 999999, True, durable=False) is False
 
 
 async def test_double_approve_is_404(client, byok_env, router_setter,
@@ -448,7 +457,7 @@ async def test_waiter_timeout_and_discard(monkeypatch):
     import invincible.core.webchat_agent as wa
 
     waiter = ApprovalWaiter()
-    assert waiter.resolve("missing", 1, True) is False
+    assert waiter.resolve("missing", 1, True, durable=False) is False
     waiter.discard("missing")  # never raises
     monkeypatch.setattr(wa, "APPROVAL_WAIT_SECONDS", 0.05)
     assert await waiter.wait("tok-t", 1) is False  # nobody resolves
@@ -457,6 +466,86 @@ async def test_waiter_timeout_and_discard(monkeypatch):
         await asyncio.sleep(0)
         waiter.discard("tok-x")
         await task
+
+
+async def test_waiter_doors_are_separate():
+    """Fast webchat and durable background approvals cannot cross."""
+    waiter = ApprovalWaiter()
+    assert waiter.register("tok-door", 1, durable=True) is True
+    # Same owner, other door: not idempotent.
+    assert waiter.register("tok-door", 1, durable=False) is False
+    assert waiter.register("tok-door", 2, durable=True) is False
+    # Resolution on the wrong door is indistinguishable from unknown.
+    assert waiter.resolve("tok-door", 1, True, durable=False) is False
+    assert waiter.resolve("tok-door", 1, True, durable=True) is True
+    assert waiter.resolve("tok-door", 1, True, durable=True) is False
+
+
+async def test_wait_decision_fallback_creates_the_fast_door():
+    waiter = ApprovalWaiter()
+    task = asyncio.create_task(
+        waiter.wait_decision("tok-fallback", 1, timeout=1))
+    await asyncio.sleep(0)
+    assert waiter.resolve("tok-fallback", 1, True, durable=True) is False
+    assert waiter.resolve("tok-fallback", 1, True, durable=False) is True
+    assert await task is True
+
+
+def test_visible_controls_escapes_spoofing_characters():
+    assert visible_controls("echo \u202e rm -rf /") == \
+        "echo <U+202E> rm -rf /"
+    assert visible_controls("a\u200bb") == "a<U+200B>b"
+    assert visible_controls("a\tb\nc d") == "a\\tb\nc d"
+    assert visible_controls("a\u00a0b\u3000c") == \
+        "a<U+00A0>b<U+3000>c"
+    assert visible_controls("a\x1bb") == "a<U+001B>b"
+    assert visible_controls("a\ue000b") == "a<U+E000>b"
+    assert visible_controls("a\ud800b") == "a<U+D800>b"
+    # A typed sequence is distinguishable from a real escaped character.
+    assert visible_controls(r"echo \u202e") == r"echo \u202e"
+    # Homoglyphs stay visible; the execute_bash notice covers them.
+    assert visible_controls("echo \u0430") == "echo \u0430"
+
+
+def test_approval_detail_full_is_untruncated_and_escaped():
+    command = "echo " + "x" * 600 + "\u202e"
+    full = approval_detail(
+        "execute_bash", {"command": command}, full=True)
+    assert "x" * 600 in full
+    assert full.endswith("<U+202E>")
+    assert "\u202e" not in full
+    # The webchat preview also escapes invisible/control characters.
+    preview = approval_detail("execute_bash", {"command": command})
+    assert preview.endswith("<U+202E>")
+    assert "\u202e" not in preview
+
+    old = "a" * 400 + "\u202e"
+    new = "b" * 400
+    full_edit = approval_detail(
+        "edit_file",
+        {"path": "f.txt", "old_string": old, "new_string": new},
+        full=True,
+    )
+    assert f"-{'a' * 400}<U+202E>\n+{'b' * 400}" in full_edit
+    default_edit = approval_detail(
+        "edit_file",
+        {"path": "f.txt", "old_string": old, "new_string": new},
+    )
+    assert "a" * 200 in default_edit
+    assert "a" * 201 not in default_edit
+    assert "801 chars total" in default_edit
+
+    content = "c" * 600
+    preview = approval_detail(
+        "write_file", {"path": "f.txt", "content": content})
+    assert preview == approval_detail(
+        "write_file", {"path": "f.txt", "content": content}, full=True)
+    assert "c" * 500 in preview
+    assert "(600 bytes total)" in preview
+
+    args = {"x": 10, "y": 20, "text": "d" * 600}
+    assert approval_detail("click", args, full=True) == json.dumps(args)
+    assert approval_detail("click", args) == json.dumps(args)[:500]
 
 
 async def test_stream_close_after_final_token_persists_assistant_reply():

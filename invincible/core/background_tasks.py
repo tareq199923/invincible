@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -46,8 +47,40 @@ MAX_RUNNING_PER_USER = 2
 # lock a user out of their own queue for a day.
 BACKGROUND_APPROVAL_TTL_SECONDS = 60 * 60
 
+# F35 D6: the real approval window is bounded by the task clock, not the
+# 1h row TTL. No approval may START an execution inside the last minute,
+# so a 30s command plus the agent grace period always fits before the
+# task's wall-clock timeout. The dashboard shows the earlier deadline;
+# the adapter enforces it at stage and wait time.
+APPROVAL_SAFETY_MARGIN_SECONDS = 60
+
 _PREVIEW_CHARS = 200
 _ERROR_CHARS = 200
+
+
+def effective_approval_deadline(
+    approval_deadline: float | None,
+    task_started_at: float | None,
+    *,
+    task_timeout_seconds: float | None = None,
+) -> float | None:
+    """The earlier of the row deadline and the task-clock cutoff.
+
+    ``None`` when neither bound is available. A known task start always
+    yields a cutoff: the task timeout minus the safety margin.
+    """
+    if task_started_at is None:
+        return approval_deadline
+    timeout = (
+        BACKGROUND_TASK_TIMEOUT_SECONDS
+        if task_timeout_seconds is None
+        else task_timeout_seconds
+    )
+    cutoff = task_started_at + timeout - APPROVAL_SAFETY_MARGIN_SECONDS
+    if approval_deadline is None:
+        return cutoff
+    return min(approval_deadline, cutoff)
+
 
 
 def new_workflow_id() -> str:
@@ -72,6 +105,11 @@ class DurableApprovalAdapter:
     The rendezvous is registered at stage time, before the runner can
     yield the approval event; otherwise a dashboard that lists the row
     immediately could approve before the runner reaches ``wait``.
+
+    The row TTL is only an upper bound. ``_task_deadline`` is the task
+    clock minus ``APPROVAL_SAFETY_MARGIN_SECONDS``; ``window_open`` and
+    the bounded wait keep any approval from starting an execution inside
+    that final margin (D6).
     """
 
     def __init__(
@@ -84,6 +122,14 @@ class DurableApprovalAdapter:
         self._owner_subject = owner_subject
         self._ttl_seconds = ttl_seconds
         self._tokens: set[str] = set()
+        self._task_deadline = (
+            time.time() + BACKGROUND_TASK_TIMEOUT_SECONDS
+            - APPROVAL_SAFETY_MARGIN_SECONDS
+        )
+
+    def window_open(self) -> bool:
+        """Whether an approval may still start an execution."""
+        return time.time() < self._task_deadline
 
     async def stage(self, record: dict) -> str:
         token = await self._store.suspend(
@@ -93,13 +139,19 @@ class DurableApprovalAdapter:
             owner_subject=self._owner_subject,
             ttl_seconds=self._ttl_seconds,
         )
-        self._waiter.register(token, self._owner_subject)
+        self._waiter.register(token, self._owner_subject, durable=True)
         self._tokens.add(token)
         return token
 
     async def wait(self, token: str) -> bool | None:
+        remaining = self._task_deadline - time.time()
+        if remaining <= 0:
+            return None
         return await self._waiter.wait_decision(
-            token, self._owner_subject, timeout=self._ttl_seconds)
+            token, self._owner_subject,
+            timeout=min(self._ttl_seconds, remaining),
+            durable=True,
+        )
 
     async def resolve(self, token: str, approve: bool) -> dict | None:
         self._tokens.discard(token)
@@ -329,11 +381,25 @@ async def _execute_task(
                     # The action is parked; the runner is about to block
                     # on the rendezvous. Metadata only - never the
                     # command, path, args, summary, or detail.
+                    action_name = _event_field(data, "action")
+                    if audit is not None:
+                        try:
+                            await audit(
+                                "background_task.approval_requested",
+                                meta={
+                                    "workflow_id": workflow_id,
+                                    "action": action_name,
+                                },
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Background approval audit write failed "
+                                "for %s", workflow_id)
                     _emit(
                         harness_bus, HarnessEventType.APPROVAL_REQUESTED,
                         workflow_id=workflow_id,
                         user_id=principal.user_id,
-                        name=_event_field(data, "action"),
+                        name=action_name,
                     )
                     continue
                 # Plan mode offers no mutating tools, so this should be

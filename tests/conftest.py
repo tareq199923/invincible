@@ -24,6 +24,7 @@ from invincible.core.db import (
 from invincible.core.db import (
     metadata as db_metadata,
 )
+from invincible.core.harness_approvals import ApprovalStore
 from invincible.core.harness_bus import HarnessBus
 from invincible.core.harness_tunnel import TunnelRegistry
 from invincible.core.identity import ApiKeyStore, AuditLog
@@ -307,6 +308,7 @@ async def client(pg_engine, router_setter, monkeypatch):
     from invincible.core.webchat_agent import ApprovalWaiter
 
     app.state.webchat_approvals = ApprovalWaiter()
+    app.state.approval_store = ApprovalStore(pg_engine)
     oauth_store = OAuthStore(engine=pg_engine)
     await oauth_store.init()
     app.state.oauth_store = oauth_store
@@ -361,6 +363,7 @@ async def client(pg_engine, router_setter, monkeypatch):
     app.state.harness_bus = None
     app.state.background_tasks = None
     app.state.webchat_approvals = None
+    app.state.approval_store = None
 
 
 # --- Phase 3 account helpers ----------------------------------------------------

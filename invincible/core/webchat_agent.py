@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import platform
+import unicodedata
 from typing import Protocol
 
 from invincible.compat.common import upstream_error_detail
@@ -400,8 +401,9 @@ class ApprovalWaiter:
     """Rendezvous between an SSE stream awaiting approval and the
     browser's approve/deny POST.
 
-    Token -> (owner user_id, Future). Single-instance by design (stored
-    on ``app.state``, same trade-off as the agent registry): a restart
+    Token -> (owner user_id, Future, durable). Single-instance by
+    design (stored on ``app.state``, same trade-off as the agent
+    registry): a restart
     orphans in-flight approvals and the stream's timeout path declines
     them. Cross-user resolution returns False (indistinguishable from
     unknown), and every entry is discarded when its stream ends, so a
@@ -414,13 +416,19 @@ class ApprovalWaiter:
     """
 
     def __init__(self):
-        self._waiters: dict[str, tuple[int, asyncio.Future]] = {}
+        self._waiters: dict[
+            str, tuple[int, asyncio.Future, bool]] = {}
 
-    def register(self, token: str, user_id: int) -> bool:
+    def register(
+        self, token: str, user_id: int, *, durable: bool
+    ) -> bool:
         """Reserve a waiter BEFORE any caller can observe the token.
 
-        Idempotent. Returns False when the token is already owned by
-        another user or already settled; resolution still fails closed.
+        ``durable`` names the door: False for the browser's fast path,
+        True for background-task approvals. Idempotent only for the
+        same owner AND the same door. Returns False when the token is
+        already owned by another user or door, or already settled;
+        resolution still fails closed.
         """
         try:
             loop = asyncio.get_running_loop()
@@ -428,8 +436,9 @@ class ApprovalWaiter:
             return False
         entry = self._waiters.get(token)
         if entry is not None:
-            return entry[0] == user_id and not entry[1].done()
-        self._waiters[token] = (user_id, loop.create_future())
+            return (entry[0] == user_id and entry[2] == durable
+                    and not entry[1].done())
+        self._waiters[token] = (user_id, loop.create_future(), durable)
         return True
 
     async def wait(self, token: str, user_id: int) -> bool:
@@ -439,14 +448,18 @@ class ApprovalWaiter:
             token, user_id, timeout=APPROVAL_WAIT_SECONDS) is True
 
     async def wait_decision(
-        self, token: str, user_id: int, *, timeout: float | None = None
+        self, token: str, user_id: int, *, timeout: float | None = None,
+        durable: bool = False,
     ) -> bool | None:
-        """Block until this user resolves ``token``.
+        """Block until this user resolves ``token`` on this door.
 
         True = approved, False = denied, None = timed out (the caller
         distinguishes a human denial from an expired wait - D5 vs D6).
         A future registered by :meth:`register` is reused, so a decision
-        that arrived between staging and this call is never lost.
+        that arrived between staging and this call is never lost. An
+        existing entry for another owner or the other door answers None
+        (webchat never registers, so its default ``durable=False``
+        creates a browser-door entry here).
         """
         if timeout is None:
             timeout = APPROVAL_WAIT_SECONDS
@@ -455,10 +468,11 @@ class ApprovalWaiter:
         except RuntimeError:
             return None
         entry = self._waiters.get(token)
-        if entry is not None and entry[0] != user_id:
+        if entry is not None and (
+                entry[0] != user_id or entry[2] != durable):
             return None
         if entry is None:
-            entry = (user_id, loop.create_future())
+            entry = (user_id, loop.create_future(), durable)
             self._waiters[token] = entry
         future = entry[1]
         try:
@@ -468,14 +482,17 @@ class ApprovalWaiter:
         finally:
             self._waiters.pop(token, None)
 
-    def resolve(self, token: str, user_id: int, approved: bool) -> bool:
-        """Resolve a pending approval. False when unknown, foreign, or
-        already settled (double-clicks and late approvals included)."""
+    def resolve(
+        self, token: str, user_id: int, approved: bool, *, durable: bool
+    ) -> bool:
+        """Resolve a pending approval. False when unknown, foreign, on
+        the other door (browser vs background), or already settled
+        (double-clicks and late approvals included)."""
         entry = self._waiters.get(token)
         if entry is None:
             return False
-        owner, future = entry
-        if owner != user_id or future.done():
+        owner, future, door = entry
+        if owner != user_id or door != durable or future.done():
             return False
         future.set_result(bool(approved))
         return True
@@ -490,7 +507,7 @@ class ApprovalWaiter:
         """Tokens this user currently has a live waiter for (non-consuming
         peek - the waiter still owns them)."""
         return [
-            token for token, (owner, future) in self._waiters.items()
+            token for token, (owner, future, _door) in self._waiters.items()
             if owner == user_id and not future.done()
         ]
 
@@ -500,9 +517,10 @@ class DurableApprovalSource(Protocol):
 
     Implemented by ``background_tasks.DurableApprovalAdapter``; webchat
     passes ``None`` and keeps the fast browser path. The agent loop only
-    calls these three methods - it never talks to ``pending_actions``
-    directly (D2). ``discard`` is the runner's cleanup hook, not part of
-    the loop's contract.
+    calls these methods - it never talks to ``pending_actions`` directly
+    (D2). ``discard`` is the runner's cleanup hook, not part of the
+    loop's contract. ``window_open`` binds staging and waiting to the
+    task clock (D6), so no execution starts inside the safety margin.
     """
 
     async def stage(self, record: dict) -> str: ...
@@ -510,6 +528,8 @@ class DurableApprovalSource(Protocol):
     async def wait(self, token: str) -> bool | None: ...
 
     async def resolve(self, token: str, approve: bool) -> dict | None: ...
+
+    def window_open(self) -> bool: ...
 
 
 def build_agent_executor(registry, subject: int, routing_on: bool):
@@ -627,31 +647,70 @@ def target_label(name: str, args: dict | None) -> str | None:
         return None
 
 
-def approval_detail(name: str, args: dict) -> str:
-    """Fuller detail for the approval card (the user approving sees
-    their own data; the client renders it as text)."""
+def visible_controls(text: str) -> str:
+    r"""Escape characters that can spoof what the card appears to show.
+
+    Newline and plain space are preserved; tab becomes the two characters
+    ``\t``; every other Cc/Cf/Co/Cs/Cn/Zl/Zp character and every
+    non-ASCII space becomes ``<U+XXXX>`` (uppercase hex). This covers
+    ESC, DEL, CR, bidi overrides/isolates, zero-width space/joiner, BOM,
+    soft hyphen, line/paragraph separators, NBSP, em space, ideographic
+    space, private use, surrogates, and unassigned code points.
+    """
+    out = []
+    for ch in text:
+        if ch == "\n" or ch == " ":
+            out.append(ch)
+            continue
+        if ch == "\t":
+            out.append(r"\t")
+            continue
+        cat = unicodedata.category(ch)
+        if cat in ("Cc", "Cf", "Co", "Cs", "Cn", "Zl", "Zp") or (
+            cat == "Zs"
+        ):
+            code = ord(ch)
+            hex_digits = f"{code:04X}" if code <= 0xFFFF else f"{code:X}"
+            out.append(f"<U+{hex_digits}>")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def approval_detail(name: str, args: dict, *, full: bool = False) -> str:
+    """Detail for the approval card (the approver sees their own data).
+
+    ``full=True`` is the owner-only dashboard detail: untruncated JSON
+    for computer/unknown actions, full ``edit_file`` old/new, and the
+    whole string passed through :func:`visible_controls` so control,
+    bidi, and invisible characters cannot spoof the rendered card.
+    Both the owner-only detail and the bounded webchat preview are
+    passed through :func:`visible_controls` before they are displayed.
+    """
     if name == "execute_bash":
-        return str(args.get("command", ""))
-    if name == "write_file":
+        detail = str(args.get("command", ""))
+    elif name == "write_file":
         content = str(args.get("content", ""))
         preview = content[:_PREVIEW_CHARS]
         if len(content) > _PREVIEW_CHARS:
             preview += f"\n… ({len(content)} bytes total)"
-        return f"{args.get('path', '')}\n---\n{preview}"
-    if name == "edit_file":
+        detail = f"{args.get('path', '')}\n---\n{preview}"
+    elif name == "edit_file":
         old = str(args.get("old_string", ""))
         new = str(args.get("new_string", ""))
-        preview = (f"-{old[:200]}\n+{new[:200]}"
-                   if old or new else "")
-        if len(old) + len(new) > _PREVIEW_CHARS:
-            preview += f"\n… ({len(old) + len(new)} chars total)"
-        return f"{args.get('path', '')}\n---\n{preview}"
-    if name in ("click", "type_text", "press_keys", "scroll", "drag",
-                "open_app", "open_url"):
-        # Computer-use approval cards: the user confirms the exact
-        # target/keys/text on their own machine (their own data).
-        return json.dumps(args)[:_PREVIEW_CHARS]
-    return json.dumps(args)[:_PREVIEW_CHARS]
+        if full:
+            preview = f"-{old}\n+{new}" if old or new else ""
+        else:
+            preview = (f"-{old[:200]}\n+{new[:200]}"
+                       if old or new else "")
+            if len(old) + len(new) > _PREVIEW_CHARS:
+                preview += f"\n… ({len(old) + len(new)} chars total)"
+        detail = f"{args.get('path', '')}\n---\n{preview}"
+    else:
+        detail = json.dumps(args)
+        if not full:
+            detail = detail[:_PREVIEW_CHARS]
+    return visible_controls(detail)
 
 
 def _preview(result: dict) -> str:
@@ -1342,12 +1401,32 @@ async def _execute_call(
             outcome["result"] = {"status": "error", "error": str(e)}
             outcome["ok"] = False
             return
+        reason = tool_executor.executor_required_reason(name)
+        if reason is not None and executor is None:
+            # D3: no paired machine means there is nowhere safe to run a
+            # machine-mutating action. Answer before staging: no row, no
+            # approval event, no browser wait.
+            outcome["result"] = {"status": "unavailable",
+                                 "reason": reason}
+            outcome["ok"] = False
+            return
+        if not durable.window_open():
+            # D6: the task clock is inside its safety margin. Never stage
+            # inside the margin; the internal timeout event makes the
+            # runner fail the workflow with the right message.
+            outcome["result"] = {
+                "status": "error", "error": "approval timed out"}
+            outcome["ok"] = False
+            yield "approval_timeout", {
+                "call_id": call_id, "action": name,
+            }
+            return
         token = await durable.stage(record)
         yield "approval", {
             "token": token,
             "call_id": call_id,
             "action": name,
-            "summary": summarize_call(name, args),
+            "summary": visible_controls(summarize_call(name, args)),
             "detail": approval_detail(name, args),
         }
         decision = await durable.wait(token)
@@ -1417,7 +1496,7 @@ async def _execute_call(
         "token": token,
         "call_id": call_id,
         "action": name,
-        "summary": summarize_call(name, args),
+        "summary": visible_controls(summarize_call(name, args)),
         "detail": approval_detail(name, args),
     }
     result, ok = await _await_approval(

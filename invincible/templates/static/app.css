@@ -457,6 +457,7 @@ body.shell-body .banner-ok { border-left-width: 3px; }
 .status-failed { color: var(--err); background: var(--err-dim); border-color: currentColor; }
 .status-untested { color: var(--muted); background: var(--raise); border-color: var(--border); }
 .status-running { color: var(--accent-ink); background: var(--accent-dim); border-color: currentColor; }
+.status-awaiting-approval { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); }
 .status-completed { color: var(--ok); background: var(--ok-dim); border-color: currentColor; }
 .status-cancelled { color: var(--muted); background: var(--raise); border-color: var(--border); }
 .status-timed-out { color: var(--err); background: var(--err-dim); border-color: currentColor; }
@@ -481,6 +482,14 @@ body.shell-body .banner-ok { border-left-width: 3px; }
   margin-top: 0.55rem;
 }
 .task-form-row button { margin-top: 0; }
+.task-form-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.55rem;
+}
+.task-form-mode-row label { margin: 0; }
+.task-form-mode-row select { width: auto; margin: 0; }
 .char-counter { font-variant-numeric: tabular-nums; }
 #background-task-error[hidden] { display: none; }
 
@@ -716,6 +725,19 @@ main.bare .panel { background: var(--surface); border: 1px solid var(--border); 
 .approval-card button.approve { background: var(--accent); border-color: var(--accent); color: #fff; }
 html[data-theme="dark"] .approval-card button.approve { color: #1e1e1e; }
 .approval-card button.resolved { opacity: 0.55; }
+.task-approval-card { margin: 0.65rem 0; }
+.approval-card-title { font-weight: 600; overflow-wrap: anywhere; }
+.approval-meta { margin: 0.25rem 0 0.45rem; font-size: 0.78rem; }
+.approval-warning { margin: 0 0 0.4rem; color: var(--warn); font-size: 0.8rem; font-weight: 500; }
+.approval-card .approval-detail {
+  max-height: 18rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.approval-decision-status { margin-top: 0.4rem; font-size: 0.78rem; }
+.approval-group { margin: 1rem 0 1.4rem; }
+.approval-group h3 { margin-bottom: 0.5rem; }
 #chat-composer { position: sticky; bottom: 0.75rem; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); padding: 0.6rem 0.6rem 0.5rem; }
 #chat-form { display: block; margin: 0; }
 #chat-form textarea { width: 100%; margin: 0; padding: 0.35rem 0.5rem; min-height: 2.4rem; font-size: 0.96rem; line-height: 1.55; font-family: inherit; color: var(--ink); background: transparent; border: 0; resize: vertical; }

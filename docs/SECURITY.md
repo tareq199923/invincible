@@ -189,13 +189,38 @@ Properties of this realm:
   `provider_name` + `catalog_key` + id only — never the key, and never
   the base URL (a URL may embed auth parameters).
 
-### Dashboard workflow timelines — cookie realm (harness H6c)
+### Dashboard workflow timelines — cookie realm (harness H6c, F35 C)
 
 `/dashboard/workflows` and `/dashboard/workflows/{workflow_id}` are
 session-cookie only. Every read filters on the resolved `user_id`; a
 workflow id is not a capability, and a foreign id returns the same 404 as
-an unknown one. The page renders metadata summaries only — never task
-objectives, findings previews, commands, paths, or file contents.
+an unknown one. Both pages are sent `Cache-Control: no-store`.
+
+The **workflow list** stays metadata only: workflow id, timestamps,
+event summaries, derived task status, and an approval count — never task
+objectives, findings previews, commands, paths, tokens, or file
+contents.
+
+The **owner detail page** has one deliberate exception for background
+tasks (`task-` workflows): an approver must see what they are approving,
+so the page renders the task text, the final answer, and each VISIBLE
+pending approval's full arguments — the complete `execute_bash` command,
+the complete `edit_file` old/new pair, or `write_file`'s path, total byte
+count, and 500-character preview. A running owner can also Stop the task
+from this page. None of that data appears on the list page or the
+approvals page, and non-task workflow details remain metadata-only.
+
+Approval display is part of the gate, not decoration:
+
+- `visible_controls` escapes every Cc/Cf/Co/Cs/Cn/Zl/Zp character and
+  every non-ASCII space as `<U+XXXX>` (tab becomes `\t`; newline and
+  plain space survive). Bidi overrides, zero-width characters, and
+  lookalike spaces therefore cannot reorder or disguise a command.
+- An `execute_bash` card with any character above U+007F adds a
+  non-ASCII lookalike warning.
+- Cards past the effective approval deadline are not rendered, and
+  `awaiting approval` is derived only from visible rows. The route
+  independently enforces the same cutoff; the page is advisory.
 
 ### Dashboard webchat — cookie realm (agent modes v2)
 
@@ -486,6 +511,65 @@ identically (nothing runs), and every definitive outcome deletes its row
 callers must log metadata only — never raw commands/paths. The durable
 workflow timeline itself (`workflow_events`, metadata only) is the audit
 trail a suspended workflow resumes against.
+
+**Background-task approval surface (F35 C).** Only the signed
+`invincible_session` cookie reaches `/dashboard/approvals` and
+`POST /dashboard/background-tasks/{workflow_id}/approvals/{token}`;
+`inv_` API keys are rejected. The decision route is JSON-only (a
+cross-site HTML form cannot submit JSON) and takes `{"approve": true |
+false}` only. It never claims or executes: it resolves the owner's live
+waiter, and the runner performs the single atomic row claim and the one
+`execute_staged` call. Unknown, foreign, already-resolved, wrong-door,
+expired, and past-the-effective-deadline tokens all return the same 404
+body.
+
+The waiter's doors are explicit: entries are `(user_id, future,
+durable)`, and `resolve`/`register` require a matching `durable` flag.
+The browser webchat route passes `durable=False`; the background route
+passes `durable=True`, so neither can settle the other path's token.
+Every call site states its door.
+
+Listing is owner-scoped (`pending_for_owner`,
+`pending_for_workflow(owner_subject=...)`). `/dashboard/approvals` is
+metadata only — workflow id, tool type, and deadlines — with no tokens,
+arguments, or decision buttons; decisions happen on the owner detail
+page. Among the background-task surfaces, the detail page and its HTMX
+fragment are the only ones that render arguments, and both are sent
+`no-store`. Commands and file contents are escaped with
+`visible_controls` (control, bidi, zero-width, and non-ASCII-space
+characters become `<U+XXXX>`; tab becomes `\t`). A non-ASCII
+`execute_bash` command gets an explicit lookalike warning, but that
+warning is **dashboard-only**; the bounded webchat default preview applies
+the same escaping without the warning, so visually confusable letters
+(for example Cyrillic `а` for ASCII `a`) remain a residual webchat risk.
+The webchat change is display-only: the fast path's approval semantics are
+unchanged.
+
+The row TTL is an upper bound; the effective window is the earlier of
+the row deadline and `task_started + 30 min − 60 s`. It is enforced
+before staging (`window_open`), inside the bounded wait, and again on
+the decision route. No approval can start an execution inside the final
+minute before the task's wall clock; a closed window stages nothing and
+fails the workflow as `"approval timed out"`. The dashboard's card
+filter uses the same cutoff but is advisory — the runner's clock is the
+authority.
+
+Staging writes one metadata-only audit row,
+`background_task.approval_requested` (`workflow_id`, `action`;
+`resource_type=background_task`, `resource_id=workflow_id`). The
+decision writes one more, `background_task.approval_decided`
+(`workflow_id`, `action`, `approved`). The decision row records the
+owner's choice, not execution: a row can expire or be purged between the
+route's 202 and the runner's claim, in which case nothing runs. Execution
+is evidenced by `approval.resolved` plus the tool result, never by the
+audit row or the HTTP status. There is no `_resolved` audit row. No audit
+row carries a token, command, path, or content.
+
+With no paired executor, the slow path answers `unavailable` to the
+model **before staging** — no row, token, or approval event — and
+`execute_staged(require_executor=True)` repeats the refusal at the
+execution boundary. A mutating background action can therefore never
+fall back to the server host.
 
 ### 2.1 `execute_bash` denylist — full inventory
 
