@@ -14,19 +14,19 @@ Status legend: **Shipped** (code + tests + docs landed) ·
 | 1 | Plan-mode task runner (server-side, no browser) | **Shipped** (F32) |
 | 2 | Dashboard UI: start, status, result page, Stop | **Shipped** (F33) |
 | 3 | Durable per-tool-call checkpoints (progress tracking) | **Shipped** (F34) |
-| 4 | Mutating tools + durable approvals | **Implemented** (F35 — A/B committed; C/D in this change) |
+| 4 | Mutating tools + durable approvals | **Shipped** (F35) |
 | 5 | Restart-safe task records (decision pending) | **Planned** |
 
 Steps 1-3 are packaged together in the 0.6.2 release (migration
 `0018`).
 
-Step 4 is implemented in slices. Slice A (the durable groundwork) is
-shipped; Slice B (the runner's suspend/approve/deny/timeout path) is
+Step 4 is shipped in slices. Slice A (the durable groundwork) shipped as
+`d9852ec`; Slice B (the runner's suspend/approve/deny/timeout path)
 shipped as `4a77a39`. Slice C (the dashboard surfaces: start with a mode,
 owner detail cards, the cross-workflow approvals page, and the decision
 route) and Slice D (the approval-requested audit row, webchat preview
-escaping, and final docs pass) are implemented in this change and remain
-uncommitted pending review.
+escaping, and final docs pass) shipped as part of `2680979`. The whole
+step rode the 0.6.3 release.
 
 ---
 

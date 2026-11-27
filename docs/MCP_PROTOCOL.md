@@ -233,7 +233,7 @@ Response:
 {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
 ```
 
-Response: `result.tools` is an array of twenty tool descriptors (the
+Response: `result.tools` is an array of 34 tool descriptors (the
 file/exec/edit/approval surface, the read-only machine tools, the
 Phase 15b continuity tools, the memory tools, and the project tools):
 

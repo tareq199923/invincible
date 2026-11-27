@@ -5,6 +5,18 @@
 
 ## Current State
 
+- F36 docs-accuracy pass done and committed/pushed to `main` (clean-state
+  5/5). Every changed number was re-derived from
+  code: registry **35**, MCP **34**, webchat **31**, loop cap **25**,
+  migration head **0018**. `docs/ARCHITECTURE.md` now states 17 plan
+  tools / 31 manual+auto webchat registry tools, cap 25, and migration
+  0018; `docs/MCP_PROTOCOL.md` and `docs/TESTING.md` state 34 MCP tools;
+  `docs/HARNESS_PLAN.md` is re-stamped 2026-11-27 with a verification
+  command and head 0018; `docs/BACKGROUND_TASKS.md` marks Step 4 shipped.
+  Verification: `python -m json.tool feature_list.json`, `ruff check .`,
+  `tests/test_docs.py` (13 passed), and the slow
+  `tests/test_wheel_contents.py` (1 passed). Clean-state checklist 5/5 —
+  build, tests, feature-list state, no artifacts, and commit all pass.
 - 0.6.3 shipped 2026-11-24 (tag `v0.6.3`, release commit `08e14d4`):
   F35 Step 4 is on PyPI. The Release workflow build/smoke gate passed,
   the scratch-venv install reports 0.6.3, and hosted production
@@ -55,10 +67,9 @@
   tool-use in `webchat_agent`); `/mcp` is the **control plane** and the
   paired agent is the execution plane; the continuity interruption note is
   failure awareness, not self-critique; background checkpoints are
-  **progress tracking, not resume**. Stale docs are tracked as F36:
-  `ARCHITECTURE.md` (cap 10, 7/9 tools, migration 0017),
-  `MCP_PROTOCOL.md` (20 tools), `TESTING.md` (23 tools). Local working
-  notes: `.zcode/pattern-map/` (git-ignored).
+  **progress tracking, not resume**. F36 cleared the stale docs that were
+  tracked here (`ARCHITECTURE.md`, `MCP_PROTOCOL.md`, `TESTING.md`).
+  Local working notes: `.zcode/pattern-map/` (git-ignored).
 - Background tasks Step 3 done (`passing` as F34): durable per-tool-call
   checkpoints. New table `background_task_checkpoints` (migration
   `0018`, mirrored in `core/db.py`): one row per SUCCESSFUL tool call,
@@ -1018,15 +1029,17 @@
 
 - No `active` entry. F35 (background tasks, Step 4) is `passing` and
   committed/pushed to `main` (`2680979`, plus CI test fixes `d57f720`
-  and `0a45f2a`); Steps 1-3 are shipped (`passing`); F36 and F30 stay
-  `planned`.
-- Internal docs-accuracy pass is `planned` as F36 (not started): fix the
-  drift recorded in the baseline above — `docs/ARCHITECTURE.md` (loop cap
-  10 → 25, webchat 7/9 → 31 registry tools, migration 0017 → 0018),
-  `docs/MCP_PROTOCOL.md` (20 → 34 tools), `docs/TESTING.md` (23 → 34
-  tools), and refresh `docs/HARNESS_PLAN.md`'s last-verified stamp. This
-  is internal accuracy work, not new product surface. Working notes live
-  in `.zcode/pattern-map/` (git-ignored).
+  and `0a45f2a`); Steps 1-3 are shipped (`passing`); F36 is `passing` and
+  committed/pushed to `main`; F30 stays `planned`.
+- F36 docs-accuracy pass is done and committed/pushed: the drift recorded
+  in the baseline above is fixed and re-verified against
+  `core/harness_tools.py`, `core/webchat_agent.py`, and the migration
+  directory — `ARCHITECTURE.md` (cap 10 → 25, 7/9 → 17 plan / 31
+  webchat tools, 0017 → 0018), `MCP_PROTOCOL.md` (20 → 34 tools),
+  `TESTING.md` (23 → 34 tools), `HARNESS_PLAN.md` re-stamped with a
+  verification command and head 0018, and `BACKGROUND_TASKS.md` Step 4
+  marked shipped. This is internal accuracy work, not new product
+  surface. Working notes live in `.zcode/pattern-map/` (git-ignored).
 - Background tasks Steps 1-3 shipped in 0.6.2 (PR #26 merged as
   `b508676`):
   - F32 (`passing`): background plan-mode agent tasks (Step 1).
@@ -1107,11 +1120,12 @@
 
 0. 0.6.3 shipped 2026-11-24 (tag `v0.6.3`, release commit `08e14d4`),
    carrying F35 Step 4 (mutating tools + durable approvals). PyPI
-   install and hosted production `/health` both report 0.6.3. Next
-   product work: Step 5 (restart-safe task records, Option A) or F36
-   docs accuracy. 0.5.x holdouts are reached by the README/docs "No
-   such command 'connect'" callout until they upgrade once; from 0.6.1
-   on, the passive notice takes over.
+   install and hosted production `/health` both report 0.6.3. F36 docs
+   accuracy is committed/pushed. Next product work: Step 5
+   (restart-safe task records, Option A). 0.5.x
+   holdouts are reached by the README/docs "No such command 'connect'"
+   callout until they upgrade once; from 0.6.1 on, the passive notice
+   takes over.
 
 1. Restart any paired `invincible connect` agent to pick up F22's voice
    poses plus the earlier F23/F25/F26 runner/overlay changes
@@ -1149,11 +1163,11 @@
    second approval system. Step 5 = pick ONE and document it;
    restart-safe task records + resume is the natural completion of
    Step 3's tracking-only checkpoints.
-8. Docs-accuracy pass (F36, `planned`): use `.zcode/pattern-map/findings.md`
-   (git-ignored) as the worklist, fix the stale counts in
-   `ARCHITECTURE.md`, `MCP_PROTOCOL.md`, `TESTING.md`, and re-stamp
-   `HARNESS_PLAN.md`. Re-verify every number against code before editing a
-   doc; the ledger is a snapshot at `b883560`, not a live source.
+8. Step 5 (restart-safe task records, Option A): add a durable
+   `background_tasks` table (migration `0019`), mark startup `running`
+   rows `interrupted`, and expose a Retry that starts a NEW task; never
+   replay automatically. F36 is closed unless the commit review finds a
+   stale number.
 
 ## Blockers
 

@@ -13,7 +13,7 @@ invincible/
 ├── cli.py                      Click CLI (setup / start / login / doctor / dev-db / db / oauth / secret / api-key / users)
 ├── providers.yaml              Static provider config (packaged test fixture)
 ├── templates/                  Jinja2 UI (public landing + docs site, login/register/account/device pages + dashboard)
-├── migrations/                 Packaged Alembic environment (0001 baseline … 0017 workflow_events_user_id)
+├── migrations/                 Packaged Alembic environment (0001 baseline … 0018 background_task_checkpoints)
 ├── endpoints/
 │   ├── auth.py                 require_auth: per-user inv_ API-key Principal resolution for /v1/* (fail closed)
 │   ├── accounts.py             Phase 3: /auth/*, /projects, /api-keys, /sessions,
@@ -308,14 +308,15 @@ webchat events: token* → done | error    token deltas as text; done carries
 ```
 
 Agent modes (v2): the stream request carries `mode` (default `manual`).
-`plan` offers the 7 read-only tools only (offered by construction - the
-model cannot mutate); `manual` offers all 9 with every `execute_bash` /
-`write_file` pausing for a browser approval (`approval` event with a
-single-use token, resolved via `POST /dashboard/chat/approve`, awaited
-up to 300s); `auto` runs all tools immediately. Execution mirrors
-`/mcp`: agent-routed with `INVINCIBLE_AGENT_ROUTING=1` (offline agent is
-a plain tool error), else local on the server host. The loop reuses the
-single router loop per iteration (cap 10, then a no-tools closing call)
+`plan` offers 17 tools - the read-only machine and data tools plus the
+`todo` step list, so the model cannot mutate the machine; `manual` offers
+all 31 webchat registry tools, with every mutating tool pausing for a browser
+approval (`approval` event with a single-use token, resolved via
+`POST /dashboard/chat/approve`, awaited up to 300s); `auto` runs all
+tools immediately. Execution mirrors `/mcp`: agent-routed with
+`INVINCIBLE_AGENT_ROUTING=1` (offline agent is a plain tool error), else
+local on the server host. The loop reuses the single router loop per
+iteration (cap 25, then a no-tools closing call)
 and persists the whole turn (user + tool_calls + tool results + final
 text) in one append, so follow-up turns replay paired. Turns created
 over `/v1/*` that carry tool payloads are skipped by the template

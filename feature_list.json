@@ -387,7 +387,7 @@
   {
     "behavior": "the internal docs match the code again: docs/ARCHITECTURE.md states the live loop cap of 25 (not 10), the 31 webchat registry tools (not 7/9), and migration head 0018 (not 0017); docs/MCP_PROTOCOL.md and docs/TESTING.md state 34 MCP tools (not 20/23); docs/HARNESS_PLAN.md carries a fresh last-verified date plus command; every changed number is re-derived from core/harness_tools.py, core/webchat_agent.py, and core/db.py before the edit, and no .zcode/pattern-map artifact is copied into docs/ or the public docs site",
     "id": "F36",
-    "state": "planned",
+    "state": "passing",
     "title": "Internal docs-accuracy pass from pattern-map audit",
     "verification": "python -m json.tool feature_list.json && ruff check . && pytest tests/test_docs.py tests/test_wheel_contents.py"
   }
