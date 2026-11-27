@@ -5,8 +5,8 @@
 
 ## Current State
 
-- F36 docs-accuracy pass done and committed/pushed to `main` (clean-state
-  5/5). Every changed number was re-derived from
+- F36 docs-accuracy pass done and committed/pushed to `main` as `fd9f621`
+  (clean-state 5/5). Every changed number was re-derived from
   code: registry **35**, MCP **34**, webchat **31**, loop cap **25**,
   migration head **0018**. `docs/ARCHITECTURE.md` now states 17 plan
   tools / 31 manual+auto webchat registry tools, cap 25, and migration
@@ -1029,10 +1029,10 @@
 
 - No `active` entry. F35 (background tasks, Step 4) is `passing` and
   committed/pushed to `main` (`2680979`, plus CI test fixes `d57f720`
-  and `0a45f2a`); Steps 1-3 are shipped (`passing`); F36 is `passing` and
-  committed/pushed to `main`; F30 stays `planned`.
-- F36 docs-accuracy pass is done and committed/pushed: the drift recorded
-  in the baseline above is fixed and re-verified against
+  and `0a45f2a`); Steps 1-3 are shipped (`passing`); F36 is `passing`
+  and committed/pushed to `main`; F30 stays `planned`.
+- F36 docs-accuracy pass is done and committed/pushed (`fd9f621`): the
+  drift recorded in the baseline above is fixed and re-verified against
   `core/harness_tools.py`, `core/webchat_agent.py`, and the migration
   directory — `ARCHITECTURE.md` (cap 10 → 25, 7/9 → 17 plan / 31
   webchat tools, 0017 → 0018), `MCP_PROTOCOL.md` (20 → 34 tools),
