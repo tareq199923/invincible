@@ -5,9 +5,9 @@
 
 ## Current State
 
-- F37 (Step 5 restart-safe background task records) is implemented in the
-  working tree; commit pending explicit user approval (clean-state 5/5:
-  build, tests, feature-list state, no artifacts, PROGRESS.md updated).
+- F37 (Step 5 restart-safe background task records) is committed/pushed to
+  `main` as `bb170ae` (clean-state 5/5: build, tests, feature-list state,
+  no artifacts, PROGRESS.md updated).
   New migration `0019` + `core/task_records.py`: `background_tasks`
   stores workflow id, owner, nullable session link (`ON DELETE SET
   NULL`), mode, status, and timestamps — metadata only, never task text,
@@ -1154,9 +1154,8 @@
    carrying F35 Step 4 (mutating tools + durable approvals). PyPI
    install and hosted production `/health` both report 0.6.3. F36 docs
    accuracy is committed/pushed. F37 Step 5 (restart-safe task records,
-   Option A) is implemented and fully verified in the working tree
-   (2301 passed / 11 skipped; slow wheel test passed; ruff clean;
-   clean-state 5/5) — waiting for explicit approval to commit/push.
+   Option A) is committed/pushed as `bb170ae` (2301 passed / 11 skipped;
+   slow wheel test passed; ruff clean; clean-state 5/5).
    0.5.x holdouts are reached by the README/docs "No such command
    'connect'" callout until they upgrade once; from 0.6.1 on, the passive
    notice takes over.
