@@ -34,6 +34,7 @@ from invincible.core.retrieval import RetrievalService
 from invincible.core.router import Router
 from invincible.core.run_store import RunStore
 from invincible.core.session_store import SessionStore
+from invincible.core.task_records import TaskRecordStore
 from invincible.core.tool_executor import PendingActionStore
 from invincible.main import app
 
@@ -309,6 +310,7 @@ async def client(pg_engine, router_setter, monkeypatch):
 
     app.state.webchat_approvals = ApprovalWaiter()
     app.state.approval_store = ApprovalStore(pg_engine)
+    app.state.task_records = TaskRecordStore(pg_engine)
     oauth_store = OAuthStore(engine=pg_engine)
     await oauth_store.init()
     app.state.oauth_store = oauth_store
@@ -364,6 +366,7 @@ async def client(pg_engine, router_setter, monkeypatch):
     app.state.background_tasks = None
     app.state.webchat_approvals = None
     app.state.approval_store = None
+    app.state.task_records = None
 
 
 # --- Phase 3 account helpers ----------------------------------------------------

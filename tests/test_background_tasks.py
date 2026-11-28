@@ -15,8 +15,10 @@ import time
 import httpx
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from invincible.core import background_tasks as bt
+from invincible.core import task_records as tr
 from invincible.core import tool_executor
 from invincible.core.background_tasks import (
     BackgroundTaskRegistry,
@@ -30,6 +32,8 @@ from invincible.core.harness_approvals import ApprovalStore
 from invincible.core.harness_bus import HarnessBus
 from invincible.core.harness_events import HarnessEventType
 from invincible.core.principal import Principal
+from invincible.core.session_store import SessionStore
+from invincible.core.task_records import TaskRecordStore
 from invincible.core.tool_executor import PendingActionStore
 from invincible.core.webchat_agent import ApprovalWaiter
 from invincible.main import app
@@ -384,6 +388,157 @@ async def test_runner_cancellation_emits_cancelled(pg_engine, monkeypatch):
     rows = await _persisted(pg_engine, workflow_id)
     assert rows[-1]["type"] == "workflow.failed"
     assert rows[-1]["payload"]["error"] == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# Step 5: durable task records
+
+
+async def _record_for(pg_engine, principal, workflow_id, *, mode="plan"):
+    store = TaskRecordStore(pg_engine)
+    await store.create_running(
+        workflow_id, user_id=principal.user_id, mode=mode)
+    return store
+
+
+async def test_runner_closes_record_completed(pg_engine, monkeypatch):
+    principal = await _principal(pg_engine)
+    workflow_id = new_workflow_id()
+    store = await _record_for(pg_engine, principal, workflow_id)
+    _patch_runner(monkeypatch, events=[("done", {"text": "the answer"})])
+    bus = HarnessBus()
+
+    await run_background_task(
+        **_runner_kwargs(
+            principal, workflow_id, harness_bus=bus, task_records=store,
+        )
+    )
+
+    row = await store.get(workflow_id, user_id=principal.user_id)
+    assert row["status"] == tr.COMPLETED
+    assert row["finished_at"] is not None
+    assert _types(bus)[-1] == HarnessEventType.WORKFLOW_COMPLETED.value
+
+
+async def test_runner_closes_record_failed(pg_engine, monkeypatch):
+    principal = await _principal(pg_engine)
+    workflow_id = new_workflow_id()
+    store = await _record_for(pg_engine, principal, workflow_id)
+    _patch_runner(
+        monkeypatch, events=[("error", {"message": "provider down"})])
+    bus = HarnessBus()
+
+    await run_background_task(
+        **_runner_kwargs(
+            principal, workflow_id, harness_bus=bus, task_records=store,
+        )
+    )
+
+    row = await store.get(workflow_id, user_id=principal.user_id)
+    assert row["status"] == tr.FAILED
+    assert row["finished_at"] is not None
+    assert _types(bus)[-1] == HarnessEventType.WORKFLOW_FAILED.value
+
+
+async def test_runner_cancellation_uses_cancel_status(pg_engine, monkeypatch):
+    """A user Stop closes ``cancelled``; a graceful shutdown closes
+    ``interrupted`` - both keep the existing event shape."""
+    principal = await _principal(pg_engine)
+
+    async def _slow_prepare(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(bt, "prepare_chat", _slow_prepare)
+
+    for expected in (tr.CANCELLED, tr.INTERRUPTED):
+        workflow_id = new_workflow_id()
+        store = await _record_for(pg_engine, principal, workflow_id)
+        bus = HarnessBus()
+        task = asyncio.ensure_future(
+            run_background_task(
+                **_runner_kwargs(
+                    principal, workflow_id, harness_bus=bus,
+                    task_records=store,
+                    cancel_status=lambda expected=expected: expected,
+                )
+            )
+        )
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        row = await store.get(workflow_id, user_id=principal.user_id)
+        assert row["status"] == expected
+        assert bus.history()[-1]["error"] == "cancelled"
+
+
+async def test_runner_record_write_failure_never_masks_result(
+    pg_engine, monkeypatch, caplog
+):
+    principal = await _principal(pg_engine)
+    workflow_id = new_workflow_id()
+    store = await _record_for(pg_engine, principal, workflow_id)
+
+    async def _boom(*args, **kwargs):
+        raise SQLAlchemyError("record write failed")
+
+    monkeypatch.setattr(store, "mark_terminal", _boom)
+    _patch_runner(monkeypatch, events=[("done", {"text": "still ok"})])
+    bus = HarnessBus()
+
+    with caplog.at_level(
+        logging.WARNING, logger="invincible.background_tasks"
+    ):
+        await run_background_task(
+            **_runner_kwargs(
+                principal, workflow_id, harness_bus=bus,
+                task_records=store,
+            )
+        )
+
+    assert _types(bus)[-1] == HarnessEventType.WORKFLOW_COMPLETED.value
+    assert "Could not persist terminal status" in caplog.text
+    # The row is untouched (still running) - the result was not masked.
+    row = await store.get(workflow_id, user_id=principal.user_id)
+    assert row["status"] == tr.RUNNING
+
+
+async def test_runner_links_session_to_record(pg_engine, monkeypatch):
+    principal = await _principal(pg_engine)
+    workflow_id = new_workflow_id()
+    store = await _record_for(pg_engine, principal, workflow_id)
+    sessions = SessionStore(engine=pg_engine)
+    session_pk = await sessions.resolve_or_create(
+        workflow_id,
+        user_id=principal.user_id,
+        project_id=principal.project_id,
+    )
+
+    class _Prepared:
+        pass
+
+    prepared = _Prepared()
+    prepared.session_pk = session_pk
+
+    async def _prepare(*args, **kwargs):
+        return prepared
+
+    monkeypatch.setattr(bt, "prepare_chat", _prepare)
+    monkeypatch.setattr(
+        bt, "run_agent_turn",
+        lambda *args, **kwargs: _fake_stream([("done", {"text": "ok"})]),
+    )
+
+    await run_background_task(
+        **_runner_kwargs(
+            principal, workflow_id, task_records=store,
+        )
+    )
+
+    row = await store.get(workflow_id, user_id=principal.user_id)
+    assert row["session_pk"] == session_pk
+    assert row["status"] == tr.COMPLETED
 
 
 async def test_runner_chat_error_has_no_traceback(
@@ -1099,6 +1254,15 @@ async def test_start_success_persists_events_and_answer(
         for message in history
     )
 
+    # Step 5: the durable row is linked to that session and closed.
+    record = await app.state.task_records.get(workflow_id, user_id=uid)
+    assert record["status"] == tr.COMPLETED
+    assert record["mode"] == "plan"
+    assert record["finished_at"] is not None
+    session_pk = await app.state.sessions.resolve_or_create(
+        workflow_id, user_id=uid, project_id=pid)
+    assert record["session_pk"] == session_pk
+
     # Amendment 3: exactly one metadata-only audit row on start.
     audit_rows = await app.state.audit_log.recent(limit=50)
     started_rows = [
@@ -1181,15 +1345,23 @@ async def test_cancel_endpoint_persists_cancelled_and_one_audit(
     monkeypatch.setattr(bt, "prepare_chat", _slow_prepare)
     bus = HarnessBus()
     bus.attach_engine(pg_engine)
+    records = TaskRecordStore(pg_engine)
+    await records.create_running(workflow_id, user_id=uid, mode="plan")
     task = app.state.background_tasks.start(
         uid,
         run_background_task(
-            **_runner_kwargs(principal, workflow_id, harness_bus=bus)
+            **_runner_kwargs(
+                principal, workflow_id, harness_bus=bus,
+                task_records=records,
+                cancel_status=app.state.background_tasks.cancel_status,
+            )
         ),
         workflow_id=workflow_id,
     )
     await asyncio.sleep(0.05)
     assert app.state.background_tasks.is_running(uid, workflow_id)
+    assert (await records.get(
+        workflow_id, user_id=uid))["status"] == tr.RUNNING
 
     response = await client.post(
         f"/dashboard/background-tasks/{workflow_id}/cancel")
@@ -1199,6 +1371,12 @@ async def test_cancel_endpoint_persists_cancelled_and_one_audit(
     with pytest.raises(asyncio.CancelledError):
         await task
     await bus.flush_persisted()
+
+    # A user Stop closes the durable row ``cancelled`` (only a graceful
+    # shutdown writes ``interrupted``).
+    row = await records.get(workflow_id, user_id=uid)
+    assert row["status"] == tr.CANCELLED
+    assert row["finished_at"] is not None
 
     # Exactly one terminal event from the existing CancelledError path -
     # the endpoint adds no second event.
@@ -1263,3 +1441,313 @@ async def test_cancel_endpoint_404_is_identical_and_leaves_foreign_running(
     app.state.background_tasks.cancel(uid_a, foreign_id)
     with pytest.raises(asyncio.CancelledError):
         await foreign
+
+
+# ---------------------------------------------------------------------------
+# Step 5: start-path records and Retry
+
+
+async def _seed_interrupted(
+    engine, workflow_id, uid, pid, *, mode="plan", text="original task",
+):
+    store = TaskRecordStore(engine)
+    await store.create_running(workflow_id, user_id=uid, mode=mode)
+    await store.mark_terminal(workflow_id, tr.INTERRUPTED)
+    if text is not None:
+        await app.state.sessions.save(
+            workflow_id,
+            [{"role": "user", "content": text}],
+            user_id=uid,
+            project_id=pid,
+        )
+    return store
+
+
+async def test_start_inserts_running_row_and_shutdown_interrupts(
+    client, byok_env, monkeypatch
+):
+    uid, _pid = await _login_with_credential(
+        client, "tasks-row-live@example.com")
+
+    async def _slow_prepare(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(bt, "prepare_chat", _slow_prepare)
+    response = await client.post(
+        "/dashboard/background-tasks", json={"task": "slow task"})
+    assert response.status_code == 202, response.text
+    workflow_id = response.json()["workflow_id"]
+
+    row = await app.state.task_records.get(workflow_id, user_id=uid)
+    assert row["status"] == tr.RUNNING
+    assert row["mode"] == "plan"
+    assert row["finished_at"] is None
+
+    await app.state.background_tasks.shutdown()
+    row = await app.state.task_records.get(workflow_id, user_id=uid)
+    assert row["status"] == tr.INTERRUPTED
+    assert row["finished_at"] is not None
+
+
+async def test_start_record_failure_fails_closed(
+    client, byok_env, monkeypatch
+):
+    uid, _pid = await _login_with_credential(
+        client, "tasks-row-down@example.com")
+
+    async def _boom(*args, **kwargs):
+        raise SQLAlchemyError("record store down")
+
+    monkeypatch.setattr(
+        app.state.task_records, "create_running", _boom)
+    response = await client.post(
+        "/dashboard/background-tasks", json={"task": "hello"})
+    assert response.status_code == 503, response.text
+    error = response.json()["error"]
+    assert error["type"] == "config_error"
+    assert "storage is unavailable" in error["message"]
+    assert app.state.background_tasks.running_count(uid) == 0
+
+
+async def test_start_scheduling_failure_marks_row_failed(
+    client, byok_env, monkeypatch
+):
+    uid, _pid = await _login_with_credential(
+        client, "tasks-schedule-fail@example.com")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("no event loop")
+
+    monkeypatch.setattr(app.state.background_tasks, "start", _boom)
+    response = await client.post(
+        "/dashboard/background-tasks", json={"task": "hello"})
+    assert response.status_code == 503, response.text
+    assert response.json()["error"]["type"] == "config_error"
+
+    rows = await app.state.task_records.list_for_user(uid)
+    assert len(rows) == 1
+    assert rows[0]["status"] == tr.FAILED
+    assert rows[0]["finished_at"] is not None
+
+
+async def test_start_cap_is_rechecked_after_record_insert(
+    client, byok_env, monkeypatch
+):
+    uid, _pid = await _login_with_credential(
+        client, "tasks-cap-recheck@example.com")
+    original = app.state.task_records.create_running
+
+    async def _insert_then_fill(*args, **kwargs):
+        await original(*args, **kwargs)
+
+        async def _hold():
+            await asyncio.sleep(3600)
+
+        for _ in range(2):
+            app.state.background_tasks.start(
+                uid, _hold(), workflow_id=new_workflow_id())
+
+    monkeypatch.setattr(
+        app.state.task_records, "create_running", _insert_then_fill)
+    response = await client.post(
+        "/dashboard/background-tasks", json={"task": "hello"})
+    assert response.status_code == 429, response.text
+    assert response.json()["error"]["type"] == "rate_limit_error"
+
+    rows = await app.state.task_records.list_for_user(uid)
+    assert len(rows) == 1
+    assert rows[0]["status"] == tr.FAILED
+    await app.state.background_tasks.shutdown()
+
+
+async def test_retry_requires_json_content_type(client, byok_env):
+    uid, pid = await _login_with_credential(
+        client, "tasks-retry-ct@example.com")
+    workflow_id = "task-retry-ct"
+    await _seed_interrupted(
+        app.state.engine, workflow_id, uid, pid)
+
+    response = await client.post(
+        f"/dashboard/background-tasks/{workflow_id}/retry",
+        content=b"{}",
+        headers={"content-type": "text/plain"},
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["type"] == "invalid_request_error"
+
+
+async def test_retry_unknown_and_foreign_are_identical_404(
+    client, byok_env
+):
+    uid, pid = await _login_with_credential(
+        client, "tasks-retry-owner@example.com")
+    workflow_id = "task-retry-foreign"
+    await _seed_interrupted(
+        app.state.engine, workflow_id, uid, pid)
+
+    other_id, _other_pid = await _login_with_credential(
+        client, "tasks-retry-other@example.com")
+    foreign = await client.post(
+        f"/dashboard/background-tasks/{workflow_id}/retry", json={})
+    unknown = await client.post(
+        "/dashboard/background-tasks/task-retry-missing/retry", json={})
+    assert foreign.status_code == unknown.status_code == 404
+    assert foreign.json() == unknown.json()
+    assert foreign.json() == {
+        "error": {
+            "message": "No such background task.",
+            "type": "not_found_error",
+        }
+    }
+    assert app.state.background_tasks.running_count(other_id) == 0
+    # The owner's row is untouched by the foreign attempt.
+    row = await app.state.task_records.get(workflow_id, user_id=uid)
+    assert row["status"] == tr.INTERRUPTED
+
+
+@pytest.mark.parametrize("status", [None, tr.COMPLETED, tr.CANCELLED])
+async def test_retry_only_interrupted_is_retryable(
+    client, byok_env, status
+):
+    uid, _pid = await _login_with_credential(
+        client, f"tasks-retry-{status or 'running'}@example.com")
+    workflow_id = f"task-retry-{status or 'running'}"
+    store = TaskRecordStore(app.state.engine)
+    await store.create_running(workflow_id, user_id=uid, mode="plan")
+    if status is not None:
+        await store.mark_terminal(workflow_id, status)
+
+    response = await client.post(
+        f"/dashboard/background-tasks/{workflow_id}/retry", json={})
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert (await store.get(
+        workflow_id, user_id=uid))["status"] == (status or tr.RUNNING)
+    assert app.state.background_tasks.running_count(uid) == 0
+
+
+async def test_retry_without_task_text_is_409_and_starts_nothing(
+    client, byok_env
+):
+    uid, pid = await _login_with_credential(
+        client, "tasks-retry-notext@example.com")
+    workflow_id = "task-retry-notext"
+    store = await _seed_interrupted(
+        app.state.engine, workflow_id, uid, pid, text=None)
+
+    response = await client.post(
+        f"/dashboard/background-tasks/{workflow_id}/retry", json={})
+    assert response.status_code == 409, response.text
+    assert "no longer available" in response.json()["error"]["message"]
+    assert app.state.background_tasks.running_count(uid) == 0
+    rows = await store.list_for_user(uid)
+    assert [row["workflow_id"] for row in rows] == [workflow_id]
+    assert rows[0]["status"] == tr.INTERRUPTED
+
+
+async def test_retry_oversized_task_text_is_409(client, byok_env):
+    uid, pid = await _login_with_credential(
+        client, "tasks-retry-long@example.com")
+    workflow_id = "task-retry-long"
+    store = await _seed_interrupted(
+        app.state.engine, workflow_id, uid, pid, text="x" * 8001)
+
+    response = await client.post(
+        f"/dashboard/background-tasks/{workflow_id}/retry", json={})
+    assert response.status_code == 409, response.text
+    assert "8000" in response.json()["error"]["message"]
+    assert app.state.background_tasks.running_count(uid) == 0
+    assert (await store.get(
+        workflow_id, user_id=uid))["status"] == tr.INTERRUPTED
+
+
+async def test_retry_without_provider_is_400_and_leaves_row(client):
+    uid, pid = await _login_with_credential(
+        client, "tasks-retry-noprov@example.com", count=0)
+    workflow_id = "task-retry-noprov"
+    store = await _seed_interrupted(
+        app.state.engine, workflow_id, uid, pid)
+
+    response = await client.post(
+        f"/dashboard/background-tasks/{workflow_id}/retry", json={})
+    assert response.status_code == 400, response.text
+    assert "No AI provider is connected" in response.json()["error"]["message"]
+    assert app.state.background_tasks.running_count(uid) == 0
+    rows = await store.list_for_user(uid)
+    assert [row["workflow_id"] for row in rows] == [workflow_id]
+    assert rows[0]["status"] == tr.INTERRUPTED
+
+
+async def test_retry_starts_new_task_and_leaves_old_untouched(
+    client, byok_env, router_setter
+):
+    _bodies, handler = _scripted([
+        provider_body("w1", content="retried answer")])
+    router_setter({"w1.example.com": handler})
+    uid, pid = await _login_with_credential(
+        client, "tasks-retry-ok@example.com")
+    old_id = "task-retry-old"
+    store = await _seed_interrupted(
+        app.state.engine, old_id, uid, pid,
+        mode="manual", text="original task")
+    old_before = await store.get(old_id, user_id=uid)
+
+    # A pending approval belongs to the OLD workflow only. Retry must not
+    # reuse it, move it, or expose it on the new task.
+    old_token = await app.state.approval_store.suspend(
+        workflow_id=old_id,
+        action_type="execute_bash",
+        args={"command": "echo old"},
+        owner_subject=uid,
+    )
+
+    response = await client.post(
+        f"/dashboard/background-tasks/{old_id}/retry", json={})
+    assert response.status_code == 202, response.text
+    new_id = response.json()["workflow_id"]
+    assert new_id != old_id
+    assert new_id.startswith("task-")
+    assert len(new_id) == len("task-") + 12
+
+    await _drain(app.state.background_tasks, uid)
+    await app.state.harness_bus.flush_persisted()
+
+    # The old row and its timeline are untouched.
+    assert await store.get(old_id, user_id=uid) == old_before
+    assert await _persisted(app.state.engine, old_id) == []
+    assert await app.state.approval_store.pending_for_workflow(
+        old_id, owner_subject=uid) != []
+    assert await app.state.approval_store.pending_for_workflow(
+        new_id, owner_subject=uid) == []
+
+    new_row = await store.get(new_id, user_id=uid)
+    assert new_row["status"] == tr.COMPLETED
+    assert new_row["mode"] == "manual"
+    assert new_row["finished_at"] is not None
+
+    result = await app.state.sessions.task_result(new_id, user_id=uid)
+    assert result["task_text"] == "original task"
+    assert result["answer"] == "retried answer"
+
+    audit = [
+        row for row in await app.state.audit_log.recent(limit=200)
+        if row["action"] in (
+            "background_task.started", "background_task.retried")
+    ]
+    started = [
+        row for row in audit
+        if row["action"] == "background_task.started"
+        and row["resource_id"] == new_id
+    ]
+    retried = [
+        row for row in audit if row["action"] == "background_task.retried"
+    ]
+    assert len(started) == 1
+    assert len(retried) == 1
+    assert retried[0]["resource_id"] == old_id
+    assert retried[0]["meta"] == {
+        "workflow_id": old_id,
+        "new_workflow_id": new_id,
+        "mode": "manual",
+    }
+    assert old_token not in json.dumps(audit, default=str)

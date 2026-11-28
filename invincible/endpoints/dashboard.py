@@ -35,6 +35,7 @@ from invincible.core.projection import (
     fetch_session_view,
 )
 from invincible.core.settings import settings
+from invincible.core.task_records import INTERRUPTED, RUNNING
 from invincible.core.user_settings_store import (
     UnknownOverrideKeyError,
     UserSettingsStore,
@@ -960,6 +961,45 @@ async def workflows_page(
     engine = _engine(request)
     rows = await list_workflows(engine, user_id=principal.user_id)
     registry = getattr(request.app.state, "background_tasks", None)
+    records = getattr(request.app.state, "task_records", None)
+    task_rows: list[dict] = []
+    if records is not None:
+        try:
+            task_rows = await records.list_for_user(principal.user_id)
+        except Exception:  # noqa: BLE001 - a read page must still render
+            logger.warning(
+                "Could not read durable background task records",
+                exc_info=True)
+    # Merge durable task rows with event-derived workflows, deduping by
+    # workflow id. The row is authoritative for task existence, status,
+    # and timestamps; event counts/summaries still come from the timeline.
+    by_id = {row["workflow_id"]: row for row in rows}
+    for task_row in task_rows:
+        workflow_id = task_row["workflow_id"]
+        row = by_id.get(workflow_id)
+        if row is None:
+            row = {
+                "workflow_id": workflow_id,
+                "event_count": 0,
+                "started_at": task_row["created_at"],
+                "last_at": task_row["finished_at"] or task_row["created_at"],
+                "latest_type": "",
+                "latest_summary": "",
+            }
+            rows.append(row)
+            by_id[workflow_id] = row
+        else:
+            row["started_at"] = task_row["created_at"]
+            row["last_at"] = (
+                task_row["finished_at"] or row.get("last_at")
+                or task_row["created_at"]
+            )
+        row["durable_status"] = task_row["status"]
+    rows.sort(
+        key=lambda row: row.get("last_at") or row.get("started_at") or 0.0,
+        reverse=True)
+    del rows[50:]
+
     store = getattr(request.app.state, "approval_store", None)
     pending_rows: list[dict] = []
     if store is not None:
@@ -982,12 +1022,19 @@ async def workflows_page(
         running = bool(
             registry and registry.is_running(
                 principal.user_id, row["workflow_id"]))
-        visible = _visible_approval_rows(
-            pending_by.get(row["workflow_id"], []),
-            task_started_at(events), now=now)
+        durable = row.get("durable_status")
+        # A durable terminal row is not waiting for a human; never show
+        # a stale approval count for it. Legacy rows keep the old rule.
+        if durable is None or running:
+            visible = _visible_approval_rows(
+                pending_by.get(row["workflow_id"], []),
+                task_started_at(events), now=now)
+        else:
+            visible = []
         row["approval_count"] = len(visible)
         row["task_status"] = task_status(
-            running, events, awaiting_approval=bool(visible))
+            running, events, awaiting_approval=bool(visible),
+            durable_status=durable)
     response = _page(
         "workflows.html", request,
         user_email=await _email(engine, principal),
@@ -1019,9 +1066,24 @@ async def approvals_page(
                 "Could not read pending approvals for the approvals page",
                 exc_info=True)
     now = time.time()
+    records = getattr(request.app.state, "task_records", None)
+    durable_status: dict[str, str | None] = {}
     groups: dict[str, dict] = {}
     for row in rows:
         workflow_id = row["workflow_id"]
+        if records is not None and workflow_id.startswith("task-"):
+            if workflow_id not in durable_status:
+                try:
+                    task_row = await records.get(
+                        workflow_id, user_id=principal.user_id)
+                except Exception:  # noqa: BLE001 - keep the page readable
+                    task_row = None
+                durable_status[workflow_id] = (
+                    task_row["status"] if task_row is not None else None)
+            if durable_status[workflow_id] not in (None, RUNNING):
+                # Startup purge normally removes these; defensively never
+                # show an approval for a terminal (e.g. interrupted) task.
+                continue
         group = groups.get(workflow_id)
         if group is None:
             events = await list_workflow_events(
@@ -1073,19 +1135,27 @@ async def workflow_detail_page(
         and registry.is_running(principal.user_id, workflow_id)
     )
     task = None
+    task_row = None
     if is_task:
         store = getattr(request.app.state, "sessions", None)
         if store is not None:
             task = await store.task_result(
                 workflow_id, user_id=principal.user_id)
-    if not events and task is None and not running:
+        records = getattr(request.app.state, "task_records", None)
+        if records is not None:
+            task_row = await records.get(
+                workflow_id, user_id=principal.user_id)
+    if not events and task is None and not running and task_row is None:
         return _missing_page(
             request, "Workflow not found",
             "This workflow has no events for this account.")
 
+    durable_status = task_row["status"] if task_row is not None else None
     started_at = task_started_at(events) if is_task else None
     approval_rows: list[dict] = []
-    if is_task:
+    if is_task and (task_row is None or durable_status == RUNNING):
+        # A durable terminal row (including interrupted) can never be
+        # approved; only fetch live/legacy pending rows.
         approval_store = getattr(
             request.app.state, "approval_store", None)
         if approval_store is not None:
@@ -1101,7 +1171,8 @@ async def workflow_detail_page(
         _approval_cards(approval_rows, started_at) if is_task else [])
     status = (
         task_status(
-            running, events, awaiting_approval=bool(approvals))
+            running, events, awaiting_approval=bool(approvals),
+            durable_status=durable_status)
         if is_task else ""
     )
     # Only VISIBLE rows may claim the task is waiting for a human. Rows
@@ -1112,16 +1183,28 @@ async def workflow_detail_page(
         render_chat_markdown(task["answer"])
         if task is not None and task.get("answer") else ""
     )
+    task_text = task.get("task_text", "") if task is not None else ""
+    can_retry = bool(
+        task_row is not None
+        and durable_status == INTERRUPTED
+        and task_text.strip())
+    retry_unavailable = bool(
+        task_row is not None
+        and durable_status == INTERRUPTED
+        and not task_text.strip())
     context = {
         "user_email": await _email(engine, principal),
         "workflow_id": workflow_id,
         "events": events,
-        "task_view": is_task and (task is not None or running),
+        "task_view": is_task and (
+            task is not None or running or task_row is not None),
         "task_status": status,
-        "task_text": task.get("task_text", "") if task is not None else "",
+        "task_text": task_text,
         "answer_html": answer_html,
         "task_session_pk": task.get("session_pk") if task is not None else None,
         "can_cancel": running,
+        "can_retry": can_retry,
+        "retry_unavailable": retry_unavailable,
         "approvals": approvals,
         "approval_window_closed": approval_window_closed,
     }

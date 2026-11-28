@@ -9,6 +9,20 @@ are called out under **Changed** and **Removed**.
 
 ## [Unreleased]
 
+### Added
+
+- Restart-safe background task records (Step 5, F37; migration `0019`,
+  table `background_tasks`): one metadata-only row per task (owner, mode,
+  nullable session link, status, timestamps — never task text, commands,
+  paths, args, answers, or free-form errors). Start inserts `running`
+  before scheduling; every terminal path closes the row exactly once;
+  a graceful shutdown writes `interrupted`, a user Stop writes
+  `cancelled`. Startup marks stale `running` rows `interrupted` before
+  serving. The Workflows page shows the interrupted state and an
+  owner-scoped Retry that starts a NEW task from the original session
+  text — never a replay; the old row, timeline, approvals, checkpoints,
+  and tokens are untouched.
+
 ## [0.6.2] - 2026-11-16
 
 ### Added

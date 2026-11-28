@@ -390,5 +390,12 @@
     "state": "passing",
     "title": "Internal docs-accuracy pass from pattern-map audit",
     "verification": "python -m json.tool feature_list.json && ruff check . && pytest tests/test_docs.py tests/test_wheel_contents.py"
+  },
+  {
+    "behavior": "A durable background_tasks row records every task (owner, mode, session, status, timestamps); start inserts running, terminal paths close it, startup marks stale running rows interrupted, and an owner-scoped Retry starts a NEW task from the original session text without replaying tool calls or approvals; migration 0019 mirrors core/db.py metadata and the dashboard shows interrupted plus Retry.",
+    "id": "F37",
+    "state": "passing",
+    "title": "Background tasks: restart-safe task records (Step 5)",
+    "verification": "python -m json.tool feature_list.json && ruff check . && pytest tests/test_background_tasks.py tests/test_background_tasks_ui.py tests/test_dashboard_workflows.py tests/test_migration_background_tasks.py tests/test_task_records.py"
   }
 ]

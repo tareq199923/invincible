@@ -1,7 +1,8 @@
 # Harness Plan — outbound-only harness behavior (additive, non-breaking)
 
-> **Last verified: 2026-11-27** on branch `main`
-> (migration head `0018`; F35 shipped as `2680979`).
+> **Last verified: 2026-11-28** on branch `main`
+> (migration head `0019`; F35 shipped as `2680979`; F37 adds the
+> background task records).
 >
 > Verification command:
 > `python -c "from pathlib import Path; from invincible.core import harness_tools as h, webchat_agent as w; print('registry', len(h.TOOLS), 'mcp', len(h.mcp_descriptors()), 'webchat', len(h.webchat_schemas()), 'cap', w.MAX_TOOL_ITERATIONS, 'head', max(p.name for p in Path('invincible/migrations/versions').glob('*.py') if p.name[0].isdigit()))"`
@@ -63,9 +64,9 @@ existing structure, auth realms, wire protocols, or conventions.
 1. Schema truth in `invincible/core/db.py` metadata. Migrations under
    `invincible/migrations/versions/`, run ONLY via `invincible db upgrade`.
    Never auto-run at startup. Verify against `create_all`. Head in this
-   tree: `0018` (F05 stage 2 merged as `011ec2c`; F29 adds the
+   tree: `0019` (F05 stage 2 merged as `011ec2c`; F29 adds the
    workflow ownership column; F34 adds the background-task checkpoint
-   table).
+   table; F37 adds the background-task records table).
 2. All in-app env reads via `invincible/core/settings.py` (live-read
    accessors). `cli.py` is the only exemption.
 3. Exactly one provider failover loop: `core/router.py::_iter_attempts`.

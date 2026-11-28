@@ -86,7 +86,7 @@ Fixture semantics (`tests/conftest.py`):
 | `endpoints/dashboard.py` | Phase 5 Jinja2 + HTMX dashboard (overview, sessions, tasks, memory, usage, settings) — session-cookie realm only |
 | `endpoints/docs.py` | Public docs site (`GET /docs`, `/docs/{slug}`): allowlisted curated guides, live MCP tool tables split by plane, request-derived host snippets, server-injected heading anchors + the `⌘K` search-index payload |
 | `endpoints/chat.py` | Dashboard webchat: page, models, SSE stream (plan/manual/auto agent modes), approvals (session realm) |
-| `endpoints/tasks.py` | `POST /dashboard/background-tasks`: start a plan-mode background agent task; `POST /dashboard/background-tasks/{workflow_id}/cancel`: owner-scoped Stop (session realm; per-user running cap, no-provider 400) |
+| `endpoints/tasks.py` | `POST /dashboard/background-tasks`: start a plan-mode background agent task; `POST /dashboard/background-tasks/{workflow_id}/cancel`: owner-scoped Stop; `POST /dashboard/background-tasks/{workflow_id}/retry`: owner-scoped Retry of an interrupted task as a NEW task (session realm; per-user running cap, no-provider 400) |
 | `endpoints/agents.py` | Phase 10 agent transport: `POST /agent/poll` + `/agent/result` (inv_ key realm), `GET /agent/machines` + `GET /agent/whoami` (inv_ key realm, read-only), `GET /agent/status` (session realm) |
 | `agent/runner.py`, `agent/sandbox.py` | The local agent that runs on the **user's** machine: pairing config + long-poll loop + home-confined sandbox |
 | `core/router.py` | THE single tiered-failover loop (`_iter_attempts`); run recording |
@@ -110,6 +110,7 @@ Fixture semantics (`tests/conftest.py`):
 | `core/agent_registry.py` | Per-user agent queues/futures (in-memory; long-poll transport, single instance by design) |
 | `core/background_tasks.py` | Server-side plan-mode background tasks: per-user registry (`MAX_RUNNING_PER_USER`), workflow events, wall-clock timeout, cancellation cleanup — same `prepare_chat` + `run_agent_turn` pipeline, no second failover loop |
 | `core/task_checkpoints.py` | Durable per-tool-call checkpoints for background tasks (metadata only: tool, call id, args digest, result size) — progress tracking, never a replay |
+| `core/task_records.py` | Durable metadata-only background-task records: start insert, terminal close, owner-scoped reads, startup sweep (`running` → `interrupted`) |
 | `core/harness_events.py` | Harness event contract: stable type names + metadata-only payloads |
 | `core/harness_bus.py` | In-memory event bus + durable `workflow_events` persistence for workflow-scoped events |
 | `core/harness_policy.py` | Unified pre-execution policy gate (denylists enforced before staging/execution) |
@@ -130,7 +131,7 @@ Fixture semantics (`tests/conftest.py`):
 | `cli.py` | Click CLI: setup/start(+tunnel)/login(device flow)/agent/doctor/dev-db/db/secret/oauth/api-key/users |
 | `compat/common.py`, `compat/anthropic.py`, `compat/responses.py` | Protocol-neutral internal message model; Anthropic and Responses translators/SSE |
 | `models/anthropic.py`, `models/responses.py` | Lenient request models (unknown fields ignored) |
-| `migrations/` | Packaged Alembic environment (baseline `0001` … current `0018`) |
+| `migrations/` | Packaged Alembic environment (baseline `0001` … current `0019`) |
 
 ---
 

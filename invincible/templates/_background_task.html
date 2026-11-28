@@ -12,14 +12,28 @@
     <button type="button" class="task-stop"
             data-cancel-workflow="{{ workflow_id }}">Stop task</button>
     {% endif %}
+    {% if can_retry %}
+    <button type="button" class="task-retry"
+            data-retry-workflow="{{ workflow_id }}">Retry task</button>
+    {% endif %}
   </div>
+
+  {% if task_status == 'interrupted' %}
+  <p class="muted task-interrupted-note">This task was interrupted by a
+  server restart. No work was resumed.</p>
+  {% if retry_unavailable %}
+  <p class="muted">The original task text is no longer available, so this
+  task cannot be retried.</p>
+  {% endif %}
+  {% endif %}
+  <p class="error" id="background-task-retry-error" role="alert" hidden></p>
 
   {% if task_text %}
   <h4>Task</h4>
   <pre class="task-result-text">{{ task_text }}</pre>
   {% endif %}
 
-  {% if approvals %}
+  {% if approvals and task_status in ('running', 'awaiting approval') %}
   <h4>Pending approvals</h4>
   {% for a in approvals %}
   <div class="approval-card task-approval-card">
@@ -59,6 +73,9 @@
   <p class="muted">Waiting for your approval above.</p>
   {% elif task_status == 'running' %}
   <p class="muted">The answer appears here when the task finishes.</p>
+  {% elif task_status == 'interrupted' %}
+  <p class="muted">No answer was stored; the task was interrupted by a
+  server restart.</p>
   {% else %}
   <p class="muted">No answer was stored for this task.</p>
   {% endif %}

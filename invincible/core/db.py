@@ -863,3 +863,43 @@ Index(
     background_task_checkpoints.c.workflow_id,
     background_task_checkpoints.c.seq,
 )
+
+
+# ---------------------------------------------------------------------------
+# Background tasks Step 5: restart-safe task records.
+#
+# One metadata-only row per background task. The row is written BEFORE the
+# runner starts and closed on every terminal path, so a hard restart can
+# mark stale ``running`` rows ``interrupted`` and the dashboard can show an
+# honest state plus a Retry action. Never stores task text, commands, paths,
+# tool args, answers, or free-form error text: the text lives in the chat
+# session whose id IS the workflow id.
+#
+# ``session_pk`` is nullable because the row is inserted before
+# ``prepare_chat`` resolves/creates the session; it is linked best-effort
+# afterwards. ON DELETE SET NULL keeps the durable task row when a session
+# is hard-deleted (``SessionStore.delete_session``).
+background_tasks = Table(
+    "background_tasks",
+    metadata,
+    Column("workflow_id", Text, primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id"), nullable=False),
+    Column(
+        "session_pk",
+        BigInteger,
+        ForeignKey("sessions.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column("mode", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("created_at", Float, nullable=False),
+    Column("started_at", Float, nullable=False),
+    Column("finished_at", Float),
+)
+
+Index(
+    "idx_bg_tasks_user_created",
+    background_tasks.c.user_id,
+    background_tasks.c.created_at.desc(),
+)
+Index("idx_bg_tasks_status", background_tasks.c.status)

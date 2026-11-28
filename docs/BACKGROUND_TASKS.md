@@ -15,10 +15,10 @@ Status legend: **Shipped** (code + tests + docs landed) ·
 | 2 | Dashboard UI: start, status, result page, Stop | **Shipped** (F33) |
 | 3 | Durable per-tool-call checkpoints (progress tracking) | **Shipped** (F34) |
 | 4 | Mutating tools + durable approvals | **Shipped** (F35) |
-| 5 | Restart-safe task records (decision pending) | **Planned** |
+| 5 | Restart-safe task records + owner Retry | **Shipped** (F37) |
 
 Steps 1-3 are packaged together in the 0.6.2 release (migration
-`0018`).
+`0018`). Step 5 adds migration `0019` (`background_tasks`).
 
 Step 4 is shipped in slices. Slice A (the durable groundwork) shipped as
 `d9852ec`; Slice B (the runner's suspend/approve/deny/timeout path)
@@ -167,10 +167,10 @@ task must never be a way to run commands on the shared host.
 
 **D4 — Ownership of the pending row.** `pending_actions` carries the
 owner inside the JSONB `args` (`_OWNER_SUBJECT_KEY`), stripped on
-resolve. That stayed as-is: neither slice needed a schema change, so
-there is **no migration `0019`**. Owner-scoped listing and purge filter
-on the same key. A dedicated indexed `owner_user_id` column is not part
-of Step 4.
+resolve. That stayed as-is: Step 4 itself needed no schema change.
+(Step 5 adds migration `0019` for task records, not for approvals.)
+Owner-scoped listing and purge filter on the same key. A dedicated
+indexed `owner_user_id` column is not part of Step 4.
 
 **D5 — Deny is a tool result, not a task failure.** A denial feeds
 `{"status": "declined"}` back to the model exactly like the fast path,
@@ -289,40 +289,50 @@ untouched.
 
 ---
 
-## Step 5 — restart-safe task records (decision pending)
+## Step 5 — restart-safe task records (shipped)
 
-Step 3 records what a task *did*; it does not record that a task
-*exists*. Today a background task lives only in the worker: after a
-restart, running tasks vanish and the Workflows page only shows the
-persisted events.
+Step 3 records what a task *did*; Step 5 records that a task *exists*.
+Option A shipped: durable metadata-only records and an explicit owner
+Retry, with no replay.
 
-Two candidate scopes:
+- Table `background_tasks` (migration `0019`): `workflow_id` (PK),
+  `user_id`, nullable `session_pk` (`ON DELETE SET NULL`), `mode`,
+  `status`, `created_at`, `started_at`, `finished_at`. The task text
+  stays in the chat session; the row never stores text, commands, paths,
+  args, answers, or free-form error text.
+- Statuses: `running`, `completed`, `failed`, `cancelled`,
+  `interrupted`. `awaiting approval` is derived UI state, never stored.
+- Start inserts `running` before `registry.start`; a failed insert fails
+  closed (503) and a failed schedule closes the row `failed` (503). The
+  row is linked to the chat session best-effort after `prepare_chat`.
+- Every terminal runner path closes the row exactly once
+  (`UPDATE ... WHERE status = 'running'`). A user Stop writes
+  `cancelled`; a graceful lifespan shutdown writes `interrupted`.
+  Record-write failures are logged and never mask the task result.
+- Startup sweep marks every stale `running` row `interrupted` with a
+  `finished_at` before serving, and logs the count. Terminal rows are
+  untouched. There is a tiny crash window between the runner writing its
+  terminal event and its row write; the sweep deliberately does not
+  reconcile events.
+- The Workflows list merges durable rows with event workflows (deduped
+  by workflow id, owner-scoped) and the detail page shows the
+  `interrupted` badge plus a **Retry** button only for an interrupted
+  task whose original text is still readable from the session.
+- Retry is not a resume. `POST
+  /dashboard/background-tasks/{workflow_id}/retry` starts a NEW task with
+  the original text and mode, a new workflow id, a new durable row, and a
+  fresh approval window. The old row and timeline are untouched; no
+  checkpoint, approval, or token is reused. Unknown and foreign ids share
+  the same 404; a non-interrupted task is 409; missing text is 409 and
+  starts nothing. Start and retry audit rows are metadata-only.
+- Event timeline divergence: a shutdown-interrupted task keeps the
+  existing `workflow.failed` / `error="cancelled"` event (no new event
+  string); the durable row is the authoritative `interrupted` state.
 
-**Option A (recommended) — durable task records, no replay.** A
-`background_tasks` table (workflow id, owner, status, mode, session id,
-timestamps; the task text stays in the chat session) makes the task
-list honest across restarts. On startup, tasks still marked `running`
-are marked `interrupted`, the owner sees them with a **Retry** button
-that starts a *new* task, and nothing is ever replayed automatically.
-Conservative: no tool call is ever executed twice, and the model is
-never re-prompted with a half-finished turn.
-
-**Option B — real resume.** Reconstruct the run from the session and the
-checkpoints and continue it. Larger promise: it must decide what to do
+Option B (real resume) remains out of scope: it must decide what to do
 with a tool call that was *started* but not recorded (checkpoints are
 written on success only), and it must survive the 30-minute wall clock
 and the provider failover semantics.
-
-Recommendation: **Option A**. It makes the state honest and keeps the
-"never execute twice" invariant. Option B can follow as its own feature
-if the product wants it.
-
-### Prerequisites either way
-
-- A durable task record is the precondition for both options.
-- The task text itself stays in the chat session (it is already
-  persisted there); the task row stays metadata-only, matching the
-  project-wide secrets discipline.
 
 ---
 

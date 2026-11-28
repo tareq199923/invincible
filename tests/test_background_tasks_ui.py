@@ -21,6 +21,7 @@ from invincible.core.db import workflow_events
 from invincible.core.harness_approvals import ApprovalStore
 from invincible.core.harness_bus import HarnessBus
 from invincible.core.principal import Principal
+from invincible.core.task_records import COMPLETED, INTERRUPTED
 from invincible.main import app
 from tests.conftest import provider_body, register_account
 from tests.test_background_tasks import (
@@ -826,6 +827,118 @@ async def test_manual_task_route_start_approve_and_finish(
     assert "echo hi" not in json.dumps(audit, default=str)
 
 
+async def test_interrupted_task_shows_badge_retry_and_no_stop(
+    client, pg_engine
+):
+    body = await _login(client, "bt-ui-interrupted@example.com")
+    uid, pid = body["id"], body["project_id"]
+    workflow_id = "task-ui-interrupted"
+    await _seed_events(pg_engine, uid, workflow_id, [
+        ("workflow.started", {"input_preview": "original task"}),
+        ("workflow.failed", {"error": "cancelled"}),
+    ])
+    await _save_task_session(workflow_id, uid, pid, text="original task")
+    await app.state.task_records.create_running(
+        workflow_id, user_id=uid, mode="plan")
+    await app.state.task_records.mark_terminal(workflow_id, INTERRUPTED)
+
+    page = await client.get(f"/dashboard/workflows/{workflow_id}")
+    assert page.status_code == 200
+    assert 'status-badge status-interrupted">interrupted' in page.text
+    assert "interrupted by a" in page.text
+    assert "server restart" in page.text
+    assert f'data-retry-workflow="{workflow_id}"' in page.text
+    assert "data-cancel-workflow" not in page.text
+    assert "hx-get=" not in page.text
+    assert "Pending approvals" not in page.text
+
+
+async def test_interrupted_task_without_text_hides_retry(
+    client, pg_engine
+):
+    body = await _login(client, "bt-ui-interrupted-notext@example.com")
+    uid = body["id"]
+    workflow_id = "task-ui-interrupted-notext"
+    await app.state.task_records.create_running(
+        workflow_id, user_id=uid, mode="plan")
+    await app.state.task_records.mark_terminal(workflow_id, INTERRUPTED)
+
+    page = await client.get(f"/dashboard/workflows/{workflow_id}")
+    assert page.status_code == 200
+    assert 'status-badge status-interrupted">interrupted' in page.text
+    assert "original task text is no longer available" in page.text
+    assert "data-retry-workflow" not in page.text
+    assert "data-cancel-workflow" not in page.text
+
+
+async def test_workflows_list_merges_durable_rows_and_events(
+    client, pg_engine
+):
+    body = await _login(client, "bt-ui-merge@example.com")
+    uid = body["id"]
+    store = app.state.task_records
+
+    await _seed_events(pg_engine, uid, "task-merge-events", [
+        ("workflow.started", {"input_preview": "x"}),
+        ("workflow.completed", {"output_preview": "y"}),
+    ])
+    await store.create_running(
+        "task-merge-events", user_id=uid, mode="plan")
+    await store.mark_terminal("task-merge-events", COMPLETED)
+    await store.create_running(
+        "task-merge-durable", user_id=uid, mode="plan")
+    await store.mark_terminal("task-merge-durable", INTERRUPTED)
+
+    page = await client.get("/dashboard/workflows")
+    assert page.status_code == 200
+    # One row per workflow id: the durable row and the event row merge.
+    assert page.text.count(
+        'href="/dashboard/workflows/task-merge-events"') == 1
+    assert "task-merge-durable" in page.text
+    assert 'status-badge status-completed">completed' in page.text
+    assert 'status-badge status-interrupted">interrupted' in page.text
+
+    other = await _login(client, "bt-ui-merge-other@example.com")
+    await store.create_running(
+        "task-merge-foreign", user_id=other["id"], mode="plan")
+    theirs = await client.get("/dashboard/workflows")
+    assert theirs.status_code == 200
+    assert "task-merge-foreign" in theirs.text
+    assert "task-merge-events" not in theirs.text
+    assert "task-merge-durable" not in theirs.text
+
+
+async def test_approvals_page_skips_terminal_durable_tasks(
+    client, pg_engine
+):
+    body = await _login(client, "bt-ui-appr-interrupted@example.com")
+    uid = body["id"]
+    workflow_id = "task-appr-interrupted"
+    await _seed_events(pg_engine, uid, workflow_id, [
+        ("workflow.started", {"input_preview": "x"}),
+    ])
+    token = await _suspend(
+        app.state.approval_store, workflow_id, uid, "execute_bash",
+        {"command": "INTERRUPTED_SECRET_COMMAND"})
+    await app.state.task_records.create_running(
+        workflow_id, user_id=uid, mode="manual")
+    await app.state.task_records.mark_terminal(workflow_id, INTERRUPTED)
+
+    page = await client.get("/dashboard/approvals")
+    assert page.status_code == 200
+    assert "No approvals are waiting" in page.text
+    assert workflow_id not in page.text
+    assert token not in page.text
+    assert "INTERRUPTED_SECRET_COMMAND" not in page.text
+
+    detail = await client.get(f"/dashboard/workflows/{workflow_id}")
+    assert detail.status_code == 200
+    assert 'status-badge status-interrupted">interrupted' in detail.text
+    assert "Pending approvals" not in detail.text
+    assert token not in detail.text
+    assert "INTERRUPTED_SECRET_COMMAND" not in detail.text
+
+
 def test_background_task_static_js_contract():
     script = (
         Path(__file__).resolve().parent.parent
@@ -839,3 +952,9 @@ def test_background_task_static_js_contract():
     assert 'body: JSON.stringify({approve: decision === "approve"})' \
         in script
     assert 'credentials: "same-origin"' in script
+    # Step 5: Retry is a delegated handler that starts a NEW task.
+    assert 'closest("[data-retry-workflow]")' in script
+    assert '"/retry"' in script
+    assert '"Content-Type": "application/json"' in script
+    assert 'body: "{}"' in script
+    assert "Could not retry the task" in script

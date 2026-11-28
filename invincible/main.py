@@ -32,6 +32,7 @@ from invincible.core.router import Router
 from invincible.core.run_store import RunStore
 from invincible.core.session_store import SessionStore
 from invincible.core.settings import settings
+from invincible.core.task_records import TaskRecordStore
 from invincible.core.tool_executor import PendingActionStore
 from invincible.core.webchat_agent import ApprovalWaiter
 from invincible.endpoints.accounts import router as accounts_router
@@ -183,6 +184,23 @@ async def lifespan(app: FastAPI):
             "Purged %d orphaned suspended approval(s) from a previous "
             "process", purged)
     app.state.approval_store = approval_store
+    # Background tasks Step 5: durable task records. Rows still ``running``
+    # belong to the previous process (single-instance deployment by
+    # design); mark them interrupted BEFORE serving. Terminal rows are
+    # untouched. A stale schema must warn, never crash startup.
+    task_records = TaskRecordStore(engine)
+    app.state.task_records = task_records
+    try:
+        interrupted = await task_records.mark_running_interrupted()
+    except SQLAlchemyError:
+        interrupted = 0
+        logger.warning(
+            "Could not mark stale background tasks interrupted "
+            "(run `invincible db upgrade`)")
+    if interrupted:
+        logger.warning(
+            "Marked %d background task(s) interrupted from a previous "
+            "process", interrupted)
     app.state.router.run_recorder = runs.record
     yield
     # Cancel in-flight background tasks FIRST: each runner records its

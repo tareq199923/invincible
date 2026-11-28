@@ -462,6 +462,7 @@ body.shell-body .banner-ok { border-left-width: 3px; }
 .status-cancelled { color: var(--muted); background: var(--raise); border-color: var(--border); }
 .status-timed-out { color: var(--err); background: var(--err-dim); border-color: currentColor; }
 .status-stalled { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); }
+.status-interrupted { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); }
 .task-status-summary { margin-left: 0.45rem; }
 
 /* ---------- background tasks ---------- */
@@ -509,6 +510,8 @@ body.shell-body .banner-ok { border-left-width: 3px; }
   gap: 0.6rem;
 }
 .task-result-head .task-stop { margin-top: 0; margin-left: auto; }
+.task-result-head .task-retry { margin-top: 0; margin-left: auto; }
+.task-interrupted-note { margin: 0.6rem 0 0; }
 .task-result-text {
   white-space: pre-wrap;
   word-break: break-word;

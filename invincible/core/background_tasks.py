@@ -28,6 +28,12 @@ from invincible.core.chat_service import ChatError, prepare_chat
 from invincible.core.harness_events import HarnessEventType
 from invincible.core.principal import Principal
 from invincible.core.task_checkpoints import TaskCheckpointStore
+from invincible.core.task_records import (
+    CANCELLED,
+    COMPLETED,
+    FAILED,
+    INTERRUPTED,
+)
 from invincible.core.webchat_agent import run_agent_turn
 
 logger = logging.getLogger("invincible.background_tasks")
@@ -182,6 +188,10 @@ class BackgroundTaskRegistry:
 
     def __init__(self) -> None:
         self._tasks: dict[int, dict[str, asyncio.Task]] = {}
+        # Set by ``shutdown`` before cancelling: the runner's durable
+        # terminal status distinguishes a process shutdown (interrupted)
+        # from a user Stop (cancelled).
+        self._shutting_down = False
 
     def start(
         self, user_id: int, coro: Awaitable[Any], *, workflow_id: str
@@ -219,6 +229,15 @@ class BackgroundTaskRegistry:
         task = tasks.get(workflow_id) if tasks else None
         return task is not None and not task.done()
 
+    def cancel_status(self) -> str:
+        """Durable status for a cancellation.
+
+        A graceful process shutdown marks the row ``interrupted``; a user
+        Stop marks it ``cancelled``. The event timeline keeps its existing
+        ``workflow.failed`` / ``error="cancelled"`` shape for both.
+        """
+        return INTERRUPTED if self._shutting_down else CANCELLED
+
     def cancel(self, user_id: int, workflow_id: str) -> bool:
         """Cancel one owned running workflow; never touches another user's.
 
@@ -235,7 +254,12 @@ class BackgroundTaskRegistry:
         return True
 
     async def shutdown(self) -> None:
-        """Cancel every running task and wait for cancellation to settle."""
+        """Cancel every running task and wait for cancellation to settle.
+
+        Marks the registry as shutting down first so each runner writes
+        the durable ``interrupted`` status rather than ``cancelled``.
+        """
+        self._shutting_down = True
         tasks = [
             task
             for group in list(self._tasks.values())
@@ -323,6 +347,7 @@ async def _execute_task(
     harness_bus=None,
     byok=None,
     audit: Callable | None = None,
+    task_records=None,
 ) -> str:
     """Prepare the turn and consume ``run_agent_turn`` to completion."""
     if mode not in ("plan", "manual"):
@@ -356,6 +381,21 @@ async def _execute_task(
         continuity=continuity,
         byok=byok,
     )
+    # Best-effort durable link: the row was inserted before the session
+    # existed. A failure here never changes the task result; Retry reads
+    # the text by workflow id anyway.
+    if task_records is not None:
+        session_pk = getattr(prepared, "session_pk", None)
+        if session_pk is not None:
+            try:
+                await task_records.attach_session(
+                    workflow_id, session_pk,
+                    user_id=principal.user_id,
+                )
+            except Exception:  # noqa: BLE001 - link is advisory
+                logger.warning(
+                    "Could not link session to background task record %s",
+                    workflow_id, exc_info=True)
     checkpointer = _make_checkpointer(
         engine, principal, prepared, workflow_id)
     stream = run_agent_turn(
@@ -469,6 +509,8 @@ async def run_background_task(
     harness_bus=None,
     byok=None,
     audit: Callable | None = None,
+    task_records=None,
+    cancel_status: Callable[[], str] | None = None,
 ) -> None:
     """Run one background task and emit its workflow events.
 
@@ -481,6 +523,11 @@ async def run_background_task(
     the task immediately. Every terminal path emits exactly one
     ``workflow.completed`` or ``workflow.failed`` event; unexpected
     exceptions are logged and never escape silently.
+
+    When ``task_records`` is supplied, every terminal path also closes
+    the durable row exactly once. ``cancel_status`` distinguishes a user
+    Stop (``cancelled``) from a graceful shutdown (``interrupted``). A
+    record-write failure is logged and never changes the task result.
     """
     base = {
         "workflow_id": workflow_id,
@@ -490,6 +537,7 @@ async def run_background_task(
         harness_bus, HarnessEventType.WORKFLOW_STARTED,
         **base, input_preview=task[:_PREVIEW_CHARS],
     )
+    terminal_status: str | None = None
     try:
         text = await asyncio.wait_for(
             _execute_task(
@@ -501,11 +549,12 @@ async def run_background_task(
                 retrieval=retrieval,
                 continuity=continuity, engine=engine,
                 agent_platform=agent_platform, harness_bus=harness_bus,
-                byok=byok, audit=audit,
+                byok=byok, audit=audit, task_records=task_records,
             ),
             timeout=BACKGROUND_TASK_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:
+        terminal_status = FAILED
         logger.warning("Background task %s timed out", workflow_id)
         _emit(
             harness_bus, HarnessEventType.WORKFLOW_FAILED,
@@ -513,6 +562,12 @@ async def run_background_task(
         )
         return
     except asyncio.CancelledError:
+        cancelled = (
+            cancel_status() if cancel_status is not None else CANCELLED
+        )
+        terminal_status = (
+            cancelled if cancelled in (CANCELLED, INTERRUPTED) else CANCELLED
+        )
         _emit(
             harness_bus, HarnessEventType.WORKFLOW_FAILED,
             **base, error="cancelled",
@@ -522,6 +577,7 @@ async def run_background_task(
         # Preparation rejected the task (e.g. provider disconnected
         # between the endpoint pre-check and the runner). The message
         # is client-safe; a traceback would only be noise.
+        terminal_status = FAILED
         message = _chat_error_message(exc)
         logger.warning(
             "Background task %s rejected: %s", workflow_id, message)
@@ -531,6 +587,7 @@ async def run_background_task(
         )
         return
     except BackgroundTaskError as exc:
+        terminal_status = FAILED
         message = _short(exc)
         logger.warning(
             "Background task %s failed: %s", workflow_id, message)
@@ -540,13 +597,25 @@ async def run_background_task(
         )
         return
     except Exception as exc:  # noqa: BLE001 - logged, never silent
+        terminal_status = FAILED
         logger.exception("Background task %s failed", workflow_id)
         _emit(
             harness_bus, HarnessEventType.WORKFLOW_FAILED,
             **base, error=_short(exc),
         )
         return
-    _emit(
-        harness_bus, HarnessEventType.WORKFLOW_COMPLETED,
-        **base, output_preview=text[:_PREVIEW_CHARS],
-    )
+    else:
+        terminal_status = COMPLETED
+        _emit(
+            harness_bus, HarnessEventType.WORKFLOW_COMPLETED,
+            **base, output_preview=text[:_PREVIEW_CHARS],
+        )
+    finally:
+        if task_records is not None and terminal_status is not None:
+            try:
+                await task_records.mark_terminal(
+                    workflow_id, terminal_status)
+            except Exception:  # noqa: BLE001 - never mask the result
+                logger.warning(
+                    "Could not persist terminal status for background "
+                    "task %s", workflow_id, exc_info=True)

@@ -13,7 +13,7 @@ invincible/
 ├── cli.py                      Click CLI (setup / start / login / doctor / dev-db / db / oauth / secret / api-key / users)
 ├── providers.yaml              Static provider config (packaged test fixture)
 ├── templates/                  Jinja2 UI (public landing + docs site, login/register/account/device pages + dashboard)
-├── migrations/                 Packaged Alembic environment (0001 baseline … 0018 background_task_checkpoints)
+├── migrations/                 Packaged Alembic environment (0001 baseline … 0019 background_tasks)
 ├── endpoints/
 │   ├── auth.py                 require_auth: per-user inv_ API-key Principal resolution for /v1/* (fail closed)
 │   ├── accounts.py             Phase 3: /auth/*, /projects, /api-keys, /sessions,
@@ -90,11 +90,17 @@ invincible/
     │                           (MAX_RUNNING_PER_USER), workflow events,
     │                           wall-clock timeout, cancellation cleanup —
     │                           uses the same prepare_chat + run_agent_turn
-    │                           pipeline and the single router failover loop
+    │                           pipeline and the single router failover loop;
+    │                           closes the durable task record on every
+    │                           terminal path
     ├── task_checkpoints.py     Durable per-tool-call checkpoints for background
     │                           tasks (tool, call id, args digest, result
     │                           size; metadata only) — progress tracking,
     │                           never a replay
+    ├── task_records.py         Durable metadata-only background-task records
+    │                           (owner, mode, nullable session link, status,
+    │                           timestamps): start insert, terminal close,
+    │                           owner-scoped reads, startup sweep
     ├── compression.py          Send-time message compression (tool-result
     │                           truncation + blank-run collapse)
     ├── tool_compression.py     Send-time tool-schema compression (description
@@ -185,6 +191,11 @@ import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
         ContinuityEngine(engine, runs=RunStore)
         PendingActionStore(); attach_engine(engine) only when
                 INVINCIBLE_PERSIST_PENDING_ACTIONS is set (opt-in persistence)
+        ApprovalStore(engine); purge_all_suspended()
+                (orphaned background approvals from the previous process)
+        TaskRecordStore(engine); mark_running_interrupted()
+                (stale `running` task rows become `interrupted` BEFORE
+                 serving; terminal rows are untouched)
                      │
         serving               app.include_router(openai_router, deps=[require_auth])
                               app.include_router(anthropic_router, deps=[require_auth])
@@ -200,7 +211,7 @@ import main  →  load_dotenv()  →  build FastAPI app (title "Invincible")
                      │
          shutdown (lifespan)   await app.state.background_tasks.shutdown()
                                                               (cancel tasks;
-                                                               last workflow events)
+                                                               runners close records `interrupted`; last workflow events)
                                await router.close()  (httpx client)
                                await continuity.close() / runs.close()
                                await retrieval.close() / memory.close()

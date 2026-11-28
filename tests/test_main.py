@@ -104,6 +104,55 @@ async def test_lifespan_survives_purge_failure_on_stale_schema(
     assert "Could not purge orphaned suspended approvals" in caplog.text
 
 
+async def test_lifespan_marks_stale_background_tasks_interrupted(
+    lifespan_env, caplog
+):
+    """Step 5: rows still ``running`` belong to the previous process and
+    are swept ``interrupted`` before serving; terminal rows survive."""
+    from invincible.core.db import ensure_local_owner
+    from invincible.core.task_records import (
+        COMPLETED,
+        INTERRUPTED,
+        TaskRecordStore,
+    )
+
+    uid, _pid = await ensure_local_owner(lifespan_env)
+    store = TaskRecordStore(lifespan_env)
+    await store.create_running("task-stale", user_id=uid, mode="plan")
+    await store.create_running("task-done", user_id=uid, mode="plan")
+    await store.mark_terminal("task-done", COMPLETED)
+
+    with caplog.at_level(logging.WARNING, logger="invincible"):
+        async with main.lifespan(main.app):
+            assert isinstance(main.app.state.task_records, TaskRecordStore)
+
+    stale = await store.get("task-stale", user_id=uid)
+    assert stale["status"] == INTERRUPTED
+    assert stale["finished_at"] is not None
+    done = await store.get("task-done", user_id=uid)
+    assert done["status"] == COMPLETED
+    assert "Marked 1 background task(s) interrupted" in caplog.text
+
+
+async def test_lifespan_survives_task_sweep_failure(
+    lifespan_env, monkeypatch, caplog
+):
+    """A stale schema must warn, never crash startup."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from invincible.core.task_records import TaskRecordStore
+
+    async def _boom(self):
+        raise SQLAlchemyError("no such table")
+
+    monkeypatch.setattr(
+        TaskRecordStore, "mark_running_interrupted", _boom)
+    with caplog.at_level(logging.WARNING, logger="invincible"):
+        async with main.lifespan(main.app):
+            assert isinstance(main.app.state.task_records, TaskRecordStore)
+    assert "Could not mark stale background tasks interrupted" in caplog.text
+
+
 async def test_lifespan_warns_when_schema_not_managed(lifespan_env, caplog):
     """create_all bootstraps tables without alembic_version; startup must
     warn loudly that `invincible db upgrade` should be run."""

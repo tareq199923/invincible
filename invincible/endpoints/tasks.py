@@ -15,10 +15,12 @@ Auth and CSRF posture match the rest of the dashboard: the signed
 routes are JSON-only (a cross-site form cannot post JSON). ``inv_`` API keys
 never authorize this surface.
 """
+import logging
 import time
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 
 from invincible.core.background_tasks import (
     MAX_RUNNING_PER_USER,
@@ -29,6 +31,7 @@ from invincible.core.background_tasks import (
 from invincible.core.principal import Principal
 from invincible.core.router import NO_CREDENTIALS_MESSAGE
 from invincible.core.settings import settings
+from invincible.core.task_records import FAILED, INTERRUPTED
 from invincible.core.webchat_agent import build_agent_executor
 from invincible.core.workflow_store import (
     list_workflow_events,
@@ -38,6 +41,8 @@ from invincible.endpoints.accounts import _audit, require_user_session
 from invincible.endpoints.byok import byok_attempt_source_for
 from invincible.endpoints.dashboard import _state
 
+logger = logging.getLogger("invincible.tasks")
+
 router = APIRouter()
 
 _MAX_TASK_CHARS = 8000
@@ -45,6 +50,13 @@ _MAX_MODEL_CHARS = 200
 _BACKGROUND_MODES = ("plan", "manual")
 _NOT_FOUND = {"error": {"message": "No such approval.",
                         "type": "not_found_error"}}
+_NOT_FOUND_TASK = {"error": {"message": "No such background task.",
+                             "type": "not_found_error"}}
+_CAP_MESSAGE = (
+    f"At most {MAX_RUNNING_PER_USER} background tasks may run at once. "
+    "Wait for one to finish, or answer a pending approval at "
+    "/dashboard/approvals, then try again."
+)
 
 
 def _error(message: str, error_type: str, status_code: int) -> JSONResponse:
@@ -61,10 +73,10 @@ async def start_background_task(
 ):
     """Start one plan or manual task; return its workflow id.
 
-    Validation and the no-provider check run BEFORE anything starts, so a
-    rejected request never leaves a phantom workflow behind. The running
-    cap is checked immediately before ``registry.start`` with no ``await``
-    in between, making the check atomic on the event loop.
+    Request validation runs BEFORE anything is persisted or started, so a
+    rejected request never leaves a phantom workflow behind. The shared
+    helper then inserts the durable ``running`` row, re-checks the running
+    cap, and schedules the runner.
     """
     try:
         raw = await request.json()
@@ -104,8 +116,29 @@ async def start_background_task(
         return _error("mode must be plan or manual.",
                       "invalid_request_error", 400)
 
+    return await _start_task(
+        request, principal, task=task, model=model, mode=mode)
+
+
+async def _start_task(
+    request: Request,
+    principal: Principal,
+    *,
+    task: str,
+    model: str | None,
+    mode: str,
+    retry_of: str | None = None,
+) -> JSONResponse:
+    """Shared start path for a fresh task and an interrupted-task Retry.
+
+    The durable ``running`` row is inserted before the runner starts. If
+    the insert fails the task is not started (503). If scheduling fails
+    after the insert, the row is closed ``failed`` - never left as a
+    phantom ``running`` row.
+    """
     engine = _state(request, "engine")
     registry = _state(request, "background_tasks")
+    records = _state(request, "task_records")
     router_obj = getattr(request.app.state, "router", None)
     if router_obj is None:
         return _error("Router not initialized.", "config_error", 503)
@@ -121,11 +154,7 @@ async def start_background_task(
         return _error(NO_CREDENTIALS_MESSAGE, "invalid_request_error", 400)
 
     if registry.running_count(principal.user_id) >= MAX_RUNNING_PER_USER:
-        return _error(
-            f"At most {MAX_RUNNING_PER_USER} background tasks may run at "
-            "once. Wait for one to finish, or answer a pending approval at "
-            "/dashboard/approvals, then try again.",
-            "rate_limit_error", 429)
+        return _error(_CAP_MESSAGE, "rate_limit_error", 429)
 
     store = _state(request, "sessions")
     memory = getattr(request.app.state, "memory", None)
@@ -165,32 +194,59 @@ async def start_background_task(
         )
 
     workflow_id = new_workflow_id()
-    registry.start(
-        principal.user_id,
-        run_background_task(
-            task=task,
-            model=model,
-            principal=principal,
-            workflow_id=workflow_id,
-            router=router_obj,
-            sessions=store,
-            memory=memory,
-            runs_store=runs_store,
-            pending_store=pending_store,
-            executor=executor,
-            waiter=waiter,
-            mode=mode,
-            approval_store=approval_store,
-            retrieval=retrieval,
-            continuity=continuity,
-            engine=engine,
-            agent_platform=agent_platform,
-            harness_bus=harness_bus,
-            byok=byok,
-            audit=_audit_tool,
-        ),
+    try:
+        await records.create_running(
+            workflow_id, user_id=principal.user_id, mode=mode)
+    except SQLAlchemyError:
+        logger.exception(
+            "Could not persist background task record %s", workflow_id)
+        return _error(
+            "Background task storage is unavailable; the task was not "
+            "started.", "config_error", 503)
+
+    # The insert above is an await, so re-check the cap immediately
+    # before registry.start with no await in between. Two racing starts
+    # can both pass the early check; this keeps the cap atomic anyway.
+    if registry.running_count(principal.user_id) >= MAX_RUNNING_PER_USER:
+        await _close_failed(records, workflow_id)
+        return _error(_CAP_MESSAGE, "rate_limit_error", 429)
+
+    runner = run_background_task(
+        task=task,
+        model=model,
+        principal=principal,
         workflow_id=workflow_id,
+        router=router_obj,
+        sessions=store,
+        memory=memory,
+        runs_store=runs_store,
+        pending_store=pending_store,
+        executor=executor,
+        waiter=waiter,
+        mode=mode,
+        approval_store=approval_store,
+        retrieval=retrieval,
+        continuity=continuity,
+        engine=engine,
+        agent_platform=agent_platform,
+        harness_bus=harness_bus,
+        byok=byok,
+        audit=_audit_tool,
+        task_records=records,
+        cancel_status=registry.cancel_status,
     )
+    try:
+        registry.start(
+            principal.user_id, runner, workflow_id=workflow_id)
+    except Exception:  # noqa: BLE001 - close the row, no phantom running
+        runner.close()
+        logger.exception(
+            "Could not schedule background task %s", workflow_id)
+        await _close_failed(records, workflow_id)
+        return _error(
+            "The background task could not be scheduled.",
+            "config_error", 503)
+
     # Metadata-only trail for the start itself: workflow id and mode -
     # never the task text.
     await _audit(
@@ -201,7 +257,31 @@ async def start_background_task(
         resource_id=workflow_id,
         meta={"workflow_id": workflow_id, "mode": mode},
     )
+    if retry_of is not None:
+        # A Retry is a NEW task; the old row and timeline are untouched.
+        await _audit(
+            request, "background_task.retried",
+            actor_user_id=principal.user_id,
+            actor_kind="user",
+            resource_type="background_task",
+            resource_id=retry_of,
+            meta={
+                "workflow_id": retry_of,
+                "new_workflow_id": workflow_id,
+                "mode": mode,
+            },
+        )
     return JSONResponse({"workflow_id": workflow_id}, status_code=202)
+
+
+async def _close_failed(records, workflow_id: str) -> None:
+    """Best-effort close for a task that never reached the registry."""
+    try:
+        await records.mark_terminal(workflow_id, FAILED)
+    except Exception:  # noqa: BLE001 - the 429/503 is the real result
+        logger.warning(
+            "Could not mark background task %s failed", workflow_id,
+            exc_info=True)
 
 
 @router.post("/dashboard/background-tasks/{workflow_id}/cancel")
@@ -232,6 +312,62 @@ async def cancel_background_task(
         meta={"workflow_id": workflow_id},
     )
     return JSONResponse({"status": "cancelling"}, status_code=202)
+
+
+@router.post("/dashboard/background-tasks/{workflow_id}/retry")
+async def retry_background_task(
+    request: Request,
+    workflow_id: str,
+    principal: Principal = Depends(require_user_session),
+):
+    """Start a NEW task from an interrupted task's original text.
+
+    Retry is deliberately not a resume: the old row and event timeline
+    stay untouched, no checkpoint or approval is reused, and the new task
+    gets a fresh workflow id, durable row, and approval window. Only an
+    owner's ``interrupted`` row is retryable; unknown and foreign ids
+    share the same 404 body. The original task text is read from the chat
+    session whose id IS the workflow id.
+    """
+    # Same CSRF posture as start: a cross-site form cannot set this
+    # content type. The body is optional; the JS sends ``{}``.
+    content_type = (
+        request.headers.get("content-type", "")
+        .split(";", 1)[0].strip().lower()
+    )
+    if content_type != "application/json":
+        return _error("Request body must be JSON.",
+                      "invalid_request_error", 400)
+
+    records = _state(request, "task_records")
+    row = await records.get(workflow_id, user_id=principal.user_id)
+    if row is None:
+        return JSONResponse(_NOT_FOUND_TASK, status_code=404)
+    if row["status"] != INTERRUPTED:
+        return _error(
+            "Only an interrupted task can be retried.",
+            "invalid_request_error", 409)
+
+    sessions = _state(request, "sessions")
+    result = await sessions.task_result(
+        workflow_id, user_id=principal.user_id)
+    task_text = str((result or {}).get("task_text") or "").strip()
+    if not task_text:
+        return _error(
+            "The original task text is no longer available.",
+            "invalid_request_error", 409)
+    if len(task_text) > _MAX_TASK_CHARS:
+        return _error(
+            f"task must be at most {_MAX_TASK_CHARS} characters.",
+            "invalid_request_error", 409)
+
+    return await _start_task(
+        request, principal,
+        task=task_text,
+        model=None,
+        mode=row["mode"],
+        retry_of=workflow_id,
+    )
 
 
 @router.post(

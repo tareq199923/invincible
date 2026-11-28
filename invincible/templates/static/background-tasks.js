@@ -225,4 +225,60 @@
       }
     });
   });
+  // Delegated: Retry is rendered only for an interrupted task. It starts
+  // a NEW task (fresh workflow id, no replay) and navigates to it.
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-retry-workflow]");
+    if (!button || button.disabled) return;
+    event.preventDefault();
+    var workflowId = button.getAttribute("data-retry-workflow");
+    if (!workflowId) return;
+
+    var errorBox = byId("background-task-retry-error");
+    if (errorBox) {
+      errorBox.textContent = "";
+      errorBox.hidden = true;
+    }
+    button.disabled = true;
+    button.textContent = "Retrying...";
+    fetch(
+      "/dashboard/background-tasks/" + encodeURIComponent(workflowId) +
+        "/retry",
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: "{}"
+      }
+    ).then(function (response) {
+      return response.json().catch(function () {
+        return {};
+      }).then(function (data) {
+        if (response.status === 202 && data.workflow_id) {
+          window.location.assign(
+            "/dashboard/workflows/" +
+              encodeURIComponent(data.workflow_id));
+          return;
+        }
+        var message = data && data.error && data.error.message;
+        if (errorBox) {
+          errorBox.textContent = message ||
+            "Could not retry the task. Try again.";
+          errorBox.hidden = false;
+        }
+        button.disabled = false;
+        button.textContent = "Retry task";
+      });
+    }).catch(function () {
+      if (errorBox) {
+        errorBox.textContent = "Network error. Try again.";
+        errorBox.hidden = false;
+      }
+      button.disabled = false;
+      button.textContent = "Retry task";
+    });
+  });
 })();

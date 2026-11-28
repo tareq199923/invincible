@@ -101,6 +101,33 @@ def test_task_status_table():
         False, [started], now=now,
         awaiting_approval=True) == "running"
 
+    # Step 5: a durable terminal status is authoritative over the event
+    # timeline. ``interrupted`` must survive an event-derived ``stalled``
+    # (the final event may never arrive after a hard kill).
+    assert task_status(
+        False, [started], now=now,
+        durable_status="interrupted") == "interrupted"
+    assert task_status(
+        False, [started, completed], now=now,
+        durable_status="interrupted") == "interrupted"
+    assert task_status(
+        False, [old_started], now=now,
+        durable_status="interrupted") == "interrupted"
+    assert task_status(
+        False, [], now=now, durable_status="failed") == "failed"
+    assert task_status(
+        False, [started], now=now, durable_status="cancelled") == "cancelled"
+    # The live registry still wins over a terminal row (a runner may be
+    # closing its row while its final event is still in flight).
+    assert task_status(
+        True, [started], now=now, durable_status="completed") == "running"
+    # A durable ``running`` row is not terminal: it falls through to the
+    # existing event/grace/stall rules.
+    assert task_status(
+        False, [started], now=now, durable_status="running") == "running"
+    assert task_status(
+        False, [old_started], now=now, durable_status="running") == "stalled"
+
 
 async def test_page_requires_session(client):
     assert (await client.get("/dashboard/workflows")).status_code == 401

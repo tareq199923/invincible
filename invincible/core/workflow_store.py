@@ -21,6 +21,10 @@ _ERROR_SUMMARY_CHARS = 200
 STALLED_AFTER_SECONDS = 60.0
 
 _TERMINAL_WORKFLOW_EVENTS = ("workflow.completed", "workflow.failed")
+# Step 5: a durable row's terminal status is authoritative. ``running``
+# is deliberately absent: a live registry still wins, and a stale
+# ``running`` row falls through to the event-derived ``stalled`` grace.
+_TERMINAL_TASK_STATUSES = ("completed", "failed", "cancelled", "interrupted")
 
 
 def _clamp(value: int, *, default: int, maximum: int) -> int:
@@ -119,23 +123,27 @@ def task_started_at(events: list[dict]) -> float | None:
 
 def task_status(
     is_running: bool, events: list[dict], *, now: float | None = None,
-    awaiting_approval: bool = False,
+    awaiting_approval: bool = False, durable_status: str | None = None,
 ) -> str:
     """One display status for a background task.
 
-    ``is_running`` comes from the in-process registry and wins over
-    stored events: the runner emits its terminal event asynchronously,
-    so events alone briefly lag reality. A running task with at least
-    one VISIBLE pending approval reads ``awaiting approval``. Once
-    nothing is running, the NEWEST terminal event decides. With no
-    terminal event, a task whose last event is older than
-    ``STALLED_AFTER_SECONDS`` is ``stalled`` (the final event may never
-    arrive after a hard server kill); inside that grace window it still
-    reads ``running`` because persistence of the terminal event is
-    asynchronous.
+    ``is_running`` comes from the in-process registry and wins over both
+    the durable row and stored events: the runner emits its terminal
+    event asynchronously, so they briefly lag reality. A running task
+    with at least one VISIBLE pending approval reads ``awaiting
+    approval``. Otherwise a terminal durable status (including
+    ``interrupted`` from the startup sweep) is authoritative - an
+    event-derived ``stalled`` must never overwrite it. For legacy tasks
+    with no row, the NEWEST terminal event decides. With no terminal
+    event, a task whose last event is older than ``STALLED_AFTER_SECONDS``
+    is ``stalled`` (the final event may never arrive after a hard server
+    kill); inside that grace window it still reads ``running`` because
+    persistence of the terminal event is asynchronous.
     """
     if is_running:
         return "awaiting approval" if awaiting_approval else "running"
+    if durable_status in _TERMINAL_TASK_STATUSES:
+        return durable_status
     terminal = [
         event for event in events
         if (event or {}).get("type") in _TERMINAL_WORKFLOW_EVENTS

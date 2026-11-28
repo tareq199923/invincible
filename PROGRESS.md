@@ -5,6 +5,38 @@
 
 ## Current State
 
+- F37 (Step 5 restart-safe background task records) is implemented in the
+  working tree; commit pending explicit user approval (clean-state 5/5:
+  build, tests, feature-list state, no artifacts, PROGRESS.md updated).
+  New migration `0019` + `core/task_records.py`: `background_tasks`
+  stores workflow id, owner, nullable session link (`ON DELETE SET
+  NULL`), mode, status, and timestamps — metadata only, never task text,
+  commands, paths, args, answers, or free-form errors. Start inserts
+  `running` before scheduling (insert failure → 503 and nothing starts;
+  scheduling failure closes the row `failed`; the per-user cap is
+  re-checked after the insert). Every terminal runner path closes the row
+  once: `completed`/`failed`, user Stop `cancelled`, graceful shutdown
+  `interrupted`; record-write failures are logged and never mask the
+  result. The lifespan sweep marks stale `running` rows `interrupted`
+  before serving (a stale schema warns, never crashes). The Workflows
+  list merges durable rows with event workflows (deduped, owner-scoped,
+  event counts preserved); the detail page shows the interrupted badge,
+  a restart note, and Retry only when the session text is readable;
+  terminal rows suppress approval cards, and `/dashboard/approvals`
+  defensively skips them. Retry (`POST
+  /dashboard/background-tasks/{workflow_id}/retry`, JSON content type,
+  body optional) is a NEW task with the same text and mode — the old
+  row, timeline, approvals, checkpoints, and tokens are untouched.
+  404 is identical for unknown/foreign; 409 for non-interrupted; 409 for
+  missing/oversized text with nothing started; 400 without a provider.
+  Docs updated (BACKGROUND_TASKS, ARCHITECTURE, ROADMAP, HARNESS_PLAN,
+  TESTING, AGENTS, CHANGELOG) and F37 is `passing`. Verification:
+  focused suite 101 passed (background runner/UI, dashboard workflows,
+  migration 0019, task records, lifespan); migration 0019 5 passed;
+  `ruff check .` clean; `python -m json.tool feature_list.json` valid;
+  `tests/test_docs.py` + `tests/test_db_dialect.py` 22 passed; full suite
+  2301 passed / 11 skipped / 1 deselected (388.28s); slow
+  `tests/test_wheel_contents.py` 1 passed (46.97s).
 - F36 docs-accuracy pass done and committed/pushed to `main` as `fd9f621`
   (clean-state 5/5). Every changed number was re-derived from
   code: registry **35**, MCP **34**, webchat **31**, loop cap **25**,
@@ -1121,11 +1153,13 @@
 0. 0.6.3 shipped 2026-11-24 (tag `v0.6.3`, release commit `08e14d4`),
    carrying F35 Step 4 (mutating tools + durable approvals). PyPI
    install and hosted production `/health` both report 0.6.3. F36 docs
-   accuracy is committed/pushed. Next product work: Step 5
-   (restart-safe task records, Option A). 0.5.x
-   holdouts are reached by the README/docs "No such command 'connect'"
-   callout until they upgrade once; from 0.6.1 on, the passive notice
-   takes over.
+   accuracy is committed/pushed. F37 Step 5 (restart-safe task records,
+   Option A) is implemented and fully verified in the working tree
+   (2301 passed / 11 skipped; slow wheel test passed; ruff clean;
+   clean-state 5/5) — waiting for explicit approval to commit/push.
+   0.5.x holdouts are reached by the README/docs "No such command
+   'connect'" callout until they upgrade once; from 0.6.1 on, the passive
+   notice takes over.
 
 1. Restart any paired `invincible connect` agent to pick up F22's voice
    poses plus the earlier F23/F25/F26 runner/overlay changes
